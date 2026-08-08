@@ -15,11 +15,11 @@ idempotência) · EP-03 (frota de números via Embedded Signup) · EP-04 (cadast
 | # | Critério | Como se prova |
 |---|---|---|
 | 1 | Base histórica do GeraCloud carregada **e reconciliada** | `conexao_erp_cobertura` com `carga_historica_estado='completa'` nos três fluxos; `mv_metricas_contato` batendo com contagem direta em `venda` |
-| 2 | Pelo menos 3 números conectados **recebendo e enviando** | Mensagem entrante do número real cria conversa e contato-lead; resposta dentro da janela chega ao aparelho |
+| 2 | Pelo menos 3 números **da Gera3** conectados, recebendo e enviando (ADR-015) | Mensagem entrante cria conversa e contato-lead; resposta dentro da janela chega ao aparelho; **e** um template aprovado inicia conversa com janela fechada (E3-15) |
 | 3 | Contato do ERP aparece no CRM com telefone e histórico corretos | Um CNPJ escolhido à mão: nomes, telefones, documentos, endereços e vendas conferidos linha a linha contra o ERP |
 | 4 | Isolamento provado | Suíte de RLS com dois tenants verde em **todo** repositório, e o varredor de schema sem achado |
 
-**Duração estimada:** 8 semanas de desenvolvimento — ⚠️ **desde que o registro na Meta comece na
+**Duração estimada:** ~6 semanas de desenvolvimento (ADR-015 — sem o piloto real dentro) — ⚠️ **desde que o registro na Meta comece na
 semana 0**. O prazo da Meta não é nosso e não paraleliza depois.
 
 ---
@@ -429,7 +429,7 @@ protegida por disciplina é invariante violada.**
 |---|---|---|---|---|
 | **1** | ⚠️ **Qualidade da base do ERP.** Nas telas do Tailor, **40% da base estava sem CPF/CNPJ** | Alta × Alto — sem documento, a chave forte de reconciliação (§6.2, nível 2) não existe e sobra o telefone, que é chave **média** e não casa automaticamente | M-11: rodar o perfilamento na cópia anonimizada **na S1**, não na S6 | (a) Ingerir tudo, casando o que dá; (b) o resto vira contato próprio com `conflito_identidade` e entra na fila de deduplicação — **nunca fusão por chave média**; (c) a tela de qualidade cadastral (RFV-08) nasce como número honesto, não como surpresa. ⚠️ Fundir errado é irreversível na prática: mistura histórico de compra e corrompe o RFV dos dois |
 | **2** | **Volume da carga histórica** derruba a primária, ou não cabe na janela | Média × Alto | M-12 sem resposta até a S2 | Lotes de 1.000–5.000 com transação curta e `cursor_retomada`; worker com pool próprio e `statement_timeout`; execução **fora do horário comercial**; partições anuais de `venda` criadas antes do lote. ⚠️ Milhões de linhas em uma transação só é `WAL` estourado e lock prolongado |
-| **3** | ⚠️ **Prazo da Meta.** M-04/M-05/M-07 são de terceiro, com reprovação possível | Alta × Alto | Qualquer etapa parada > 10 dias | Começar na S0; desenvolver 100% na WABA da Gera3 (M-08); documentação de M-04 conferida contra o cartão CNPJ **antes** de enviar; App Review agendado só quando o fluxo estiver em hom. **Plano B:** critério de saída nº 2 atendido com números da Gera3 e piloto real escorregando para a Onda 1 — sem escorregar mais nada |
+| **3** | ⚠️ **Prazo da Meta.** M-04/M-05/M-07 são de terceiro, com reprovação possível | Alta × Alto | Qualquer etapa parada > 10 dias | Começar na S0; desenvolver 100% na WABA da Gera3 (M-08); documentação de M-04 conferida contra o cartão CNPJ **antes** de enviar; App Review agendado só quando o fluxo estiver em hom. ⚠️ **Deixou de ser plano B: virou o plano (ADR-015).** O piloto real é Onda 1; um atraso da Meta agora atrasa a Onda 1, não a Onda 0 |
 | **4** | **PK composta `(tenant_id, id)`** se mostra hostil ao Drizzle e ao console | Média × Alto (se descoberto tarde) | PoC D-00 | Fechar na S0, com ADR. A alternativa (`id` PK + `UNIQUE(tenant_id, id)`) preserva as FKs compostas. ⚠️ Depois da migration `0012` a troca é reescrita de schema |
 | **5** | **Volume real desconhecido** (decisão aberta nº 1) leva a partição mal dimensionada | Média × Médio | M-12 | Mensal para `mensagem` é o default seguro; anual para `venda`. Repartir depois é caro mas possível — **o que não é possível é não particionar desde o dia 1** |
 | **6** | **Janela de reentrega de webhook da Meta** desconhecida (decisão aberta nº 15) define a retenção de `evento_externo` | Média × Médio | — | ⚠️ **Errar para o lado longo.** Retenção curta reabre o furo de custo em dobro (INV-54); longa é só storage barato. A linha-chave permanece mesmo com o `corpo` expurgado |

@@ -254,6 +254,31 @@ o rollback deixa de ser técnico e vira decisão de negócio, com perda declarad
 próprio critério de sucesso. ⚠️ Rollback sem critério escrito é decisão tomada no desespero — o
 critério está em `entrada-do-primeiro-cliente.md` e é aprovado **antes** do primeiro corte.
 
+## ADR-015 — A Onda 0 fecha com números da Gera3; o cliente entra na Onda 1
+**Contexto**: ao definir quando é seguro conectar o número de uma vendedora real,
+`entrada-do-primeiro-cliente.md` exigiu que ela consiga buscar conversa, ouvir áudio, ver a ficha do
+cliente e deixar comentário — o mínimo para atender de verdade. ⚠️ **Tudo isso é Onda 1.** Sem
+perceber, o critério de saída da Onda 0 passou a exigir a Onda 1 inteira, esticando-a para 10–11
+semanas sem nenhum marco verificável no caminho.
+
+**Decisão**: a Onda 0 fecha em ~6 semanas usando **números da própria Gera3** (dogfooding). O
+cliente real entra na **Onda 1**, quando inbox, busca, áudio e ficha existirem.
+
+**Por quê**: o erro aparece com um número nosso, não com uma vendedora atendendo lojista. E dez
+semanas sem marco verificável é tempo demais sem sinal de que a fundação funciona — carga
+histórica, conciliação, canal e template são exatamente o que precisa ser provado cedo.
+
+**Consequências**:
+- Critério de saída nº 2 da Onda 0 passa a dizer "números da Gera3", e ganha a prova do template
+  (E3-15) — no corte, todas as janelas nascem fechadas.
+- ⚠️ **O plano da Onda 1 deixa de ser macro e precisa ser detalhado**, no formato de
+  `plano-onda-0.md`: é nela que o cliente entra, com carga conciliada, janela de sombra, corte por
+  número (ADR-014) e treinamento.
+- `entrada-do-primeiro-cliente.md` passa a ser executado **na Onda 1**; o levantamento prévio e a
+  janela de sombra continuam começando **agora**, porque medem o estado anterior e são
+  irrecuperáveis depois.
+- O que era "Plano B" do risco nº 3 (prazo da Meta) vira o plano.
+
 ## ADR-011 — Convenções
 Domínio em português (`Conversa`, `Pedido`, `Campanha`), infraestrutura em inglês, comentários em
 inglês · sem `enum` do TypeScript (união de literais + `z.enum`) · sem status numérico mágico ·
