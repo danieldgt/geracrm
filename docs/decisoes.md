@@ -425,6 +425,54 @@ sai do escopo — não é lacuna a preencher depois.
 premissa anterior e precisam de revisão de peso — não de reescrita. O modelo de dados não muda: ele
 já era genérico por ADR-004, e é isso que torna esta virada barata.
 
+## ADR-020 — Fidelidade e cashback: o saldo é do ERP, a alavanca é nossa
+**Contexto**: com o varejo como caso principal (ADR-019), fidelidade deixa de ser "coisa de PDV
+fora do escopo" e vira **paridade competitiva** — é o que Dito, Mercafácil e Zoppy oferecem, e eles
+passaram de adjacentes a concorrentes diretos.
+
+**A descoberta que define o desenho**: o **pdv-core já tem cashback completo**.
+
+```
+CartaoCashback                 por cliente, com numeração e habilitação
+MovimentacaoCartaoCashback     ⚠️ com dataExpiracao e vínculo à Venda
+ConfiguracaoCartaoCashback     percentual base · limite de resgate · validade, POR LOJA
+```
+
+**Decisão**: **não construímos motor de cashback.** O saldo, o acúmulo, o resgate e a expiração
+ficam no ERP. O GeraCRM **lê o saldo e o transforma em alavanca de recompra**.
+
+### Por que esta é a divisão certa, e não preguiça
+
+⚠️ **O resgate acontece no caixa.** Quem debita o saldo é o PDV, no momento da venda. Se o saldo
+vivesse no CRM, toda venda no balcão dependeria de uma chamada ao nosso sistema — e uma
+indisponibilidade nossa viraria fila parada na loja.
+
+Cashback é **dinheiro do cliente**. Duas fontes de verdade para dinheiro é a pior arquitetura
+possível: qualquer divergência vira discussão no balcão, com o cliente presente.
+
+### O que o GeraCRM faz com isso
+
+| Capacidade | Exemplo |
+|---|---|
+| **Saldo na ficha e na conversa** | A vendedora vê "R$ 47 disponíveis" antes de falar |
+| **⚠️ Campanha por expiração** | "Seu cashback de R$ 47 vence em 5 dias" — o campo `dataExpiracao` existe e ninguém usa para isso |
+| **Segmento cruzado com RFV** | Cliente `Em Risco` **com saldo** é o alvo mais barato que existe: o incentivo já está pago |
+| **Atribuição** | Quanto da receita veio de campanha que citou saldo |
+| **Gatilho de reativação** | Saldo prestes a expirar entra na Fila do Dia |
+
+⚠️ **A campanha por expiração é o diferencial e é quase de graça.** O ERP já calcula a validade;
+falta alguém avisar o cliente antes de o dinheiro dele evaporar. Nenhum dos concorrentes analisados
+faz isso a partir do saldo real do ERP.
+
+### Capacidade de conector
+
+Entra `fidelidade` na declaração (ADR-008): sem ela, os blocos de saldo **não aparecem** e a
+segmentação por saldo some — o produto degrada, não quebra.
+
+**Consequências**: `FID` entra no escopo como módulo de **leitura e ativação**, não de gestão.
+Nenhuma tabela de saldo no nosso banco — apenas projeção para segmentar, com o horário da última
+sincronização visível. ⚠️ Saldo em cache exibido como se fosse ao vivo é reclamação no balcão.
+
 ## ADR-011 — Convenções
 Domínio em português (`Conversa`, `Pedido`, `Campanha`), infraestrutura em inglês, comentários em
 inglês · sem `enum` do TypeScript (união de literais + `z.enum`) · sem status numérico mágico ·

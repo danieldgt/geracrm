@@ -21,7 +21,7 @@ export function conformidade(criar: () => ConectorErp): void {
       const esperadas = [
         'ingestaoClientes', 'ingestaoProdutos', 'ingestaoPedidos', 'cargaHistorica',
         'saldoSincrono', 'tabelaPrecoSincrona', 'creditoCliente', 'escritaPedido',
-        'webhookDeVenda',
+        'webhookDeVenda', 'fidelidade',
       ] as const
       for (const cap of esperadas) {
         expect(typeof c.capacidades[cap], `capacidade ${cap}`).toBe('boolean')
@@ -51,6 +51,7 @@ export function conformidade(criar: () => ConectorErp): void {
       expect(typeof c.consultarPrecos === 'function').toBe(c.capacidades.tabelaPrecoSincrona)
       expect(typeof c.consultarCredito === 'function').toBe(c.capacidades.creditoCliente)
       expect(typeof c.efetivarPedido === 'function').toBe(c.capacidades.escritaPedido)
+      expect(typeof c.consultarSaldoFidelidade === 'function').toBe(c.capacidades.fidelidade)
     })
 
     it('⚠️ escrita de pedido exige reconciliação por chave', () => {
@@ -113,6 +114,18 @@ export function conformidade(criar: () => ConectorErp): void {
         const a = await c.efetivarPedido!(pedido)
         const b = await c.efetivarPedido!(pedido)
         if (a.ok && b.ok) expect(b.valor.numeroExterno).toBe(a.valor.numeroExterno)
+      },
+    )
+
+    it.skipIf(!c.capacidades.fidelidade)(
+      'saldo de fidelidade vem com data de apuração — nunca como se fosse ao vivo',
+      async () => {
+        const saldo = await c.consultarSaldoFidelidade!('1')
+        if (saldo) {
+          expect(saldo.apuradoEm instanceof Date).toBe(true)
+          // ⚠️ Saldo negativo na tela é reclamação no balcão.
+          expect(saldo.disponivelCentavos).toBeGreaterThanOrEqual(0)
+        }
       },
     )
 

@@ -1,6 +1,7 @@
 import type {
   ConectorErp, Capacidades, ClienteCanonico, SkuCanonico, SaldoCanonico,
-  PrecoCanonico, VendaCanonica, Pagina, Resultado, FalhaEfetivacao,
+  PrecoCanonico, VendaCanonica, SaldoFidelidadeCanonico, Pagina, Resultado,
+  FalhaEfetivacao,
 } from '../porta.js'
 
 /**
@@ -39,6 +40,10 @@ export const CAPACIDADES_GERACLOUD: Capacidades = {
   // No outbound webhook anywhere in the codebase. Sync is scheduled — and the
   // resulting lag in revenue attribution must be declared on screen.
   webhookDeVenda: false,
+  // ✅ The pdv-core already has CartaoCashback, MovimentacaoCartaoCashback and
+  // ConfiguracaoCartaoCashback — including dataExpiracao, which is what makes
+  // FID-04 possible. We read it; we never manage it (ADR-020).
+  fidelidade: true,
 }
 
 export interface OpcoesGeraCloud {
@@ -261,6 +266,46 @@ export class ConectorGeraCloud implements ConectorErp {
         }
       })
       .filter((p) => skusExternos.length === 0 || skusExternos.includes(p.skuExterno))
+  }
+
+  /**
+   * ⚠️ Read-only, by design (ADR-020). Redemption happens at the till, and the
+   * ERP is the single source of truth for the customer's money.
+   *
+   * `expiraEm` is the field that makes FID-04 work: the ERP already computes
+   * the deadline and nobody tells the customer before the money is gone.
+   */
+  async consultarSaldoFidelidade(clienteExterno: string): Promise<SaldoFidelidadeCanonico | null> {
+    const dados = await this.#pedir<{ content?: unknown[] }>(
+      `/movimentacoes-cartao-cashback?idClientePdv=${encodeURIComponent(clienteExterno)}&size=200`,
+    ).catch(() => ({ content: [] }))
+
+    const movs = (dados.content ?? []) as Record<string, unknown>[]
+    if (movs.length === 0) return null
+
+    let disponivel = 0
+    let expiraEm: Date | undefined
+    for (const m of movs) {
+      const valor = paraCentavos((m.valor as Record<string, unknown>)?.amount ?? m.valor)
+      // The ERP records credits and debits as operations; only live credits count.
+      const credito = String(m.operacao ?? '').toUpperCase().includes('CREDITO')
+      const vencimento = m.dataExpiracao ? new Date(String(m.dataExpiracao)) : undefined
+      const vencido = vencimento ? vencimento.getTime() < Date.now() : false
+      if (credito && !vencido) {
+        disponivel += valor
+        // Earliest upcoming expiry drives the campaign — that is the urgency.
+        if (vencimento && (!expiraEm || vencimento < expiraEm)) expiraEm = vencimento
+      } else if (!credito) {
+        disponivel -= valor
+      }
+    }
+
+    return {
+      clienteExterno,
+      disponivelCentavos: Math.max(0, disponivel),
+      expiraEm,
+      apuradoEm: new Date(),
+    }
   }
 
   // -------------------------------------------------------------------------

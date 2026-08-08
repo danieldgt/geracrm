@@ -36,6 +36,9 @@ export interface Capacidades {
   /** Without it, sync is scheduled and revenue attribution carries that lag —
    *  ⚠️ which must be declared on screen, not implied. */
   readonly webhookDeVenda: boolean
+  /** Loyalty balance is READ from the ERP, never managed here (ADR-020).
+   *  Without it, balance blocks disappear and segmentation by balance is gone. */
+  readonly fidelidade: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +87,17 @@ export interface PrecoCanonico {
   readonly tabela: string
   /** Integer cents, always. ⚠️ Never float. */
   readonly valorCentavos: number
+}
+
+export interface SaldoFidelidadeCanonico {
+  readonly clienteExterno: string
+  readonly disponivelCentavos: number
+  /** ⚠️ The whole point of FID-04: the ERP already computes this and nobody
+   *  warns the customer before their money evaporates. */
+  readonly expiraEm?: Date
+  /** When this was last true. Shown on screen — a cached balance displayed as
+   *  live becomes a complaint at the counter. */
+  readonly apuradoEm: Date
 }
 
 export interface VendaCanonica {
@@ -142,6 +156,11 @@ export interface ConectorErp {
   consultarSaldo?(skusExternos: readonly string[], filialExterna?: string): Promise<readonly SaldoCanonico[]>
   consultarPrecos?(clienteExterno: string, skusExternos: readonly string[]): Promise<readonly PrecoCanonico[]>
   consultarCredito?(clienteExterno: string): Promise<{ disponivelCentavos: number }>
+
+  /** Only when `fidelidade`. ⚠️ Read-only — the ERP owns the balance, because
+   *  redemption happens at the till and two sources of truth for the customer's
+   *  money is the worst possible arrangement. */
+  consultarSaldoFidelidade?(clienteExterno: string): Promise<SaldoFidelidadeCanonico | null>
 
   /**
    * Only when `escritaPedido`.

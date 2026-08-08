@@ -67,6 +67,7 @@ Detalhamento e consequências na seção 20.
 ├─ CMP  Campanhas e comunicação em massa
 ├─ IA   Agente autônomo e copiloto
 ├─ CAT  Catálogo como peça de conversa
+├─ FID  Fidelidade e cashback — leitura e ativação (ADR-020)
 ├─ PED  Pedido assistido (tira-pedidos na conversa)
 ├─ FDV  Força de vendas / campo / representante
 ├─ GES  Metas, performance e capacitação de equipe
@@ -337,7 +338,36 @@ Escopo reduzido por decisão: **sem loja self-service, sem checkout do cliente f
 
 ---
 
+## 13b. FID — Fidelidade e cashback
+
+⚠️ **Módulo de leitura e ativação, não de gestão** (ADR-020). O saldo, o acúmulo, o resgate e a
+expiração ficam no ERP — que já tem tudo isso. Duas fontes de verdade para dinheiro do cliente é a
+pior arquitetura possível: divergência vira discussão no balcão, com o cliente presente.
+
+| ID | Funcionalidade | Origem | Onda |
+|---|---|---|---|
+| FID-01 | **Saldo na ficha do cliente e no painel de contexto da conversa**, com horário da última sincronização | ★ | 2 |
+| FID-02 | Extrato de movimentação (acúmulo, resgate, expiração) | ★ | 2 |
+| FID-03 | **Segmento "tem saldo"** combinável com RFV — ⚠️ cliente `Em Risco` **com saldo** é o alvo mais barato que existe: o incentivo já está pago | ★ | 2 |
+| FID-04 | ⚠️ **Campanha por expiração de saldo** — "seu cashback de R$ 47 vence em 5 dias". O ERP já calcula a validade; falta avisar o cliente antes de o dinheiro dele evaporar | ★ | 3 |
+| FID-05 | Saldo prestes a expirar entra na **Fila do Dia** | ★ | 4 |
+| FID-06 | Atribuição: quanto da receita veio de campanha que citou saldo | ★ | 3 |
+| FID-07 | Copiloto cita o saldo na sugestão de mensagem, quando houver | ★ | 3 |
+
+> **FID-04 é o diferencial, e é quase de graça.** Nenhum concorrente analisado dispara campanha a
+> partir do saldo real do ERP com data de expiração. O campo existe e ninguém usa.
+
+⚠️ **Nenhuma tabela de saldo no nosso banco** — apenas projeção para segmentar, com o horário da
+sincronização visível. Saldo em cache exibido como se fosse ao vivo é reclamação no balcão.
+
+---
+
 ## 14. PED — Pedido assistido (tira-pedidos na conversa)
+
+⚠️ **Reposicionado pelo ADR-019.** Com o varejo como caso principal, a venda acontece no balcão,
+pelo PDV — não na conversa. Este módulo continua útil para **encomenda, reserva e venda por
+WhatsApp**, que existem no varejo, mas deixou de ser o que define o produto. No perfil `atacado`
+ele volta a ser central.
 
 **Decisão:** a vendedora monta o pedido dentro do atendimento; **o ERP conectado** efetiva. O rascunho é nosso, o pedido efetivado é do ERP.
 
