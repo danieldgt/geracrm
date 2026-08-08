@@ -339,6 +339,33 @@ ter piorado a operação**. A medição viraria arma contra o próprio produto.
 - O termo **"janela de sombra"** sai dos documentos. Passa a ser **"medição do antes"** — jargão que
   não explica nada custa reunião, e custou uma.
 
+## ADR-018 — Frota mista na entrada: conexão direta primeiro, portabilidade em paralelo
+**Contexto**: levantamento com o cliente piloto revelou que a frota é **mista** — parte das
+vendedoras usa o **app WhatsApp Business comum** e parte já opera em **API oficial por outro
+fornecedor**. Os dois caminhos de entrada são diferentes em prazo e em dependência.
+
+| Origem do número | Caminho | Depende de | Prazo |
+|---|---|---|---|
+| App WhatsApp Business | **Conexão direta** por Embedded Signup | Só do cliente | horas |
+| API oficial de outro fornecedor | **Portabilidade entre WABAs** | ⚠️ Do fornecedor que está **perdendo** o cliente | até 3 semanas |
+
+**Decisão**: **o piloto começa pelos números de conexão direta.** A portabilidade dos demais corre
+**em paralelo**, sem bloquear o primeiro corte.
+
+**Por quê**: o cenário misto, que parecia complicação, é na verdade uma **vantagem de cronograma** —
+elimina a dependência de terceiro do caminho crítico do piloto. Se o piloto dependesse de
+portabilidade, três semanas de espera de um concorrente entrariam antes da primeira conversa real.
+
+**Consequências**:
+- ⚠️ **A solicitação de portabilidade é aberta AGORA**, mesmo que os números só entrem depois — o
+  relógio de três semanas é de terceiro e não paraleliza depois.
+- O corte por número (ADR-014) ganha um atributo: **origem do número**, que define o procedimento.
+- ⚠️ **Números do app comum precisam ser removidos do app antes de conectar**, e as conversas que
+  estão lá **não migram**. A vendedora precisa saber disso antes, não no dia.
+- Números portados **preservam qualidade, limite e templates** (`meta-plataforma.md` §4); números
+  novos começam no tier inicial. Isso muda o que se pode disparar na primeira semana de cada um.
+- O treinamento é o mesmo, mas o **roteiro do dia D difere** por origem.
+
 ## ADR-011 — Convenções
 Domínio em português (`Conversa`, `Pedido`, `Campanha`), infraestrutura em inglês, comentários em
 inglês · sem `enum` do TypeScript (união de literais + `z.enum`) · sem status numérico mágico ·
