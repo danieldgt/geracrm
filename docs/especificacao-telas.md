@@ -181,10 +181,16 @@ A tela que fecha a venda. Abre **sobre a coluna de contexto** no web; como folha
 
 ```
    rascunho ──► validando ──► enviando ──► EFETIVADO (nº do ERP)
-       ▲                          │
-       └──────────────────────────┘
-              falhou (PED-08)
+       ▲                          │  │
+       │                          │  └──► AGUARDANDO CONFERÊNCIA
+       └──────────────────────────┘           │
+              falhou (PED-08)                 └──► reconciliado ──► EFETIVADO
+                                                        ou ──► rascunho
 ```
+
+⚠️ **`aguardando_conferencia` não é detalhe — é o que impede pedido duplicado.** Quando a resposta
+do ERP se perde (timeout), **o pedido pode ter sido criado lá**. O estado registra essa incerteza
+até que a reconciliação por consulta ao ERP a resolva (INV-53).
 
 **O estado `falhou` é o mais importante da tela.** Regras:
 - O rascunho **nunca é perdido** — permanece intacto e editável
@@ -196,7 +202,14 @@ A tela que fecha a venda. Abre **sobre a coluna de contexto** no web; como folha
 | Crédito bloqueado | "Crédito insuficiente: pedido R$ 991, disponível R$ 400" | Solicitar liberação · reduzir pedido |
 | Item inativado | "08825 foi inativado no ERP" | Remover item · buscar substituto |
 | Cliente sem cadastro fiscal | "Cliente sem CNPJ cadastrado no ERP" | Abrir ficha para completar |
-| Erro de comunicação | "GeraCloud não respondeu" | **Tentar novamente** — com idempotência garantida (PED-07), reenviar não duplica |
+| **Não chegou ao ERP** (`502`) | "Não foi possível falar com o ERP" | **Tentar novamente** — a chamada não chegou, retentar é seguro |
+| ⚠️ **Resposta perdida** (`504`, timeout) | "O ERP não respondeu a tempo. **O pedido pode ter sido criado lá.** Estamos conferindo." | **Nenhum botão de reenviar.** O pedido vai para `aguardando_conferencia` e o sistema reconcilia por consulta ao ERP. Se a reconciliação não resolver, a vendedora confirma manualmente |
+
+⚠️ **Os dois últimos casos parecem o mesmo erro para o usuário e são opostos para o sistema.**
+Em `502` a chamada não chegou — retentar é seguro. Em `504` a resposta se perdeu, e o pedido **pode
+existir no ERP**: oferecer "tentar novamente" aqui produz exatamente o bug que INV-29 e INV-53
+existem para impedir — **pedido duplicado no ERP do cliente**. A idempotência protege o reenvio da
+mesma chave, mas não substitui a reconciliação quando o estado é desconhecido.
 
 ### 2.5 Efetivado
 
@@ -310,9 +323,26 @@ O **tempo desde o último toque** é o dado mais acionável do card, e é o que 
 ### 4.2 Comportamento
 
 - Colunas com contador e **carregamento sob demanda** — coluna com 11.358 leads não carrega inteira
+- Filtros e exportação no topo; filtro aplicado fica visível como chip removível
+
+### 4.3 ⚠️ Só um dos dois kanbans é arrastável
+
+| Kanban | Arrastar? | Por quê |
+|---|---|---|
+| **Funil de Leads** | ✅ Sim | A etapa é **decisão humana** — alguém qualifica, alguém descarta |
+| **Funil de Relacionamento** | ❌ **Não entre as colunas de contagem** | `1 pedido`, `2 pedidos`, `3+ pedidos` são **derivadas do histórico de compras**. Ninguém "move" um cliente para 3 pedidos — ele compra pela terceira vez |
+
+No Funil de Relacionamento, o card **não arrasta** entre as colunas de contagem. As ações ficam no
+próprio card: `Trabalhar`, `Descartar`, `Qualificar` — e mover para `Representantes` ou
+`Descartados`, que são **estados atribuídos**, não contagens.
+
+⚠️ **Arrastar algo que o sistema recalcula é a pior experiência possível:** o card volta sozinho
+para onde estava, e o usuário conclui que o produto está quebrado. Se o gesto não pode ter efeito,
+o alvo não deve aceitar o gesto.
+
+**No Funil de Leads:**
 - Arrastar entre colunas dispara automação da etapa (CRM-10), com desfazer por 5s
 - Mover para `Descartado` **exige motivo** (CRM-09) — modal bloqueante, é o único caso justificado
-- Filtros e exportação no topo; filtro aplicado fica visível como chip removível
 
 ---
 

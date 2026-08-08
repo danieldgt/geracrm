@@ -63,7 +63,7 @@ apenas onde o perfil de carga é genuinamente diferente.
 ┌───────┴──────┐      ┌─────────┴────────┐     ┌────────┴────────┐
 │  GATEWAY     │      │  WORKERS         │     │  DADOS          │
 │  Meta        │      │  disparo         │     │  Postgres (RLS) │
-│  webhooks    │      │  sincronização   │     │  Redis          │
+│  webhooks    │      │  sincronização   │     │  + réplica      │
 │  entrada     │      │  IA assíncrona   │     │  Object storage │
 └──────────────┘      │  mídia           │     └─────────────────┘
                       └──────────────────┘
@@ -93,8 +93,8 @@ a fronteira está certa. Vamos manter essa propriedade **sem** pagar o preço de
 | **Linguagem** | **TypeScript** em API, web, mobile e workers | Tipos compartilhados de ponta a ponta eliminam a classe de bug mais comum: contrato divergente entre front e back. Time único, sem troca de contexto | **Go/Elixir**: melhores em conexões persistentes, mas obrigam segunda linguagem. O gargalo real é I/O e banco, não CPU do runtime. **Python**: forte em IA, fraco no resto — a IA entra por API, não precisa dominar a stack |
 | **Runtime API** | **Node LTS**, framework HTTP enxuto | Ecossistema maduro para Meta, filas e Postgres | — |
 | **Banco transacional** | **PostgreSQL** | **RLS resolve o isolamento de tenant na camada** (INV-04) · JSONB para campos personalizados (CTT-06) · particionamento para mensagens · transação forte para PED-07 | **NoSQL**: perde transação e integridade justo onde o domínio é relacional (cliente↔pedido↔item). **Multi-banco**: custo e complexidade sem ganho nesta fase |
-| **Cache / fila / presence** | **Redis** | Throttling por número (CMP-09) exige contador por chave com janela · presence para aviso de colisão (INB-18) · pub/sub para o fan-out de eventos | **Só Postgres (pg-boss)**: elimina um componente, mas throttling e pub/sub ficam ruins. Redis gerenciado é barato o suficiente para valer |
-| **Push server→client** | **SSE sobre HTTP/2 + Redis Pub/Sub** | §5 inteira | **WebSocket próprio**: bidirecional que não usamos — o envio vai por POST. **Serviço gerenciado** (Pusher/Ably): custo por conexão cresce com a base, e conexão aberta o dia inteiro é o nosso padrão de uso |
+| **Fila, throttling e presence** | **Postgres** — outbox pós-commit, contador em tabela com `UPDATE ... RETURNING`, presence com `expira_em` | ADR-007. Um componente a menos: custo fixo, superfície de falha e coisa para monitorar. O outbox garante que o evento só existe se a transação commitou — broker separado tem o problema oposto | **Redis**: foi a escolha inicial, revista ao adotar a stack do drezz. Com payload mínimo (§5.3), `LISTEN/NOTIFY` atende o fan-out e o limite de 8 KB fica irrelevante. Entra quando **medirmos** necessidade |
+| **Push server→client** | **SSE sobre HTTP/2 + `LISTEN/NOTIFY`** | §5 inteira | **WebSocket próprio**: bidirecional que não usamos — o envio vai por POST. **Serviço gerenciado** (Pusher/Ably): custo por conexão cresce com a base, e conexão aberta o dia inteiro é o nosso padrão de uso |
 | **Analítico** | **Réplica de leitura + views materializadas**, no mesmo Postgres | RFV, evolução de segmento, atribuição 3/7/14d (§8 da spec de telas) sem competir com o inbox | **Colunar (ClickHouse/DuckDB)**: correto no volume certo, caro e desnecessário agora. Gatilho de migração na §12 |
 | **Mídia** | **Object storage S3-compatível + URLs assinadas** | Áudio, imagem, PDF em volume (INB-02) | Guardar binário no banco — inflaciona backup e mata o custo |
 | **Console web** | **Angular 21+** (zoneless, signals, standalone), servido por CDN | **RxJS** modela o stream SSE multiplexado por canal · **CDK** para virtual scroll das listas grandes · estrutura opinativa em app denso de vida longa · Vitest padrão · **o time domina Angular** (ADR-010) | **React DOM**: compartilharia cultura com o Expo, mas o stream de eventos e as listas ficariam artesanais. **SSR no console**: não ajuda quem fica 8 h na mesma tela e adiciona servidor para pagar |
@@ -190,7 +190,9 @@ para poucas instâncias Node, sem infraestrutura de realtime dedicada. Gatilho d
 
 ### 5.6 Presence (aviso de colisão, "digitando")
 
-Heartbeat por POST a cada N segundos, gravado no Redis com TTL. Sem conexão bidirecional, sem
+Heartbeat por POST a cada N segundos, gravado na tabela `conversa_presenca` com coluna `expira_em`
+e varredura periódica de expirados. ⚠️ **Postgres não tem TTL nativo** — o vencimento é lógico, e a
+leitura sempre filtra por `expira_em > agora()`, nunca confia só na varredura. Sem conexão bidirecional, sem
 componente novo. Atende INB-18 com precisão de segundos — que é o suficiente para "Eduarda está
 nesta conversa".
 
@@ -275,8 +277,11 @@ Campanha → fila por número → throttling por número → envio → registro 
                         qualidade do número cair (CAN-06)
 ```
 
-O **limite é por número, não global** — cada número da frota tem tier próprio na Meta. Redis com
-contador por chave `numero:{N}:dia:{D}` resolve isso diretamente.
+O **limite é por número, não global** — cada número da frota tem tier próprio na Meta. Contador em
+tabela com `UPDATE ... RETURNING` atômico, no mesmo padrão da numeração fiscal do drezz.
+
+⚠️ **A janela não é o dia de calendário.** Chave por `dia` permite enviar o limite inteiro às 23h e
+de novo às 00h05. A modelagem correta está em `modelo-de-dados.md` §2.5.
 
 ### 9.2 Webhooks da Meta
 
@@ -342,7 +347,6 @@ da Meta e ERP de teste) · produção.
 2. **Object storage** — áudio e imagem de conversa acumulam rápido; política de retenção desde o dia 1
 3. **API de IA** — por token; transcrição e agente autônomo são os pesados
 4. **Compute da API** — relativamente barato, escala horizontal
-5. **Redis** — pequeno
 6. **CDN** — desprezível
 
 ⚠️ **Custo por mensagem da Meta não é nosso** — decisão de Tech Provider (o cliente paga a Meta
@@ -382,7 +386,7 @@ Fechando o ciclo com a §8 da especificação de telas:
 
 | # | Exigência | Atendida por |
 |---|---|---|
-| 1 | Tempo real bidirecional | SSE + Redis Pub/Sub (§5); envio por POST |
+| 1 | Tempo real bidirecional | SSE + outbox + `LISTEN/NOTIFY` (§5); envio por POST |
 | 2 | Contagem regressiva de janela | Estado derivado no cliente, a partir do timestamp; sem round-trip |
 | 3 | Leitura síncrona ao ERP | Contrato INT-01b com timeout curto e degradação explícita (§9.3) |
 | 4 | Escrita transacional idempotente | Postgres + chave de idempotência (§9.3) |
@@ -393,7 +397,7 @@ Fechando o ciclo com a §8 da especificação de telas:
 | 9 | Offline com fila | SQLite + fila, com conflito resolvido pela vendedora (§6.1) |
 | 10 | Isolamento por tenant | RLS no banco + canais prefixados + payload mínimo (§5, §10) |
 | 11 | Mídia com transcrição | Object storage + worker assíncrono |
-| 12 | Throttling por número | Redis com contador por chave (§9.1) |
+| 12 | Throttling por número | Contador em tabela com `UPDATE ... RETURNING` (§9.1) |
 
 ---
 
