@@ -118,19 +118,78 @@ descartar o repetido é mais barato que descobrir venda faltando três meses dep
 
 ---
 
-## 6. O que só o ambiente responde
+## 6. Respondido — e o que decorre
 
-| # | Pergunta | Por que importa |
+### 6.1 ✅ Não há limite de crédito no pdv-core
+
+**Todas as vendas são com pagamento no ato** — débito, crédito ou Pix.
+
+`creditoCliente: false` deixa de ser "não encontrei" e passa a ser **definitivo**. O bloco de
+crédito **não aparece** na tela (não aparece desabilitado), e `PED-11` simplesmente não se aplica a
+este conector.
+
+⚠️ **Mas isso abre uma pergunta de produto, não de integração — ver §7.**
+
+### 6.2 ⚠️ `POST /vendas` provavelmente NÃO tem idempotência
+
+É o pior caso, e ele muda a estratégia de escrita. Sem chave de idempotência no ERP, **nós** temos
+de garantir que um reenvio não crie o segundo pedido. O caminho é o previsto em INV-53, que deixa
+de ser exceção e vira o fluxo principal:
+
+```
+1. Grava a chave em `chave_idempotencia` ANTES de chamar o ERP
+   ⚠️ Antes, não depois: se gravar depois, o timeout apaga o rastro
+2. Chama o ERP
+3a. Respondeu → grava o número, conclui
+3b. Timeout → ⚠️ o pedido PODE existir lá. NÃO reenvia.
+    → estado `aguardando_conferencia`
+    → reconciliação por consulta (§6.3)
+```
+
+### 6.3 Reconciliação sem chave: busca heurística, e o limite dela
+
+Sem idempotência nativa, "este pedido já existe?" só pode ser respondido por **busca aproximada**:
+mesmo cliente, mesmo valor total, dentro de uma janela de minutos.
+
+⚠️ **E ela é ambígua por natureza.** Dois pedidos idênticos do mesmo cliente no mesmo minuto são
+raros, mas acontecem — e a heurística não sabe distinguir "achei o meu" de "achei outro parecido".
+
+Por isso a regra é: **heurística resolve o caso claro; ambiguidade vai para conferência humana.**
+Um pedido em `aguardando_conferencia` é um incômodo; um pedido duplicado no ERP do cliente é um
+problema com o cliente dele.
+
+### 6.4 Ainda em aberto
+
+| # | Pergunta | Impacto |
 |---|---|---|
-| 1 | 🔴 **`POST /vendas` aceita chave de idempotência?** | Sem ela, timeout de rede duplica pedido no ERP de cliente real (INV-53). Se não aceitar, precisamos de estratégia de reconciliação por consulta — e isso muda PED-08 |
-| 2 | 🔴 **Onde está o limite de crédito do cliente?** | Não localizado no código lido. Se não existir, `creditoCliente: false` e o bloco some da tela (não fica desabilitado) |
-| 3 | **Latência de `/estoques/tela-venda`** | O contrato exige resposta em ~2s. Acima disso, `saldoSincrono` vira `false` na prática |
-| 4 | **Limite de requisições por minuto** | Dimensiona a carga histórica |
-| 5 | **Formato do token do Keycloak e escopos** | Autenticação do adaptador |
-| 6 | **`/vendas` paginado devolve os itens?** | Se não, é uma chamada por venda — e a carga histórica muda de ordem de grandeza |
+| 3 | Latência de `/estoques/tela-venda` | Acima de ~2s, `saldoSincrono` vira `false` na prática |
+| 4 | Limite de requisições por minuto | Dimensiona a carga histórica |
+| 5 | Token do Keycloak e escopos | Autenticação do adaptador |
+| 6 | `/vendas` paginado devolve os itens? | Se não, é uma chamada por venda e a carga histórica muda de ordem de grandeza |
 
-⚠️ **As duas primeiras são bloqueantes de PED-07/PED-08** e precisam ser respondidas antes de o
-tira-pedidos ser construído. As demais afinam, não travam.
+---
+
+## 7. ⚠️ A pergunta de produto que a resposta sobre crédito revelou
+
+O pdv-core é um **PDV de varejo**: venda com pagamento no ato, sem crédito, sem prazo.
+
+O GeraCRM é para **atacado**, onde vender a prazo é o normal. E há evidência disso no próprio
+levantamento: o sistema de referência (Tailor) tem templates chamados **"Boleto Prazo Em Análise"**,
+**"Boleto Prazo Aprovado"** e **"Boleto Prazo Recusado"**
+(`inventario-funcionalidades-referencia.md`).
+
+Ou seja: **o fluxo de boleto a prazo existe na operação do cliente, mas não no ERP que analisamos.**
+
+Três possibilidades, e cada uma leva a um caminho diferente:
+
+| Hipótese | Consequência |
+|---|---|
+| O cliente de atacado usa **outro sistema**, não o pdv-core | O conector do atacado é outro, e este levantamento serve ao varejo |
+| O prazo é controlado **fora do sistema** (planilha, WhatsApp, confiança) | ⚠️ **Oportunidade de produto:** o GeraCRM poderia ser onde isso passa a existir |
+| Existe módulo de crediário/prazo que **não localizei** | Basta apontar onde |
+
+⚠️ **Isto não bloqueia a Onda 0** — a ingestão e o saldo funcionam do mesmo jeito. Mas muda o
+desenho do pedido assistido e precisa ser respondido antes de PED-11/PED-12.
 
 ---
 

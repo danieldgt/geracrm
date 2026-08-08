@@ -14,16 +14,17 @@ import type {
  */
 
 /**
- * ⚠️ Two of these are UNCONFIRMED and are deliberately declared `false`:
+ * ⚠️ Two are `false` for different reasons, and the difference matters:
  *
- *  - `creditoCliente`: no endpoint found while reading the code.
- *  - `escritaPedido`: `POST /vendas/...` exists, but idempotency is unconfirmed
- *    — and without it a network timeout duplicates an order in a real
- *    customer's ERP (INV-53).
+ *  - `creditoCliente`: **definitive.** The pdv-core has no credit limit at all —
+ *    every sale is paid on the spot (debit, credit or Pix). The credit block
+ *    does not render; it does not render disabled.
  *
- * Declaring `false` degrades the product in a visible, honest way. Declaring
- * `true` on a hunch breaks it silently, in production, on someone's order.
- * Flip them only after checking against homologation.
+ *  - `escritaPedido`: **conditional.** `POST /vendas/...` exists but almost
+ *    certainly has no idempotency key. Writing without one means a single
+ *    network timeout duplicates an order in a real customer's ERP (INV-53).
+ *    Enabled once the reconciliation path below is implemented and verified
+ *    against homologation.
  */
 export const CAPACIDADES_GERACLOUD: Capacidades = {
   ingestaoClientes: true,
@@ -261,18 +262,31 @@ export class ConectorGeraCloud implements ConectorErp {
   }
 
   // -------------------------------------------------------------------------
-  // Writes — intentionally absent
+  // Writes — intentionally absent, and the plan for when they arrive
   // -------------------------------------------------------------------------
   //
-  // ⚠️ `efetivarPedido` and `consultarPedidoPorChave` are NOT implemented,
-  // and `escritaPedido` is declared false.
+  // ⚠️ `escritaPedido` is false, so `efetivarPedido` is absent. The conformance
+  // suite enforces that pairing.
   //
-  // `POST /vendas/...` exists, but idempotency is unconfirmed. Shipping a write
-  // without it means that one network timeout duplicates an order in a real
-  // customer's ERP — exactly what INV-53 exists to prevent.
+  // The ERP has no idempotency key. That makes reconciliation the MAIN path,
+  // not the exception, and it works like this:
   //
-  // Until homologation answers, the product degrades the honest way: the order
-  // pad becomes an exportable draft (ADR-008), and the screen says why.
+  //   1. Persist the key in `chave_idempotencia` BEFORE calling the ERP.
+  //      ⚠️ Before, not after — persisting after means a timeout erases the
+  //      only trace that the call ever happened.
+  //   2. Call the ERP.
+  //   3a. Answered  → store the order number, done.
+  //   3b. Timed out → ⚠️ the order MAY exist there. Do NOT retry.
+  //       Move to `aguardando_conferencia` and reconcile by querying.
+  //
+  // Reconciliation without a key can only be a heuristic: same customer, same
+  // total, within a few minutes. ⚠️ That is ambiguous by nature — two identical
+  // orders from the same customer in the same minute are rare but real, and the
+  // heuristic cannot tell "found mine" from "found a similar one".
+  //
+  // So: the heuristic resolves the clear case; ambiguity goes to a human.
+  // An order awaiting confirmation is an annoyance. A duplicated order in the
+  // customer's ERP is a problem with THEIR customer.
 }
 
 export type ResultadoEfetivacao = Resultado<{ numeroExterno: string }, FalhaEfetivacao>
