@@ -184,6 +184,35 @@ forma de escrever teste.
 **7. Angular Aria** (preview no 21) para acessibilidade headless, em vez de reimplementar padrões
 WAI-ARIA à mão.
 
+## ADR-012 — Identidade visual própria: azul suave, claro e escuro
+**Contexto**: o produto precisava de identidade, e havia três caminhos — herdar da Gera3, derivar do
+drezz (laranja #FF6732) ou criar linha própria.
+**Decisão**: **identidade própria**. Tons suaves de azul, tema claro com fundo branco e tema escuro
+completo, layout marcante e moderno.
+
+**A tensão que governa o sistema**: "marcante" e "oito horas por dia" puxam para lados opostos —
+visual marcante que cansa é fracasso funcional. A resolução é gastar boldness em **um** lugar: o
+ambiente fica quieto (azul dessaturado, sem gradiente, sem sombra empilhada) e a energia vai para
+onde há informação urgente.
+
+**Elemento assinatura — o anel de janela**: a contagem regressiva da janela de 24h vira desenho.
+Anel fino ao redor do avatar na lista, barra de 2px no topo do chat, drenando ao longo das 24 horas;
+turquesa com folga, âmbar nas últimas 2h, coral ao fechar. Movimento contínuo e lentíssimo — não
+pisca. Nasce do domínio (só existe pela regra da Meta), é funcional (substitui leitura de número por
+percepção periférica), é onipresente e nenhum concorrente tem — todos usam badge de texto.
+⚠️ Nunca é a única fonte: o tempo em texto permanece, e o estado é anunciado a leitores de tela.
+
+**Decisão tipográfica que virou identidade**: monoespaçada para **identificadores** — SKU, telefone,
+protocolo, CNPJ, referência. São valores comparados e conferidos o dia inteiro; em mono eles alinham
+em coluna e o olho acha a diferença entre dois SKUs parecidos, sem precisar de cor ou negrito.
+
+**Consequências**: `packages/design-tokens/tokens.json` é a fonte da verdade, consumida por Angular
+(custom properties) e Expo (NativeWind) — componente se duplica, token não. O tema escuro **não é
+inversão automática**: fundo azul profundo (`#0D1830`, não preto) e cores de estado clareadas.
+Ficam explicitamente descartados: gradiente em superfície, sombra empilhada, ilustração em estado
+vazio, canto muito arredondado e animação de entrada em lista que atualiza em tempo real.
+Detalhamento em `docs/identidade-visual.md`.
+
 ## ADR-011 — Convenções
 Domínio em português (`Conversa`, `Pedido`, `Campanha`), infraestrutura em inglês, comentários em
 inglês · sem `enum` do TypeScript (união de literais + `z.enum`) · sem status numérico mágico ·
