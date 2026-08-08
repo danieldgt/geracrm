@@ -138,6 +138,17 @@ Duas branches paralelas criam `0007` e nenhuma das duas percebe até o merge. Re
 2. Quem mergeia primeiro fica com o número; **o segundo renumera antes de mergear**, e roda o
    runner de novo a partir do schema atual.
 3. **No máximo um agente por vez** criando migration (§10.4).
+4. ⚠️ **Migration prevista em documento de planejamento também reserva número — e a reserva vive na
+   tabela §4 do plano da onda, não na cabeça de quem escreveu.** Antes de escrever `00NN_` em
+   qualquer documento, o número sai de lá e volta para lá, no mesmo commit.
+
+⚠️ **A regra 4 não é hipótese: `0017` já foi reservado duas vezes no mesmo dia**, por
+`entrada-do-primeiro-cliente.md` (conciliação) e `metricas-de-sucesso.md` (métricas de produto).
+Nenhum PR existia, nenhuma branch existia, e as regras 1 a 3 — todas sobre PR e branch — **não
+tinham como pegar**. A colisão nasceu no planejamento e só apareceu numa revisão cruzada; foi
+resolvida renumerando a conciliação para `0018`. O recurso mais serializado do repositório começa a
+ser consumido antes de existir código, e a tabela §4 do plano da onda é o único lugar onde as duas
+reservas se enxergam.
 
 ### 3.3 Tamanho de PR
 

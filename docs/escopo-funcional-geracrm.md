@@ -91,6 +91,14 @@ Detalhamento e consequências na seção 20.
 | PLT-09 | White-label: logo, cores, domínio, remetente — *destravado por PLT-03* | ★ | 4 |
 | PLT-10 | Painel de revenda com subcontas — *destravado por PLT-03* | ★ | 4 |
 | PLT-11 | Suporte embutido ("Solicitar Ajuda") e base de conhecimento | T | 2 |
+| PLT-12 | **Linha de base e marcos do tenant** — régua congelada (LB-01…LB-15) e datas de marco (`carga_historica_completa`, `linha_base_congelada`, `primeiro_corte`, `abandono_sistema_antigo`). ⚠️ Congelada é **imutável**: correção é linha nova, nunca `UPDATE` | ★ | 0 |
+| PLT-13 | **Telemetria de uso agregada** — uma linha por usuário/dia/superfície, escrita por `UPSERT` no caso de uso. ⚠️ **Não** é pipeline de evento; e é dado de trabalhador, com retenção definida pelo jurídico | ★ | 0 *(tabela)* / 1 *(escrita)* |
+| PLT-14 | **Assinatura do tenant** — o que **este** cliente paga (valor, ciclo, vigência sem sobreposição), distinto do catálogo de planos. É o **denominador de BI-11** e a base do MRR | ★ | 0 |
+
+> ⚠️ **PLT-12 a PLT-14 são Onda 0 por serem irrecuperáveis, não por serem urgentes.** LB-10…LB-12
+> (conversas/dia, tempo de primeira resposta, % sem resposta) só existem enquanto a equipe ainda
+> está no sistema antigo: a janela fecha no primeiro corte e não reabre. Sem eles, toda melhora das
+> ondas seguintes é opinião.
 
 ---
 
@@ -115,6 +123,18 @@ O módulo mais estratégico. Se ele falha, o CRM não se preenche sozinho e todo
 | INT-11 | n8n / Make / Zapier | K | 3 |
 | INT-12 | Pagamentos (Asaas, Mercado Pago, PagBank) para link de pagamento | T | 3 |
 | INT-13 | **Marketplace de conectores** com SDK e certificação de parceiro | ★ | 4 |
+| INT-14 | **Relatório de conciliação (RC)** — comando executável que compara CRM × ERP (RC-01…RC-10), classifica cada achado num código **DIV**, grava execução e divergências consultáveis e sai em Markdown + CSV para assinatura do gestor comercial | ★ | 0 |
+| INT-15 | **Perfilamento de base** (B-01…B-10) — comando que mede qualidade cadastral sobre a **cópia anonimizada**, antes da carga: % sem documento, duplicidade, telefone inválido, cliente sem telefone | ★ | 0 |
+| INT-16 | **Recarga por janela de data** (delta) — reprocessar um intervalo sem duplicar, **na porta**, não só no conector nativo | ★ | 0 |
+| INT-17 | **De-para de vendedoras e filiais** entre ERP e CRM (`usuario_identidade_externa`, `filial_identidade_externa`), com fila nomeada de não mapeados | ★ | 0 |
+
+> ⚠️ **INT-14 é o que separa "carregado" de "confiável".** A reconciliação interna (INV-57) fecha
+> perfeitamente numa carga que trouxe 60% das vendas — ela só compara o CRM com ele mesmo. Quem
+> compara com o ERP é o RC, e é ele que o gestor assina.
+>
+> ⚠️ **INT-17 falha alto, de propósito.** Venda de vendedor do ERP sem de-para entra no total,
+> fica **fora** do ranking e aparece numa fila de não mapeados. Agregar em "outros" é produzir um
+> ranking errado com cara de certo.
 
 > **Regra de ouro:** nada que o conector GeraCloud faz pode ser exclusivo dele. Toda capacidade tem de existir também pela API pública — senão o produto vira acessório do ERP da casa e perde o mercado externo.
 
@@ -189,6 +209,15 @@ O módulo mais estratégico. Se ele falha, o CRM não se preenche sozinho e todo
 | CTT-13 | **Marcar como representante** — tipo de relação distinto de cliente | T | 2 |
 | CTT-14 | Listas personalizadas / segmentos salvos | T | 2 |
 | CTT-15 | LGPD: consentimento, opt-out, exportação e exclusão do titular | ★ | 3 |
+| CTT-16 | **Importação de opt-out histórico** do sistema antigo para a lista de bloqueio, por **chave reduzida** (55+DDD+8 dígitos), com `origem='migracao'` | ★ | 0 |
+| CTT-17 | **Marca de origem da carga no contato** (`origem_carga`: chave forte, chave média, sem chave forte, manual) — grava **como** o contato entrou, no instante do `INSERT` | ★ | 0 |
+
+> ⚠️ **CTT-16 é pré-requisito do go-live, não do desligamento do sistema antigo.** Depois que o
+> antigo desliga, quem pediu para sair não existe mais em lugar nenhum — e o primeiro disparo para
+> essa pessoa é o tipo de erro que não se explica ao jurídico.
+>
+> ⚠️ **CTT-17 é irrecuperável por construção.** Depois de 40 mil contatos carregados, não existe
+> consulta que distinga o que casou por CNPJ do que virou contato próprio por não ter documento.
 
 ---
 

@@ -23,7 +23,9 @@
    ponto de não retorno estão na §6 — escritos **antes** de conectar o primeiro número.
 
 **Convenção de tempo:** `T` = semana do corte do **primeiro número**. `D` = dia do corte de um
-número específico. `S0…S7` = semanas do plano da Onda 0.
+número específico. `S0…S6` = semanas do plano da Onda 0 (S0 de preparação + seis de desenvolvimento).
+`ENS-1` / `ENS-2` = os dois **ensaios de carga** — ⚠️ nunca `E1`/`E2`, que no plano são prefixos de
+tarefa por épico.
 
 **Artefatos que este documento obriga a existir** (um por cliente, versionados em `docs/clientes/<cliente>/`):
 
@@ -241,14 +243,18 @@ tem documento válido (DV conferido)?
 | Idempotência | Mesmo lote reenviado não muda a contagem (E2-03) |
 | Horário | Fora do expediente, dentro da janela de manutenção do ERP (D-04) |
 | Réplica | ⚠️ Lag durante a carga é esperado; o painel **declara a hora de apuração**, nunca finge tempo real |
-| **Dois ensaios** | **E1** em T-4, sobre a cópia real em homologação → mede duração e acha DIV. **E2** em T-1, em produção, carga completa |
+| **Dois ensaios** | **ENS-1** em T-4, sobre a cópia real em homologação → mede duração e acha DIV. **ENS-2** em T-1, em produção, carga completa |
 | **Delta de véspera** | Entre a carga de T-1 e o corte, o ERP continuou vendendo. Em T (D-0) roda **recarga por janela de data** |
 
-⚠️ **A "recarga por janela de data" não existe no plano atual** — E2-07 fala em carga completa com
-retomada. Sem ela, o delta de véspera exige recarregar tudo na madrugada do corte. Vira **E2-18**
-(§9).
+⚠️ **Os ensaios chamam-se `ENS-1` e `ENS-2`, nunca `E1` e `E2`.** No `plano-onda-0.md`, `E1-xx` e
+`E2-xx` são **prefixos de tarefa por épico** (`E1-01` = EP-01, `E2-16` = EP-02) — e este documento
+usava os dois sentidos em seções vizinhas (§2.5 e §9.1). Uma frase como *"E2 depende de E2-07"* tem
+duas leituras corretas e nenhuma delas óbvia.
 
-⚠️ **A duração medida no ensaio E1 é o que define a janela do go-live.** Prometer data antes de
+⚠️ **A "recarga por janela de data" agora existe no plano:** é **E2-18 / INT-16**, na porta e no
+adaptador. Sem ela, o delta de véspera exigiria recarregar tudo na madrugada do corte.
+
+⚠️ **A duração medida no ensaio ENS-1 é o que define a janela do go-live.** Prometer data antes de
 medir é a origem do go-live que vira madrugada.
 
 ### 2.6 O que **não** migra — lista fechada, assinada pelo cliente
@@ -333,11 +339,11 @@ template aprovado. Ela não perdeu o cliente; perdeu a permissão de falar prime
 | D-2 | PIN de verificação em duas etapas conhecido e testado (F-03) | Cliente |
 | D-2 | Método de pagamento na conta Meta ativo (F-04) | Cliente |
 | D-2 | Display name aprovado (F-05) | Meta |
-| D-2 | Templates de reabertura aprovados | Meta |
+| D-2 | Templates de reabertura aprovados **e sincronizados pelo E3-15** | Meta + nós |
 | D-2 | Vendedora concluiu B1+B2 do treinamento e passou na certificação (§5.4) | Nós |
 | D-1 | Backup do aparelho / exportação das conversas críticas | Cliente |
-| D-1 | Carga de produção concluída e RC v2 assinado | Nós + cliente |
-| D-0 | Recarga delta desde o corte do ensaio (E2-18) | Nós |
+| D-1 | Carga de produção (ENS-2) concluída e RC v2 assinado | Nós + cliente |
+| D-0 | Recarga delta desde o corte do ensaio (E2-18 / INT-16) | Nós |
 | D-0 | Carta de despedida enviada nas conversas ativas | Vendedora |
 | D-0 | **Registro na Cloud API** | Nós (Embedded Signup) |
 | D-0 | Webhook verificado; assinatura validando | Nós |
@@ -450,20 +456,34 @@ o produto.
 ### 6.1 Linha de base — medida **antes**, ou nunca
 
 ⚠️ Resolve a metade operacional da lacuna 4.3 de `prontidao-para-inicio`. **A linha de base é
-coletada na transição ou não é coletada nunca.** Fonte: **ERP**, 8 semanas anteriores ao corte.
+coletada na transição ou não é coletada nunca.**
 
-| Métrica | Corte | Fonte |
-|---|---|---|
-| Faturamento e nº de pedidos | mês × filial × vendedora | ERP |
-| Ticket médio | mês × vendedora | ERP |
-| Clientes que compraram no mês · % recorrentes | mês | ERP |
-| Clientes ativos nos últimos 24 meses | — | ERP (define o denominador do RFV) |
-| Tempo médio de primeira resposta | vendedora | Sistema antigo, se exporta; senão **amostra manual de 3 dias** |
-| Conversas/dia por número | número | Sistema antigo ou amostra |
+**A régua é `metricas-de-sucesso.md` §1.2 — LB-01…LB-15.** Este documento não mantém uma segunda
+lista: ela divergiria da primeira no primeiro ajuste. O que cabe aqui é **quando** e **por quem**:
+
+| Bloco | O que | Fonte | Quando | Reconstituível? |
+|---|---|---|---|---|
+| **LB-01…LB-09** | Receita, compradores ativos, recompra 90 d, tempo até o 2º pedido, ticket **e mediana**, intervalo entre compras, foto RFV, qualidade cadastral, clientes "invisíveis" | **ERP**, sobre a carga histórica — **24 meses**, e ⚠️ **nunca fora de `conexao_erp_cobertura`** (INV-56) | Quando der, depois da carga | ✅ sim |
+| **LB-10…LB-12** | 🔴 **Conversas/dia por vendedora · tempo até a primeira resposta (mediana e p90) · % de entrantes sem resposta em 24 h** | **Janela de sombra** — 2 semanas com a equipe ainda no sistema antigo: contagem diária de conversas, **amostra de 30 conversas por vendedora** para tempo de resposta, contagem de sem resposta às 18h. Se o antigo exporta, a exportação vem primeiro; se o cliente opera em WhatsApp puro, a **exportação de conversa do próprio aplicativo** carrega os horários e reconstrói LB-11/LB-12 melhor que qualquer declaração | **T-8**, 2 semanas **antes** da ficha de entrada | 🔴 **não** |
+| **LB-13…LB-15** | Volume e custo de disparo atual · custo das ferramentas atuais · nº de vendedoras, números e horas/dia | Fatura do BSP, contratos, declarado (como **faixa**, nunca número) | T-6, com a ficha | 🔴 **não** |
+
+⚠️ **A "amostra manual de 3 dias" que este documento pedia foi substituída pela janela de sombra de
+2 semanas.** Três dias não distinguem segunda-feira de sexta em atacado de moda, e a **média** que
+ela produzia é a estatística errada: uma conversa esquecida por 14 horas move a média e não move a
+mediana. O instrumento é **mediana e p90 sobre 30 conversas por vendedora**, com a `fonte` gravada
+em `linha_base_metrica` (`export_antigo` \| `medido` \| `declarado`).
+
+⚠️ **A sombra roda ANTES de a equipe saber da mudança.** Depois do anúncio, o tempo de resposta
+melhora sozinho — e a Onda 1 perde o crédito por uma melhora que já tinha acontecido. Como T-6 já é
+uma conversa com o gestor sobre carteira e vendedoras (§1.C), **T-8 é o último momento em que a
+medição ainda é do estado anterior**.
+
+⚠️ **Toda comparação posterior é contra o mesmo mês do ano anterior, sazonalizada** — nunca contra
+as semanas imediatamente anteriores. Sazonalidade de coleção domina o atacado de moda: virada em
+janeiro comparada com dezembro "prova" queda de 40% que não existe.
 
 ⚠️ **Sem tempo de resposta de base, não se pode afirmar que piorou nem que melhorou — e a primeira
-reclamação vira verdade por falta de contraditório.** Se o sistema antigo não exporta, a amostra
-manual de três dias é obrigatória, não opcional.
+reclamação vira verdade por falta de contraditório.**
 
 ### 6.2 Critérios de sucesso, por marco
 
@@ -476,7 +496,7 @@ manual de três dias é obrigatória, não opcional.
 | **D+7** | Qualidade do número na Meta | alta | Painel Meta |
 | **D+7** | Incidentes P1 abertos | 0 | Sentry + diário |
 | **D+7** | Tempo de primeira resposta | ≤ base | GeraCRM |
-| **D+30** | Faturamento da vendedora/filial | ⚠️ **≥ 95% da média das 8 semanas anteriores** | ERP |
+| **D+30** | Faturamento da vendedora/filial | ⚠️ **≥ 95% do mesmo mês do ano anterior, sazonalizado** (LB-01) — **nunca** contra as 8 semanas anteriores | ERP |
 | **D+30** | Relatório de conciliação final | assinado, sem DIV bloqueante aberto | `conciliacao-<data>.md` |
 | **D+30** | Base classificada pelo RFV | ≥ 80%; o restante **justificado por INV-56**, não por falha | `mv_rfv_segmento_atual` |
 | **D+30** | Sistema antigo | em modo leitura | Contrato |
@@ -526,38 +546,54 @@ por quê.**
 
 | Semana | Marco | Nós | Cliente | ERP | Meta |
 |---|---|---|---|---|---|
+| **T-8** | 🔴 **Janela de sombra abre** — 2 semanas medindo o **sistema antigo** (LB-10, LB-11, LB-12), **antes** da ficha de entrada | Entregar o instrumento e a planilha de contagem; treinar quem vai medir; congelar o método antes de começar | **Uma pessoa, ~1 h/dia**: contagem diária de conversas, 30 conversas por vendedora, sem resposta às 18h | — | — |
 | **T-6** | Ficha de entrada + cópia da base | Conduzir §1.A/C/E/F/G; abrir **M-13** (situação dos números na Meta) | Assinar; entregar cópia (M-11); nomear decisor e multiplicadora | Liberar credenciais de homologação (M-10) | Business Verification já correndo (M-04) |
 | **T-5** | **Perfilamento entregue** + definições fechadas | Rodar §1.B; entregar `perfilamento.md`, `linha-de-base.md`, `o-que-nao-migra.md` | ⚠️ Fechar **definição de "valor da venda"** (D-07) e a regra de cancelamento (D-06). Assinar `o-que-nao-migra` | Responder D-01…D-06 | Tech Provider (M-05) |
-| **T-4** | **Ensaio E1 de carga** em homologação, sobre a base real | Medir duração; gerar RC v0 | Entregar de-para de vendedoras | Ajustar filtros/consultas conforme DIV | App Review submetido (M-07) |
+| **T-4** | **Ensaio ENS-1 de carga** em homologação, sobre a base real | Medir duração; gerar RC v0 | Entregar de-para de vendedoras | Ajustar filtros/consultas conforme DIV | App Review submetido (M-07) |
 | **T-3** | **Conciliação v1** + divergências nomeadas | Classificar toda linha em DIV; corrigir e reprocessar | Responder DIV-01/02/03 | — | — |
 | **T-2** | Conciliação v2 fecha · treinamento B1/B2/B5 · verificações Meta | Executar B1/B2/B5; submeter templates e display name | Liberar admin do BM; **cadastrar método de pagamento**; exportar **opt-out** | — | Aprovação de templates e display name |
-| **T-1** | **Carga de produção** (E2) + ensaio de corte | Executar; RC v2 assinado; checklist do dia D | Assinar RC v2; confirmar a janela | Janela de manutenção | — |
+| **T-1** | **Carga de produção** (ENS-2) + ensaio de corte | Executar; RC v2 assinado; checklist do dia D | Assinar RC v2; confirmar a janela | Janela de manutenção | — |
 | **T** | **Corte do número piloto** | Delta + registro + 3 testes + B3; monitoramento 48h | Vendedora presente; carta de despedida | — | Embedded Signup |
 | **T+1** | Gate D+7 do piloto → **lote 2 (+2 números)** | ✅ Fecha o critério de saída nº 2 da Onda 0 | — | — | — |
 | **T+2** | Restante da filial-sede · **B4** com todas | — | — | — | — |
 | **T+3…T+5** | Uma filial por semana, com gate D+7 | — | — | — | — |
 | **T+6** | **D+30 do piloto** · conciliação final · antigo em leitura · retrospectiva | Assinar RC final; fechar o diário | Colocar o antigo em leitura (⚠️ não cancelar) | — | — |
 
-### ⚠️ O encaixe com o plano da Onda 0 — e o que ele revela
+⚠️ **T-8 é a única linha deste cronograma que não pode escorregar para a direita.** Todas as outras
+custam prazo quando atrasam; esta custa **o dado**. LB-10, LB-11 e LB-12 são 🔴 não reconstituíveis
+(`metricas-de-sucesso` §1.2): a janela fecha no `primeiro_corte` e não reabre. E ela precisa vir
+**antes de T-6**, porque T-6 já é uma conversa com o gestor sobre carteira, vendedoras e turnover
+(§1.C) — a partir daí a equipe sabe da mudança, e o tempo de resposta melhora sozinho.
 
-O ensaio E1 (T-4) depende de **E2-07/E2-08**, que o plano posiciona na **S6**. Logo:
+⚠️ **A sombra não consome engenharia.** É uma pessoa do cliente, uma hora por dia, com planilha. O
+que ela consome é **decisão antecipada**: quem mede, com que método, e o congelamento do método
+antes da primeira contagem. O artefato final é `linha-de-base.md`, carregado em `linha_base_metrica`
+(PLT-12) com `fonte` gravada — não uma planilha solta no Drive.
 
-```
-T-4 = S6      T-2 = S8      T (corte do piloto) = S10
-```
+### ✅ O encaixe com o plano da Onda 0 — decidido: saída (b), ADR-015
 
-⚠️ **A Onda 0, como escrita, subestima o prazo em ~2 semanas.** As 8 semanas terminam com o **código
-pronto**, não com **o cliente dentro** — e o critério de saída nº 2 ("3 números recebendo e
-enviando") só fecha em **T+1 = S11** se depender do cliente.
+O ensaio ENS-1 (T-4) depende de **E2-07/E2-08**, que o plano posiciona na **S6**. Levado a sério,
+isso punha o corte do piloto em **S10** e o critério de saída nº 2 em **S11** — dez semanas sem
+marco verificável no caminho.
 
-Duas saídas, ambas legítimas, uma precisa ser escolhida agora:
+**A escolha está feita e é a (b)**, registrada em **ADR-015**:
 
-| Saída | Consequência |
+| Saída | Estado |
 |---|---|
-| **(a)** Onda 0 passa de 8 para **10–11 semanas** | Prazo honesto; a onda entrega cliente em produção |
-| **(b)** Critério nº 2 é atendido com **números da Gera3** (o Plano B do risco nº 3 do plano), e o cliente entra na **Onda 1** | Onda 0 fecha no prazo; a transição vira o primeiro bloco da Onda 1 — com o plano dela ainda inexistente |
+| **(a)** Onda 0 passa a 10–11 semanas, com o cliente dentro | ❌ **Descartada** |
+| **(b)** Critério nº 2 atendido com **números da Gera3** (dogfooding); o cliente entra na **Onda 1** | ✅ **Decidida — ADR-015** |
 
-⚠️ **Não escolher é escolher (b) por omissão, sem plano.**
+**Consequências que este documento assume:**
+
+| O que muda | Detalhe |
+|---|---|
+| **Este cronograma (T-8…T+6) é executado na Onda 1**, não na Onda 0 | O corte do primeiro número é o **primeiro bloco da Onda 1**, e depende do inbox (EP-05) e da certificação prática da §5.4 — cinco das seis ações certificadas são Onda 1 |
+| ⚠️ **T-8 e T-6 começam AGORA, mesmo assim** | A janela de sombra e **M-13** medem/destravam o **estado anterior**. Adiá-los para a Onda 1 é perdê-los: a sombra fecha no primeiro corte, e a portabilidade entre WABAs depende de um terceiro hostil com até 3 semanas de espera |
+| **A carga histórica e a conciliação permanecem na Onda 0** | São o critério de saída nº 1, e é o que dá seis semanas de sinal verificável |
+| ⚠️ **O plano da Onda 1 deixa de ser macro** | É nela que o cliente entra; ela precisa do detalhe de `plano-onda-0.md`, com semanas — `plano-ondas-1-4.md` §3 já a abre com a transição como **escopo da onda** |
+
+⚠️ **A frase que estava aqui — *"não escolher é escolher (b) por omissão, sem plano"* — deixou de
+valer no pior sentido possível: escolheu-se (b), e agora o plano da Onda 1 é dívida com data.**
 
 ---
 
@@ -572,7 +608,7 @@ Duas saídas, ambas legítimas, uma precisa ser escolhida agora:
 | **TR-05** | Disparo em massa em número recém-conectado limita o número | Média × **Alto** | Pedido de campanha na semana 1 | **Proibição escrita** de campanha nos primeiros 14 dias de cada número; CAN-06 pausa automática | Nós |
 | **TR-06** | Opt-out histórico não exportado antes do cancelamento do antigo | Média × **Alto (jurídico)** | E-04 sem resposta | Exportação é pré-requisito do **go-live**, não do cancelamento (RC-10) | Cliente |
 | **TR-07** | Vendedora volta ao celular pessoal → operação paralela invisível | **Alta** × Alto | Queda de conversas/dia no número sem queda de faturamento | Política escrita, acompanhamento diário na semana 1, RB-06 | Gestor |
-| **TR-08** | Carga de produção estoura a janela ou pressiona a primária | Média × Alto | Duração do ensaio E1 > 1/3 da janela | Lotes curtos; janela com **3× folga** sobre o medido; partições criadas antes | Nós |
+| **TR-08** | Carga de produção estoura a janela ou pressiona a primária | Média × Alto | Duração do ensaio ENS-1 > 1/3 da janela | Lotes curtos; janela com **3× folga** sobre o medido; partições criadas antes | Nós |
 | **TR-09** | Top vendedora no lote 1 | Média × Alto | — | Regra da mediana (§3.1) | Nós |
 | **TR-10** | ERP altera venda retroativamente → conciliação nunca fecha | Média × Médio | RC v1 e v2 divergindo em meses já fechados | **Data de corte contábil**: conciliar o "estado em D", com o snapshot guardado | Nós + ERP |
 | **TR-11** | Cliente cancela o sistema antigo cedo para economizar | Média × **Alto** | Pergunta "posso cancelar já?" | Cláusula: cancelamento só após D+30 do último lote e após o checklist de exportação | Nós (contrato) |
@@ -586,32 +622,42 @@ Itens acionáveis. Cada um altera um documento existente.
 
 ### 9.1 Novas tarefas em EP-02 (`plano-onda-0.md` §5.2)
 
-| # | Tarefa | Dep. | Definição de pronto |
-|---|---|---|---|
-| **E2-16** | **Relatório de conciliação** (RC-01…RC-10) como comando executável, saída Markdown + CSV | E2-07, E2-08 | `dado o ERP com 3 vendas a mais em março, quando roda, então RC-01 acusa o mês, a diferença em centavos e classifica como DIV-01` |
-| **E2-17** | **Perfilamento de base** (§1.B) como comando, sobre cópia anonimizada | E2-03 | Roda na **S1**; produz as 10 métricas de B-01…B-10 |
-| **E2-18** | **Recarga por janela de data** (delta) na porta e no adaptador | E2-01, E2-07 | `dada recarga de 01/03 a 07/03, quando roda, então só a janela é reprocessada e nada duplica` |
-| **E2-19** | **Importação de opt-out histórico** para `lista_bloqueio`, por `chave_busca` (INV-50), com origem `migracao` | E2-15 | `dado opt-out importado com 12 dígitos, quando a campanha materializa o contato de 13, então o gateway bloqueia` |
-| **E2-20** | **De-para de vendedoras** (`usuario_identidade_externa`) obrigatório antes de RC-03 | E1-03, E2-03 | RC-03 **falha explicitamente** se houver vendedor do ERP sem de-para — não silencia |
-| **E2-21** | Marcar contato criado **sem chave forte** (`origem_carga`) | E2-05 | O número aparece em RC-05 e alimenta a fila de deduplicação |
+⚠️ **Toda tarefa carrega o ID de requisito** — `processo-de-trabalho` §0, regra 1: *"trabalho sem ID
+de requisito não entra; nem tarefa, nem branch, nem commit"*. Os IDs abaixo foram criados em
+`escopo-funcional-geracrm.md` §3, §4 e §7. **Já aplicadas em `plano-onda-0.md` §5.2.**
+
+| # | Requisito | Tarefa | Dep. | Definição de pronto |
+|---|---|---|---|---|
+| **E2-16** | `INT-14` | **Relatório de conciliação** (RC-01…RC-10) como comando executável, saída Markdown + CSV, gravando em `conciliacao_execucao`/`conciliacao_divergencia` | E2-07, E2-08, D-18 | `dado o ERP com 3 vendas a mais em março, quando roda, então RC-01 acusa o mês, a diferença em centavos e classifica como DIV-01` |
+| **E2-17** | `INT-15` | **Perfilamento de base** (§1.B) como comando, sobre a cópia anonimizada por **R-11** | E2-03, R-11 | Roda na **S1**; produz as 10 métricas de B-01…B-10 e `perfilamento.md`. ⚠️ B-03/B-04 exigem anonimização **determinística** |
+| **E2-18** | `INT-16` | **Recarga por janela de data** (delta) na porta e no adaptador | E2-01, E2-07 | `dada recarga de 01/03 a 07/03, quando roda, então só a janela é reprocessada e nada duplica` |
+| **E2-19** | `CTT-16` | **Importação de opt-out histórico** para `lista_bloqueio`, por `chave_bloqueio` (INV-50), com `origem='migracao'` | E2-15, D-09 | `dado opt-out importado com 12 dígitos, quando a campanha materializa o contato de 13, então o gateway bloqueia` |
+| **E2-20** | `INT-17` | **De-para de vendedoras e filiais** (`usuario_identidade_externa`, `filial_identidade_externa`) obrigatório antes de RC-03 | E1-03, E2-03, D-07 | RC-03 **falha explicitamente** se houver vendedor do ERP sem de-para — não silencia e não agrega em "outros" |
+| **E2-21** | `CTT-17` | Marcar contato criado **sem chave forte** (`contato.origem_carga`) | E2-05, D-08 | O número aparece em RC-05 e alimenta a fila de deduplicação |
 
 ### 9.2 Nova migration
 
-- **D-17 / `0017`** — `conciliacao_execucao` e `conciliacao_divergencia` (código DIV, valores das duas
-  fontes, estado, responsável, resolvido_em).
+- **D-18 / `0018_conciliacao.sql`** — `conciliacao_execucao` e `conciliacao_divergencia` (código DIV,
+  valores das duas fontes, estado, responsável, `resolvido_em`).
   ⚠️ **Divergência sem estado e sem responsável vira PDF morto.** O relatório precisa ser
   consultável, não só gerado.
+- ⚠️ **Era `0017` e foi renumerada.** `metricas-de-sucesso.md` §6.2 reservou `0017_metricas_produto`
+  no mesmo dia, e as duas reservas colidiram **no planejamento**, antes de existir PR. A reserva
+  agora vive na tabela §4 de `plano-onda-0.md` — que é o lugar onde `processo-de-trabalho` §3.2
+  manda procurar o próximo número livre, e não na cabeça de quem escreveu o documento.
 
-### 9.3 Correções no plano da Onda 0
+### 9.3 Correções no plano da Onda 0 — ✅ aplicadas
 
-| Onde | Mudança |
-|---|---|
-| **Critério de saída nº 1** | "Carregada **e reconciliada**" passa a exigir **RC assinado**. ⚠️ INV-57 e `cobertura='completa'` são **consistência interna** — fecham perfeitamente numa carga que trouxe 60% das vendas |
-| **Checklist §8** | Trocar "um CNPJ conferido linha a linha" por **"RC-09: 10 CNPJs estratificados"**; acrescentar **"RC assinado pelo gestor comercial"**, **"opt-out histórico importado (RC-10)"** e **"linha de base coletada"** |
-| **§1 (caminho crítico Meta)** | Acrescentar **M-13 — situação atual dos números na Meta** (F-02). ⚠️ Portabilidade entre WABAs depende de terceiro hostil e pode ser mais lenta que M-04 |
-| **§5.5 (sequência)** | Ficha de entrada em **S0**; perfilamento (E2-17) em **S1**; E2-16/E2-18/E2-19/E2-20/E2-21 em **S6** |
-| **Duração** | Decidir entre **(a) 10–11 semanas** ou **(b) critério nº 2 com números da Gera3** (§7) |
-| **§6 (riscos)** | Incorporar TR-01, TR-05, TR-06, TR-07 e TR-11 — nenhum deles é risco de código |
+| Onde | Mudança | Estado |
+|---|---|---|
+| **Critério de saída nº 1** | "Carregada **e reconciliada**" passa a exigir **conciliação com RC assinado**. ⚠️ INV-57 e `cobertura='completa'` são **consistência interna** — fecham perfeitamente numa carga que trouxe 60% das vendas | ✅ aplicada |
+| **Critério de saída nº 3** | "Um CNPJ conferido linha a linha" → **RC-09, 10 CNPJs estratificados** | ✅ aplicada |
+| **Checklist §8** | RC assinado · opt-out histórico importado (RC-10) · **linha de base congelada (MN-01)** · `tenant_marco` · consultas `.sql` versionadas | ✅ aplicada |
+| **§1.1 (caminho crítico Meta)** | **M-13 — situação atual dos números na Meta** (F-02) | ✅ aplicada, com o risco nº 10 |
+| **§5.2 (EP-02)** | As seis tarefas **E2-16…E2-21**, com ID de requisito | ✅ aplicada |
+| **§5.5 (sequência)** | Ficha de entrada em **S0**; perfilamento (E2-17) em **S1**; E2-16/18/19/20/21 em **S6**; **sombra 2 semanas antes da ficha** | ✅ aplicada |
+| **Duração** | Decidido: **(b)**, ADR-015 — ~6 semanas, sem o piloto real dentro | ✅ decidida |
+| **§6 (riscos)** | TR-01, TR-05, TR-06, TR-07 e TR-11 incorporados como riscos **10 a 14** | ✅ aplicada |
 
 ### 9.4 Decisões que este documento fecha
 

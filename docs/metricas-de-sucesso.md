@@ -14,7 +14,8 @@ ter valido, e o que precisa ser **gravado desde a Onda 0** para essa resposta ex
 
 ⚠️ **A urgência é de instrumentação, não de análise.** Métrica de venda é reconstituível a qualquer
 momento (`venda` é fato imutável, e a carga histórica traz anos). **Métrica de atendimento não é**:
-tempo de primeira resposta, conversa sem resposta e volume de conversa do dia anterior à virada
+tempo de primeira resposta, conversa sem resposta e volume de conversa do dia anterior ao
+`primeiro_corte`
 **deixam de existir para sempre** se ninguém capturar antes. O produto que promete provar ROI não
 pode ser o único sem linha de base.
 
@@ -44,14 +45,14 @@ cliente antes da onda começar (§9, decisão nº 1) · — = observar sem alvo 
         │                              │
 ──── anos de venda no ERP ─────────────┼──── operação no GeraCRM ────►
                                        │
-   sombra (2 semanas, manual) ─────────┤
+   sombra (2 semanas, manual, em T-8) ─┤
                                        ▲
                           linha de base CONGELADA  =  marco `linha_base_congelada`
                                        ▲
-                          primeiro dia de operação real = marco `virada_onda1`
+                          corte do 1º número do cliente = marco `primeiro_corte`
 ```
 
-⚠️ **A janela fecha no dia da virada e não reabre.** Depois dela, tudo que a equipe faz já é o
+⚠️ **A janela fecha no `primeiro_corte` e não reabre.** Depois dela, tudo que a equipe faz já é o
 produto agindo — inclusive antes do login, porque a equipe muda de comportamento assim que sabe que
 está sendo medida.
 
@@ -65,7 +66,7 @@ está sendo medida.
 | **LB-04** | Tempo até o 2º pedido — **mediana**, por coorte de 1º pedido | 24 meses | `venda` | ✅ sim |
 | **LB-05** | Ticket médio **e mediana**; peças por pedido | 24 meses | `venda`, `venda_item` | ✅ sim |
 | **LB-06** | Intervalo médio entre compras, por cliente | 24 meses | `venda` | ✅ sim |
-| **LB-07** | Distribuição RFV da base no dia da virada | foto | job de RFV sobre `venda` | ✅ sim (RFV é Onda 2; a foto se reconstrói) |
+| **LB-07** | Distribuição RFV da base no dia do `primeiro_corte` | foto | job de RFV sobre `venda` | ✅ sim (RFV é Onda 2; a foto se reconstrói) |
 | **LB-08** | Qualidade cadastral: % com CNPJ, % com telefone válido, duplicidade estimada | foto | `contato_documento`, `contato_telefone`, `conflito_identidade` | ✅ sim |
 | **LB-09** | Clientes "invisíveis": compraram nos últimos 12 meses e **não têm telefone** | foto | `contato` | ✅ sim |
 | **LB-10** | **Conversas por dia**, por vendedora | 2 semanas | ⚠️ sombra / export | 🔴 **não** |
@@ -104,9 +105,19 @@ reconstroem LB-11 e LB-12 com fidelidade melhor que qualquer declaração.
 ⚠️ **Meça a sombra antes de anunciar a ferramenta à equipe.** Depois do anúncio, o tempo de resposta
 melhora sozinho — e a Onda 1 perde o crédito por uma melhora que já tinha acontecido.
 
+**A sombra tem semana no cronograma: `T-8`** (`entrada-do-primeiro-cliente.md` §7), duas semanas
+**antes** da ficha de entrada — porque T-6 já é a conversa com o gestor sobre carteira e vendedoras,
+e a partir dela a equipe sabe. Custo: uma pessoa do cliente, ~1 h/dia. **Não consome engenharia.**
+
+⚠️ **O artefato tem nome e destino, e não é uma planilha solta.** A sombra produz
+`docs/clientes/<cliente>/linha-de-base.md` e é **carregada em `linha_base_metrica`** (PLT-12, D-17),
+com `fonte` (`export_antigo` \| `medido` \| `declarado`), `apurado_em` e, depois da conferência com o
+cliente, `congelado_em`. Planilha no Drive some no primeiro rodízio de pessoa; e uma régua que
+ninguém acha é uma régua que não existe quando alguém contesta o resultado.
+
 ### 1.4 Congelamento
 
-A linha de base é **gravada, congelada e conferida com o cliente** antes da virada:
+A linha de base é **gravada, congelada e conferida com o cliente** antes do `primeiro_corte`:
 
 - Vive em `linha_base_metrica` (§6.2), com `fonte`, `confiavel`, `apurado_em` e `congelado_em`.
 - Congelada = imutável. Correção posterior entra como **nova linha** com `observacao`, nunca por
@@ -359,6 +370,15 @@ As de `geracrm-observabilidade`, com o que elas custam ao cliente quando degrada
 | **MT-09** | Conexões SSE ativas | Gatilho de escala antes de a operação sentir | §12 de `stack-arquitetura` | Escalar |
 | **MT-10** | Taxa de erro do webhook | Mensagem do cliente que não entra é atendimento perdido sem ninguém saber | Subindo | Verificar assinatura e idempotência |
 
+⚠️ **O destino destas métricas é a tarefa I-11 de `plano-onda-0.md` §2.1** — um destino de **série
+temporal** por ambiente, decidido entre tabelas de agregação no próprio Postgres (com job de janela)
+e serviço gerenciado. **Sentry não serve**: ele é rastreamento de **erro**, não guarda p95 por 15
+minutos nem dispara MT-03. MO-05 tem a mesma casa.
+
+⚠️ Sem I-11, MT-01…MT-05 perdem exatamente o que as torna úteis: a **consequência automática**.
+*"Taxa de entrega < 95% em 1 h ⇒ pausar disparo naquele número"* vira disciplina humana — e a §4
+deste documento é categórica quanto a isso. Os três limiares viraram alerta em **I-10**.
+
 ---
 
 ## 6. Instrumentação
@@ -384,15 +404,37 @@ Boa notícia: a maior parte não exige tabela nova, porque o modelo é factual.
 Sete lacunas. **Cinco entram na Onda 0** porque a alternativa é reprocessar histórico — o mesmo
 raciocínio que fez `atendimento` nascer completo e vazio na `0012`.
 
-| # | O que | Onda | Por que agora |
-|---|---|---|---|
-| **1** | `atendimento.primeira_entrante_em`, `primeira_resposta_em`, `primeira_resposta_humana_em`, `primeira_resposta_por_id` | **0** | 🔴 Derivar depois é varrer `mensagem` **particionada** conversa a conversa. E a definição precisa ser decidida **antes** de existir dado: a mensagem de ausência automática preenche `primeira_resposta_em`, **não** `primeira_resposta_humana_em` — é exatamente o que MC-05 vigia. Uma coluna só torna a contra-métrica impossível |
-| **2** | `linha_base_metrica(tenant_id, metrica, periodo_de, periodo_ate, valor_num numeric, unidade, fonte, confiavel bool, observacao, apurado_em, congelado_em, congelado_por)` PK `(tenant_id, metrica, periodo_de)` | **0** | §1. É a régua. Sem tabela, ela vira slide perdido no Drive |
-| **3** | `tenant_marco(tenant_id, marco, ocorrido_em, observacao)` PK `(tenant_id, marco)` | **0** | ⚠️ Sem a **data da virada**, todo "antes e depois" é chute. E não é a data do contrato: é o primeiro dia de operação real. Marcos: `onboarding_concluido`, `carga_historica_completa`, `linha_base_congelada`, `virada_onda1`, `abandono_sistema_antigo`, `virada_onda2`… |
-| **4** | `assinatura_tenant(tenant_id, id, plano_id, valor_centavos bigint, ciclo, vigente_de, vigente_ate)` + `EXCLUDE` sem sobreposição | **0** | Denominador de BI-11 e base do MRR. `plano` (global, `0002`) tem catálogo, **não tem o que este cliente paga** — desconto e negociação existem |
-| **5** | `uso_diario_usuario(tenant_id, usuario_id, dia, superficie, primeiro_em, ultimo_em, acoes, conversas_tocadas, mensagens_enviadas, pedidos_criados)` PK `(tenant_id, usuario_id, dia, superficie)` | **0** (escrita a partir da Onda 1) | MA-01, MA-06, MC-09. ⚠️ **Não é pipeline de eventos**: é um `UPSERT` por caso de uso de escrita, uma linha por usuário/dia/superfície. Ponto quente por usuário, não global. Responde "vendedoras ativas/dia" sem varrer `mensagem` |
-| **6** | `uso_ia(tenant_id, id, criado_em, funcionalidade, modelo, tokens_entrada, tokens_saida, centavos bigint, latencia_ms, resultado, usuario_id, conversa_id, desfecho)` — particionada mensal | **2** | Espelha `custo_mensagem`, inclusive a única por evento. ⚠️ `desfecho ('enviado_sem_edicao'\|'enviado_editado'\|'descartado')` **nasce junto**: é MA-08, a única métrica honesta de qualidade do copiloto, e retrofit dela é impossível |
-| **7** | `campanha_destinatario.grupo ('alvo'\|'controle')` default `'alvo'` | **3** | §3.4. Decidida agora, criada com a campanha |
+⚠️ **Cada uma tem ID de requisito** (`processo-de-trabalho` §0, regra 1), criado em
+`escopo-funcional-geracrm.md` §3. E ⚠️ **o item 1 não mora nesta migration**: ele é `atendimento`, e
+`atendimento` nasce completo na **D-12 / `0012`** — ver a nota abaixo da tabela.
+
+| # | Requisito | O que | Onda | Migration | Por que agora |
+|---|---|---|---|---|---|
+| **1** | `PLT-12` | `atendimento.primeira_entrante_em`, `primeira_resposta_em`, `primeira_resposta_humana_em`, `primeira_resposta_por_id` | **0** | ⚠️ **D-12**, não `0017` | 🔴 Derivar depois é varrer `mensagem` **particionada** conversa a conversa. E a definição precisa ser decidida **antes** de existir dado: a mensagem de ausência automática preenche `primeira_resposta_em`, **não** `primeira_resposta_humana_em` — é exatamente o que MC-05 vigia. Uma coluna só torna a contra-métrica impossível |
+| **2** | `PLT-12` | `linha_base_metrica(tenant_id, metrica, periodo_de, periodo_ate, valor_num numeric, unidade, fonte, confiavel bool, observacao, apurado_em, congelado_em, congelado_por)` PK `(tenant_id, metrica, periodo_de)` | **0** | D-17 | §1. É a régua. Sem tabela, ela vira slide perdido no Drive |
+| **3** | `PLT-12` | `tenant_marco(tenant_id, marco, ocorrido_em, observacao)` PK `(tenant_id, marco)` | **0** | D-17 | ⚠️ Sem a data do primeiro corte, todo "antes e depois" é chute. E não é a data do contrato: é o primeiro dia de operação real. Marcos: `onboarding_concluido`, `carga_historica_completa`, `linha_base_congelada`, **`primeiro_corte`**, **`ultimo_corte`**, **`abandono_sistema_antigo`**, `virada_onda2`… |
+| **4** | `PLT-14` | `assinatura_tenant(tenant_id, id, plano_id, valor_centavos bigint, ciclo, vigente_de, vigente_ate)` + `EXCLUDE` sem sobreposição | **0** | D-17 | Denominador de BI-11 e base do MRR. `plano` (global, `0002`) tem catálogo, **não tem o que este cliente paga** — desconto e negociação existem |
+| **5** | `PLT-13` | `uso_diario_usuario(tenant_id, usuario_id, dia, superficie, primeiro_em, ultimo_em, acoes, conversas_tocadas, mensagens_enviadas, pedidos_criados)` PK `(tenant_id, usuario_id, dia, superficie)` | **0** (escrita a partir da Onda 1) | D-17 | MA-01, MA-06, MC-09. ⚠️ **Não é pipeline de eventos**: é um `UPSERT` por caso de uso de escrita, uma linha por usuário/dia/superfície. Ponto quente por usuário, não global. Responde "vendedoras ativas/dia" sem varrer `mensagem` |
+| **6** | `IA-*` | `uso_ia(tenant_id, id, criado_em, funcionalidade, modelo, tokens_entrada, tokens_saida, centavos bigint, latencia_ms, resultado, usuario_id, conversa_id, desfecho)` — particionada mensal | **2** | — | Espelha `custo_mensagem`, inclusive a única por evento. ⚠️ `desfecho ('enviado_sem_edicao'\|'enviado_editado'\|'descartado')` **nasce junto**: é MA-08, a única métrica honesta de qualidade do copiloto, e retrofit dela é impossível |
+| **7** | `CMP-*` | `campanha_destinatario.grupo ('alvo'\|'controle')` default `'alvo'` | **3** | — | §3.4. Decidida agora, criada com a campanha |
+
+⚠️ **`0017_metricas_produto.sql` cria os itens 2 a 5 — quatro tabelas.** O item 1 são colunas de
+`atendimento` e vai para **D-12**, que é a migration que promete *"`atendimento` nasce completo"*;
+com quatro colunas fora, ele nascia incompleto. E ⚠️ **`0018` está tomado**: é
+`0018_conciliacao.sql` (`entrada-do-primeiro-cliente` §9.2), que reservou `0017` no mesmo dia que
+este documento e foi renumerada. **A reserva de número vive na tabela §4 de `plano-onda-0.md`.**
+
+⚠️ **Os marcos foram renomeados, e não é cosmética.** `virada_onda1` significava três coisas
+diferentes em três documentos: o corte do **primeiro** número (`entrada`: `T`/`D-0`), a operação
+inteira sem a ferramenta antiga (`plano-ondas-1-4` M1.7) e o "primeiro dia de operação real" daqui.
+Ficou:
+
+| Marco | O que é, exatamente |
+|---|---|
+| `linha_base_congelada` | ⚠️ **Sempre antes de `primeiro_corte`.** É o congelamento da régua, e ele não admite ser posterior ao evento que está medindo |
+| `primeiro_corte` | O primeiro número do cliente apontando para o GeraCRM. É o instante em que LB-10…LB-12 deixam de ser obtíveis |
+| `ultimo_corte` | O último número da frota conectado |
+| `abandono_sistema_antigo` | A ferramenta antiga com acesso revogado ou contrato encerrado — fato administrativo, com data |
 
 **Regras que valem para as sete** — as mesmas de `plano-onda-0.md` §4.1: `tenant_id` em todas
 (nenhuma entra na lista fechada de exceções da §7.2), RLS `FORCE` com `USING` **e** `WITH CHECK` na
@@ -421,8 +463,11 @@ a um painel de produto — e o dia em que a retenção da auditoria encurtar, a 
 
 ### 6.5 A regra que fecha a §0
 
-**Toda métrica deste documento tem um arquivo `.sql` versionado em `apps/api/src/analitico/`, com o
-ID da métrica no nome.** A consulta é escrita **junto com a funcionalidade**, e a tarefa não fecha
+**Toda métrica deste documento tem um arquivo `.sql` versionado em
+`apps/api/src/contexts/analitico/consultas/`, com o ID da métrica no nome** — `MN-04-recompra-90d.sql`.
+⚠️ O caminho é `src/contexts/analitico/`, não `src/analitico/`: a estrutura de `plano-onda-0.md` §3
+coloca **todo** contexto sob `src/contexts/`, e um diretório fora dessa convenção é o começo de uma
+segunda árvore de código. A consulta é escrita **junto com a funcionalidade**, e a tarefa não fecha
 sem ela. Métrica combinada em reunião e consultada por SQL improvisado três meses depois devolve um
 número diferente a cada pessoa que a roda.
 
@@ -480,12 +525,15 @@ que dura dois meses.
 
 ## 10. Checklist — o que a Onda 0 precisa entregar por causa deste documento
 
-Soma-se ao checklist de `plano-onda-0.md` §8:
+Soma-se ao checklist de `plano-onda-0.md` §8 — ✅ **já incorporado lá**, item a item:
 
-- ☐ `0017_metricas_produto.sql` aplicada: itens 1 a 5 da §6.2
+- ☐ **D-17 / `0017_metricas_produto.sql`** aplicada: itens **2 a 5** da §6.2 (`linha_base_metrica`, `tenant_marco`, `assinatura_tenant`, `uso_diario_usuario`)
+- ☐ **D-12** com as **quatro colunas de primeira resposta** em `atendimento` — item **1** da §6.2, que não mora na `0017`
+- ☐ **I-11** de pé: MO-05 responde o p95 dos últimos 15 min por tenant, e MT-01/MT-03/MT-05 têm alerta em I-10
 - ☐ LB-01…LB-09 calculadas sobre a carga histórica, **dentro da cobertura** (INV-56)
-- ☐ LB-10…LB-15 capturadas por sombra/export/declaração, **com `fonte` gravada**
-- ☐ Linha de base **congelada** e conferida com o cliente (`congelado_em` preenchido)
-- ☐ `tenant_marco` com `carga_historica_completa` e `linha_base_congelada`
-- ☐ Consultas `.sql` versionadas para toda métrica das Ondas 0 e 1
+- ☐ LB-10…LB-15 capturadas por sombra (**T-8**) / export / declaração, **com `fonte` gravada**
+- ☐ Linha de base **congelada** e conferida com o cliente (`congelado_em` preenchido) — é **MN-01**, e é o **critério de saída nº 5** da Onda 0
+- ☐ `tenant_marco` com `carga_historica_completa` e `linha_base_congelada` — ⚠️ **`linha_base_congelada` antes de `primeiro_corte`**, sempre
+- ☐ Consultas `.sql` versionadas para toda métrica das Ondas 0 e 1, em `apps/api/src/contexts/analitico/consultas/`
+- ☐ **PLT-12, PLT-13 e PLT-14** existem em `escopo-funcional-geracrm.md` §3 — nenhuma tabela desta lista entrou sem ID de requisito
 - ☐ Decisões nº 4 e nº 5 da §9 fechadas

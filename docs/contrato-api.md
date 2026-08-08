@@ -272,6 +272,7 @@ Um envelope, sempre o mesmo, em qualquer status ≥ 400:
                        "pedido": 3, "disponivel": 0 } ]
     },
     "campos": [ { "caminho": "itens[1].quantidade", "codigo": "quantidade_maior_que_saldo" } ],
+    "retentavel": false,
     "requestId": "01J8Z…"
   }
 }
@@ -283,7 +284,25 @@ Um envelope, sempre o mesmo, em qualquer status ≥ 400:
 | `mensagem` | pt-BR, para humano. ⚠️ **Pode mudar sem aviso.** Controle de fluxo por `mensagem` (ou por `string.includes()`) é proibido (ADR-011) |
 | `detalhe` | Objeto **tipado por código** — o schema de `detalhe` faz parte do contrato daquele código. É o que permite a tela dizer *"VERDE G42: pedido 3, disponível 1"* em vez de *"erro de estoque"* |
 | `campos` | Só em erro de validação de forma; `caminho` em notação de JSON Pointer simplificado |
+| **`retentavel`** | `boolean`, **obrigatório em todo `4xx`/`5xx`**. Diz se **repetir a mesma requisição** pode dar outro resultado. ⚠️ **O cliente nunca deriva isso do status** — ver abaixo |
 | `requestId` | Ecoa `X-Request-Id`. É o que o suporte pede e o que liga a tela ao log e ao Sentry |
+
+⚠️ **`retentavel` existe porque a alternativa é a tela decidir, e a tela não tem como saber.** A
+regra real é *"`502` sim, `504` não"* (§4.4) — que não é uma propriedade do status HTTP, é uma
+propriedade **do nosso lado**: no `502` a chamada não chegou ao ERP; no `504` a resposta se perdeu e
+o pedido **pode** ter sido criado. Um componente de erro que infere retentabilidade da faixa do
+status acerta por coincidência até o dia em que um `502` de circuit breaker aberto passa a ser
+não-retentável, e aí a inferência está espalhada por trinta telas.
+
+**Consequências duras:**
+
+- **`retentavel: true` significa "repetir é seguro"**, não "provavelmente vai funcionar". Ele é uma
+  afirmação de **idempotência**, e é o servidor quem a faz.
+- O componente de erro (`biblioteca-componentes` §4.5) **só mostra "Tentar novamente" quando
+  `retentavel: true`**. Não há segunda regra na tela.
+- `409` de conflito de estado é `false` (recarregar e decidir, não repetir); `422` de regra de
+  negócio é `false` (o mundo disse não); `429` e `503` são `true`, respeitando `Retry-After`;
+  `401` é `false` (renovar o token é outra requisição, não a mesma).
 
 ⚠️ **Falha de negócio é resultado tipificado, não exceção** (skill `geracrm-arquitetura`). No fio
 isso significa: estoque esgotado é **422 com código**, não `500`, e não `200` com `sucesso:false`
@@ -302,7 +321,7 @@ diferentes no cliente, no alerta e no Sentry (`500` vira issue; `422` não vira)
 | `422` | **Regra de negócio recusou.** Sintaxe ok, semântica não | Mostrar a ação corretiva nomeada. É o status do catálogo do PED-08 |
 | `429` | Limite de requisições, ou **quota de tier do número** (INV-22) | Respeitar `Retry-After` |
 | `500` | Nós quebramos | Reportar. Vira issue no Sentry |
-| `502` / `504` | **Terceiro** falhou (ERP, Meta, IA). `detalhe.origem` nomeia quem | ⚠️ §4.4: `502` é retentável, `504` **não** |
+| `502` / `504` | **Terceiro** falhou (ERP, Meta, IA). `detalhe.origem` nomeia quem — ⚠️ pelo **rótulo do tenant**, nunca pelo fornecedor (§4.3) | ⚠️ §4.4: `502` é retentável (`retentavel: true`), `504` **não** |
 | `503` | Manutenção ou circuit breaker aberto | `Retry-After` |
 
 ⚠️ **`404` versus `403` na multi-tenancy:** com RLS ligada, a linha de outro tenant **não existe**
@@ -322,13 +341,29 @@ a linha é do tenant e o usuário não pode vê-la (carteira, número, filial �
 | `pedido.credito_bloqueado` | `422` | `{ pedidoCentavos, disponivelCentavos, bloqueado }` | "Crédito insuficiente: pedido R$ 991, disponível R$ 400" · **Solicitar liberação** · **Reduzir pedido** | PED-08/PED-11 |
 | `pedido.item_inativado` | `422` | `variantes[] { sku, descricao }` | "08825 foi inativado no ERP" · **Remover item** · **Buscar substituto** | PED-08 |
 | `pedido.cliente_sem_cadastro_fiscal` | `422` | `{ contatoId, faltando: ['cnpj'\|'inscricao'\|'endereco'] }` | "Cliente sem CNPJ cadastrado no ERP" · **Abrir ficha para completar** | PED-08 |
-| `pedido.erp_indisponivel` | `502` | `{ origem: 'geracloud', tentativaId }` | "GeraCloud não respondeu" · **Tentar novamente** — ⚠️ **mesma** `versaoConteudo`, mesma `chaveEfetivacao`: reenviar **não duplica** (INV-29) | PED-08/PED-07 |
-| `pedido.erp_timeout` | `504` | `{ origem, tentativaId, estadoDoPedido, reconciliavel: bool }` | ⚠️ **Não oferecer "tentar novamente".** Ver §4.4 | INV-53 |
+| `pedido.erp_indisponivel` | `502` | `{ origem: { conexaoId, nome, conector }, tentativaId }` | "**ERP da matriz** não respondeu" · **Tentar novamente** — ⚠️ **mesma** `versaoConteudo`, mesma `chaveEfetivacao`: reenviar **não duplica** (INV-29) | PED-08/PED-07 |
+| `pedido.erp_timeout` | `504` | `{ origem: { conexaoId, nome, conector }, tentativaId, estadoDoPedido, reconciliavel: bool }` | ⚠️ **Não oferecer "tentar novamente".** Ver §4.4 | INV-53 |
 | `pedido.validacao_pendente` | `422` | `validacoes[] { regra, mensagem, faltando }` | As linhas do PED-05: *"Mínimo 10 peças — faltam 3"*, *"grade fechada — falta 1 P38"*, *"Mix mínimo: 2 categorias"* | PED-05, spec §2.3 |
 | `pedido.divergencia_na_revalidacao` | `409` | `{ divergencias[] { campo, congelado, atual } }` | Apresenta a diferença entre o que estava congelado no rascunho e o que o ERP diz agora — ⚠️ **nunca silenciar** (INV-28) | INV-28 |
 | `pedido.versao_conteudo_divergente` | `409` | `{ enviada, atual }` | O rascunho mudou em outra aba/dispositivo (PED-06). Recarregar e reenviar | INV-29 |
 | `pedido.rascunho_ja_existe` | `409` | `{ pedidoId }` | Abre o rascunho existente em vez de criar o segundo | INV-52 |
 | `pedido.imutavel` | `409` | `{ estado }` | Pedido efetivado não se edita; oferece **duplicar** (PED-16) | INV-31 |
+
+⚠️ **`detalhe.origem` é objeto, e o campo que a tela usa é `nome` — nunca `conector`.**
+
+| Campo | O que é | Vai para a tela? |
+|---|---|---|
+| `conexaoId` | O id de `conexao_erp` | Não. Serve a log, suporte e ao painel de sincronização |
+| **`nome`** | O **rótulo que o tenant deu** àquela conexão: *"ERP da matriz"*, *"Sistema do showroom"* | ✅ **É o único que a tela exibe** |
+| `conector` | O slug do fornecedor: `geracloud`, `bling`, `api_publica` | 🔴 **Nunca.** Telemetria, roteamento e log |
+
+⚠️ **Este campo já nasceu errado uma vez.** `detalhe: { origem: 'geracloud' }` entregava **o nome
+literal do ERP** ao mesmo componente que `biblioteca-componentes` §1.8/§4.5 e `especificacao-telas`
+§2.1 criaram justamente para **nunca** escrever "GeraCloud" na tela: a regra é *"nunca o nome do
+fornecedor — o nome da conexão ativa do tenant"*. O componente obedecia a regra e recebia o dado que
+a viola. Com dois ERPs conectados, *"GeraCloud não respondeu"* é pior que feio: a vendedora não tem
+como saber **qual** dos dois caiu, enquanto *"ERP da matriz não respondeu"* diz exatamente o que ela
+precisa para decidir se liga para o financeiro ou se espera.
 
 ⚠️ **Os cinco erros do PED-08 são o motivo de este documento existir.** Se qualquer um deles chegar
 à tela como `500 "erro ao enviar pedido"`, a vendedora volta a lançar no ERP e o módulo morre —
@@ -347,6 +382,14 @@ engenharia.**
 | `canal.desconectado` | `422` | Banner no topo da lista, não modal (spec §1.2) | CAN-03 |
 | `canal.quota_de_tier_esgotada` | `429` | `detalhe { canalId, limite, reiniciaEm }` + `Retry-After`. Disparo pausa e retoma sozinho | INV-22 |
 | `canal.qualidade_abaixo_do_limiar` | `422` | Bloqueia campanha naquele número e explica (CAN-06) | INV-24 |
+| `canal.destino_fora_da_allowlist` | `422` | ⚠️ **Só existe fora de `prod`.** `detalhe { ambiente, destinoMascarado }` — a tela de homologação diz *"número fora da allowlist de teste"*, com o número **mascarado**. `retentavel: false` | `processo-de-trabalho` §8.3 |
+
+⚠️ **`canal.destino_fora_da_allowlist` é código, não configuração — e é por isso que ele está no
+catálogo de erros e não numa variável de ambiente.** Em homologação o gateway de saída (E3-09)
+revalida o destino contra uma **allowlist de números de teste** e recusa **antes de chamar a Meta**.
+O custo de não ter isso está escrito em `processo-de-trabalho` §8.2: token de produção apontado para
+ambiente de teste entrega *"Teste 123"* a lojistas reais às 3h da manhã — e **mensagem entregue não
+se desfaz**. Envio para fora da allowlist é **erro tipificado**, nunca aviso em log.
 
 #### Contato, campanha e integração
 

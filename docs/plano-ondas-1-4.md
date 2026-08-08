@@ -44,7 +44,7 @@ E, ao **fechar** a onda: rodar de novo a revisão de consistência cruzada
 
 | Onda | Estimativa | O que domina o prazo |
 |---|---|---|
-| **1 — Atender** | 8 semanas + 2 de virada | Front (é a primeira onda de tela) e a adoção humana, que não paraleliza |
+| **1 — Atender** | 8 semanas + 2 de corte da frota | Front (é a primeira onda de tela) e a adoção humana, que não paraleliza |
 | **2A — Vendável** | 10–12 semanas | Pedido assistido + RFV; é o caminho crítico do produto inteiro |
 | **2B — Completo** | 6–8 semanas | Pode escorregar para dentro da Onda 3 sem quebrar a cobrança (§4.8) |
 | **3 — Escalar** | 12–16 semanas | Aprovação de template e **aquecimento de número** — tempo de calendário de terceiro |
@@ -93,9 +93,29 @@ board: uma é um número que ninguém mediu, a outra é tempo de calendário que
 > **Objetivo:** a equipe larga a ferramenta atual e passa a atender pelo GeraCRM.
 > **Pergunta que responde:** *dá para trabalhar aqui oito horas por dia sem voltar para o WhatsApp Web?*
 
-⚠️ **É a primeira onda com usuário real.** O trabalho de migração (treinar, conviver, decidir a
-virada, ter critério de rollback) **é escopo da onda**, não overhead — é a lacuna `prontidao` §4.1
+⚠️ **É a primeira onda com usuário real.** O trabalho de migração (treinar, conviver, decidir o
+corte, ter critério de rollback) **é escopo da onda**, não overhead — é a lacuna `prontidao` §4.1
 chegando à conta.
+
+🔴 **A Onda 1 começa com a transição do primeiro cliente**, e isso é decisão registrada (**ADR-015**),
+não interpretação. O cronograma inteiro de `entrada-do-primeiro-cliente.md` §7 — **T-8 (janela de
+sombra) até T+6 (D+30 do piloto)** — é **escopo desta onda**, com semanas, dono e gate. A Onda 0
+fecha com números da própria Gera3; o número da primeira vendedora só é conectado quando ela
+consegue responder dentro da janela, reconhecer janela fechada e enviar template, buscar um cliente,
+ouvir um áudio, abrir a ficha e registrar um comentário (certificação de `entrada` §5.4) — e **cinco
+dessas seis ações são construídas aqui**.
+
+⚠️ **Duas linhas do cronograma de `entrada` NÃO esperam a Onda 1 começar:** a **janela de sombra**
+(T-8) e **M-13** (situação dos números na Meta, T-6) rodam ainda na Onda 0. A sombra mede o estado
+**anterior** e fecha no `primeiro_corte`; a portabilidade entre WABAs depende de um terceiro hostil,
+com até três semanas de espera. Adiar qualquer uma para o início desta onda é perdê-la.
+
+| Bloco da transição | Quando, dentro da Onda 1 |
+|---|---|
+| Treinamento B1/B2/B5 e certificação prática (§5.4) | Depois de M1.3 (conversa completa) e M1.4 (fila e busca) — **não antes**: certificar numa tela que ainda não existe é ensaio de teatro |
+| Corte do número piloto (`primeiro_corte`) + monitoramento 48 h | Depois de M1.5 |
+| Lotes 2…N, um por semana, com gate D+7 | Até M1.7 (`ultimo_corte`) |
+| Conciliação final e D+30 do piloto | Fechamento da onda |
 
 ⚠️ **É a primeira onda de front.** O back que ela consome já existe desde a Onda 0: ingestão de
 mensagem (E3-06), envio com todas as revalidações (E3-09), janela derivada (E3-10), outbox e
@@ -130,8 +150,14 @@ depois: montar a lista com fetch e "ligar o tempo real depois" é reescrever o e
 | **M1.3** | Conversa completa | Texto, mídia, áudio com player, **anel de janela** drenando (ADR-012), bloqueio fora da janela oferecendo template |
 | **M1.4** | Operação | Fila pull com "Assumir atendimento", abas Meus/Fila com contador, protocolo numerado, busca por nome/telefone/protocolo |
 | **M1.5** | Frota visível | Painel de saúde com tier, qualidade e **`pagamento OK`** — a falha por método de pagamento ausente aparece com essa causa, não como "erro ao enviar" (ADR-002) |
-| **M1.6** | **Piloto sombra** | 2 vendedoras usando o GeraCRM em paralelo à ferramenta antiga por 1 semana, com lista aberta de "o que a antiga faz e a nossa não" |
-| **M1.7** | **Virada** | Operação inteira sem a ferramenta antiga |
+| **M1.6** | **Piloto paralelo** | 2 vendedoras usando o GeraCRM em paralelo à ferramenta antiga por 1 semana, com lista aberta de "o que a antiga faz e a nossa não" |
+| **M1.7** | **`ultimo_corte`** | Frota inteira conectada; operação inteira sem a ferramenta antiga. ⚠️ O marco administrativo de encerrar o contrato antigo é **`abandono_sistema_antigo`**, e ele vem depois — nunca antes de D+30 do último lote (ADR-014) |
+
+⚠️ **M1.6 chama-se "piloto paralelo", não "piloto sombra".** *"Janela de sombra"*
+(`metricas-de-sucesso` §1.3) é a operação **oposta**: medir o **sistema antigo** à mão, por 2
+semanas, **antes** de a equipe saber da mudança — e ela acontece lá atrás, em T-8. Aqui, duas
+vendedoras **usam o GeraCRM**. Uma palavra para "medir o velho" e "usar o novo" é a confusão que
+entra no código e no cronograma no mesmo dia.
 
 ### 3.3 ✅ Critério de saída observável
 
@@ -143,14 +169,14 @@ Não é "o inbox está pronto". São fatos constatáveis:
 | **2** | A ferramenta antiga teve **acesso revogado ou contrato cancelado** | Fato administrativo, com data |
 | **3** | **Zero conversa órfã**: toda conversa com mensagem entrante no período tem `atendimento` com dono ou está visível na fila | Consulta ao banco no fechamento |
 | **4** | **Zero evento entregue a tenant errado** e suíte de isolamento de canal verde | `geracrm-tempo-real` + log do período |
-| **5** | **Linha de base de produto capturada**: tempo até primeira resposta, mensagens/dia por número, conversas/dia, % sem resposta | É o "antes" que as Ondas 3 e 4 vão usar para provar ROI (cadeia nº 9) |
+| **5** | **Linha de base já congelada na Onda 0** (MN-01) e **conferida com o cliente**. Na Onda 1 ela é **usada**, não capturada | ⚠️ LB-10…LB-12 (conversas/dia, tempo até primeira resposta, % sem resposta) **não são reconstituíveis** (`metricas-de-sucesso` §1.1): a janela de sombra fecha no `primeiro_corte`, que acontece **dentro** desta onda. Capturá-la aqui é capturar o produto medindo a si mesmo. O que esta onda entrega é o **depois**: MO-07 e MO-08 contra LB-11 e LB-12 |
 
 ### 3.4 Dependências externas
 
 | Dono | Item | ⚠️ |
 |---|---|---|
 | **Meta** | M-05 (Tech Provider) e M-07 (App Review) **aprovados** | ⚠️ A Onda 1 é a primeira que **exige número de cliente real**. Se a Onda 0 fechou com números da Gera3 (plano B da §1.4 do `plano-onda-0`), a Onda 1 não fecha. O passivo da Meta é cobrado aqui |
-| **Cliente** | Disponibilidade das vendedoras para treinamento; decisão de cancelar a ferramenta antiga | A decisão é do dono, não nossa. Sem data marcada, o piloto sombra vira permanente |
+| **Cliente** | Disponibilidade das vendedoras para treinamento; decisão de cancelar a ferramenta antiga | A decisão é do dono, não nossa. Sem data marcada, o piloto paralelo vira permanente |
 | **Jurídico** | Política de privacidade e termos publicados; base legal do tratamento de conversa | Também é requisito do App Review (URL de política) |
 | **ERP** | Nada novo | O conector já rodou na Onda 0 |
 
@@ -158,7 +184,7 @@ Não é "o inbox está pronto". São fatos constatáveis:
 
 | # | Risco | Sinal antecipado | Mitigação |
 |---|---|---|---|
-| **1** | ⚠️ **Rejeição das vendedoras.** É o risco nº 1 da onda e não é técnico | Vendedora com o WhatsApp Web aberto na 2ª semana do piloto | Piloto sombra (M1.6) com 2 pessoas escolhidas — nem as mais resistentes, nem as mais entusiastas; **critério de rollback escrito antes da virada**; lista de lacunas mantida aberta e respondida item a item |
+| **1** | ⚠️ **Rejeição das vendedoras.** É o risco nº 1 da onda e não é técnico | Vendedora com o WhatsApp Web aberto na 2ª semana do piloto | Piloto paralelo (M1.6) com 2 pessoas escolhidas — nem as mais resistentes, nem as mais entusiastas; **critério de rollback escrito antes do `primeiro_corte`**; lista de lacunas mantida aberta e respondida item a item |
 | **2** | **Biblioteca de componentes subestimada** | Card de "componente novo" na semana 4 | Começar **antes** da onda (`prontidao` §5); inventário limitado ao que as telas da Onda 1 usam. Componente sob demanda, não catálogo |
 | **3** | **SSE em rede real** — reconexão, multi-aba, proxy que bufferiza | Usuário relatando "sumiu e voltou" | Cursor de versão desde o 1º dia; teste de reconexão com queda forçada; o **payload mínimo** (ADR-007) faz o pior caso ser um refetch, nunca um vazamento |
 | **4** | **Volume de mídia** — áudio de WhatsApp em operação real acumula rápido | Curva do bucket na semana 1 do piloto | Política de ciclo de vida já configurada na Onda 0 (I-05); medir e projetar durante o piloto, não depois |
@@ -183,7 +209,7 @@ Não é "o inbox está pronto". São fatos constatáveis:
 
 ⚠️ **Divergência a resolver na abertura:** **RFV-08 (qualidade cadastral)** é Onda 3 no escopo
 funcional e Onda 1 na mitigação do risco nº 1 do backlog. Recomendação: **Onda 1**, porque durante a
-virada ela é ferramenta de higienização (40% da base sem CPF/CNPJ na referência), não relatório.
+transição ela é ferramenta de higienização (40% da base sem CPF/CNPJ na referência), não relatório.
 
 ---
 
@@ -554,7 +580,7 @@ Estas não são adiamentos. São decisões fechadas, e reabri-las exige ADR novo
 | Onda | Decisão | Consequência de não fechar |
 |---|---|---|
 | **1** | RFV-08 é Onda 1 ou 3 · PLT-11 é Onda 1 ou 2 (M-10) · exigências técnicas 13–26 sem resposta arquitetural (A-06) | Tela especificada sem endpoint, achado que a revisão já pegou uma vez |
-| **1** | Critério de rollback da virada | Não se decide sob pressão no dia da virada |
+| **1** | Critério de rollback do corte | Não se decide sob pressão no dia do `primeiro_corte` |
 | **2** | ⚠️ **Preço e unidade de cobrança** · **como se emite a fatura** (não há ID no escopo) · provedor de IA (aberta nº 6) | Não se cobra |
 | **3** | Ordem dos conectores de ERP (aberta nº 4) · Solution Partner × Tech Provider (ADR-002) · reabrir ou não o canal não oficial (ADR-003) | Roadmap de integração e modelo de receita indefinidos |
 | **4** | Modelo de revenda e white-label (D7) — **ADR, não épico** | Muda cobrança, suporte e responsabilidade sem ninguém ter decidido |

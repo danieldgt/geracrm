@@ -159,7 +159,9 @@ A tela que fecha a venda. Abre **sobre a coluna de contexto** no web; como folha
 ```
 
 ⚠️ **O ERP nunca é nomeado literalmente na interface.** O botão diz `Enviar pedido`; as mensagens de
-erro usam **o nome da conexão ativa** daquele tenant, que vem em `detalhe.origem` na resposta da API.
+erro usam **o nome da conexão ativa** daquele tenant, que vem em `detalhe.origem.nome` na resposta
+da API — ⚠️ o objeto `origem` também carrega `conector` (`geracloud`, `bling`), e **esse campo nunca
+chega à tela**.
 Um cliente de Bling lendo "Enviar ao GeraCloud" é bug visível — e contraria o ADR-008, que existe
 justamente para o produto não ser acessório de um ERP. Onde este documento escreve `{ERP}`, leia-se
 o nome da conexão.

@@ -41,7 +41,7 @@ Quatro frentes correm em paralelo, com donos diferentes:
 | **I** — Infra | §2 | Cartão corporativo e conta AWS |
 | **R** — Repositório | §3 | Nada |
 | **D** — Migrations | §4 | R (esqueleto) + decisão nº 10 do modelo |
-| **E1…E4** — Épicos | §5 | D, I, e (só para o piloto) M |
+| **E1…E4** — Épicos | §5 | D, I, e (só para E3-01) M-06 |
 
 ⚠️ **Sequenciar M depois de tudo é o único erro desta onda que não tem correção.** Business
 Verification + Tech Provider + App Review somam semanas de espera de terceiro. Enquanto isso, todo o
@@ -121,7 +121,7 @@ Menor, mas com dono fora do time. Encaminhar na mesma semana:
 |---|---|---|
 | **M-09** | Documentação da API do GeraCloud (clientes, produtos/estoque, pedidos, saldo, tabela de preço, crédito, escrita de pedido) | EP-02 inteiro |
 | **M-10** | Credenciais de **homologação** do GeraCloud, isoladas das de produção | EP-02 |
-| **M-11** | **Cópia de base real anonimizada** do cliente piloto, ou acesso de leitura à base dele | Dimensionamento da carga histórica e o risco nº 1 da §6 |
+| **M-11** | **Cópia de base real anonimizada** do cliente piloto, ou acesso de leitura à base dele. ⚠️ **A anonimização é nossa (R-11)**, executada na infraestrutura do cliente ou sob o contrato de G-04 — **nunca "eles mandam anonimizado"**: sem controle do algoritmo não há como saber se a duplicidade que o perfilamento mede é do cadastro ou do anonimizador | Dimensionamento da carga histórica, E2-17 (perfilamento, S1) e o risco nº 1 da §6 |
 | **M-12** | Resposta ao **volume real** (nº de contatos, anos de histórico, vendas/ano, mensagens/dia, nº de números) | Granularidade de partição — decisão aberta nº 1 do modelo. ⚠️ Barato agora, caro depois |
 
 ---
@@ -296,21 +296,28 @@ for insuportável, a alternativa é registrada como ADR **antes** de `0001`, nã
 | **D-01** | `0001_base.sql` | Extensões `btree_gist`, `pg_trgm` · role `geracrm_app` (sem `BYPASSRLS`, sem ownership) · função `app_tenant_atual()` · procedure `aplicar_rls_padrao(regclass)` · `schema_migrations` · `outbox` | `app_tenant_atual()` usa `current_setting('app.tenant_id', true)` — sem tenant setado devolve `NULL` e a policy **não devolve linha nenhuma**. Job sem tenant não roda, em vez de ler tudo |
 | **D-02** | `0002_catalogos_globais.sql` | `plano`, `perfil_vertical_modelo`, `tarifa_meta` | Três das seis tabelas **sem `tenant_id`** (§7.2). Só `GRANT SELECT` para `geracrm_app`. Qualquer tabela nova fora da lista das seis sem `tenant_id` é **bug de revisão de migration** |
 | **D-03** | `0003_tenant.sql` | `tenant` (com `tenant_pai_id` nulo, para PLT-10 na Onda 4) · `perfil_vertical` · RLS em ambas | ⚠️ **Dependência circular real:** `tenant.perfil_vertical_id → perfil_vertical` e `perfil_vertical.tenant_id → tenant`. Cria-se `tenant` sem a FK, depois `perfil_vertical`, e a FK entra por `ALTER TABLE` no fim do mesmo arquivo |
-| **D-03b** | `0003b_onboarding.sql` | `onboarding_passo` (PK `(tenant_id, passo)`, com `estado`, `dados jsonb`, `concluido_em`, `concluido_por`) + RLS | ⚠️ **Entra antes de E3-01 (Embedded Signup).** O estado do assistente é do **servidor**, não do navegador: o admin fecha a aba no meio do fluxo da Meta e precisa retomar de onde parou — inclusive com a conexão que já existe do lado da Meta. `aceite_capacidades` registra a data em que ele foi informado do que aquele ERP habilita (ADR-008) |
+| **D-03b** | `0003b_onboarding.sql` | `onboarding_passo` (PK `(tenant_id, passo)`, com `estado`, `dados jsonb`, `concluido_em`, `concluido_por`, **`concluido_por_staff bool`**) + RLS | ⚠️ **`concluido_por_staff` nasce agora porque MO-06 não é calculável sem ela**: `concluido_por` é um `usuario_id` do tenant, e staff da Gera3 é **group do Cognito** (§2.2) — não tem linha em `usuario`. Sem o booleano, *"passos que exigiram intervenção manual da Gera3"* não distingue nada, e MO-06 é a métrica que prevê o custo de vender o segundo cliente. ⚠️ **Entra antes de E3-01 (Embedded Signup).** O estado do assistente é do **servidor**, não do navegador: o admin fecha a aba no meio do fluxo da Meta e precisa retomar de onde parou — inclusive com a conexão que já existe do lado da Meta. `aceite_capacidades` registra a data em que ele foi informado do que aquele ERP habilita (ADR-008) |
 | **D-04** | `0004_organizacao.sql` | `filial`, `setor`, `contador_por_tenant`, `auditoria` (particionada mensal por `criado_em`) + 12 partições | Protocolo e numeração usam `contador_por_tenant` com `UPDATE … RETURNING`. ⚠️ `SEQUENCE` do Postgres é global — não serve (§7.1, regra 5) |
 | **D-05** | `0005_usuario.sql` | `usuario` (`cognito_sub UNIQUE` global), `usuario_filial` (PK `(tenant_id, usuario_id, filial_id)`, `filial_id NULL` = escopo tenant), `token_integracao` | ⚠️ **`usuario` não tem coluna `papel`** (INV-59). Quem adicionar "só para simplificar" reintroduz o bug que INV-59 fecha |
 | **D-06** | `0006_integracao.sql` | `conexao_erp` (+ `UNIQUE (tenant_id) WHERE papel='fiscal'`, + `UNIQUE (tenant_id) WHERE fonte_de_venda`), `conexao_erp_cobertura`, `evento_externo`, `operacao_ingestao`, `chave_idempotencia` | ⚠️ `evento_externo` é **não particionada de propósito** (INV-37): a única `(tenant_id, canal, id_externo_evento)` é a base de toda a idempotência de webhook, e em tabela particionada ela não existiria |
 | **D-07** | `0007_identidades_externas_org.sql` | `usuario_identidade_externa`, `filial_identidade_externa` | Sem elas, `venda.vendedor_externo` (string do ERP) nunca vira ranking (GES-02/03). Nascem na Onda 0 porque a **ingestão** já as preenche |
-| **D-08** | `0008_contato_nucleo.sql` | `grupo_economico`, `contato`, `contato_nome`, `contato_telefone`, `contato_documento`, `contato_endereco` | ⚠️ A única de telefone é **parcial**: `UNIQUE (tenant_id, telefone_e164) WHERE principal` (INV-07/49). Única total quebra a ingestão do ERP. `contato_documento`/`contato_endereco` com **chave local `seq`** — não UUID (§5.3) |
-| **D-09** | `0009_contato_satelites.sql` | `contato_identidade_externa`, `contato_campo_origem`, `contato_mesclagem`, `conflito_identidade`, `consentimento_contato`, `pessoa`, `pessoa_contato`, `comentario`, `lista_bloqueio` | `lista_bloqueio` nasce agora, chaveada por **`chave_bloqueio`** (55+DDD+8 dígitos, INV-50), não pela E.164 completa — porque o gateway de envio da Onda 0 já revalida contra ela |
+| **D-08** | `0008_contato_nucleo.sql` | `grupo_economico`, `contato` (**incluindo `origem_carga`**), `contato_nome`, `contato_telefone`, `contato_documento`, `contato_endereco` | ⚠️ **`contato.origem_carga` (`'chave_forte'`\|`'chave_media'`\|`'sem_chave_forte'`\|`'manual'`) nasce aqui ou nunca**: ela registra **como o contato entrou**, e essa informação some no instante do `INSERT` — derivar depois é impossível, não caro (E2-21, `entrada` §2.4). É ela que alimenta RC-05 e a fila de deduplicação. ⚠️ A única de telefone é **parcial**: `UNIQUE (tenant_id, telefone_e164) WHERE principal` (INV-07/49). Única total quebra a ingestão do ERP. `contato_documento`/`contato_endereco` com **chave local `seq`** — não UUID (§5.3) |
+| **D-09** | `0009_contato_satelites.sql` | `contato_identidade_externa`, `contato_campo_origem`, `contato_mesclagem`, `conflito_identidade`, `consentimento_contato`, `pessoa`, `pessoa_contato`, `comentario`, `lista_bloqueio` | `lista_bloqueio` nasce agora, chaveada por **`chave_bloqueio`** (55+DDD+8 dígitos, INV-50), não pela E.164 completa — porque o gateway de envio da Onda 0 já revalida contra ela. ⚠️ **E nasce com `origem ('pedido_do_contato'\|'migracao'\|'manual'\|'campanha')`**, separada de `motivo` (texto livre): E2-19 importa o opt-out histórico do sistema antigo, e sem `origem` não há como responder *"este bloqueio veio de onde?"* — que é a primeira pergunta jurídica quando o cliente reclama de ter sido bloqueado ou de **não** ter sido |
 | **D-10** | `0010_carteira.sql` | `carteira_atribuicao` com coluna gerada `periodo tstzrange` e `EXCLUDE USING gist` | ⚠️ Exige `btree_gist` (D-01) e a coluna **gerada** — o operador `&&` não existe sobre `de`/`ate` soltas. `usuario_id NULL` é a linha explícita de "sem dono" (INV-58) |
 | **D-11** | `0011_canal.sql` | `canal_conectado` (raiz genérica) + `numero_whatsapp` + `perfil_instagram` + `canal_saude_evento` + `usuario_canal` + `numero_throttle` + `numero_conversa_iniciada` + `numero_quota_hora` | ⚠️ A raiz é **genérica** desde já (§1.2). Criar `numero` como raiz e "adaptar para Instagram depois" é o retrofit que degrada a chave natural `(canal, contato)` |
 | **D-11b** | `0011b_template.sql` | `template` e `template_versao` (corpo, categoria, status na Meta, `id_externo`, variáveis) | ⚠️ **Sem isto a Onda 0 não consegue falar com ninguém no dia do corte.** No minuto em que o número é conectado, **todas as janelas de 24h estão fechadas** — a janela é por número e nasce zerada. Sem template aprovado, a vendedora não inicia nenhuma conversa. O contrato de API já previa o caminho; faltavam a tabela e a tarefa |
-| **D-12** | `0012_conversa_mensagem.sql` | `conversa` (+ `UNIQUE(tenant_id, canal_id, contato_id)`), `conversa_leitura`, `mensagem` **particionada mensal** + partições, `mensagem_id_externo` (guardiã, não particionada), `midia`, `atendimento` (+ única parcial INV-51), `atendimento_evento` | ⚠️ `atendimento` **nasce completo** e vazio (decisão aberta nº 9 — fechada aqui): criá-lo depois obriga a reprocessar histórico. ⚠️ `midia` carrega `mensagem_criado_em` para a FK composta ser possível (INV-04/60) |
+| **D-12** | `0012_conversa_mensagem.sql` | `conversa` (+ `UNIQUE(tenant_id, canal_id, contato_id)`), `conversa_leitura`, `mensagem` **particionada mensal** + partições, `mensagem_id_externo` (guardiã, não particionada), `midia`, `atendimento` (+ única parcial INV-51, **+ as quatro colunas de primeira resposta**), `atendimento_evento` | ⚠️ **`primeira_entrante_em`, `primeira_resposta_em`, `primeira_resposta_humana_em`, `primeira_resposta_por_id` entram aqui — não na `0017`.** D-12 promete que `atendimento` *"nasce completo"*; com quatro colunas fora ele nasce incompleto, e derivá-las depois é varrer `mensagem` **particionada** conversa a conversa. ⚠️ **São duas colunas de resposta de propósito:** a mensagem de ausência automática preenche `primeira_resposta_em` e **não** `primeira_resposta_humana_em` — é exatamente o que MC-05 vigia, e uma coluna só torna a contra-métrica impossível. ⚠️ `atendimento` **nasce completo** e vazio (decisão aberta nº 9 — fechada aqui): criá-lo depois obriga a reprocessar histórico. ⚠️ `midia` carrega `mensagem_criado_em` para a FK composta ser possível (INV-04/60) |
 | **D-13** | `0013_catalogo.sql` | `produto`, `produto_identidade_externa`, `produto_variante`, `variante_identidade_externa`, `tabela_preco`, `tabela_preco_identidade_externa`, `tabela_preco_item`, `saldo_cache` | ⚠️ Identidade externa em **tabela própria**, nunca `conexao_id` embutido no produto (§6.7) — com dois ERPs, o embutido duplica produto e quebra `UNIQUE(tenant_id, referencia)`. `saldo_cache` tem PK `(tenant_id, conexao_id, variante_id)` |
 | **D-14** | `0014_venda.sql` | `venda` **particionada anual por `data`**, `venda_chave_externa` (guardiã, não particionada), `venda_item` (carregando `venda_data`) | ⚠️ A única de reconciliação **não pode morar em `venda`** (§6.6): incluir `data` destruiria a garantia — a mesma venda reingerida com data corrigida entraria duas vezes sem erro. Partições **retroativas** conforme os anos da carga histórica |
 | **D-15** | `0015_indices_onda0.sql` | Índices da §8.6 usados nesta onda: ingestão por id externo, dedup por `wamid`, idempotência de webhook, reconciliação pedido↔venda, `venda (tenant_id, contato_id, data DESC)`, `contato_telefone (tenant_id, telefone_e164)` e `chave_busca`, GIN trigram em `contato.nome_preferido`, `outbox (id) WHERE processado_em IS NULL`, expurgo de `evento_externo` | ⚠️ Índice não usado custa escrita em toda inserção. Índice de tela do inbox e do kanban **não entra agora** — entra na onda que tem a tela |
 | **D-16** | `0016_mv_metricas_contato.sql` | `mv_metricas_contato` com `tenant_id`, `confiavel` e `apurado_desde` + índice único (para `REFRESH CONCURRENTLY`) + **policy própria** | ⚠️ **View materializada não herda RLS** da tabela base (§7.3). MV sem policy própria é o dashboard vazando tudo |
+| **D-17** | `0017_metricas_produto.sql` | `linha_base_metrica` (PK `(tenant_id, metrica, periodo_de)`, com `fonte`, `confiavel`, `apurado_em`, `congelado_em`, `congelado_por`) · `tenant_marco` (PK `(tenant_id, marco)`) · `assinatura_tenant` (+ `EXCLUDE` de vigência sem sobreposição, `valor_centavos bigint`) · `uso_diario_usuario` (PK `(tenant_id, usuario_id, dia, superficie)`) + RLS nas quatro | ⚠️ **É a régua contra a qual as quatro ondas seguintes serão julgadas** (`metricas-de-sucesso` §6.2, itens 2–5). Sem `linha_base_metrica` a linha de base vira slide perdido no Drive; sem `tenant_marco` todo "antes e depois" é chute. ⚠️ `uso_diario_usuario` é **`UPSERT` por caso de uso de escrita**, uma linha por usuário/dia/superfície — **não** é pipeline de evento, e a tabela genérica de "evento de produto" está explicitamente proibida (§6.3 de `metricas`). Escrita só começa na Onda 1; a tabela nasce agora |
+| **D-18** | `0018_conciliacao.sql` | `conciliacao_execucao` e `conciliacao_divergencia` (código **DIV**, valores das **duas** fontes, estado, responsável, `resolvido_em`) + RLS | ⚠️ **Divergência sem estado e sem responsável vira PDF morto.** O RC (E2-16) precisa ser **consultável**, não só gerado — o critério de saída nº 1 exige RC assinado, e assinar um relatório cujas pendências não têm dono é assinar um retrato. ⚠️ **Era `0017` em `entrada` §9.2 e colidia com D-17** — a renumeração é a §1.3 da revisão de lacunas, e a reserva agora vive **aqui**, nesta tabela, não na cabeça de quem escreveu |
+
+⚠️ **Esta tabela é a reserva de número de migration.** `processo-de-trabalho` §3.2 chama o número de
+migration de *"o recurso mais serializado do repositório"* — e a colisão do `0017` entre `entrada` e
+`metricas` nasceu no **planejamento**, antes de existir PR para reservar coisa alguma. Migration
+prevista em documento também reserva número, e a reserva é esta linha.
 
 ### 4.1 Regras que valem para todas elas
 
@@ -367,6 +374,12 @@ Notação: **dep.** = de quem depende · **DoD** = o teste que precisa passar (B
 | **E2-13** | Escrita idempotente de pedido — **só o contrato e o dublê** (INT-01c) | E2-01 | `dada falha de comunicação, quando reenvia com a mesma chave de efetivação, então o ERP não cria segundo pedido`. Erros **tipificados**, nunca string crua do ERP |
 | **E2-14** | Circuit breaker por integração | E2-03 | `dado ERP fora do ar, quando o inbox carrega, então o histórico aparece e só o bloco do ERP degrada` |
 | **E2-15** | Normalização de telefone na escrita, com o nono dígito (§6.5) | R-03 | Tabela de casos: `+55 81 99861-7049`, `5581998617049`, `81998617049`, `(81) 9861-7049` colidem na mesma canônica; `wa_id` de 12 dígitos vai para `telefone_e164_meta`, **não** vira o canônico |
+| **E2-16** · `INT-14` | **Relatório de conciliação** (RC-01…RC-10) como comando executável, saída Markdown + CSV, gravando em `conciliacao_execucao`/`conciliacao_divergencia` | E2-07, E2-08, D-18 | `dado o ERP com 3 vendas a mais em março, quando roda, então RC-01 acusa o mês, a diferença em centavos e classifica como DIV-01`. ⚠️ **É o comando que fecha o critério de saída nº 1** — INV-57 prova consistência interna, o RC prova o que faltou |
+| **E2-17** · `INT-15` | **Perfilamento de base** (`entrada` §1.B, B-01…B-10) como comando, sobre a **cópia anonimizada** (R-11) | E2-03, R-11 | Roda na **S1**, não na S6 — é o sinal antecipado do risco nº 1. Produz as 10 métricas e o arquivo `perfilamento.md`. ⚠️ B-03/B-04 medem **duplicidade e cardinalidade**: só fazem sentido sobre anonimização determinística |
+| **E2-18** · `INT-16` | **Recarga por janela de data** (delta) na **porta** e no adaptador | E2-01, E2-07 | `dada recarga de 01/03 a 07/03, quando roda, então só a janela é reprocessada e nada duplica`. ⚠️ Entra na **porta**, não só no GeraCloud — senão a correção de divergência só existe para o ERP da casa |
+| **E2-19** · `CTT-16` | **Importação de opt-out histórico** para `lista_bloqueio`, por `chave_bloqueio` (INV-50), com `origem='migracao'` | E2-15, D-09 | `dado opt-out importado com 12 dígitos, quando a campanha materializa o contato de 13, então o gateway bloqueia`. ⚠️ **É pré-requisito do go-live, não do cancelamento do sistema antigo** (RC-10, TR-06): opt-out não exportado antes do desligamento é passivo jurídico irrecuperável |
+| **E2-20** · `INT-17` | **De-para de vendedoras e filiais** (`usuario_identidade_externa`, `filial_identidade_externa`) obrigatório antes de RC-03 | E1-03, E2-03, D-07 | RC-03 **falha explicitamente** se houver vendedor do ERP sem de-para — ⚠️ **não silencia e não agrega em "outros"**. Venda de vendedor não mapeado entra no total, fica **fora** do ranking e aparece numa fila nomeada |
+| **E2-21** · `CTT-17` | Marcar contato criado **sem chave forte** (`contato.origem_carga`) | E2-05, D-08 | O número aparece em RC-05 e alimenta a fila de deduplicação. ⚠️ Grava-se **no `INSERT`** — depois a informação não existe mais |
 
 ⚠️ **E2-12 e E2-13 entram na Onda 0 mesmo sem tela.** É a dependência nº 4 do backlog: o pedido
 assistido exige do conector três capacidades de **leitura síncrona** que a carga em lote não atende.
@@ -384,7 +397,7 @@ Descobrir isso na Onda 2 significa renegociar o contrato de integração com a O
 | **E3-06** | Ingestão de mensagem entrante (INV-12, §3.4) | E3-04, D-12, E2-04 | `dado número desconhecido, quando a mensagem chega, então contato-lead + conversa + mensagem nascem na MESMA transação`. `dado rollback, então não sobra lead fantasma` |
 | **E3-07** | Dedup por `wamid` (INV-38) | E3-06 | `dado wamid repetido, quando ingere, então existe uma mensagem` — a única mora em `mensagem_id_externo`, gravada no mesmo commit |
 | **E3-08** | Status de entrega monotônico (INV-39) | E3-04 | `dado 'lido' chegando antes de 'entregue', quando processa, então o status não regride` |
-| **E3-09** | Envio de mensagem — gateway único de saída | E3-06, D-11 | Revalida, **antes de chamar a Meta**: janela (INV-17/18), canal conectado + pagamento OK (INV-21), opt-out (INV-13), lista de bloqueio por **chave reduzida** (INV-15/50) |
+| **E3-09** | Envio de mensagem — gateway único de saída | E3-06, D-11 | Revalida, **antes de chamar a Meta**: janela (INV-17/18), canal conectado + pagamento OK (INV-21), opt-out (INV-13), lista de bloqueio por **chave reduzida** (INV-15/50). ⚠️ **E, em ambiente ≠ `prod`, a allowlist de números de teste** — recusando com erro tipificado `canal.destino_fora_da_allowlist`. **É código, não variável de ambiente** (`processo-de-trabalho` §8.3): `dado ambiente hom e destino fora da allowlist, quando envia, então recusa ANTES de chamar a Meta`. ⚠️ O motivo é §8.2: token de produção em ambiente de teste entrega *"Teste 123"* a lojistas reais às 3h da manhã — e **mensagem entregue não se desfaz** |
 | **E3-15** | **Template: sincronizar da Meta e enviar** (CMP-03/04) | E3-01, D-11b, E3-09 | ⚠️ **Pré-requisito do corte, não item de campanha.** Sincroniza o catálogo aprovado na WABA (nome, categoria, variáveis, status) e permite enviar 1-a-1 pelo gateway. `dada janela fechada, quando envia template aprovado, então passa; quando envia texto livre, então recusa com motivo`. `dado template rejeitado pela Meta, então some da lista e o motivo aparece`. **O construtor de campanha continua na Onda 3** — aqui é só o envio individual |
 | **E3-10** | Janela de atendimento **derivada**, função pura em `shared` (INV-18) | R-03 | Testes de fronteira em **23h e 24h** — as bordas é que quebram. A mesma função serve a contagem regressiva da tela e o bloqueio do servidor |
 | **E3-11** | Throttling por canal (INV-23) e limite de tier (INV-22) | D-11 | `dadas 50 reservas concorrentes com limite 10, quando disparam, então exatamente 10 passam`. ⚠️ Reserva **antes** da chamada à Meta; proibido ler-incrementar-gravar |
@@ -409,18 +422,24 @@ teste automatizado.**
 | **E4-08** | Mesclagem manual, **reversível**, agregado por agregado (§6.4.1, INV-11) | E4-07, D-10, D-12 | `dada mesclagem de contatos com conversa no mesmo canal, quando funde, então as duas conversas permanecem fisicamente e a UI apresenta thread único`. `dado desfazer, então o estado anterior volta` |
 | **E4-09** | Carteira com histórico sem sobreposição **e sem lacuna** (INV-32/33/58) | D-10 | `dada transferência, quando executa, então fecha uma linha e abre outra na mesma transação`. `dada vendedora removida, então abre linha com usuario_id NULL`. `quem era o dono em março?` nunca devolve vazio |
 
-### 5.5 Sequência sugerida — 8 semanas
+### 5.5 Sequência sugerida — S0 de preparação + seis semanas de desenvolvimento
 
 | Semana | M (Meta) | I (Infra) | R + D | Épicos |
 |---|---|---|---|---|
-| **S0** | M-01…M-03, M-08, **abrir M-04** · M-09…M-12 | I-01, I-03, I-04 | D-00 (PoC de PK), R-01, R-03, R-07 | E1-07 (spec das telas de entrada) |
-| **S1** | aguarda M-04 | I-05…I-09 | D-01…D-05, R-02, R-06 | E1-01, E1-02 |
-| **S2** | aguarda M-04 | I-10 | D-06…D-10, R-08, R-09 | E1-03, E1-04, E2-01, E2-02 |
-| **S3** | M-05 assim que M-04 sair | — | D-11, D-12 | E1-05, E2-03, E2-04, E2-15, E3-03…E3-05 |
-| **S4** | M-06 | — | D-13, D-14 | E2-05, E2-06, E3-06…E3-08, E4-01…E4-05 |
-| **S5** | **M-07 (App Review)** — exige E3-01 em hom | — | D-15 | **E3-01**, E3-02, E3-09…E3-12, E2-11 |
-| **S6** | acompanhar M-07 | — | D-16 | E2-07, E2-08, E2-09, E2-10, E3-13, E3-14 |
-| **S7** | piloto real (se M-05/M-07 saíram) | — | — | E2-12, E2-13, E2-14, E4-07…E4-09, E1-06, E1-08 |
+| **S0** | M-01…M-03, M-08, **abrir M-04** · M-09…M-12 · **abrir M-13** | I-01, I-03, I-04 | D-00 (PoC de PK), R-01, R-03, R-07, **R-11** | E1-07 (spec das telas de entrada) · **ficha de entrada** (`entrada` §1) |
+| **S1** | aguarda M-04 | I-05…I-09 | D-01…D-05, R-02, R-06, **R-12 (início)** | E1-01, E1-02, **E2-17 — perfilamento sobre a cópia anonimizada** |
+| **S2** | aguarda M-04 | I-10, **I-11** | D-06…D-10, R-08, R-09, **R-12 (fim)** | E1-03, E1-04, E2-01, E2-02 |
+| **S3** | M-05 assim que M-04 sair | — | D-11, **D-11b**, D-12 · **bloco 3 da biblioteca** | E1-05, E2-03, E2-04, E2-15, E3-03…E3-05 |
+| **S4** | M-06 | — | D-13, D-14, **D-18** · **bloco 3 da biblioteca** | E2-05, E2-06, E3-06…E3-08, E4-01…E4-05 |
+| **S5** | **M-07 (App Review)** — exige E3-01 em hom | — | D-15, **D-17** | **E3-01**, E3-02, E3-09…E3-12, **E3-15**, E2-11, E2-12, E2-13 |
+| **S6** | acompanhar M-07 | — | D-16 | E2-07…E2-10, E2-14, **E2-16, E2-18, E2-19, E2-20, E2-21**, E3-13, E3-14, E4-07…E4-09, E1-06, E1-08 |
+
+⚠️ **Duas linhas desta tabela não são desenvolvimento e mesmo assim mandam no calendário:**
+
+| Fora do quadro | Quando | Por quê |
+|---|---|---|
+| **Janela de sombra** (LB-10, LB-11, LB-12) | **começa 2 semanas ANTES da ficha de entrada** — ou seja, antes da S0 | ⚠️ É o único dado **irrecuperável** do projeto: a janela fecha no primeiro corte e não reabre. E ela precisa rodar **antes de a equipe saber da mudança** — depois do anúncio o tempo de resposta melhora sozinho, e a Onda 1 perde o crédito por uma melhora que já tinha acontecido. Custo: uma pessoa do cliente, ~1 h/dia. **Não consome engenharia** |
+| **M-13** (situação dos números na Meta) | **S0**, junto da ficha | Até 3 semanas de espera com um terceiro não cooperativo — ver §1.1 e o risco nº 10 |
 
 ### 5.6 Os varredores de schema (E1-08) — invariantes que testes de unidade não pegam
 
@@ -455,6 +474,11 @@ protegida por disciplina é invariante violada.**
 | **7** | **Regra do nono dígito por faixa de DDD** (decisão aberta nº 16) errada | Média × Alto | Duplicidade aparecendo na S4 | Tabela de faixas por DDD versionada em `packages/shared`, com suíte de casos. Errar produz duplicidade de cadastro (recuperável) ou **falha de bloqueio** (não recuperável) — daí a assimetria de INV-50 |
 | **8** | **Escopo crescendo** — inbox "só um pouquinho" para demonstrar | Alta × Alto | Card de tela fora da §7 | §7 é a lista fechada. Demonstração da Onda 0 é feita com **API + logs + SQL**, não com tela |
 | **9** | Instagram entra "de graça" porque a permissão foi pedida no mesmo App Review | Média × Médio | Card de Instagram no board | A permissão é pedida junto (economiza um ciclo de review); **a implementação é Onda 2 (EP-20)**. As tabelas já suportam — `perfil_instagram` existe e fica vazia |
+| **10** | ⚠️ **Números do cliente presos na WABA de terceiro** (TR-01, M-13). Se eles já estão em API Oficial dentro da WABA da ferramenta atual, não é Embedded Signup: é **portabilidade entre WABAs**, dependente de ação do detentor — que é **o concorrente que está perdendo o cliente** | **Alta × Alto** | F-02 sem resposta clara na S0 | Levantar em **T-6 (= S0)**; **o cliente**, como dono do BM, abre a solicitação **por escrito**; prever **3 semanas**. Plano B (número novo) só serve para vendedora nova — número novo perde o reconhecimento da base. ⚠️ **Pode ser o caminho crítico real, acima da Meta e da carga** — e é o único item da lista sem plano B verdadeiro |
+| **11** | **Disparo em massa em número recém-conectado** limita o número (TR-05) | Média × **Alto** | Pedido de campanha na semana 1 de um número | **Proibição escrita** de campanha nos primeiros 14 dias de cada número, no contrato e no produto; CAN-06 pausa automática. ⚠️ Não é risco de código: é o gestor querendo "aproveitar que já está tudo lá" |
+| **12** | **Opt-out histórico não exportado** antes do desligamento do sistema antigo (TR-06) | Média × **Alto (jurídico)** | E-04 sem resposta na ficha de entrada | A exportação é pré-requisito do **go-live**, não do cancelamento (RC-10, E2-19). ⚠️ Depois que o sistema antigo desliga, o dado não existe mais em lugar nenhum — e o primeiro disparo para quem pediu para sair é o tipo de erro que não se explica |
+| **13** | **Vendedora volta ao celular pessoal** → operação paralela invisível (TR-07) | **Alta** × Alto | Queda de conversas/dia no número **sem** queda de faturamento — é a assinatura exata do vazamento | Política escrita, acompanhamento diário na primeira semana de cada lote, RB-06. ⚠️ MA-04 (contato com venda e **sem** conversa) é o proxy que mede isso na Onda 1; na Onda 0 o que se faz é **combinar a regra antes**, porque depois vira acusação |
+| **14** | **Cliente cancela o sistema antigo cedo** para economizar (TR-11) | Média × **Alto** | A pergunta *"posso cancelar já?"* | Cláusula contratual: cancelamento só **após D+30 do último lote** e após o checklist de exportação (opt-out, histórico de conversa, relatórios). ⚠️ É o único item desta tabela cuja mitigação é uma linha de contrato, e por isso o mais fácil de esquecer |
 
 ---
 
@@ -475,11 +499,11 @@ protegida por disciplina é invariante violada.**
 | Pedido assistido (PED-01…16, EP-27) | 2 | ⚠️ **Exceção deliberada:** o **contrato** de leitura síncrona (E2-12) e escrita idempotente (E2-13) entra agora. A tela, o rascunho e a efetivação, não |
 | Catálogo conversacional, link, rastreio (CAT-01…04) | 2 | As tabelas de produto existem porque a ingestão as preenche; o catálogo como produto, não |
 | Copiloto, transcrição, resumo, agente autônomo (IA-*) | 2–3 | Nada de IA nesta onda |
-| Campanhas, templates HSM, disparo, atribuição de receita (CMP-*) | 3 | ⚠️ **Menos** `lista_bloqueio` e `consentimento_contato`, que nascem agora por serem invariante de envio (INV-13/15/50) |
+| Campanhas, disparo em massa, atribuição de receita (CMP-*) | 3 | ⚠️ **Menos** `lista_bloqueio`, `consentimento_contato` **e o envio unitário de template (E3-15, D-11b)**. Os dois primeiros são invariante de envio (INV-13/15/50); o terceiro é **invariante de reabertura de janela** — no minuto do corte de qualquer número, todas as janelas de 24 h estão fechadas, e sem template aprovado não se fala com ninguém. **Convenção única, idêntica nos três documentos:** envio unitário de template = **Onda 0** · submissão dos 5 templates mais usados = **na abertura da onda em que o cliente é cortado** · construtor de campanha e disparo em massa = **Onda 3** |
 | App mobile (MOB-*) | 2 | `apps/app` existe como esqueleto e watch path. Sem tela |
 | Instagram Direct (CAN-07…09) | 2–3 | Só a permissão no App Review e a tabela `perfil_instagram` vazia |
 | Metas, ranking, BI, home executiva (GES-*, BI-*) | 2 | `usuario_identidade_externa` nasce agora **só** porque a ingestão a preenche |
-| Design system completo, alta fidelidade, modo escuro | Paralelo | `packages/design-tokens/tokens.json` já existe (ADR-012). O console da Onda 0 tem **cinco telas**: login, recuperação, convite, onboarding (Meta + ERP) e lista de contatos em leitura |
+| **Design system completo**, alta fidelidade e modo escuro | Paralelo | `packages/design-tokens/tokens.json` já existe (ADR-012). O console da Onda 0 tem **cinco telas**: login, recuperação, convite, onboarding (Meta + ERP) e lista de contatos em leitura. ⚠️ **Mas o bloco 1 da biblioteca é Onda 0, com tarefa, dono e semana (R-12, S1–S2)** — essas cinco telas consomem o bloco 1 inteiro e boa parte do bloco 3 (tabela com cursor, modal, select, checkbox). Sem R-12 elas nascem com cor literal e a Onda 1 as refaz. *"Paralelo"* não tem semana, não tem dono e não entra em checklist |
 | SSE no console | 1 | O **outbox e o `NOTIFY` existem** (E3-14) porque INV-40 é invariante de escrita. O consumo na tela é Onda 1 |
 | Planos, limites e cadeado de upsell (PLT-06) | **2** | `plano` nasce na `0002` e o cadeado atravessa `GET /eu` desde a Onda 0 — a resposta já distingue *sem permissão* de *não contratado*. A **tela** de planos é Onda 2 |
 | White-label e revenda (PLT-09/10) | 4 | `tenant.tenant_pai_id` nasce agora, vazio e sem policy |
@@ -493,14 +517,28 @@ carga histórica — que é a dependência nº 1 de todo o valor analítico do p
 ## 8. Checklist de fechamento da Onda 0
 
 - ☐ Meta: Business Verification aprovada · Tech Provider ativo · App Review submetido ou aprovado
+- ☐ **M-13 respondido**: para cada número do cliente, se é novo, se está em WABA de terceiro (⇒ portabilidade aberta por escrito) ou em WhatsApp Business App
 - ☐ Três ambientes com credenciais **distintas em tudo** — Meta, ERP, IA, banco, storage
-- ☐ Migrations `0001`…`0016` aplicadas nos três ambientes pelo **mesmo** runner
-- ☐ Os oito varredores de schema verdes no CI
+- ☐ Migrations `0001`…`0018` aplicadas nos três ambientes pelo **mesmo** runner, e `schema-atual.sql` versionado (R-07)
+- ☐ Os oito varredores de schema verdes no CI, **e o bloco obrigatório do CI em < 8 min** (R-08)
 - ☐ Teste de RLS com dois tenants em **todo** repositório — incluindo contra a **réplica**
-- ☐ Suíte de conformidade verde para **GeraCloud e API pública**, com os `skip` esperados
+- ☐ **Teste de isolamento de canal SSE** verde como gate de todo PR (R-08)
+- ☐ Suíte de conformidade verde para **GeraCloud e API pública**, com os `skip` esperados — **como gate do CI**, não só como tarefa
 - ☐ Carga histórica completa, com retomada testada por `kill -9` no meio do lote
 - ☐ `conexao_erp_cobertura` = `completa` nos três fluxos, e a reconciliação (INV-57) batendo 100%
+- ☐ **RC assinado pelo gestor comercial**, sem DIV bloqueante aberto (E2-16, D-18)
+- ☐ **RC-09 — 10 CNPJs estratificados** conferidos linha a linha contra o ERP: nomes, telefones, documentos, endereços, vendas
+- ☐ **Opt-out histórico importado** (RC-10, E2-19), com `origem='migracao'`
+- ☐ **Linha de base congelada e conferida com o cliente (MN-01)** — LB-01…LB-15 em `linha_base_metrica`, com `fonte` e `congelado_em` preenchidos
+- ☐ **`tenant_marco` com `carga_historica_completa` e `linha_base_congelada`**
+- ☐ **Consultas `.sql` versionadas** de toda métrica das Ondas 0 e 1, em `apps/api/src/contexts/analitico/consultas/`, com o ID da métrica no nome
 - ☐ Três números conectados, recebendo e enviando, com custo gravado por mensagem
-- ☐ Um CNPJ conferido linha a linha contra o ERP: nomes, telefones, documentos, endereços, vendas
+- ☐ **Um template aprovado enviado com a janela fechada** (E3-15) e o custo gravado como `utility`
+- ☐ **Allowlist de envio ativa em hom**, recusando destino de fora com `canal.destino_fora_da_allowlist`
 - ☐ Nenhuma tabela nova fora das seis exceções sem `tenant_id`
 - ☐ Decisões abertas nº 1 (volume) e nº 10 (PK composta) **fechadas**, com ADR
+- ☐ Decisões nº 4 (*"vendedora ativa"*) e nº 5 (quem assina a linha de base) de `metricas-de-sucesso` §9 fechadas
+
+⚠️ **O item que mais some deste checklist é o penúltimo bloco.** MN-01 não é técnico e não quebra
+nenhum teste — mas é o único que, faltando, **invalida a avaliação das quatro ondas seguintes**: sem
+régua congelada, toda melhora da Onda 1 vira opinião.

@@ -157,6 +157,8 @@ coluna "Lead", que é exatamente o sintoma que este parágrafo diz estar evitand
 | **OperacaoDeIngestao** | `(tenant_id, id)` | INT-04/05/08: lote, retomada, erros |
 | **ChaveDeIdempotencia** | `(tenant_id, escopo, chave)` | INT-04 |
 | **Outbox** | `id` | Infra (ADR-007), mas carrega `tenant_id` no payload |
+| **ExecucaoDeConciliacao** | `(tenant_id, id)` | INT-14: uma rodada do RC (RC-01…RC-10), com escopo, período e quem assinou |
+| **DivergenciaDeConciliacao** | `(tenant_id, id)` | Uma linha por achado, com código **DIV**, os valores das **duas** fontes, estado e responsável. ⚠️ Divergência sem estado e sem dono vira PDF morto |
 
 #### `analitico`
 
@@ -166,6 +168,10 @@ coluna "Lead", que é exatamente o sintoma que este parágrafo diz estar evitand
 | **AtribuicaoDeReceita** | `(tenant_id, id)` | CMP-11: `metodo` (exata \| estimada) obrigatório |
 | **CustoDeMensagem** | `(tenant_id, id)` | Fato por mensagem entregue, com categoria e tarifa vigente |
 | **MetricaDoNumero** | `(tenant_id, canal_id, dia)` | Série diária de saúde e volume. ⚠️ **Métrica, não controle de quota** (INV-22) |
+| **LinhaDeBaseDeMetrica** | `(tenant_id, metrica, periodo_de)` | A régua congelada (LB-01…LB-15). ⚠️ **Imutável depois de `congelado_em`** — correção é linha nova, nunca `UPDATE` |
+| **MarcoDoTenant** | `(tenant_id, marco)` | O **quando** de todo "antes e depois": `carga_historica_completa`, `linha_base_congelada`, `primeiro_corte`, `ultimo_corte`, `abandono_sistema_antigo`. ⚠️ Não é a data do contrato |
+| **AssinaturaDoTenant** | `(tenant_id, id)`, sem sobreposição de vigência | O que **este** cliente paga — desconto e negociação existem. Denominador de BI-11 e base do MRR. ⚠️ Distinta de `Plano`, que é catálogo global |
+| **UsoDiarioDoUsuario** | `(tenant_id, usuario_id, dia, superficie)` | Telemetria **agregada** de adoção (MA-01, MA-06). ⚠️ Única exceção à proibição de tabela de evento de produto, e ela é agregada de propósito |
 
 `PerfilRfvDoContato`, `MetricasDoContato` (dias sem vendas, média entre vendas, ticket) e
 `CicloDeVida` **não são entidades** — são projeções derivadas (§5.4).
@@ -405,7 +411,7 @@ aberta nº 13 trata **ordem de conectores**, não isto.
 | ID | Invariante | Dono |
 |---|---|---|
 | **INV-42** | Atribuição **exata** e **estimada** nunca são somadas | Modelo: `metodo` é coluna **obrigatória** e nenhuma view materializada expõe a soma. A API devolve dois campos, não um total |
-| **INV-43** | Uma venda tem no máximo **uma** atribuição exata | `UNIQUE(tenant_id, venda_id) WHERE metodo = 'exata'` |
+| **INV-43** | Uma venda tem no máximo **uma** atribuição exata, e **qual** origem vence é regra declarada, não escolha do job | `UNIQUE(tenant_id, venda_id) WHERE metodo = 'exata'` **+ ADR-013**: precedência `exata → estimada` e, dentro da exata, `tarefa → campanha → conversa espontânea`. ⚠️ A única garante *uma* atribuição; ela **não** diz qual. Sem a precedência escrita, dois jobs corretos produzem dois donos diferentes para a mesma receita, e a soma dos cards da home fica maior que o faturamento |
 | **INV-44** | A regra de desempate da atribuição estimada é única e **declarada**, e a janela usada fica gravada no registro | Job de atribuição + coluna `janela_dias` + legenda na tela |
 | **INV-45** | A linha do tempo de RFV é **encadeada e sem empate**: não há duas transições do mesmo contato no mesmo instante, e `faixa_de` da linha N = `faixa_para` da linha N-1 | `UNIQUE(tenant_id, contato_id, avaliado_em)` + trigger de encadeamento no `INSERT`. ⚠️ A redação antiga ("um registro vigente", "índice parcial `WHERE ate IS NULL`") descrevia um modelo **com vigência que `rfv_evento` não tem** — o estado vigente mora em `mv_rfv_segmento_atual`, e view materializada **não impõe invariante de escrita** |
 | **INV-54** | Uma mensagem gera **no máximo uma linha de custo por categoria cobrável** | `UNIQUE(tenant_id, mensagem_criado_em, mensagem_id, categoria)` em `custo_mensagem` (a coluna de partição entra na única, INV-60) |
@@ -1160,12 +1166,22 @@ usuario_perfil(tenant_id, usuario_id, foto_chave_objeto, bloqueada_ate, mfa_ativ
 
 -- Onboarding do tenant (B-02) — a tela mais importante da Onda 0 não tinha onde morar
 onboarding_passo(tenant_id, passo, estado, dados jsonb,
-                 concluido_em, concluido_por, atualizado_em)
+                 concluido_em, concluido_por, concluido_por_staff bool, atualizado_em)
                                                    PK (tenant_id, passo)
       -- passo:  'empresa' | 'canal_whatsapp' | 'pagamento_meta' | 'erp'
       --       | 'aceite_capacidades' | 'carga_historica'
       -- estado: 'pendente' | 'em_andamento' | 'concluido' | 'falhou' | 'dispensado'
+      -- concluido_por_staff: TRUE quando quem concluiu foi staff da Gera3 (group do Cognito),
+      --                      não usuário do tenant  ⚠️ é o dono de MO-06
 ```
+
+⚠️ **`concluido_por_staff` existe porque MO-06 não é calculável sem ela.** A métrica é *"passos do
+onboarding que exigiram intervenção manual da Gera3 ÷ total"*, e `concluido_por` é um `usuario_id`
+**do tenant** — staff da Gera3 é **group do Cognito** (`plano-onda-0.md` §2.2), não tem linha em
+`usuario`. Sem o booleano, `concluido_por IS NULL` significa tanto "ninguém concluiu" quanto "quem
+concluiu fomos nós", e a métrica que prevê o custo de vender o **segundo** cliente não existe:
+onboarding que só a Gera3 sabe fazer não escala, e a hora de descobrir isso é no primeiro, não no
+décimo.
 
 ⚠️ **O estado do onboarding é do servidor, não do navegador.** `localStorage` é o erro clássico
 aqui: o admin começa a configurar no escritório, o Embedded Signup abre uma janela da Meta, ele
@@ -1202,6 +1218,8 @@ contato(tenant_id, id,
         classificacao ('atacado'|'varejo'), qualificacao, qualificado_em, qualificado_por,
         origem ('ingestao_mensagem'|'campanha'|'instagram'|'indicacao'|'importacao'|'manual'),
         origem_detalhe jsonb,                               -- IA-09, BI-06: lead sem procedência é lead cego
+        origem_carga ('chave_forte'|'chave_media'|'sem_chave_forte'|'manual'),
+                       -- ⚠️ COMO o contato entrou na base. Gravada no INSERT ou nunca (E2-21)
         recebe_campanhas bool, recebe_automacoes bool,      -- INV-13/14
         dono_atual_id,                                      -- desnormalizado da carteira
         filial_id,                                          -- INV-34 (escopo supervisor)
@@ -1252,6 +1270,15 @@ colunas inventadas na hora de escrever o índice e nunca declaradas. `ultimo_toq
 e alimenta o motor da Fila do Dia (TSK-08): é **desnormalização mantida no mesmo commit da mensagem
 saliente**, igual a `conversa.ultima_mensagem_em` (§3.4), e entra na lista de contadores com dono
 declarado (INV-57).
+
+⚠️ **`contato.origem_carga` é diferente de `contato.origem`, e a diferença é o que a torna
+irrecuperável.** `origem` responde *"de onde veio este cliente"* (mensagem, campanha, indicação);
+`origem_carga` responde *"com qual chave ele foi reconciliado quando entrou"* — chave forte
+(documento), chave média (telefone), nenhuma, ou digitação manual. A segunda pergunta só tem
+resposta **no instante do `INSERT`**: depois de carregados 40 mil contatos, não existe consulta que
+distinga o que casou por CNPJ do que virou contato próprio por não ter documento (`entrada` §2.4).
+É ela que alimenta RC-05 e a fila de deduplicação — e é ela que permite responder ao gestor *"o
+sistema perdeu clientes?"* com um número em vez de uma suposição.
 
 ⚠️ **`qtd_pedidos` virou `qtd_vendas` porque o nome e o dado discordavam.** A fonte de verdade de
 compra é `venda` (§3.7) e **nem toda venda tem pedido** — a maioria é lançada direto no ERP. Um
@@ -1326,7 +1353,9 @@ midia(tenant_id, id, mensagem_id, mensagem_criado_em, chave_objeto, mime, bytes,
 --                 seguinte) e `#72372.2` (herança visual do Tailor, nunca foi decisão nossa).
 atendimento(tenant_id, id, conversa_id, canal_id, protocolo bigint, atendente_id,
             estado ('na_fila'|'em_atendimento'|'encerrado'),
-            criado_em, assumido_em, encerrado_em, setor_id, csat)
+            criado_em, assumido_em, encerrado_em, setor_id, csat,
+            primeira_entrante_em, primeira_resposta_em,
+            primeira_resposta_humana_em, primeira_resposta_por_id)   -- MO-07, MC-05, LB-11
                                                    UNIQUE(tenant_id, protocolo)
    CREATE UNIQUE INDEX ON atendimento (tenant_id, conversa_id) WHERE estado <> 'encerrado'  -- INV-51
 atendimento_evento(tenant_id, id, atendimento_id, tipo, ator_id, motivo, criado_em)
@@ -1344,6 +1373,15 @@ a vendedora seguinte deixa de responder um cliente por causa de um fantasma.
 O heartbeat chega por `POST` a cada N segundos, e a ausência dele **não** dispara evento de saída:
 o registro simplesmente vence. É o que mantém o mecanismo barato — sem conexão bidirecional, sem
 componente novo, e uma tabela pequena que nunca é lida sem filtro de tempo.
+
+⚠️ **As quatro colunas de primeira resposta nascem com a tabela, na `0012` — não numa migration de
+métrica.** Derivá-las depois é varrer `mensagem` **particionada**, conversa a conversa, para achar a
+primeira entrante e a primeira saliente de cada episódio; e a definição precisa estar decidida
+**antes de existir dado**. São **duas** colunas de resposta de propósito: a mensagem de ausência
+automática preenche `primeira_resposta_em` e **não** `primeira_resposta_humana_em`. Com uma coluna
+só, um robô respondendo "Recebemos sua mensagem!" em 2 segundos faz o tempo de primeira resposta
+despencar e a métrica declarar uma vitória que não houve — que é exatamente a contra-métrica MC-05.
+`primeira_resposta_por_id` é quem respondeu, e é o que liga MO-07 ao ranking sem varrer mensagem.
 
 ⚠️ **`atendimento.canal_id` e `atendimento.criado_em` também só existiam no índice da §8.6.** O índice
 da Fila mobile (MOB-03, **Onda 1**) filtra por canal e ordena por chegada; sem essas colunas ele
@@ -1430,8 +1468,11 @@ campanha_destinatario(tenant_id, id, campanha_id, contato_id, canal_id, telefone
                       PK (tenant_id, campanha_mes, id)
                       UNIQUE(tenant_id, campanha_mes, campanha_id, contato_id)
                       PARTITION BY RANGE (campanha_mes)
-lista_bloqueio(tenant_id, chave_bloqueio, telefone_e164_original, motivo, criado_em)
-                                                   PK (tenant_id, chave_bloqueio)   -- INV-15/50
+lista_bloqueio(tenant_id, chave_bloqueio, telefone_e164_original,
+               origem ('pedido_do_contato'|'migracao'|'manual'|'campanha'),
+               motivo, criado_em)                  PK (tenant_id, chave_bloqueio)   -- INV-15/50
+      -- ⚠️ `origem` é união de literais e é consultável; `motivo` é texto livre e não é.
+      --    `origem='migracao'` é o opt-out histórico importado do sistema antigo (E2-19/CTT-16)
 
 -- integracao
 conexao_erp(tenant_id, id, sistema, nome, credenciais_cifradas bytea,
@@ -1451,6 +1492,16 @@ operacao_ingestao(tenant_id, id, conexao_id, fluxo, cursor_retomada, lidos, grav
 chave_idempotencia(tenant_id, escopo, chave, resultado jsonb, criado_em)  PK (tenant_id,escopo,chave)
 outbox(id bigserial, payload jsonb, criado_em, processado_em)
 
+-- conciliação contra o ERP (0018_conciliacao.sql, Onda 0) — INT-14, `entrada` §2.2
+conciliacao_execucao(tenant_id, id, conexao_id, escopo ('v0'|'v1'|'v2'|'final'),
+                     periodo_de, periodo_ate, executada_em, executada_por,
+                     assinada_em, assinada_por, arquivo_chave_objeto)
+conciliacao_divergencia(tenant_id, id, execucao_id, codigo, entidade, chave_natural,
+                        valor_crm jsonb, valor_erp jsonb, diferenca_centavos bigint,
+                        estado ('aberta'|'em_analise'|'aceita'|'corrigida'|'descartada'),
+                        bloqueante bool, responsavel_id, observacao, resolvido_em)
+      -- codigo: 'DIV-01' … 'DIV-09'  ⚠️ união de literais, não texto livre
+
 -- analitico
 rfv_evento(tenant_id, id, contato_id, faixa_de, faixa_para, r, f, v, avaliado_em, motivo)
                                                    UNIQUE(tenant_id, contato_id, avaliado_em)  -- INV-45
@@ -1464,7 +1515,42 @@ custo_mensagem(tenant_id, id, mensagem_id, mensagem_criado_em, canal_id, campanh
                UNIQUE(tenant_id, mensagem_criado_em, mensagem_id, categoria)   -- INV-54
 metrica_numero_dia(tenant_id, canal_id, dia, enviadas, entregues, lidas, falhas,
                    custo_centavos bigint)          -- dia no fuso do tenant; é MÉTRICA, não controle
+
+-- Régua de produto (0017_metricas_produto.sql, Onda 0) — `metricas-de-sucesso.md` §6.2
+linha_base_metrica(tenant_id, metrica, periodo_de, periodo_ate, valor_num numeric, unidade,
+                   fonte ('erp'|'export_antigo'|'medido'|'declarado'), confiavel bool,
+                   observacao, apurado_em, congelado_em, congelado_por)
+                                                   PK (tenant_id, metrica, periodo_de)
+      -- metrica: 'LB-01' … 'LB-15'
+      -- ⚠️ Congelada = IMUTÁVEL. Correção entra como linha nova com `observacao`, nunca por UPDATE
+tenant_marco(tenant_id, marco, ocorrido_em, observacao)   PK (tenant_id, marco)
+      -- marco: 'onboarding_concluido' | 'carga_historica_completa' | 'linha_base_congelada'
+      --      | 'primeiro_corte' | 'ultimo_corte' | 'abandono_sistema_antigo' | 'virada_onda2' …
+assinatura_tenant(tenant_id, id, plano_id, valor_centavos bigint, ciclo ('mensal'|'anual'),
+                  vigente_de, vigente_ate,
+                  periodo tstzrange GENERATED ALWAYS AS (tstzrange(vigente_de, vigente_ate,'[)')) STORED)
+                  EXCLUDE USING gist (tenant_id WITH =, periodo WITH &&)
+      -- ⚠️ `plano` (global, 0002) é CATÁLOGO; isto é o que ESTE cliente paga. Denominador de BI-11
+uso_diario_usuario(tenant_id, usuario_id, dia, superficie ('console'|'app'),
+                   primeiro_em, ultimo_em, acoes int, conversas_tocadas int,
+                   mensagens_enviadas int, pedidos_criados int)
+                                                   PK (tenant_id, usuario_id, dia, superficie)
+      -- ⚠️ UPSERT no caso de uso de escrita. NÃO é pipeline de evento (§6.3 de metricas)
 ```
+
+⚠️ **As quatro tabelas acima nascem na Onda 0 e três delas ficam vazias até a Onda 1** — e é
+deliberado, pelo mesmo raciocínio que fez `atendimento` nascer completo na `0012`.
+`linha_base_metrica` é a régua contra a qual as quatro ondas seguintes serão julgadas: sem ela, a
+linha de base vira slide perdido no Drive e a comparação "antes e depois" não tem "antes".
+`tenant_marco` é o **quando** dessa comparação — e ⚠️ **não é a data do contrato**: é o primeiro dia
+de operação real, que só quem estava lá sabe qual foi.
+
+⚠️ **`uso_diario_usuario` é a única exceção à proibição de telemetria** (§6.3 de
+`metricas-de-sucesso`): nenhuma tabela genérica de "evento de produto" entra no modelo — ela vira
+lixão em três meses, com metade dos tipos errados e nenhuma consulta escrita. A exceção é agregada
+de propósito: **uma linha por usuário/dia/superfície**, escrita por `UPSERT` dentro do caso de uso,
+respondendo "vendedoras ativas/dia" sem varrer `mensagem`. O ponto quente é por usuário, não global.
+⚠️ E ela é **dado de trabalhador**: a retenção é decisão jurídica, não técnica (§9, nº 6).
 
 ⚠️ **`campanha_destinatario` particiona por `campanha_mes`, não por `criado_em`** — e a coluna
 `criado_em` que a §8.5 usava como chave de partição **nem existia na definição**. A escolha não é

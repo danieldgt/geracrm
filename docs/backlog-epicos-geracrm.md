@@ -37,10 +37,10 @@ Quinze blocos. Cada um é um capítulo do produto.
 
 | Épico | Nome | Escopo (IDs do escopo funcional) | Onda |
 |---|---|---|---|
-| **EP-01** | Fundação da plataforma e tenancy | PLT-01…04 | 0 |
-| **EP-02** | Espinha dorsal de dados — GeraCloud + API pública | INT-01…09 | 0 |
+| **EP-01** | Fundação da plataforma e tenancy | PLT-01…04, **PLT-12…14** | 0 |
+| **EP-02** | Espinha dorsal de dados — GeraCloud + API pública | INT-01…09, **INT-14…17** | 0 |
 | **EP-03** | Conectividade WhatsApp e frota de números | CAN-01…05 | 0 |
-| **EP-04** | Cadastro unificado de cliente | CTT-01…08, CTT-10 | 0 |
+| **EP-04** | Cadastro unificado de cliente | CTT-01…08, CTT-10, **CTT-16, CTT-17** | 0 |
 | **EP-05** | Inbox e conversa | INB-01…08, INB-11 | 1 |
 | **EP-06** | Fila e assunção de atendimento | INB-09, INB-10 | 1 |
 | **EP-07** | Governança e auditoria | PLT-05, PLT-07, PLT-11 | 1 |
@@ -87,12 +87,12 @@ tabela intitulada "exclusivos da Onda 4".
 
 | Épico | Entregáveis |
 |---|---|
-| EP-01 | Modelo de tenant/empresa/filial · usuários e papéis · autenticação com 2FA · permissões por módulo |
-| EP-02 | Conector GeraCloud (clientes, produtos/estoque, pedidos) · API pública de ingestão com três fluxos · Bearer Token e painel de tokens · **idempotência** · **carga histórica** · painel de sincronização com erros e reprocessamento |
+| EP-01 | Modelo de tenant/empresa/filial · usuários e papéis · autenticação com 2FA · permissões por módulo · **linha de base e marcos do tenant (PLT-12)** · **assinatura do tenant (PLT-14)** · **tabela de telemetria de uso (PLT-13, escrita a partir da Onda 1)** |
+| EP-02 | Conector GeraCloud (clientes, produtos/estoque, pedidos) · API pública de ingestão com três fluxos · Bearer Token e painel de tokens · **idempotência** · **carga histórica** · painel de sincronização com erros e reprocessamento · **relatório de conciliação (INT-14)** · **perfilamento de base (INT-15)** · **recarga por janela de data (INT-16)** · **de-para de vendedoras e filiais (INT-17)** |
 | EP-03 | Onboarding de número via Embedded Signup · frota multi-número com nome amigável e filial · status e reconexão · recebimento e envio básico |
-| EP-04 | Cadastro com múltiplos telefones, múltiplos CNPJs, múltiplos nomes · endereço e cidade/UF · unificação por chave |
+| EP-04 | Cadastro com múltiplos telefones, múltiplos CNPJs, múltiplos nomes · endereço e cidade/UF · unificação por chave · **importação de opt-out histórico (CTT-16)** · **marca de origem da carga (CTT-17)** |
 
-**Critério de saída:** base histórica do GeraCloud carregada e reconciliada; pelo menos 3 números conectados recebendo e enviando; um contato do ERP aparece no CRM com telefone e histórico corretos.
+**Critério de saída:** base histórica do GeraCloud carregada, **reconciliada (INV-57) e conciliada (RC assinado)**; pelo menos 3 números **da Gera3** conectados recebendo e enviando, inclusive um **template** com a janela fechada (ADR-015); **10 CNPJs estratificados** conferidos linha a linha contra o ERP; e a **linha de base congelada** (MN-01). Detalhe em `plano-onda-0.md`.
 
 **Riscos:** qualidade dos dados do ERP (nas telas do Tailor, **40% da base estava sem CPF/CNPJ**) · volume da carga histórica · aprovação da Meta para o app.
 

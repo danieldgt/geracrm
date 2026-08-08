@@ -7,7 +7,11 @@ describe('Normalização de telefone', () => {
     const grafias = ['+55 81 99861-7049', '5581998617049', '81998617049', '(81) 99861-7049']
     const chaves = new Set(grafias.map((g) => normalizarTelefone(g)?.chaveBloqueio))
     expect(chaves.size).toBe(1)
-    expect([...chaves][0]).toBe('5581998617049')
+    // ⚠️ 55 + DDD + ÚLTIMOS 8 dígitos — 12 caracteres, não o E.164 completo.
+    // É o truncamento que faz o número colidir com e sem o nono dígito (INV-50).
+    expect([...chaves][0]).toBe('558198617049')
+    // E o E.164, esse sim, preserva o número inteiro para poder enviar.
+    expect(normalizarTelefone('81998617049')?.e164).toBe('+5581998617049')
   })
 
   it('dado número sem o nono dígito, então a chave de bloqueio bate com a versão com nono dígito', () => {

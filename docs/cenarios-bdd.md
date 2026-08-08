@@ -59,6 +59,21 @@ do gateway de envio — não na onda em que a tela aparece:
 | **Cobertura de dados** | O intervalo de tempo que uma conexão de ERP realmente importou |
 | **Lista de bloqueio** | Telefones da empresa que não recebem envio, mesmo sem contato cadastrado |
 
+#### ⚠️ Termos de transição — as palavras que significavam duas coisas
+
+Cada linha abaixo é uma palavra que, em documentos escritos na mesma semana, nomeava **dois eventos
+diferentes**. É o defeito mais barato de corrigir hoje e o mais caro depois, porque ele entra no
+código: um marco de banco chamado `virada_onda1` que significa três coisas produz três consultas
+corretas e três respostas diferentes.
+
+| Termo **correto** | Significa exatamente | ⚠️ Não confundir com |
+|---|---|---|
+| **Janela de sombra** | 2 semanas medindo **o sistema antigo**, à mão, em **T-8** — antes de a equipe saber da mudança. Produz LB-10, LB-11 e LB-12, que **não são reconstituíveis** | **Piloto paralelo** (M1.6 da Onda 1): 2 vendedoras **usando o GeraCRM** em paralelo por 1 semana. São operações **opostas** — medir o velho × usar o novo |
+| **`ENS-1` / `ENS-2`** | Os dois **ensaios de carga**: ENS-1 em T-4 (homologação, mede duração e acha DIV), ENS-2 em T-1 (produção, carga completa) | **`E1-xx` / `E2-xx`**: prefixo de **tarefa por épico** no `plano-onda-0.md` (`E1-01` = EP-01, `E2-16` = EP-02). ⚠️ *"E2 depende de E2-07"* tinha duas leituras corretas |
+| **`primeiro_corte`** | O **primeiro** número do cliente apontando para o GeraCRM (`T` / `D-0`). É o instante em que a janela de sombra fecha para sempre | **`ultimo_corte`** (frota inteira conectada) e **`abandono_sistema_antigo`** (contrato antigo encerrado — ⚠️ nunca antes de D+30 do último lote). Os três eram "a virada" |
+| **`linha_base_congelada`** | O marco de congelar a régua. ⚠️ **Sempre antes de `primeiro_corte`** — uma régua congelada depois do evento que ela mede não é régua | — |
+| **Conciliação** | Comparar o CRM **contra o ERP** (RC-01…RC-10, códigos DIV). Prova o que **faltou** trazer | **Reconciliação** (INV-57): contadores **internos** batendo entre si. ⚠️ Fecha perfeitamente numa carga que trouxe 60% das vendas. As duas palavras andam **sempre juntas** no critério de saída da Onda 0 |
+
 ### 0.3 Personagens e dados fixos
 
 ```

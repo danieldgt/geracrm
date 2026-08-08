@@ -173,7 +173,7 @@ melhor e destrói a varredura periférica: o olho aprende a posição, não o co
 | "Nenhum resultado" | Por que está vazio e qual a ação seguinte |
 | "Campo obrigatório" isolado num toast | A mensagem **no campo**, com o nome do campo |
 | Mensagem crua do ERP ou código HTTP na tela | Erro tipificado; o código vai no rodapé copiável (id de correlação) |
-| ⚠️ **Nome literal do ERP** ("Enviar ao GeraCloud") | O nome da **conexão ativa** do tenant, vindo de `detalhe.origem` |
+| ⚠️ **Nome literal do ERP** ("Enviar ao GeraCloud") | O nome da **conexão ativa** do tenant, vindo de **`detalhe.origem.nome`** — ⚠️ nunca `origem.conector`, que é o slug do fornecedor e não vai para a tela (`contrato-api` §4.3) |
 
 ### 1.9 Ícones
 
@@ -646,7 +646,7 @@ ação(ões) · rodapé com **id de correlação copiável**.
 
 | ⚠️ | Regra |
 |---|---|
-| Nomear a origem | *"A conexão **{nome da conexão ativa}** não respondeu"* — vindo de `detalhe.origem`, **nunca** o nome do ERP escrito no código (§2.1 das telas) |
+| Nomear a origem | *"A conexão **{nome da conexão ativa}** não respondeu"* — vindo de **`detalhe.origem.nome`** (o rótulo que o tenant deu: *"ERP da matriz"*), **nunca** `origem.conector` nem o nome do ERP escrito no código (§2.1 das telas) |
 | Nunca mostrar o cru | Mensagem do ERP e código HTTP não vão para a tela; vão para o id de correlação e para o Sentry |
 | Recuperável ≠ retentável | ⚠️ **`502` oferece `Tentar de novo`; `504` NÃO oferece** (§2.4 das telas). Em timeout o pedido pode existir no ERP, e o botão de retentar produz pedido duplicado. O componente aceita `retentavel: boolean` **vindo do servidor** — a tela não decide isso |
 | Erro de permissão | Não é estado de erro. O elemento **não existe** (§1.1) |
@@ -1219,7 +1219,7 @@ falham.
 | Cálculo de faixa de RFV | API / analítico |
 | Decisão de janela aberta/fechada | Servidor; o componente **apresenta** o `janelaExpiraEm` |
 | Validação de pedido mínimo, mix e grade fechada | `packages/shared` + API |
-| Nome literal do ERP | `detalhe.origem` da resposta |
+| Nome literal do ERP | `detalhe.origem.nome` da resposta |
 | Cor literal (`#3F6FBE`, `rgb(…)`) | Token semântico — barrado por lint |
 | `enum` do TypeScript | União de literais + `z.enum` (ADR-011) |
 | Chamada de rede direta | Serviço de dados da funcionalidade |
@@ -1228,14 +1228,30 @@ falham.
 
 ## 7. Ordem de construção e o que ainda falta decidir
 
-**Ordem** — segue as telas da Onda 1 (inbox e frota), não o alfabeto:
+**Ordem** — segue as telas, não o alfabeto. ⚠️ **E a onda de cada bloco é a onda da primeira tela
+que o consome, não "pré-Onda 1" genérico:**
 
-| Bloco | Componentes | Bloqueia |
-|---|---|---|
-| **1 — Fundação** | tokens no build · botão · campo · badge · esqueleto · vazio · erro · toast · painel · cabeçalho de tela | Tudo |
-| **2 — Inbox (Onda 1)** | avatar · **anel de janela** · balão · composer · player de áudio · seletor de número · abas · banner | Telas §1 e §7 |
-| **3 — Frota e entrada (Onda 1)** | tabela · modal · toggle · checkbox · chip · select | `especificacao-telas-entrada` §4–6 |
-| **4 — CRM e pedido (Onda 2)** | card de kanban · badge RFV · **grade cor × tamanho** · card de tarefa · linha do tempo de segmento · progresso | Telas §2–5 |
+| Bloco | Onda | Componentes | Bloqueia | Tarefa e semana |
+|---|---|---|---|---|
+| **1 — Fundação** | 🔴 **Onda 0** | tokens no build · botão · campo · badge · esqueleto · vazio · erro · toast · painel · cabeçalho de tela | Tudo | **R-12** de `plano-onda-0.md` §3.1, **S1–S2** |
+| **2 — Inbox** | **Onda 1** | avatar · **anel de janela** · balão · composer · player de áudio · seletor de número · abas · banner | Telas §1 e §7 | Pré-onda de `plano-ondas-1-4.md` §3.1, ordem 0 |
+| **3 — Frota e entrada** | **Onda 0 / 1** | tabela (com cursor) · modal · toggle · checkbox · chip · select | `especificacao-telas-entrada` §4–6 | Parte em **S3–S4 da Onda 0** (ver abaixo); o restante na pré-onda da Onda 1 |
+| **4 — CRM e pedido** | **Onda 2** | card de kanban · badge RFV · **grade cor × tamanho** · card de tarefa · linha do tempo de segmento · progresso | Telas §2–5 | Abertura da Onda 2 |
+
+🔴 **O bloco 1 é Onda 0, com tarefa, dono e semana — não "paralelo".** O `plano-onda-0.md` §7 declara
+**cinco telas de console na Onda 0**: login, recuperação de senha, convite/aceite, onboarding do
+tenant (Meta + ERP) e lista de contatos em leitura. Essas cinco consomem o bloco 1 **inteiro** e
+uma parte concreta do bloco 3 — **tabela com cursor** (lista de contatos), **modal**, **select** e
+**checkbox** (onboarding e convite). Elas serão construídas de qualquer jeito; a única escolha é se
+serão construídas **sobre a biblioteca** ou com `#hex` no meio do componente, para a Onda 1 refazer.
+
+⚠️ **`especificacao-telas-entrada` §4–6 (equipe, frota, onboarding) é Onda 0 — E1-07 e E3-01.** É por
+isso que o bloco 3 tem duas ondas: o subconjunto que essas telas usam nasce em **S3–S4 da Onda 0**,
+e o restante (chip, toggle nas telas de conversa) fica para a pré-onda da Onda 1.
+
+⚠️ **"Paralelo" não tem semana, não tem dono e não entra em checklist.** Era assim que esta
+biblioteca aparecia no plano da Onda 0 — e é exatamente o estado em que um pré-requisito de tudo
+chega atrasado sem que ninguém tenha decidido atrasá-lo.
 
 ⚠️ **O protótipo de alta fidelidade do inbox vem antes do bloco 2 inteiro** (§9 de
 `direcao-visual.md`) — é onde a densidade quebra, e é mais barato descobrir isso num protótipo do
