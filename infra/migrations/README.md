@@ -43,3 +43,32 @@ Ela roda **antes do código novo, com a versão anterior ainda atendendo tráfeg
 - **Mensagens nascem particionadas** por período. Barato agora, caro depois.
 
 Regras completas: [`geracrm-dados-postgres`](../../.claude/skills/geracrm-dados-postgres/SKILL.md)
+
+---
+
+## ⚠️ Antes de rodar as migrations em desenvolvimento
+
+O container do Postgres cria o `POSTGRES_USER` como **superusuário** — e
+**superusuário ignora RLS**, com ou sem `FORCE ROW LEVEL SECURITY`.
+
+Se a API se conectar com ele, o isolamento entre empresas **não acontece**, e
+nenhum teste percebe: as consultas voltam com dados de todos os tenants e a
+suíte fica verde.
+
+Foi detectado rodando, no primeiro dia: `/v1/eu` devolveu o tenant errado.
+
+```bash
+docker compose up -d postgres
+docker exec -i geracrm-postgres psql -U geracrm -d geracrm < infra/migrations/0001_base.sql
+# ... demais migrations ...
+docker exec -i geracrm-postgres psql -U geracrm -d geracrm < infra/dev/setup-dev.sql
+```
+
+| Conexão | Usuário | Para quê |
+|---|---|---|
+| `DATABASE_URL` | **`geracrm_api`** | A API. Sem superusuário, sem `BYPASSRLS` |
+| `DATABASE_ADMIN_URL` | `geracrm` | Migrations e preparo de dados de teste |
+
+⚠️ Todo teste de isolamento prepara dado com a conexão de **dono** e consulta
+com a conexão da **API**. Se as duas fossem a mesma, o teste passaria sem provar
+nada.
