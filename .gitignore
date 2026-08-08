@@ -1,0 +1,38 @@
+node_modules/
+dist/
+build/
+.turbo/
+coverage/
+
+.env
+.env.*
+!.env.example
+
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+.DS_Store
+Thumbs.db
+
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Expo
+.expo/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Angular
+.angular/
+
+# Claude Code — local
+.claude/settings.local.json
+
+# Capturas do sistema de referência: 89MB, e são telas de produto de terceiro.
+# O conteúdo já está extraído em docs/inventario-funcionalidades-referencia.md
+docs/referencias/imagens de referencia/

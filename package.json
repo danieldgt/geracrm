@@ -1,0 +1,20 @@
+{
+  "name": "geracrm",
+  "private": true,
+  "packageManager": "pnpm@10.6.3",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "test": "turbo test",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "turbo": "^2.10.6",
+    "typescript": "^7.0.2"
+  }
+}
