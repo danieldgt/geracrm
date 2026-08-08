@@ -103,6 +103,21 @@ O worker de importação precisa de: **lotes**, **retomada de onde parou**, **id
 
 ## Tipos
 
+⚠️ **`bigint` volta como STRING no driver.** É o comportamento correto — `bigint` excede
+`Number.MAX_SAFE_INTEGER` —, mas silencioso e perigoso:
+
+```ts
+// ❌ "2" + "3" = "23". Sem erro, sem aviso, número errado no dashboard.
+const total = linha.total_vendas_centavos + outra.total_vendas_centavos
+
+// ✅ cast na consulta, onde o tipo ainda é conhecido
+sql`SELECT total_vendas_centavos::bigint::text AS total FROM ...`   // e converta no domínio
+sql`SELECT ocorrencias::int AS ocorrencias FROM ...`                // quando cabe em int
+```
+
+**Regra:** toda coluna `bigint` lida para cálculo recebe cast explícito na consulta. Afeta
+`total_vendas_centavos`, `ocorrencias`, `registros_importados`, `valor` de contador e protocolo.
+
 - Dinheiro: `numeric` no banco, **centavos inteiros** na aplicação. ⚠️ Nunca `float`.
 - Ids: **UUID v7** — ordenável por tempo, bom para índice.
 - Estado: `text` com união de literais na aplicação. ⚠️ Nunca status numérico mágico; nunca `enum`

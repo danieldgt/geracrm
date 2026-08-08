@@ -48,14 +48,14 @@ export interface Capacidades {
 export interface ClienteCanonico {
   readonly idExterno: string
   readonly nome: string
-  readonly documento?: string
+  readonly documento?: string | undefined
   readonly telefones: readonly string[]
-  readonly email?: string
+  readonly email?: string | undefined
   /** Salesperson as the ERP knows them — plain text. Resolved against
    *  `usuario_identidade_externa` (migration 0007); unmatched values become
    *  `correspondencia_pendente` instead of being dropped. */
-  readonly vendedorExterno?: string
-  readonly filialExterna?: string
+  readonly vendedorExterno?: string | undefined
+  readonly filialExterna?: string | undefined
   readonly ativo: boolean
 }
 
@@ -68,14 +68,14 @@ export interface SkuCanonico {
    * colour, size AND sub-size. Fixed columns would already be broken.
    */
   readonly atributos: Readonly<Record<string, string>>
-  readonly codigoBarras?: string
+  readonly codigoBarras?: string | undefined
   readonly ativo: boolean
 }
 
 export interface SaldoCanonico {
   readonly skuExterno: string
   readonly quantidade: number
-  readonly filialExterna?: string
+  readonly filialExterna?: string | undefined
   /** ⚠️ When the connector lacks `saldoSincrono`, this is when the number was
    *  last true — and the screen shows it. A balance without a timestamp reads
    *  as live when it is not. */
@@ -94,7 +94,7 @@ export interface SaldoFidelidadeCanonico {
   readonly disponivelCentavos: number
   /** ⚠️ The whole point of FID-04: the ERP already computes this and nobody
    *  warns the customer before their money evaporates. */
-  readonly expiraEm?: Date
+  readonly expiraEm?: Date | undefined
   /** When this was last true. Shown on screen — a cached balance displayed as
    *  live becomes a complaint at the counter. */
   readonly apuradoEm: Date
@@ -105,8 +105,8 @@ export interface VendaCanonica {
   readonly clienteExterno: string
   readonly ocorridaEm: Date
   readonly valorCentavos: number
-  readonly vendedorExterno?: string
-  readonly filialExterna?: string
+  readonly vendedorExterno?: string | undefined
+  readonly filialExterna?: string | undefined
   readonly itens: readonly {
     readonly skuExterno: string
     readonly quantidade: number
@@ -136,7 +136,7 @@ export type Resultado<T, E> = { ok: true; valor: T } | { ok: false; falha: E }
 
 export interface Pagina<T> {
   readonly itens: readonly T[]
-  readonly cursor?: string
+  readonly cursor?: string | undefined
 }
 
 // ---------------------------------------------------------------------------

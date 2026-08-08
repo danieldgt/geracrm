@@ -20,6 +20,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@geracrm/conectores':
+        specifier: workspace:*
+        version: link:../../packages/conectores
       '@geracrm/shared':
         specifier: workspace:*
         version: link:../../packages/shared

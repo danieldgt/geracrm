@@ -27,11 +27,11 @@ beforeAll(async () => {
   process.env.DEV_TENANT_HEADER = 'on'
 
   await dono`INSERT INTO plano (id, codigo, nome, modulos)
-            VALUES (${PLANO}, 'pro', 'Pro', ARRAY['crm','campanha'])
-            ON CONFLICT (id) DO NOTHING`
+            VALUES (${PLANO}, 'plano-teste-tenant', 'Pro', ARRAY['crm','campanha'])
+            ON CONFLICT DO NOTHING`
   await dono`INSERT INTO perfil_vertical_modelo (id, codigo, nome)
-            VALUES (${MODELO}, 'moda_atacado', 'Moda Atacado')
-            ON CONFLICT (id) DO NOTHING`
+            VALUES (${MODELO}, 'modelo-teste-tenant', 'Moda Atacado')
+            ON CONFLICT DO NOTHING`
 
   for (const [id, nome, perfil] of [
     [A, 'Marca A', 'aaaaaaaa-0000-0000-0000-000000000001'],

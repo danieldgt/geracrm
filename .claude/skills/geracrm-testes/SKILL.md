@@ -115,6 +115,23 @@ describe.each(conectores)('conformidade — %s', (conector) => {
 - Conector é mockado **pelo contrato**, com fixtures de resposta reais (sucesso, recusa tipificada,
   timeout). ⚠️ Proibido stub ad-hoc de `fetch`.
 
+## ⚠️ Isolamento ENTRE arquivos de teste
+
+O Vitest roda arquivos **em paralelo**, contra o mesmo banco. Dois erros aparecem, e os dois se
+manifestam como falha intermitente que muda a cada execução:
+
+| Erro | Sintoma |
+|---|---|
+| Dois arquivos usando o **mesmo `tenant_id`** de fixture | Um apaga o dado do outro no `beforeEach`. O teste falha comparando um nome pelo outro |
+| Dois arquivos inserindo em **tabela global** com a mesma chave natural | `duplicate key` em `plano_codigo_key` — `plano` não tem `tenant_id` (§7.2), então `codigo` é único no banco inteiro |
+
+**Regra:** cada arquivo de teste tem **UUIDs de fixture exclusivos** e, em tabela global, **chave
+natural com o nome do arquivo** (`plano-teste-ingestao`, não `pro`).
+
+⚠️ Isto é o "estado compartilhado" que a skill `tdd` proíbe — só que entre arquivos, onde é mais
+difícil de enxergar. Serializar com `fileParallelism: false` esconde o problema e torna a suíte
+lenta; isolar o fixture resolve.
+
 ## Concorrência
 
 Testes de duas transações simultâneas, obrigatórios em:
