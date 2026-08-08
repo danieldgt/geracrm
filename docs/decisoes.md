@@ -213,6 +213,47 @@ Ficam explicitamente descartados: gradiente em superfície, sombra empilhada, il
 vazio, canto muito arredondado e animação de entrada em lista que atualiza em tempo real.
 Detalhamento em `docs/identidade-visual.md`.
 
+## ADR-013 — Precedência na atribuição de receita
+**Contexto**: um pedido pode ser atribuível a mais de uma origem ao mesmo tempo — nasceu numa
+conversa que veio de uma campanha, e havia uma tarefa aberta para aquele cliente. Sem regra de
+precedência, a mesma receita é contada três vezes e a soma dos cards da home fica maior que o
+faturamento. ⚠️ Esta decisão estava fechada dentro de `metricas-de-sucesso.md`, mas é **regra de
+modelo** (INV-43) e pertence aqui.
+
+**Decisão**: precedência **exata → estimada**, e dentro de cada uma, a origem mais próxima do
+pedido vence.
+
+1. **Atribuição exata** (pedido nascido na conversa, PED-09): vence sempre. Dentro dela, a ordem é
+   `tarefa` → `campanha` → `conversa espontânea` — a tarefa é o toque deliberado mais recente.
+2. **Atribuição estimada** (janela 3/7/14d) só se aplica a pedido **sem** vínculo exato.
+3. ⚠️ **Uma receita tem exatamente uma origem.** Nunca somar as duas famílias sem distinção, e
+   nunca creditar o mesmo pedido a duas origens "para não perder o crédito".
+
+**Consequência**: os cards da home exibem exata e estimada **separadas, com legenda**. A soma das
+origens é igual ao faturamento do período — é o teste que prova a regra. Um pedido reatribuído
+(ex.: a campanha chegou depois) reescreve a origem e o histórico registra a troca.
+
+## ADR-014 — Corte seco na virada, com ponto de não retorno declarado
+**Contexto**: no dia em que o número do cliente passa a apontar para o GeraCRM, **não há como
+manter os dois sistemas recebendo** — o WhatsApp entrega a mensagem a um webhook só. Convivência
+real é impossível no canal; o que existe é convivência **de leitura** (consultar o histórico antigo
+em outra aba).
+
+**Decisão**: **corte seco por número**, nunca por cliente inteiro. Um número piloto primeiro, o
+restante da frota depois. Antes do corte de cada número:
+- a **janela de sombra** já rodou (medição de linha de base — sem ela não há comparação depois);
+- os templates estão aprovados e sincronizados (ADR/E3-15) — ⚠️ no minuto do corte todas as janelas
+  estão fechadas;
+- a carga histórica está **conciliada**, não apenas importada.
+
+**Ponto de não retorno**: o corte de um número é reversível até a primeira mensagem entrante ser
+respondida pelo GeraCRM. Depois disso, voltar ao sistema antigo **perde o histórico do intervalo** —
+o rollback deixa de ser técnico e vira decisão de negócio, com perda declarada.
+
+**Consequência**: o cronograma de entrada trata cada número como uma virada independente, com seu
+próprio critério de sucesso. ⚠️ Rollback sem critério escrito é decisão tomada no desespero — o
+critério está em `entrada-do-primeiro-cliente.md` e é aprovado **antes** do primeiro corte.
+
 ## ADR-011 — Convenções
 Domínio em português (`Conversa`, `Pedido`, `Campanha`), infraestrutura em inglês, comentários em
 inglês · sem `enum` do TypeScript (união de literais + `z.enum`) · sem status numérico mágico ·

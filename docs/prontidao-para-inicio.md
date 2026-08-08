@@ -1,179 +1,124 @@
-# Prontidão para início — o que falta antes da primeira linha de código
+# Prontidão para início
 
-> Estado em 07/08/2026. O repositório tem `docs/` e `.claude/skills/` — **nenhum código, nenhuma
-> infraestrutura provisionada.**
-
----
-
-## 1. O que está pronto
-
-| Artefato | Documento | Estado |
-|---|---|---|
-| Estudo de mercado | `estudo-crms-whatsapp.md` | ✅ |
-| Análise do sistema de referência | `inventario-funcionalidades-referencia.md` | ✅ 38 telas catalogadas |
-| Mapa competitivo | `concorrentes-tailor.md` | ✅ 6 anéis |
-| Escopo funcional | `escopo-funcional-geracrm.md` | ✅ ~150 funcionalidades, 15 módulos, 5 ondas |
-| Épicos e backlog | `backlog-epicos-geracrm.md` | ✅ 27 épicos |
-| Especificação de telas | `especificacao-telas.md` | ⚠️ **6 telas de operação — estrutura e estados, sem design visual** |
-| Stack e arquitetura | `stack-arquitetura.md` | ✅ |
-| Aproveitamento do drezz | `aproveitamento-drezz.md` | ✅ |
-| Decisões (ADRs) | `decisoes.md` | ✅ 11 ADRs |
-| Regras de código | `.claude/skills/` | ✅ 34 skills |
-
-**A trilha de `workflow-produto` está cumprida nas etapas 1, 2, 4 (parcial), 5 e 7.**
+> Estado em 08/08/2026. Substitui a versão de 07/08, que descrevia um estado anterior ao
+> planejamento (achado M-01 da revisão de consistência).
 
 ---
 
-## 2. As cinco lacunas de planejamento
+## 1. Resposta curta
 
-### 2.1 ⚠️ Modelo de dados — a etapa 3 nunca foi executada
-
-**É a lacuna mais crítica.** Existe a skill `modelar-dados`, mas o domínio do GeraCRM nunca foi
-modelado. Não há entidades, invariantes escritas, agregados nem limites de transação definidos.
-
-Sem isso não dá para escrever a primeira migration — e migration errada custa dois ou três deploys
-para corrigir (ADR-006).
-
-**O que precisa existir:**
-- Entidades e objetos de valor (`Conversa`, `Contato`, `Numero`, `Pedido`, `Campanha`, `Tarefa`…)
-- **Invariantes numeradas** (`INV-01`…) com o dono de cada uma
-- Agregados e limites de transação
-- Cardinalidades reais questionadas (múltiplos telefones, múltiplos CNPJs, múltiplos nomes)
-- Estratégia de temporalidade (o que precisa de histórico: carteira, segmento RFV, preço no pedido)
-- Chave de reconciliação de identidade externa, com N ERPs escrevendo
-- Particionamento de mensagens desde o início
-
-**Esforço:** é a entrega mais densa que falta. E é pré-requisito de tudo.
-
-### 2.2 ⚠️ Telas de entrada não foram especificadas
-
-A `especificacao-telas.md` cobre **seis telas de operação** — inbox, pedido, ficha, kanban, fila do
-dia, home, fila mobile. **Nenhuma tela de entrada foi especificada:**
-
-- Login, cadastro, recuperação de senha, definição de senha
-- Convite de usuário e aceite
-- **Onboarding do tenant** — conectar o primeiro número (Embedded Signup), escolher e autenticar o
-  ERP, e a tela que **mostra o que aquele ERP habilita** (ADR-008)
-- Seleção de filial e de número
-- Perfil, equipe, papéis e permissões
-- Assinatura, plano e limites
-
-⚠️ **O onboarding é a tela mais importante do produto que ninguém lembra de especificar.** É onde o
-cliente conecta Meta e ERP — se falhar ali, não existe operação.
-
-### 2.3 ⚠️ Design visual não existe
-
-O que temos é **estrutura**: regiões, estados, transições. O que não temos é **design**:
-
-- Direção de arte — personalidade, referências, o que o produto comunica
-- **Design tokens** — cor, tipografia, espaçamento, raio, elevação (fonte da verdade compartilhada
-  entre Angular e Expo, ADR-010)
-- Biblioteca de componentes — botão, campo, tabela, card, badge, modal, toast, estados vazios
-- Telas em alta fidelidade
-- Modo escuro (decidido desde o começo, não depois)
-- Acessibilidade — contraste, foco, navegação por teclado
-
-⚠️ **Pergunta em aberto:** o GeraCRM herda a identidade da Gera3, tem identidade própria, ou segue
-o caminho do drezz (que tem `docs/design.md` com paleta definida)? Isso precisa ser respondido
-antes de qualquer token.
-
-### 2.4 Contrato de API não definido
-
-Nenhum endpoint especificado. Precisa de: convenção de rota e versionamento, formato de paginação
-por cursor, formato de erro tipificado, contrato do canal SSE, e a API pública de ingestão
-(INT-02) — que é o **conector universal** e não pode ser menos capaz que um adaptador nativo.
-
-### 2.5 Cenários BDD não escritos
-
-A skill `bdd` existe; os cenários, não. Toda invariante do modelo precisa de pelo menos um cenário
-que tenta violá-la — e eles são o critério de aceite executável de cada épico.
-
----
-
-## 3. O que não é planejamento — é execução, e alguns levam semanas
-
-### 3.1 🔴 Registro na Meta — CAMINHO CRÍTICO, começar hoje
-
-| Etapa | Depende de |
+| | |
 |---|---|
-| Conta de desenvolvedor e app | Nós |
-| **Business Verification** | **Meta** — documentação da empresa, prazo variável |
-| **Enrollment no Tech Provider Program** | **Meta** |
-| **App Review** (WhatsApp + `instagram_business_manage_messages`) | **Meta** |
+| **Onda 0** | ✅ **Planejamento completo.** O que falta é execução — e o item mais urgente não depende de código |
+| **Ondas 1–4** | ⚠️ Backlog definido (*o quê*), plano de execução ausente (*como e em que ordem*) |
+| **Lacunas fora do backlog** | 🔴 Três, e nenhuma estava mapeada — §4 |
 
-⚠️ **Isto não depende de código e leva semanas.** É o único item do projeto cujo prazo não
-controlamos. Deve começar **em paralelo** ao modelo de dados, não depois.
-
-### 3.2 Infraestrutura a provisionar
-
-| Item | Estado |
-|---|---|
-| **Cognito user pool** | ❌ Não existe. Nada provisionado |
-| Projeto Railway + Postgres + réplica | ❌ |
-| Bucket S3 | ❌ |
-| Sentry | ❌ |
-| Ambientes (dev, homologação, produção) | ❌ |
-| Credenciais separadas por ambiente | ❌ |
-
-**Sobre a pergunta "já tem Cognito para a tela de login?":** não. Existe a **decisão** (ADR-006,
-Cognito headless, herdado do ADR-005 do drezz) e as **regras** (`geracrm-identidade-acesso`). Não
-existe user pool criado, nem tela, nem código. E a tela de login sequer foi especificada (§2.2).
-
-### 3.3 Esqueleto do monorepo
-
-Não existe `package.json`, `pnpm-workspace.yaml`, `turbo.json`, nem nenhuma das quatro apps.
-É trabalho de horas, com o padrão do drezz para copiar — mas precisa ser feito.
-
-### 3.4 Acesso ao GeraCloud
-
-Documentação da API, credenciais de teste e um ambiente de homologação do ERP.
+⚠️ **O caminho crítico continua sendo o registro na Meta**, e ele não avançou nenhum dia desde que
+foi identificado. Business Verification → Tech Provider Program → App Review leva semanas, não
+depende de nós e bloqueia a Onda 1 inteira.
 
 ---
 
-## 4. Ordem sugerida — as seis próximas entregas
+## 2. O que está pronto
 
-| # | Entrega | Por quê nesta ordem | Bloqueia |
+| Artefato | Cobertura |
+|---|---|
+| `estudo-crms-whatsapp` · `inventario-funcionalidades-referencia` · `concorrentes-tailor` | Descoberta e mercado |
+| `escopo-funcional-geracrm` | ~150 funcionalidades, 15 módulos, 5 ondas |
+| `backlog-epicos-geracrm` | 28 épicos, backlog por onda, integração Meta e Instagram |
+| `modelo-de-dados` | 64 entidades, 60 invariantes com dono, 22 agregados, tabelas e índices |
+| `contrato-api` | Rotas por contexto, cursor, erros tipificados, SSE, ingestão pública, porta de conector |
+| `especificacao-telas` | 7 telas de operação, com os cinco estados e as transições |
+| `especificacao-telas-entrada` | Login, convite, equipe, frota, planos e onboarding do tenant |
+| `cenarios-bdd` | Ondas 0–1 completas; 60/60 invariantes com cenário |
+| `plano-onda-0` | Caminho crítico, infra, esqueleto, migrations `0001`–`0010`, tarefas por épico |
+| `stack-arquitetura` · `decisoes` · `arquitetura-visual` | Stack, 12 ADRs, 11 diagramas |
+| `identidade-visual` + `tokens.json` | Paleta, tipografia, elemento assinatura, temas claro e escuro |
+| `.claude/skills` | 35 skills: regras de código, metodologia e stack |
+
+---
+
+## 3. O que falta para começar a Onda 0 — tudo é execução
+
+| # | Item | Depende de | Prazo |
 |---|---|---|---|
-| **0** | **Iniciar registro na Meta** | Prazo fora do nosso controle | Onda 1 inteira |
-| **1** | **Modelo de dados** | Nada pode ser escrito antes | Migrations, API, telas |
-| **2** | **Identidade visual + design tokens** | Token é pré-requisito de qualquer componente | Todo o front |
-| **3** | **Especificação das telas de entrada** | Login e onboarding são a primeira coisa a construir | Onda 0/1 |
-| **4** | **Esqueleto do monorepo + infra provisionada** | Terreno para o código | Tudo |
-| **5** | **Contrato de API + cenários BDD da Onda 0** | Critério de aceite antes da implementação | Onda 0 |
+| **1** 🔴 | **Registro na Meta** — Business Verification, Tech Provider Program, App Review | **Meta** | Semanas. **Começar hoje** |
+| **2** | Provisionar Cognito, Railway (API + Postgres + réplica), bucket, Sentry, três ambientes | Nós | Dias |
+| **3** | Esqueleto do monorepo — `package.json` de cada app, configuração de build e CI | Nós | Horas |
+| **4** | Documentação da API do GeraCloud, credenciais e ambiente de teste | Time do ERP | Dias |
+| **5** | Definir **volume real do primeiro cliente** — números, mensagens/dia, contatos, anos de histórico | Cliente | Levantar junto com a carga |
 
-As entregas 0, 1 e 2 podem correr **em paralelo** — dependem de pessoas diferentes.
+⚠️ **Nada aqui é planejamento.** O item 1 deveria estar correndo em paralelo desde a semana passada.
 
 ---
 
-## 5. Sobre "testes de todas as naturezas"
+## 4. 🔴 As três lacunas que ninguém mapeou
 
-A estratégia está definida em `geracrm-testes`, `tdd` e `bdd`. As naturezas e onde cada uma entra:
+Não estavam no backlog nem na revisão de consistência — não são "itens pendentes", são **assuntos
+ausentes**.
 
-| Natureza | Onde | Quando entra |
+### 4.1 Como o primeiro cliente entra
+
+O planejamento inteiro descreve **o produto**, e nenhum documento descreve **a transição**. O
+cliente hoje opera em algum lugar — Tailor, planilha, WhatsApp puro. Perguntas sem dono:
+
+- Quem carrega os anos de histórico, e como se **concilia** o que veio com o que o ERP diz?
+- O que acontece com as conversas em andamento no dia da virada?
+- Há período de **convivência** com a ferramenta antiga, ou corte seco?
+- Quem treina as vendedoras, e em quê — o produto muda a rotina delas, não só a tela?
+- Qual é o critério para dizer que a migração **falhou** e voltar atrás?
+
+⚠️ Isto define requisitos da **Onda 0**: a carga histórica precisa de relatório de conciliação, não
+só de importação. Descobrir isso na semana da virada é tarde.
+
+### 4.2 Como o time trabalha
+
+`CLAUDE.md` diz "não commitar em `main` sem os checks verdes" — e é tudo. Não existe: definição de
+pronto, política de branch, quem revisa, o que exige revisão, como uma tarefa entra e sai, o que
+acontece quando a suíte quebra em `main`.
+
+⚠️ Com agentes de IA no fluxo (`workflow-agentes-programacao`), a ausência de "definição de pronto"
+é mais cara: o agente entrega o que **parece** pronto, e sem critério escrito ninguém discorda.
+
+### 4.3 Como saber se funcionou
+
+Há critério de saída **técnico** por onda ("a equipe operou 2 semanas sem o sistema antigo"). Não há
+métrica de **produto**: o que precisa acontecer com o negócio do cliente para a onda ter valido.
+
+⚠️ Isto define o que instrumentar **desde a Onda 0**. Métrica decidida depois é métrica sem
+histórico — e o produto que promete provar ROI não pode ser o único sem linha de base.
+
+---
+
+## 5. Lacunas conhecidas, com data para resolver
+
+| Lacuna | Quando planejar | Por que não agora |
 |---|---|---|
-| **Domínio puro** | Regras de RFV, janela de 24h, pedido mínimo, máquina de estados | Com o modelo de dados |
-| **Caso de uso + banco real** | Testcontainers, transação, contador atômico | Onda 0 |
-| **Isolamento (RLS)** | Todo repositório, com dois tenants | Onda 0 — não negociável |
-| **Isolamento de canal** | Push SSE, com dois tenants | Onda 1 |
-| **Conformidade de conector** | Uma suíte, todo adaptador | Onda 0 |
-| **API HTTP** | `fastify.inject()` | Onda 0 |
-| **Concorrência** | Disparo, assumir atendimento, efetivação | Onda 1–3 |
-| **Console** | Vitest + Testing Library — fluxos e transições de estado | Onda 1 |
-| **App** | RNTL — fila, assumir, pedido offline | Onda 2 |
-| **Acessibilidade** | Contraste, foco, teclado | Com o design system |
-| **Carga** | Volume real do primeiro cliente | Antes da Onda 3 |
-| **Fim a fim** | Poucos, nos fluxos que param o negócio | Onda 2+ |
-
-⚠️ **O que ainda falta é o volume real do primeiro cliente** (decisão pendente nº 5 da stack) —
-sem ele não dá para dimensionar teste de carga.
+| Plano de execução das **Ondas 1–4** | Macro agora, detalhe ao entrar em cada uma | Detalhar a Onda 3 hoje é planejar o que vai mudar |
+| **Cenários BDD** das Ondas 2–4 | Ao entrar em cada onda | Idem |
+| **Telas** de campanha, IA, catálogo, metas, Visão de Mercado, SLA, capacitação | Ao entrar em cada onda | Idem |
+| **Biblioteca de componentes** | **Antes da Onda 1** | O front começa na Onda 1; token sem componente não constrói tela |
+| **Runbook de operação** | Antes do go-live | Precisa da operação real para ser útil |
+| **LGPD formal** — política, termos, DPA com provedores | Antes do primeiro cliente real | Depende de jurídico |
+| **Precificação concreta** | Antes de vender | Decisão comercial; a recomendação (por número de WhatsApp) está em `concorrentes-tailor` §9 |
+| 11 médias e 6 baixas da revisão de consistência | Contínuo | Nenhuma bloqueia a Onda 0 |
 
 ---
 
-## 6. Resposta curta
+## 6. Ordem recomendada
 
-**Planejamento de produto e arquitetura: pronto.**
-**Modelo de domínio, design e telas de entrada: não existem.**
-**Infraestrutura e registro na Meta: nada provisionado.**
+```
+HOJE, em paralelo:
+  ① Registro na Meta ...................... não depende de nós — começar já
+  ② Provisionar infra ..................... dias
+  ③ Esqueleto do monorepo ................. horas
+  ④ Planejar as três lacunas da §4 ........ define requisitos da Onda 0
 
-Nada disso é retrabalho — é a sequência natural. Mas **o registro na Meta deveria ter começado
-ontem**, porque é o único prazo que não controlamos.
+DEPOIS:
+  ⑤ Biblioteca de componentes ............. antes da Onda 1
+  ⑥ Migrations 0001–0010 .................. o plano já as descreve
+  ⑦ Conector GeraCloud + carga histórica .. o coração da Onda 0
+```
+
+⚠️ **O item ④ não é burocracia.** A conciliação da carga histórica (§4.1) e as métricas de linha de
+base (§4.3) **mudam o que a Onda 0 precisa entregar**. Planejar depois significa reabrir a onda.
