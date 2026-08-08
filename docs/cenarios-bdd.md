@@ -720,9 +720,9 @@ Funcionalidade: Fila em modo pull e assunção de atendimento
       E é informado que Ale está atendendo
 
     Cenário: conversa encerrada pode ser assumida de novo, com protocolo novo
-      Dado que Ale encerrou o atendimento de "Saturno Modas" com o protocolo "2026-04-000318"
+      Dado que Ale encerrou o atendimento de "Saturno Modas" com o protocolo "#000318"
       Quando Karine assume um novo atendimento dessa conversa
-      Então um novo atendimento é aberto com protocolo "2026-04-000319"
+      Então um novo atendimento é aberto com protocolo "000319"
       E o histórico da conversa permanece contínuo
 
   ⚠️ Só esconder o botão de quem chegou depois **não é dono de invariante — é esperança com CSS**.

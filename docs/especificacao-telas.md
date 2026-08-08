@@ -154,9 +154,15 @@ A tela que fecha a venda. Abre **sobre a coluna de contexto** no web; como folha
 │  [+] mensagem…            🎤  ➤      │  7 peças · R$ 991,00           │
 │                                      │  ⚠ Mínimo 10 peças — faltam 3  │
 │                                      │  [ Salvar rascunho ]           │
-│                                      │  [ Enviar ao GeraCloud ]  ⊘    │
+│                                      │  [ Enviar pedido ]  ⊘    │
 └──────────────────────────────────────┴────────────────────────────────┘
 ```
+
+⚠️ **O ERP nunca é nomeado literalmente na interface.** O botão diz `Enviar pedido`; as mensagens de
+erro usam **o nome da conexão ativa** daquele tenant, que vem em `detalhe.origem` na resposta da API.
+Um cliente de Bling lendo "Enviar ao GeraCloud" é bug visível — e contraria o ADR-008, que existe
+justamente para o produto não ser acessório de um ERP. Onde este documento escreve `{ERP}`, leia-se
+o nome da conexão.
 
 ### 2.2 Regiões
 
@@ -166,7 +172,7 @@ A tela que fecha a venda. Abre **sobre a coluna de contexto** no web; como folha
 | **Busca de produto** | Por referência, SKU, nome, categoria | Resultado mostra foto pequena, referência, preço da tabela do cliente e saldo |
 | **Item na grade** | Matriz cor × tamanho com campo de quantidade por célula | Célula sem estoque fica desabilitada com o saldo em tooltip. Célula com saldo menor que o pedido mostra `⚠` com o disponível |
 | **Rodapé de totais** | Peças · valor · **validações pendentes** | Cada regra violada vira uma linha explicando **o que falta**, não só "inválido" |
-| **Ações** | Salvar rascunho · Enviar ao GeraCloud | Enviar fica desabilitado enquanto houver validação pendente, com o motivo no hover |
+| **Ações** | Salvar rascunho · Enviar pedido | Enviar fica desabilitado enquanto houver validação pendente, com o motivo no hover |
 
 ### 2.3 Validações (PED-05) — sempre dizem o que falta
 

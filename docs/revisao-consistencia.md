@@ -624,3 +624,29 @@ não sobrevive à escrita. Onde não existe, ela só aparece numa revisão como 
 
 **Pendentes:** as 7 altas, 11 médias e 6 baixas seguem abertas e estão listadas acima, cada uma com
 o documento que deveria mudar.
+
+## Correções aplicadas — altas (08/08/2026)
+
+| # | O que mudou |
+|---|---|
+| **A-01** | **EP-26 partido em dois.** `PLT-06` (planos, limites, cadeado) fica na **Onda 2** — o cadeado atravessa `GET /eu` desde a Onda 0 e a tabela `plano` nasce na `0002`. `PLT-09/10` (white-label, revenda) viram **EP-28**, Onda 4. Corrigidos `backlog-epicos` §2/§18/§4 e `plano-onda-0` §7. De quebra, a contagem de épicos passou de "vinte e um" para 28 (M-09) |
+| **A-02** | **Formato do protocolo decidido:** `bigint` sequencial por tenant, **nunca reinicia**; apresentação zero-padded a 6 com prefixo (`#000318`), **só na camada de exibição**; busca aceita com ou sem `#` e com ou sem zeros. Descartados `2026-04-000318` (reinício mensal quebra `UNIQUE(tenant_id, protocolo)` no ano seguinte) e `#72372.2` (herança visual do Tailor). Exemplos corrigidos em `cenarios-bdd`, `identidade-visual` e `direcao-visual` |
+| **A-03** | Entraram `usuario_preferencia` (aparência, notificações, assinatura e **`escopo_ativo`** — exigência 23), `usuario_sessao` e `usuario_perfil` no modelo §8.1; e `/eu/preferencias`, `/eu/sessoes`, `/eu/2fa`, `/usuarios/{id}/2fa/resetar`, `/eu/foto` e `/plano/faturas` no contrato §5.1 |
+| **A-04** | Entrou `canal_configuracao` (horário, ausência, assinatura, **`disparo_pausado`**) no modelo §8.3; e `/canais/{id}/configuracao`, `/reconectar`, `/disparo/retomar` e `DELETE /canais/{id}` no contrato §5.2. ⚠️ Sem `disparo_pausado` não havia onde registrar a pausa automática por queda de qualidade (CAN-06) |
+| **A-05** | `POST /pedidos/{id}/exportacoes` — `202` + job + URL assinada. Distinto de `/resumo`, que é texto para a conversa. É o contrato de degradação do ADR-008 no caso mais severo |
+| **A-06** | `stack-arquitetura.md` §13 estendida de 12 para **26 exigências** |
+| **A-07** | O ERP deixou de ser nomeado literalmente na interface: botão vira `Enviar pedido`, mensagens usam **o nome da conexão ativa** via `detalhe.origem`. Corrigidos `especificacao-telas` §2 e `escopo-funcional` §1.2/PED-07/INT-01c |
+
+### Duas observações que sobreviveram às correções
+
+⚠️ **A-06 revelou uma assimetria no processo.** `stack-arquitetura.md` abre com *"escolha sem
+exigência apontada é preferência disfarçada"* — mas o inverso não estava escrito. **Exigência sem
+escolha apontada é lacuna disfarçada**, e foi assim que 14 exigências ficaram sem resposta: a §8 da
+primeira spec de telas estava mapeada, a §9 da segunda não. A regra inversa agora está no documento.
+
+⚠️ **A-03 desmentiu um checklist.** O `modelo-de-dados.md` §10 fechava com "☑ Toda funcionalidade de
+Onda 1–2 tem onde morar". Não tinha — faltavam preferências, sessões e perfil. Checklist que se
+autoavalia é a forma mais convincente de esconder lacuna.
+
+**Estado:** 4 bloqueantes e 7 altas corrigidos. Seguem abertas **11 médias e 6 baixas**, listadas
+acima, cada uma com o documento que deveria mudar.

@@ -22,7 +22,7 @@ Quinze blocos. Cada um é um capítulo do produto.
 | **8** | **Inteligência RFV** | 11 faixas de segmento com histórico temporal, ciclo de vida configurável e visão de qualidade da base | 2 → 3 |
 | **9** | **Tarefas e Fila do Dia** | O sistema decide com quem falar hoje, por que, e entrega a mensagem pronta | 2 → 4 |
 | **10** | **Catálogo conversacional** | Catálogo espelhado do ERP virando link, mídia e rastreio de interesse na conversa | 2 |
-| **10b** | **Pedido assistido** | A vendedora monta o pedido dentro da conversa — grade, tabela de preço, estoque, regras comerciais — e o GeraCloud efetiva | 2 |
+| **10b** | **Pedido assistido** | A vendedora monta o pedido dentro da conversa — grade, tabela de preço, estoque, regras comerciais — e o ERP conectado efetiva | 2 |
 | **11** | **Copiloto de IA** | Sugere a mensagem usando cidade, categorias compradas e tempo sem comprar; transcreve áudio; resume conversa | 2 |
 | **12** | **Agente autônomo de IA** | Atende 24/7, extrai dados, qualifica ou desqualifica, entrega ao humano só quem está pronto | 3 |
 | **13** | **Campanhas em massa** | Disparo segmentado por templates HSM, distribuído pela frota, com custo e receita atribuída em 3/7/14 dias | 3 |
@@ -33,7 +33,7 @@ Quinze blocos. Cada um é um capítulo do produto.
 
 ## 2. Estrutura de épicos
 
-Vinte e um épicos. A coluna **Onda** indica onde o épico **começa**; vários atravessam ondas.
+**Vinte e oito épicos** — 23 na tabela abaixo e 5 exclusivos da Onda 4. A coluna **Onda** indica onde o épico **começa**; vários atravessam ondas.
 
 | Épico | Nome | Escopo (IDs do escopo funcional) | Onda |
 |---|---|---|---|
@@ -57,8 +57,15 @@ Vinte e um épicos. A coluna **Onda** indica onde o épico **começa**; vários 
 | **EP-18** | Agente autônomo de IA | IA-05…09 | 3 |
 | **EP-19** | Força de vendas e campo | FDV-01, FDV-06, FDV-07, FDV-11 | 2 → 4 |
 | **EP-27** | **Pedido assistido (tira-pedidos na conversa)** | PED-01…16 | **2** |
+| **EP-26** | **Planos, limites e cadeado de upsell** | PLT-06 | **2** |
 | **EP-20** | Instagram e canais adicionais | CAN-07…09 | 2 → 3 |
 | **EP-21** | Ecossistema de integrações | INT-10…13 | 3 → 4 |
+
+⚠️ **EP-26 foi partido em dois.** `PLT-06` (planos, limites, cadeado de upsell) é **Onda 2** — o
+cadeado atravessa `GET /eu` desde a Onda 0, a tabela `plano` nasce na migration `0002`, e a resposta
+da API precisa distinguir *sem permissão* de *não contratado*. Já `PLT-09/10` (white-label e revenda)
+seguem na **Onda 4**, como EP-28. Manter os três no mesmo épico colocava um item de Onda 2 numa
+tabela intitulada "exclusivos da Onda 4".
 
 Épicos exclusivos da Onda 4 (diferenciais):
 
@@ -68,7 +75,7 @@ Vinte e um épicos. A coluna **Onda** indica onde o épico **começa**; vários 
 | **EP-23** | Atendimento estruturado (setores, SLA, CSAT) | INB-21…24 | **D2** |
 | **EP-24** | Governança de reputação e custo | CAN-06, CMP-18, BI-11 | **D3, D4** |
 | **EP-25** | Capacitação e playbook | GES-06…10 | **D5** |
-| **EP-26** | White-label e multi-tenant comercial | PLT-06, PLT-09, PLT-10 | **D7** |
+| **EP-28** | White-label e revenda | PLT-09, PLT-10 | **D7** |
 
 ---
 
@@ -160,7 +167,7 @@ Vinte e um épicos. A coluna **Onda** indica onde o épico **começa**; vários 
 | EP-23 | SLA de primeira resposta e resolução · escalonamento · **CSAT** · monitoramento ao vivo do supervisor | **D2** |
 | EP-24 | Saúde preditiva do número · **simulador de custo e receita pré-disparo** · **painel de ROI da própria ferramenta** | **D3, D4** |
 | EP-25 | Trilhas de capacitação com quiz · **playbook por segmento RFV no momento do atendimento** · onboarding de vendedor novo · gamificação · comissionamento | **D5** |
-| EP-26 | Planos e limites com cadeado de upsell · **white-label** · **painel de revenda** | **D7** |
+| EP-28 | **White-label** (logo, cores, domínio, remetente) · **painel de revenda com subcontas** | **D7** |
 | EP-21 (cont.) | **Marketplace de conectores** com SDK | **D6** |
 | Diversos | NPS · campanhas de e-mail · gatilhos transacionais · teste A/B · equipe de agentes de IA · catálogo por cliente · alerta de reposição · visitas e roteiro | — |
 
@@ -176,7 +183,7 @@ EP-02 (dados) ──┬──> EP-09 (RFV) ──> EP-22 (Fila do Dia)
 EP-03 (números) ──┬──> EP-05 (inbox) ──> EP-06 (fila) ──> EP-23 (SLA/CSAT)
                   └──> EP-17 (campanhas) ──> EP-24 (governança)
 
-EP-01 (tenancy) ──> EP-26 (white-label)
+EP-01 (tenancy) ──> EP-26 (planos, Onda 2) ──> EP-28 (white-label, Onda 4)
 ```
 
 **Quatro dependências que não podem ser invertidas:**

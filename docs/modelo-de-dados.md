@@ -1146,6 +1146,18 @@ auditoria(tenant_id, id, ator_id, acao, entidade, entidade_id, dados jsonb, cria
                                                    PK (tenant_id, criado_em, id)
                                                    PARTITION BY RANGE (criado_em)
 
+-- Preferências e sessões do usuário (A-03) — telas de perfil sem lugar no modelo
+usuario_preferencia(tenant_id, usuario_id, chave, valor jsonb, atualizado_em)
+                                                   PK (tenant_id, usuario_id, chave)
+      -- chave: 'aparencia' ('claro'|'escuro'|'sistema')
+      --      | 'escopo_ativo' ({filialId, canalId})   ⚠️ exigência 23
+      --      | 'notificacoes'  ({evento: {app, push, email, som}})
+      --      | 'assinatura'    (texto anexado às mensagens da atendente)
+usuario_sessao(tenant_id, id, usuario_id, dispositivo, user_agent, ip_ultimo,
+               criado_em, visto_em, encerrada_em)
+usuario_perfil(tenant_id, usuario_id, foto_chave_objeto, bloqueada_ate, mfa_ativo bool)
+                                                   PK (tenant_id, usuario_id)
+
 -- Onboarding do tenant (B-02) — a tela mais importante da Onda 0 não tinha onde morar
 onboarding_passo(tenant_id, passo, estado, dados jsonb,
                  concluido_em, concluido_por, atualizado_em)
@@ -1166,6 +1178,15 @@ que a limitação foi apresentada e aceita na configuração.
 
 O banner de "configuração pendente" que a tela exibe lê exatamente esta tabela — e **nomeia o passo
 que falta**, em vez de dizer "configuração incompleta".
+
+⚠️ **`escopo_ativo` é a exigência 23, e ela é a única forma de o app e o console concordarem.**
+A vendedora escolhe filial e número no console e abre o app: se o escopo estiver no `localStorage`,
+os dois discordam e ela atende pelo número errado. Por isso é preferência **do servidor**.
+
+⚠️ **`usuario_sessao` existe porque "desativar usuário encerra as sessões" é promessa da tela.**
+Sem a tabela, "encerrar todas as outras" não tem o que encerrar — e a desativação vira um `ativo =
+false` que só faz efeito no próximo login. O 2FA em si fica no Cognito; `mfa_ativo` aqui é só o
+selo que a lista de usuários exibe.
 
 ⚠️ **`tenant.plano_id` e `tenant.perfil_vertical_id` eram FKs penduradas no vazio** — nenhuma das duas
 tabelas existia. Isso não é ausência de funcionalidade: é **migration que não fecha**. Mesmo caso de
@@ -1251,6 +1272,12 @@ numero_whatsapp(tenant_id, canal_id, telefone_e164, waba_id, phone_number_id,
 perfil_instagram(tenant_id, canal_id, ig_user_id, pagina_id)   PK (tenant_id, canal_id)
                                                    UNIQUE(tenant_id, ig_user_id)
 canal_saude_evento(tenant_id, id, canal_id, campo, de, para, criado_em)
+canal_configuracao(tenant_id, canal_id, horario_atendimento jsonb, mensagem_ausencia text,
+                   assinatura text, disparo_pausado bool, pausado_motivo, pausado_em)
+                                                   PK (tenant_id, canal_id)
+      -- ⚠️ `disparo_pausado` é o que a tela de saúde liga e desliga (A-04). Sem ele, "retomar
+      --    disparo" não tem o que retomar, e a pausa automática por queda de qualidade (CAN-06)
+      --    não tem onde ser registrada.
 
 -- throttling (INV-23) e limite de tier (INV-22) — duas formas, duas tabelas
 numero_throttle(tenant_id, canal_id, proximo_envio_permitido_em)   PK (tenant_id, canal_id)
@@ -1289,6 +1316,14 @@ mensagem_id_externo(tenant_id, id_externo, mensagem_id, mensagem_criado_em, cria
 midia(tenant_id, id, mensagem_id, mensagem_criado_em, chave_objeto, mime, bytes,
       duracao_s, transcricao)
 
+-- ⚠️ FORMATO DO PROTOCOLO — decisão fechada (A-02)
+-- Armazenamento:  bigint sequencial por tenant, de `contador_por_tenant` com UPDATE … RETURNING.
+--                 Nunca reinicia. UNIQUE(tenant_id, protocolo) vale para sempre.
+-- Apresentação:   zero-padded a 6 dígitos com prefixo — #000318 — SÓ na camada de exibição.
+-- Busca:          aceita com ou sem `#`, com ou sem zeros à esquerda. "318", "000318" e
+--                 "#000318" encontram o mesmo atendimento.
+-- ⚠️ Descartados: `2026-04-000318` (sequência que reinicia por mês quebra a unicidade no ano
+--                 seguinte) e `#72372.2` (herança visual do Tailor, nunca foi decisão nossa).
 atendimento(tenant_id, id, conversa_id, canal_id, protocolo bigint, atendente_id,
             estado ('na_fila'|'em_atendimento'|'encerrado'),
             criado_em, assumido_em, encerrado_em, setor_id, csat)

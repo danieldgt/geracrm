@@ -399,6 +399,29 @@ Fechando o ciclo com a §8 da especificação de telas:
 | 11 | Mídia com transcrição | Object storage + worker assíncrono |
 | 12 | Throttling por número | Contador em tabela com `UPDATE ... RETURNING` (§9.1) |
 
+E as exigências **13–26**, que `especificacao-telas-entrada.md` §9 acrescentou:
+
+| # | Exigência | Atendida por |
+|---|---|---|
+| 13 | Estado do onboarding no servidor, retomável | Tabela `onboarding_passo` (modelo §8.1) + `GET /onboarding`. ⚠️ `localStorage` é o erro clássico: o admin fecha a aba no meio do fluxo da Meta e perde uma conexão que já existe do outro lado |
+| 14 | Conclusão do Embedded Signup confirmada no nosso servidor | `GET /canais/whatsapp/signup/estado`, consultado em loop enquanto a janela da Meta está aberta |
+| 15 | Verificação do método de pagamento na Meta | `POST /canais/{id}/pagamento/verificar` + `numero_whatsapp.pagamento_ok` |
+| 16 | Reparo de número sem sair da tela | `POST /canais/{id}/reconectar`, `/disparo/retomar`, `DELETE /canais/{id}` — ⚠️ tela de monitoramento sem ação de reparo é relatório |
+| 17 | **Texto de consequência da capacidade, versionado** | `conexao_erp.capacidades` guarda o booleano; o **texto** ("o saldo terá horário") é conteúdo de domínio versionado junto com o catálogo de capacidades — ⚠️ não é string de front, senão cada tela escreve a sua |
+| 18 | Aceite registrado das capacidades do ERP | `onboarding_passo` com `passo='aceite_capacidades'` — guarda **a data em que o admin foi informado** |
+| 19 | Banner de configuração pendente nomeando o passo | `GET /eu` devolve o passo pendente; a tela nomeia, em vez de "configuração incompleta" |
+| 20 | Distinguir **sem permissão** × **não contratado** × **capacidade ausente** | `GET /eu` devolve os três separados: papéis, limites do plano e capacidades por conexão. ⚠️ Colapsar em "indisponível" faz o usuário abrir chamado para o suporte errado |
+| 21 | 2FA e recuperação sem UI de terceiro | Cognito headless — telas próprias, `POST /eu/2fa`, `POST /usuarios/{id}/2fa/resetar` |
+| 22 | Encerrar sessões de outro dispositivo | Tabela `usuario_sessao` + `DELETE /eu/sessoes` — ⚠️ desativar usuário sem encerrar sessão só faz efeito no próximo login |
+| 23 | **Escopo ativo (filial/número) no servidor** | `usuario_preferencia` chave `escopo_ativo` — é a única forma de app e console concordarem |
+| 24 | Limites do plano avaliados no servidor | `contador_por_tenant` como fonte de uso; `GET /plano` compara contra o contratado |
+| 25 | Segredos write-only, mascarados na leitura | INV-41; credenciais cifradas por tenant, nunca devolvidas |
+| 26 | Preferência de aparência por usuário | `usuario_preferencia` chave `aparencia` — claro/escuro/sistema, sincronizado entre superfícies |
+
+⚠️ **A regra de abertura deste documento tem um inverso:** se *"escolha sem exigência apontada é
+preferência disfarçada"*, então **exigência sem escolha apontada é lacuna disfarçada**. As 13–26
+ficaram sem resposta por três semanas porque só a §8 da primeira spec de telas estava mapeada aqui.
+
 ---
 
 ## 14. Decisões que ainda dependem de informação que não temos

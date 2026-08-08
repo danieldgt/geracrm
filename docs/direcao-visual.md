@@ -313,7 +313,7 @@ que cor escolhida ad hoc dentro do componente:
 | Números | a sans com `tabular-nums`, peso 600, tracking −0.02em | Colunas de valor precisam alinhar |
 
 **⚠️ Proposta com opinião: monoespaçada para identificadores.** SKU `22625-VERDE-G42`, telefone
-`+55 81 99861-7049`, CNPJ `60.631.000/0014-30`, protocolo `#72372.2`. São valores **comparados,
+`+55 81 99861-7049`, CNPJ `60.631.000/0014-30`, protocolo `#000318`. São valores **comparados,
 conferidos e digitados** o dia inteiro. Em mono eles alinham em coluna, o olho acha a diferença entre
 dois SKUs parecidos, e o dado se distingue do texto sem gastar cor nem negrito. Nenhum concorrente faz
 isso. É a decisão tipográfica mais barata e mais visível do projeto — **e é decisão do dono** (§8).

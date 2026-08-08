@@ -125,7 +125,7 @@ parecer coeso em vez de "azul aplicado sobre um template cinza".
 
 ### ⚠️ Monoespaçada para identificadores é escolha funcional que virou identidade
 
-`22625-VERDE-G42`, `+55 81 99861-7049`, `60.631.000/0014-30`, protocolo `#72372.2`.
+`22625-VERDE-G42`, `+55 81 99861-7049`, `60.631.000/0014-30`, protocolo `#000318`.
 
 Esses valores são **comparados, conferidos e digitados** o dia inteiro. Em monoespaçada eles
 alinham em coluna, o olho acha a diferença entre dois SKUs parecidos, e o dado se distingue do

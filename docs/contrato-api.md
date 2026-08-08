@@ -424,7 +424,13 @@ função do **conteúdo**, e por isso é do servidor.
 | `GET` | `/notificacoes` · `POST /notificacoes/{id}/lida` | In-app com contador (`count WHERE lida_em IS NULL`) | PLT-07 | — |
 | `PUT` `DELETE` | `/dispositivos-push` | Token de push por dispositivo | MOB-07 | — |
 | `GET` | `/auditoria` | Cursor; filtros por ator, ação, entidade, período | PLT-05 | — |
-| `GET` | `/plano` | Limites contratados × uso atual | PLT-06 | — |
+| `GET` `PUT` | `/eu/preferencias` | Aparência (claro/escuro/sistema), notificações por evento × canal, assinatura da atendente e **escopo ativo** (filial/número). ⚠️ **No servidor** — é a única forma de app e console concordarem (exigência 23) | §7, exig. 23 | — |
+| `GET` | `/eu/sessoes` · `DELETE /eu/sessoes/{id}` · `DELETE /eu/sessoes` | Dispositivos ativos; encerrar uma ou **todas as outras** | §7 | — |
+| `POST` | `/eu/2fa` · `DELETE /eu/2fa` | Configurar (QR + chave manual + códigos de recuperação) e desativar | §1.3 | — |
+| `POST` | `/usuarios/{id}/2fa/resetar` | Admin reseta o 2FA de outro usuário | §5.2 | `autorizacao.sem_permissao` |
+| `PUT` | `/eu/foto` | Foto do perfil — URL assinada | §7 | — |
+| `GET` | `/plano` | Limites contratados × uso atual. ⚠️ A contagem de uso vem de `contador_por_tenant`, avaliada **no servidor** (exigência 24) | PLT-06 | — |
+| `GET` | `/plano/faturas` | Histórico de faturas e forma de pagamento | PLT-06, §8 | — |
 | `POST` | `/staff/acessos` | ⚠️ Sessão de acesso cross-tenant do staff, **auditada** (§2.2) | PLT-05 | `autorizacao.sem_permissao` |
 
 ### 5.2 `atendimento`
@@ -438,6 +444,10 @@ função do **conteúdo**, e por isso é do servidor.
 | `POST` | `/canais/{id}/pagamento/verificar` | ⚠️ Reconsulta o método de pagamento na conta Meta do cliente. É o botão **"Verificar de novo"**: sem pagamento cadastrado o número não envia, e a falha precisa dizer isso | CAN-04, ADR-002 | `canal.sem_pagamento_meta` |
 | `POST` | `/canais/instagram/signup` | Instagram Business Login | CAN-07 | — |
 | `GET` | `/canais/{id}/contadores` | Contatos, clientes, conversas ativas | CAN-05 | — |
+| `GET` `PUT` | `/canais/{id}/configuracao` | Horário de atendimento, mensagem de ausência, assinatura da atendente | CAN-02 | — |
+| `POST` | `/canais/{id}/reconectar` | ⚠️ **Ação de reparo** — reabre o Embedded Signup só na etapa necessária | CAN-03 | — |
+| `POST` | `/canais/{id}/disparo/retomar` | ⚠️ **Ação de reparo** — retoma disparo em número pausado por qualidade (CAN-06) | CAN-06 | `canal.qualidade_insuficiente` |
+| `DELETE` | `/canais/{id}` | Remove da frota. ⚠️ Resposta de pré-confirmação informa **quantas conversas deixarão de receber mensagem** | CAN-02 | `canal.possui_conversas_ativas` |
 | `GET` | `/conversas` | Lista do inbox. Filtros: `canalId`, `semResposta`, `arquivada`, `busca`. `ordem`: `ultimaMensagem` \| `ultimaEntrante` | INB-01/07 | `listagem.cursor_incompativel` |
 | `GET` | `/conversas/{id}` | Cabeçalho: contato, canal, **janela derivada** `{ aberta, expiraEm, duracaoH, reabrePor }`, `versao`, atendimento atual | INB-04 | — |
 | `GET` | `/conversas/{id}/mensagens` | Histórico para trás em blocos (`ate`, cursor) | INB-08 | `listagem.cursor_incompativel` |
@@ -497,6 +507,7 @@ transforma a tela mais importante do produto em tela lenta.
 | `POST` | `/pedidos/{id}/reconciliacao` | Depois de `504`: consulta o ERP pela `chaveEfetivacao` antes de qualquer retentativa | INV-53 | `integracao.capacidade_indisponivel` |
 | `POST` | `/pedidos/{id}/conferencia` | Confirmação **humana** quando o ERP não sabe consultar por chave | INV-53 | — |
 | `GET` | `/pedidos/{id}/resumo` | Texto formatado do pedido para colar na conversa. ⚠️ **Não envia** — ação sugerida, não automática (PED-10) | PED-10 | — |
+| `POST` | `/pedidos/{id}/exportacoes` | ⚠️ **Rascunho exportável** — `202` + job + URL assinada (CSV/PDF com itens, grade, preços e dados do cliente), para lançamento manual no ERP. É o contrato de degradação do ADR-008 quando `escritaPedido` é ausente: sem esta rota, "degrada em vez de quebrar" vira "quebra com uma frase bonita". ⚠️ Distinto de `/resumo`, que é **texto para a conversa**, não arquivo para o ERP | ADR-008, PED-07 | — |
 | `POST` | `/pedidos/{id}/duplicar` | "Repetir última compra" | PED-16 | — |
 | `GET` | `/vendas` | Fato do ERP: cursor, filtros por contato, período, filial, vendedor | RFV-04, BI-05 | — |
 

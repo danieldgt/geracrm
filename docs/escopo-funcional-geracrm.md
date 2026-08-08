@@ -30,8 +30,8 @@
 - **Emissão fiscal, controle de estoque, financeiro contábil** — permanecem no ERP.
 
 **Dentro do escopo:**
-- **Tira-pedidos assistido** ✅ *decidido* — a vendedora monta o pedido **dentro da conversa**, com tabela de preço do cliente, grade e estoque em tempo real. O rascunho vive no GeraCRM; a **efetivação acontece no GeraCloud**. Não confundir com loja B2B: aqui quem monta é a vendedora, durante o atendimento.
-- **O pedido efetivado, o estoque e o fiscal são do GeraCloud.** O GeraCRM origina a intenção e o rascunho; do pedido efetivado em diante, o ERP é a fonte da verdade.
+- **Tira-pedidos assistido** ✅ *decidido* — a vendedora monta o pedido **dentro da conversa**, com tabela de preço do cliente, grade e estoque em tempo real. O rascunho vive no GeraCRM; a **efetivação acontece no ERP do cliente** — GeraCloud é o primeiro conector, não o único (ADR-008). Não confundir com loja B2B: aqui quem monta é a vendedora, durante o atendimento.
+- **O pedido efetivado, o estoque e o fiscal são do ERP.** O GeraCRM origina a intenção e o rascunho; do pedido efetivado em diante, o ERP é a fonte da verdade.
 - **Integração aberta com terceiros** desde o dia 1 — GeraCloud é o primeiro conector, não o único. Todo dado que o GeraCloud fornece precisa ter equivalente via API pública, senão amarramos o produto a um único ERP e perdemos o mercado.
 
 > **Por que o tira-pedidos muda o produto, e não só o escopo:** com o pedido nascendo na conversa, a **atribuição de receita deixa de ser estimativa**. O modelo de referência (Tailor) atribui venda por janela temporal — "quem comprou em 3/7/14 dias depois de receber a campanha". Com o vínculo direto pedido ↔ conversa ↔ campanha ↔ tarefa, sabemos exatamente o que gerou o quê. O diferencial mais forte do produto passa de aproximação estatística a fato registrado.
@@ -102,7 +102,7 @@ O módulo mais estratégico. Se ele falha, o CRM não se preenche sozinho e todo
 |---|---|---|---|
 | INT-01 | **Conector nativo GeraCloud** — sincronização de clientes, produtos/estoque e pedidos/vendas | ★ | 0 |
 | INT-01b | **Leitura síncrona ao vivo** (não em lote): saldo por SKU, tabela de preço do cliente, limite de crédito — requisito do pedido assistido (PED-03, PED-04, PED-11) | ★ | 0 |
-| INT-01c | **Escrita de pedido** no GeraCloud com idempotência e retorno de número/erro tipificado (PED-07, PED-08) | ★ | 0 |
+| INT-01c | **Escrita de pedido** no ERP com idempotência e retorno de número/erro tipificado (PED-07, PED-08) | ★ | 0 |
 | INT-02 | **API pública de ingestão** com três fluxos independentes: `customers`, `products`, `orders` — combináveis | T | 0 |
 | INT-03 | Autenticação por **Bearer Token**, gerado em painel próprio ("Tokens de Integração") | T | 0 |
 | INT-04 | **Idempotência** por chave de operação — reenvio não duplica | T | 0 |
@@ -310,7 +310,7 @@ Escopo reduzido por decisão: **sem loja self-service, sem checkout do cliente f
 
 ## 14. PED — Pedido assistido (tira-pedidos na conversa)
 
-**Decisão:** a vendedora monta o pedido dentro do atendimento; o GeraCloud efetiva. O rascunho é nosso, o pedido efetivado é do ERP.
+**Decisão:** a vendedora monta o pedido dentro do atendimento; **o ERP conectado** efetiva. O rascunho é nosso, o pedido efetivado é do ERP.
 
 | ID | Funcionalidade | Origem | Onda |
 |---|---|---|---|
@@ -320,7 +320,7 @@ Escopo reduzido por decisão: **sem loja self-service, sem checkout do cliente f
 | PED-04 | **Estoque e disponibilidade em tempo real** por SKU, com aviso de saldo insuficiente antes de adicionar | MC | 2 |
 | PED-05 | **Validação das regras comerciais antes de enviar**: pedido mínimo (peças ou valor), múltiplo de grade, mix mínimo por categoria — com o que falta explicitado | V,MC | 2 |
 | PED-06 | **Rascunho persistente e retomável**, múltiplos rascunhos por cliente, sobrevive a fechar o navegador e a troca de dispositivo | ★ | 2 |
-| PED-07 | **Envio ao GeraCloud para efetivação**, com idempotência e retorno do número do pedido | ★ | 2 |
+| PED-07 | **Envio ao ERP para efetivação**, com idempotência e retorno do número do pedido. ⚠️ A interface nunca nomeia o ERP literalmente — usa o nome da conexão ativa | ★ | 2 |
 | PED-08 | **Tratamento de falha na efetivação** — estoque esgotado, crédito bloqueado, item inativo, cliente sem cadastro fiscal — com ação corretiva na própria tela, sem perder o rascunho | ★ | 2 |
 | PED-09 | **Vínculo pedido ↔ conversa ↔ campanha ↔ tarefa ↔ vendedora** — base da atribuição exata de receita (CMP-11, BI-02) | ★ | 2 |
 | PED-10 | **Resumo do pedido enviado ao cliente pela conversa**, em mensagem formatada e conferível | ★ | 2 |

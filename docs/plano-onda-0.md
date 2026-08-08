@@ -460,7 +460,8 @@ protegida por disciplina é invariante violada.**
 | Metas, ranking, BI, home executiva (GES-*, BI-*) | 2 | `usuario_identidade_externa` nasce agora **só** porque a ingestão a preenche |
 | Design system completo, alta fidelidade, modo escuro | Paralelo | `packages/design-tokens/tokens.json` já existe (ADR-012). O console da Onda 0 tem **cinco telas**: login, recuperação, convite, onboarding (Meta + ERP) e lista de contatos em leitura |
 | SSE no console | 1 | O **outbox e o `NOTIFY` existem** (E3-14) porque INV-40 é invariante de escrita. O consumo na tela é Onda 1 |
-| White-label, planos, revenda (PLT-06/09/10) | 4 | `tenant.tenant_pai_id` e `plano` nascem agora, vazios e sem policy |
+| Planos, limites e cadeado de upsell (PLT-06) | **2** | `plano` nasce na `0002` e o cadeado atravessa `GET /eu` desde a Onda 0 — a resposta já distingue *sem permissão* de *não contratado*. A **tela** de planos é Onda 2 |
+| White-label e revenda (PLT-09/10) | 4 | `tenant.tenant_pai_id` nasce agora, vazio e sem policy |
 
 ⚠️ **A tentação real desta onda é construir o inbox "só para demonstrar".** Ele consome quatro
 semanas, adianta a Onda 1 em nada (porque será refeito sobre a especificação de telas) e atrasa a
