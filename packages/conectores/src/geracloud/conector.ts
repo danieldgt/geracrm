@@ -16,9 +16,10 @@ import type {
 /**
  * ⚠️ Two are `false` for different reasons, and the difference matters:
  *
- *  - `creditoCliente`: **definitive.** The pdv-core has no credit limit at all —
- *    every sale is paid on the spot (debit, credit or Pix). The credit block
- *    does not render; it does not render disabled.
+ *  - `creditoCliente`: **definitive, and out of scope.** The pdv-core has no
+ *    credit limit — every sale is paid on the spot. And term/credit management
+ *    stays in the ERP, which already has it (ADR-019). This is not a gap to
+ *    fill later; the credit block simply does not render.
  *
  *  - `escritaPedido`: **conditional.** `POST /vendas/...` exists but almost
  *    certainly has no idempotency key. Writing without one means a single
@@ -118,8 +119,9 @@ export class ConectorGeraCloud implements ConectorErp {
         return {
           idExterno: String(c.id),
           nome: nome || String(c.nome ?? ''),
-          // ⚠️ CNPJ wins over CPF: in wholesale the buyer is a company, and the
-          // reconciliation key across ERPs is the company document.
+          // CNPJ first, CPF next — but ⚠️ in retail (the primary case, ADR-019)
+          // most customers have NEITHER. Reconciliation cannot rely on this
+          // field; the normalised phone is the primary key.
           documento: apenasDigitos((c.cnpj as string) ?? (c.cpf as string)),
           // The ERP holds ONE phone. The others arrive via WhatsApp and import —
           // hence the array here even though the source gives at most one.

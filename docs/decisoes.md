@@ -366,6 +366,65 @@ portabilidade, três semanas de espera de um concorrente entrariam antes da prim
   novos começam no tier inicial. Isso muda o que se pode disparar na primeira semana de cada um.
 - O treinamento é o mesmo, mas o **roteiro do dia D difere** por origem.
 
+## ADR-019 — Varejo e atacado, com o varejo em primeiro lugar
+**Contexto**: todo o planejamento até aqui assumiu **atacado de moda** como vertical inicial — o
+escopo funcional, o mapa competitivo (Tailor, Modall), o modelo de dados e o pedido assistido. A
+definição agora é outra: o produto atende **atacado e varejo, principalmente varejo**.
+
+**Decisão**: o perfil de vertical (ADR-004) deixa de ser uma abstração para o futuro e passa a ter
+**dois perfis ativos desde o dia 1** — `varejo` e `atacado`. O varejo é o caso principal.
+
+### O que muda de verdade
+
+| Área | Atacado | Varejo | Consequência |
+|---|---|---|---|
+| **Identidade do cliente** | CNPJ | ⚠️ CPF, **ou só telefone e nome** | A reconciliação não pode depender de documento |
+| **Pedido assistido (PED)** | Coração do produto | ⚠️ **Periférico** — a venda acontece no PDV | Ver §"O que perde peso" |
+| **Grade cor × tamanho** | Essencial (grade fechada) | Compra 1 peça | Continua no modelo, some da tela no perfil varejo |
+| **Tabela de preço por cliente** | Regra | Preço único | Capacidade que o perfil varejo ignora |
+| **Pedido mínimo, mix, múltiplo** | Regra | Não existe | Validações desligadas por perfil |
+| **RFV e recompra** | Importante | ⚠️ **É o produto** | Ganha centralidade |
+| **Volume de contatos** | Milhares | ⚠️ Dezenas de milhares | Campanha e segmentação pesam mais |
+
+### ⚠️ A mudança mais séria: identidade sem documento
+
+No varejo, **muito cliente tem só telefone e primeiro nome**. Todo o desenho de reconciliação
+partia do CNPJ como chave forte (`modelo-de-dados` §6, conector §2).
+
+Consequências imediatas:
+- O **telefone normalizado** passa a ser a chave primária de reconciliação, não a secundária —
+  e a função que já existe em `packages/shared` vira ainda mais crítica.
+- A **qualidade cadastral** deixa de ser um alerta e vira condição normal de operação: no sistema
+  de referência, 40% da base já estava sem documento. No varejo isso será a maioria.
+- **Mesclagem de contatos** (CTT-11) sobe de prioridade: sem documento, duplicata é inevitável.
+- ⚠️ Isto se soma ao BSUID (`meta-plataforma.md` §6): o telefone pode nem vir. Contato **sem
+  telefone e sem documento** deixa de ser hipótese remota.
+
+### O que perde peso
+
+**O pedido assistido (PED-01…16) deixa de ser o coração.** No varejo a venda acontece no balcão,
+pelo PDV — não na conversa. Ele continua útil para encomenda, reserva e venda por WhatsApp, que
+existem no varejo, mas não é mais o que define o produto.
+
+⚠️ **A atribuição exata de receita depende dele** (ADR-013). Com o pedido nascendo no PDV, a
+atribuição volta a ser majoritariamente **estimada por janela** — e isso precisa ser dito com todas
+as letras, em vez de prometer precisão que o fluxo não sustenta.
+
+### O que ganha peso
+
+**Recompra, RFV e campanha segmentada.** É exatamente o território de Dito e Mercafácil
+(`concorrentes-tailor.md` anel 2) — que analisamos como adjacentes e agora são concorrentes
+diretos. ⚠️ Vale reler aquele anel com outros olhos: eles têm CDP, predição de churn e programa de
+fidelidade, três coisas que descartamos por serem "de varejo".
+
+### Crédito e prazo: fora, definitivamente
+O GeraCloud já tem gestão de títulos. **Não replicamos.** `creditoCliente` fica `false` e o assunto
+sai do escopo — não é lacuna a preencher depois.
+
+**Consequências**: `escopo-funcional`, `backlog-epicos` e `concorrentes-tailor` foram escritos sob a
+premissa anterior e precisam de revisão de peso — não de reescrita. O modelo de dados não muda: ele
+já era genérico por ADR-004, e é isso que torna esta virada barata.
+
 ## ADR-011 — Convenções
 Domínio em português (`Conversa`, `Pedido`, `Campanha`), infraestrutura em inglês, comentários em
 inglês · sem `enum` do TypeScript (união de literais + `z.enum`) · sem status numérico mágico ·
