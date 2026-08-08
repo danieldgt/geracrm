@@ -48,6 +48,39 @@ describe('Efetivação de pedido assistido', () => {
 **RLS testa-se com dois tenants.** Todo teste de repositório inclui um caso provando que tenant A
 não lê dado do tenant B. Sem exceção.
 
+### ⚠️ E o teste precisa rodar sob o PAPEL DA APLICAÇÃO
+
+Este erro custou um teste falso-verde no primeiro dia do projeto:
+
+```sql
+-- ❌ Conectado como dono/superusuário: o RLS é IGNORADO.
+--    O teste passa sempre, inclusive quando a policy está errada ou ausente.
+SET geracrm.tenant_id = '...tenant A...';
+SELECT * FROM contato;          -- devolve TUDO, de todos os tenants
+
+-- ✅ Sob o papel da aplicação, que é como a API se conecta de verdade:
+SET ROLE geracrm_app;
+SET geracrm.tenant_id = '...tenant A...';
+SELECT * FROM contato;          -- devolve só o do tenant A
+```
+
+⚠️ **`FORCE ROW LEVEL SECURITY` não resolve isso.** `FORCE` submete o **dono** da tabela às
+policies — mas **superusuário ignora RLS sempre**, com ou sem `FORCE`. E em desenvolvimento é
+comum a conexão ser justamente com o superusuário do container.
+
+**Regra:** todo teste de isolamento faz `SET ROLE geracrm_app` (ou usa uma conexão com esse papel)
+**antes** de qualquer asserção. Um teste de isolamento que passa conectado como superusuário não
+está provando nada — e é pior que nenhum teste, porque dá confiança falsa.
+
+**Casos obrigatórios do bloco de isolamento:**
+
+```
+□ tenant A não lê linha do tenant B
+□ tenant A não GRAVA linha com tenant_id de B   → o banco recusa
+□ sessão sem tenant definido devolve zero linhas (não devolve tudo)
+□ o papel da aplicação NÃO tem BYPASSRLS
+```
+
 **Canal SSE testa-se com dois tenants também.** Herda a mesma lógica, aplicada ao push:
 
 ```ts

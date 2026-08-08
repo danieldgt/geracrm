@@ -1,0 +1,79 @@
+# Ambiente de desenvolvimento local.
+# Sobe sem AWS, sem Railway e sem cartão — é o que destrava as migrations e o
+# desenvolvimento enquanto os passos externos correm.
+#
+#   docker compose up -d
+#   pnpm --filter @geracrm/api migrate
+#
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: geracrm-postgres
+    environment:
+      POSTGRES_USER: geracrm
+      POSTGRES_PASSWORD: geracrm_dev
+      POSTGRES_DB: geracrm
+      # Sem locale ICU: o ordenamento precisa bater com o de produção,
+      # senão índice e ORDER BY divergem entre ambientes.
+      LANG: C.UTF-8
+    command:
+      - postgres
+      # RLS é o coração do isolamento (ADR-001). Em dev, garantir que o dono da
+      # tabela TAMBÉM seja submetido às policies — senão o teste passa aqui e
+      # falha em produção.
+      - -c
+      - log_statement=none
+      - -c
+      - max_connections=100
+    ports:
+      # 5432 costuma estar ocupada por outro Postgres na máquina —
+      # o do drezz, ou um Testcontainers rodando. 5442 evita a colisão.
+      - "5442:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geracrm -d geracrm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Réplica de leitura — o analítico não compete com o inbox (stack §8).
+  # Em dev ela existe para o código nunca "esquecer" de usá-la.
+  postgres_replica:
+    image: postgres:17-alpine
+    container_name: geracrm-postgres-replica
+    environment:
+      POSTGRES_USER: geracrm
+      POSTGRES_PASSWORD: geracrm_dev
+      POSTGRES_DB: geracrm
+      LANG: C.UTF-8
+    ports:
+      - "5443:5432"
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+    profiles: ["replica"]
+
+  # Object storage compatível com S3 — mídia de conversa (INB-02).
+  # A mídia da Meta expira; guardar desde o dia 1 é requisito, não otimização.
+  minio:
+    image: minio/minio:latest
+    container_name: geracrm-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: geracrm
+      MINIO_ROOT_PASSWORD: geracrm_dev_secret
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+  postgres_replica_data:
+  minio_data:
