@@ -10,17 +10,24 @@
 **Entrega:** EP-01 (tenancy e usuários) · EP-02 (conector GeraCloud + API pública + carga histórica +
 idempotência) · EP-03 (frota de números via Embedded Signup) · EP-04 (cadastro unificado).
 
-**Critério de saída** (os quatro, simultaneamente):
+**Critério de saída** (os cinco, simultaneamente):
 
 | # | Critério | Como se prova |
 |---|---|---|
-| 1 | Base histórica do GeraCloud carregada **e reconciliada** | `conexao_erp_cobertura` com `carga_historica_estado='completa'` nos três fluxos; `mv_metricas_contato` batendo com contagem direta em `venda` |
+| 1 | Base histórica do GeraCloud carregada, **reconciliada (INV-57) e conciliada (RC)**, com **RC assinado pelo gestor comercial** | `conexao_erp_cobertura` com `carga_historica_estado='completa'` nos três fluxos; `mv_metricas_contato` batendo com contagem direta em `venda`; **e** `conciliacao-<data>.md` assinado, sem DIV bloqueante aberto (E2-16). ⚠️ **INV-57 e `cobertura='completa'` são consistência *interna*** — fecham perfeitamente numa carga que trouxe 60% das vendas. Quem prova o que faltou é o RC, contra o ERP |
 | 2 | Pelo menos 3 números **da Gera3** conectados, recebendo e enviando (ADR-015) | Mensagem entrante cria conversa e contato-lead; resposta dentro da janela chega ao aparelho; **e** um template aprovado inicia conversa com janela fechada (E3-15) |
-| 3 | Contato do ERP aparece no CRM com telefone e histórico corretos | Um CNPJ escolhido à mão: nomes, telefones, documentos, endereços e vendas conferidos linha a linha contra o ERP |
+| 3 | Contato do ERP aparece no CRM com telefone e histórico corretos | **RC-09 — 10 CNPJs estratificados** (grande, médio, inativo, sem documento, com duas grafias): nomes, telefones, documentos, endereços e vendas conferidos linha a linha contra o ERP |
 | 4 | Isolamento provado | Suíte de RLS com dois tenants verde em **todo** repositório, e o varredor de schema sem achado |
+| 5 | **Régua congelada** (MN-01) | `linha_base_metrica` com LB-01…LB-15 gravadas, `congelado_em` preenchido e conferido com o cliente; `tenant_marco` com `carga_historica_completa` e `linha_base_congelada`. ⚠️ É o único critério **irrecuperável**: LB-10…LB-12 fecham no primeiro corte e não reabrem |
 
-**Duração estimada:** ~6 semanas de desenvolvimento (ADR-015 — sem o piloto real dentro) — ⚠️ **desde que o registro na Meta comece na
-semana 0**. O prazo da Meta não é nosso e não paraleliza depois.
+**Duração estimada:** S0 de preparação + **~6 semanas de desenvolvimento** (ADR-015 — sem o piloto
+real dentro) — ⚠️ **desde que o registro na Meta comece na semana 0**. O prazo da Meta não é nosso e
+não paraleliza depois.
+
+⚠️ **A Onda 0 não termina com o cliente dentro.** O corte do primeiro número é o **primeiro bloco da
+Onda 1** e depende do inbox (EP-05) e da certificação prática de `entrada-do-primeiro-cliente` §5.4.
+O que **começa agora**, na S0, é o que é irrecuperável depois: a **ficha de entrada**, a **janela de
+sombra** (LB-10…LB-12, 2 semanas antes da ficha) e **M-13** (situação dos números na Meta).
 
 ---
 
@@ -58,6 +65,13 @@ resto é desenvolvível com a WABA da própria Gera3 em modo de desenvolvimento.
 | **M-06** | Configuração do **Embedded Signup** (`config_id`, permissões, redirect URIs) | Nós | M-05 | horas |
 | **M-07** | **App Review** — `whatsapp_business_management`, `whatsapp_business_messaging`, `business_management`, `instagram_business_manage_messages`, `instagram_business_basic` | **Meta** | M-06 **e o fluxo funcionando em URL pública** | **dias a semanas, com reprovações** |
 | **M-08** | Número de teste da Cloud API + WABA da Gera3 em modo dev | Nós | M-03 | minutos |
+| **M-13** | ⚠️ **Situação atual dos números do cliente na Meta** (`entrada` §1.F F-02): número novo, número em API Oficial na **WABA do concorrente** (⇒ portabilidade entre WABAs) ou número em WhatsApp Business App | **Cliente** (dono do BM) | Ficha de entrada (S0) | **até 3 semanas**, com terceiro não cooperativo |
+
+⚠️ **M-13 pode ser o caminho crítico real desta onda — acima da própria Meta.** Portabilidade entre
+WABAs não é Embedded Signup: ela depende de ação do **detentor atual da WABA**, que é o concorrente
+que está perdendo o cliente. Levantar em **T-6 (= S0)**. Descobrir na semana do corte que o número
+está preso na WABA do concorrente é o único atraso desta onda pior que o da Meta — e ele nem sequer
+tem plano B, porque número novo perde o reconhecimento da base.
 
 ### 1.2 ⚠️ O ciclo que trava quem não percebe
 
@@ -93,9 +107,11 @@ com o nome legal e o endereço visíveis.
 | **M-07** (permissões de Instagram) | Instagram Direct em escala | Nada da Onda 0 — Instagram é Onda 2/3 (EP-20). Pedir as permissões **junto** só para não fazer dois ciclos |
 | Método de pagamento do **cliente** na conta Meta dele | O número **do cliente** enviar | Nada nosso. É passo obrigatório do onboarding (ADR-002) e campo do painel de saúde |
 
-**Regra da onda:** o **piloto com cliente real** é o único item que fica atrás da Meta. Se M-05 não
-sair até a S6, o critério de saída nº 2 é atendido com **números da Gera3** e o piloto escorrega
-para a Onda 1 — sem escorregar mais nada.
+**Regra da onda (ADR-015):** o **piloto com cliente real não está nesta onda** — ele é o primeiro
+bloco da Onda 1. O critério de saída nº 2 é atendido com **números da Gera3**, por decisão, não por
+atraso. ⚠️ **Isto deixou de ser plano B: virou o plano.** Um atraso de M-05/M-07 agora atrasa a
+**Onda 1**, não a Onda 0 — e é exatamente por isso que M-04 e M-13 são abertos na S0 mesmo sem
+ninguém depender deles nesta onda.
 
 ### 1.5 Segundo caminho externo — acesso ao GeraCloud
 
@@ -137,7 +153,8 @@ Railway compartilha o mesmo `PROJECT_ID` e o mesmo blast radius de permissão; a
 | **I-07** | Cofre de variáveis por ambiente | Segredo da Meta, credencial do GeraCloud, chave de cifra das credenciais de tenant, `DATABASE_URL`, `DATABASE_REPLICA_URL`, Cognito, S3, Sentry DSN | Nenhum segredo em `.env` versionado; `.gitignore` cobre |
 | **I-08** | Domínios: `api.` / `app.` / `hom-api.` / `hom-app.` | Necessário para M-02 e para o webhook da Meta (HTTPS público) | Certificado válido e webhook da Meta verificado |
 | **I-09** | **Chave de cifra de credenciais de tenant** (INV-41) | Chave por ambiente, fora do banco, com procedimento de rotação escrito | Credencial de ERP gravada e lida cifrada; `SELECT` cru devolve bytes |
-| **I-10** | Alertas mínimos | Deploy falho, `preDeployCommand` falho, erro 5xx acima do limiar, fila de outbox parada, webhook da Meta com timeout | Alerta chega ao canal certo, com o ambiente no título |
+| **I-10** | Alertas mínimos | Deploy falho, `preDeployCommand` falho, erro 5xx acima do limiar, fila de outbox parada, webhook da Meta com timeout · **latência p95 do ERP > 2 s por 15 min (MT-03)** · **taxa de entrega por número < 95% em 1 h (MT-01)** · **outbox não processado > 2 min (MT-05)** | Alerta chega ao canal certo, com o ambiente no título. ⚠️ Os três novos exigem I-11 — sem série temporal eles não têm de onde ler |
+| **I-11** | ⚠️ **Destino de métrica de aplicação** (série temporal), um por ambiente | Decidir entre **(a)** tabelas de agregação no próprio Postgres com job de janela — barato, nosso, já sob RLS — ou **(b)** serviço gerenciado. Sentry é rastreamento de **erro**: ele não guarda p95 por 15 minutos nem dispara MT-03. ⚠️ *"MT-01…MT-05 têm consequência **automática** no produto (pausar disparo, escalar worker, avisar o cliente); sem série temporal, a consequência é uma pessoa lembrando"* — e `metricas-de-sucesso` §4 é categórico: contra-métrica que depende de alguém olhar o gráfico não protege nada | **MO-05 responde o p95 dos últimos 15 min por tenant**, e MT-01 pausa `canal_configuracao.disparo_pausado` sozinho |
 
 ### 2.2 ⚠️ A contradição do papel no Cognito, decidida aqui
 
@@ -204,10 +221,12 @@ infra/
 | **R-04** | `apps/console` Angular 21+ com login funcionando contra o Cognito | Login real em hom; Hosted UI **nunca** aparece |
 | **R-05** | `packages/conectores` com a **porta** (definida pelo nosso domínio) e a suíte de conformidade `describe.each` | Suíte roda contra um conector dublê e os `skip` são os esperados |
 | **R-06** | **Contrato de API** — lacuna 2.4 de `prontidao-para-inicio` | Documento curto: versionamento de rota, `{ itens, cursorProximo, temMais }`, formato de erro tipificado, contrato do canal SSE. ⚠️ Escrever **antes** da primeira rota, não depois de vinte |
-| **R-07** | `infra/runner` — aplicador de migrations com `pg_advisory_lock` e `schema_migrations` | Roda no CI a cada PR e é **o mesmo** binário do `preDeployCommand` |
-| **R-08** | CI: `pnpm lint typecheck test` + runner de migrations + **os varredores de schema** (§5.6) | Nenhum merge em `main` sem os checks |
+| **R-07** | `infra/runner` — aplicador de migrations com `pg_advisory_lock` e `schema_migrations`. ⚠️ O runner também **emite** `infra/migrations/schema-atual.sql` (dump **só de estrutura**), versionado a cada migration aplicada | Roda no CI a cada PR e é **o mesmo** binário do `preDeployCommand`; `schema-atual.sql` é regravado no mesmo PR da migration, e é ele que o CI usa como base do segundo cenário de R-08 |
+| **R-08** | **CI completo** — a lista é a de `processo-de-trabalho` §6.1, não um subconjunto dela: `lint` · `typecheck` · `test` · **`build` de todos os apps (Turborepo)** · runner de migrations **em dois cenários — banco vazio e a partir de `schema-atual.sql`** · os **oito varredores de schema** (§5.6) · **teste de isolamento de canal SSE** (dois tenants, permissão revogada, payload sem conteúdo) · **suíte de conformidade dos conectores** como **gate**, não só como tarefa (E2-02) · verificador de watch path (R-09) | Nenhum merge em `main` sem os checks. ⚠️ **Alvo: bloco obrigatório em < 8 min** (`processo-de-trabalho` §6.2) — CI lento é revisão pulada. ⚠️ *"Runner rodando só contra banco vazio é armadilha"*: migration que assume tabela vazia passa verde e quebra no `preDeployCommand`, com a versão anterior servindo |
 | **R-09** | `infra/railway/watch-paths.json` + verificador no CI | Ver §3.3 |
 | **R-10** | Versão exibida no rodapé, com rótulo de ambiente que **nunca** aparece em produção | `hom` mostra "hom"; `prod` não mostra nada |
+| **R-11** | ⚠️ **Script de anonimização versionado** — telefone, CNPJ/CPF, nome, endereço e corpo de mensagem. Dep.: nada. **S0**, porque E2-17 roda na S1 sobre a saída dele | ⚠️ **DETERMINÍSTICO por tenant** (mesma entrada ⇒ mesma saída, com sal por tenant): o mesmo CNPJ em N cadastros precisa continuar sendo o mesmo N. **Anonimização aleatória destrói B-03 e B-04 do perfilamento** — cardinalidade e duplicidade são exatamente o que E2-17 mede, e ruído aleatório as apaga. `dado o mesmo CNPJ em 3 linhas, quando anonimiza, então as 3 continuam iguais entre si e diferentes do original`. ⚠️ **A anonimização é nossa e por script — nunca "eles mandam anonimizado", nunca à mão** (`processo-de-trabalho` §8.3, `entrada` G-04) |
+| **R-12** | **Bloco 1 da biblioteca de componentes + pipeline de tokens** — botão, campo, badge, esqueleto, vazio, erro, toast, painel, cabeçalho de tela; e `tokens.json` → CSS custom properties + preset NativeWind + `tokens.d.ts` + **lint que proíbe cor literal** | As **cinco telas do console da §7** (login, recuperação, convite, onboarding, lista de contatos) são construídas **sem um `#hex` no código**. ⚠️ Sem R-12 elas nascem com cor literal e a Onda 1 as refaz — e o lint que a `biblioteca-componentes` §0.1 chama de mecanismo nº 1 chega depois do código que ele deveria barrar |
 
 ### 3.2 ⚠️ `packages/shared` é TypeScript puro — sem exceção
 

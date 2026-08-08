@@ -1,0 +1,29 @@
+{
+  "name": "@geracrm/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "comment": "TypeScript PURO. Consumido por Angular, Expo e API ao mesmo tempo — um import de framework quebra dois dos três consumidores.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
