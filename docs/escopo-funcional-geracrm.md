@@ -255,7 +255,7 @@ O coração analítico. É o que separa CRM de caixa de entrada.
 | RFV-07 | **Visão de Mercado** — Venn cruzando Base do CRM × Contatos de WhatsApp × Clientes do ERP, com interseções | T | 3 |
 | RFV-08 | **Qualidade cadastral** da base: % com CPF, % com CNPJ, % não informado | T | 3 |
 | RFV-09 | Distribuição RFV da base inteira, com filtro por filial e vendedor | T | 3 |
-| RFV-10 | **Predição de churn** — probabilidade de o cliente parar de comprar, com janela e motivo | D,★ | 4 |
+| RFV-10 | **Predição explicável de atraso** — `dias_sem_comprar ÷ média do próprio cliente`, com o motivo em texto. ⚠️ Comparado ao histórico DELE, nunca a uma média geral: quem compra a cada 90 dias não está atrasado aos 60. Modelo estatístico fica para depois de medir esta versão (`avaliacao-churn-cdp.md`) | D,★ | **3** |
 | RFV-11 | **Valor esperado de reativação** por cliente — quanto vale falar com ele hoje | ★ | 4 |
 | RFV-12 | Mapa de clientes (geolocalização) e lista de cidades / cobertura | T | 3 |
 
