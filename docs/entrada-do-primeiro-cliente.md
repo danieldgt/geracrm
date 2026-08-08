@@ -279,7 +279,7 @@ medir é a origem do go-live que vira madrugada.
 |---|---|---|---|
 | **0** | S3–S5 | Número de teste da Gera3 (M-08), em homologação | Fluxo completo sem cliente |
 | **1** | **T** | **1 número piloto** | Critérios D+7 da §6.2 |
-| **2** | T+1 | +2 números da mesma filial | ✅ Fecha o **critério de saída nº 2** da Onda 0 (3 números). Gate D+7 |
+| **2** | T+1 | +2 números da mesma filial | Amplia o piloto. ⚠️ **Não** fecha critério da Onda 0 — pelo ADR-015 ela já fechou com números da Gera3. Gate D+7 |
 | **3** | T+2 | Restante da filial-sede | Gate D+7 |
 | **4** | T+3…T+5 | Uma filial por semana | Gate D+7 por filial |
 
@@ -464,10 +464,10 @@ lista: ela divergiria da primeira no primeiro ajuste. O que cabe aqui é **quand
 | Bloco | O que | Fonte | Quando | Reconstituível? |
 |---|---|---|---|---|
 | **LB-01…LB-09** | Receita, compradores ativos, recompra 90 d, tempo até o 2º pedido, ticket **e mediana**, intervalo entre compras, foto RFV, qualidade cadastral, clientes "invisíveis" | **ERP**, sobre a carga histórica — **24 meses**, e ⚠️ **nunca fora de `conexao_erp_cobertura`** (INV-56) | Quando der, depois da carga | ✅ sim |
-| **LB-10…LB-12** | 🔴 **Conversas/dia por vendedora · tempo até a primeira resposta (mediana e p90) · % de entrantes sem resposta em 24 h** | **Janela de sombra** — 2 semanas com a equipe ainda no sistema antigo: contagem diária de conversas, **amostra de 30 conversas por vendedora** para tempo de resposta, contagem de sem resposta às 18h. Se o antigo exporta, a exportação vem primeiro; se o cliente opera em WhatsApp puro, a **exportação de conversa do próprio aplicativo** carrega os horários e reconstrói LB-11/LB-12 melhor que qualquer declaração | **T-8**, 2 semanas **antes** da ficha de entrada | 🔴 **não** |
+| **LB-10…LB-12** | 🔴 **Conversas/dia por vendedora · tempo até a primeira resposta (mediana e p90) · % de entrantes sem resposta em 24 h** | **Medição do antes** — 2 semanas com a equipe ainda no sistema antigo: contagem diária de conversas, **amostra de 30 conversas por vendedora** para tempo de resposta, contagem de sem resposta às 18h. Se o antigo exporta, a exportação vem primeiro; se o cliente opera em WhatsApp puro, a **exportação de conversa do próprio aplicativo** carrega os horários e reconstrói LB-11/LB-12 melhor que qualquer declaração | **ADR-017**: 2 semanas, **encerrando antes do anúncio à equipe**. Independe da onda | 🔴 **não** |
 | **LB-13…LB-15** | Volume e custo de disparo atual · custo das ferramentas atuais · nº de vendedoras, números e horas/dia | Fatura do BSP, contratos, declarado (como **faixa**, nunca número) | T-6, com a ficha | 🔴 **não** |
 
-⚠️ **A "amostra manual de 3 dias" que este documento pedia foi substituída pela janela de sombra de
+⚠️ **A "amostra manual de 3 dias" que este documento pedia foi substituída pela medição do antes de
 2 semanas.** Três dias não distinguem segunda-feira de sexta em atacado de moda, e a **média** que
 ela produzia é a estatística errada: uma conversa esquecida por 14 horas move a média e não move a
 mediana. O instrumento é **mediana e p90 sobre 30 conversas por vendedora**, com a `fonte` gravada
@@ -475,7 +475,7 @@ em `linha_base_metrica` (`export_antigo` \| `medido` \| `declarado`).
 
 ⚠️ **A sombra roda ANTES de a equipe saber da mudança.** Depois do anúncio, o tempo de resposta
 melhora sozinho — e a Onda 1 perde o crédito por uma melhora que já tinha acontecido. Como T-6 já é
-uma conversa com o gestor sobre carteira e vendedoras (§1.C), **T-8 é o último momento em que a
+uma conversa com o gestor sobre carteira e vendedoras (§1.C), **o encerramento da medição é o último momento em que a
 medição ainda é do estado anterior**.
 
 ⚠️ **Toda comparação posterior é contra o mesmo mês do ano anterior, sazonalizada** — nunca contra
@@ -546,7 +546,7 @@ por quê.**
 
 | Semana | Marco | Nós | Cliente | ERP | Meta |
 |---|---|---|---|---|---|
-| **T-8** | 🔴 **Janela de sombra abre** — 2 semanas medindo o **sistema antigo** (LB-10, LB-11, LB-12), **antes** da ficha de entrada | Entregar o instrumento e a planilha de contagem; treinar quem vai medir; congelar o método antes de começar | **Uma pessoa, ~1 h/dia**: contagem diária de conversas, 30 conversas por vendedora, sem resposta às 18h | — | — |
+| **A-2** | 🔴 **Medição do antes abre** (ADR-017 — âncora é o anúncio, não a sigla) — 2 semanas medindo o **sistema antigo** (LB-10, LB-11, LB-12), **antes** da ficha de entrada | Entregar o instrumento e a planilha de contagem; treinar quem vai medir; congelar o método antes de começar | **Uma pessoa, ~1 h/dia**: contagem diária de conversas, 30 conversas por vendedora, sem resposta às 18h | — | — |
 | **T-6** | Ficha de entrada + cópia da base | Conduzir §1.A/C/E/F/G; abrir **M-13** (situação dos números na Meta) | Assinar; entregar cópia (M-11); nomear decisor e multiplicadora | Liberar credenciais de homologação (M-10) | Business Verification já correndo (M-04) |
 | **T-5** | **Perfilamento entregue** + definições fechadas | Rodar §1.B; entregar `perfilamento.md`, `linha-de-base.md`, `o-que-nao-migra.md` | ⚠️ Fechar **definição de "valor da venda"** (D-07) e a regra de cancelamento (D-06). Assinar `o-que-nao-migra` | Responder D-01…D-06 | Tech Provider (M-05) |
 | **T-4** | **Ensaio ENS-1 de carga** em homologação, sobre a base real | Medir duração; gerar RC v0 | Entregar de-para de vendedoras | Ajustar filtros/consultas conforme DIV | App Review submetido (M-07) |
@@ -559,7 +559,7 @@ por quê.**
 | **T+3…T+5** | Uma filial por semana, com gate D+7 | — | — | — | — |
 | **T+6** | **D+30 do piloto** · conciliação final · antigo em leitura · retrospectiva | Assinar RC final; fechar o diário | Colocar o antigo em leitura (⚠️ não cancelar) | — | — |
 
-⚠️ **T-8 é a única linha deste cronograma que não pode escorregar para a direita.** Todas as outras
+⚠️ **A medição do antes é a única linha deste cronograma que não pode escorregar para a direita** — e ela não se ancora em `T`, e sim no anúncio à equipe (ADR-017). Todas as outras
 custam prazo quando atrasam; esta custa **o dado**. LB-10, LB-11 e LB-12 são 🔴 não reconstituíveis
 (`metricas-de-sucesso` §1.2): a janela fecha no `primeiro_corte` e não reabre. E ela precisa vir
 **antes de T-6**, porque T-6 já é uma conversa com o gestor sobre carteira, vendedoras e turnover
@@ -587,8 +587,8 @@ marco verificável no caminho.
 
 | O que muda | Detalhe |
 |---|---|
-| **Este cronograma (T-8…T+6) é executado na Onda 1**, não na Onda 0 | O corte do primeiro número é o **primeiro bloco da Onda 1**, e depende do inbox (EP-05) e da certificação prática da §5.4 — cinco das seis ações certificadas são Onda 1 |
-| ⚠️ **T-8 e T-6 começam AGORA, mesmo assim** | A janela de sombra e **M-13** medem/destravam o **estado anterior**. Adiá-los para a Onda 1 é perdê-los: a sombra fecha no primeiro corte, e a portabilidade entre WABAs depende de um terceiro hostil com até 3 semanas de espera |
+| **Este cronograma é executado na Onda 1** (a medição do antes, porém, roda antes e independe da onda — ADR-017), não na Onda 0 | O corte do primeiro número é o **primeiro bloco da Onda 1**, e depende do inbox (EP-05) e da certificação prática da §5.4 — cinco das seis ações certificadas são Onda 1 |
+| ⚠️ **A medição do antes e M-13 começam AGORA, mesmo assim** | Os dois medem/destravam o **estado anterior**. Adiá-los para a Onda 1 é perdê-los: a medição fecha no primeiro corte e não reabre (ADR-017), e a portabilidade entre WABAs depende de um terceiro que está perdendo o cliente, com até 3 semanas de espera |
 | **A carga histórica e a conciliação permanecem na Onda 0** | São o critério de saída nº 1, e é o que dá seis semanas de sinal verificável |
 | ⚠️ **O plano da Onda 1 deixa de ser macro** | É nela que o cliente entra; ela precisa do detalhe de `plano-onda-0.md`, com semanas — `plano-ondas-1-4.md` §3 já a abre com a transição como **escopo da onda** |
 

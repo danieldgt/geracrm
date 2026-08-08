@@ -105,7 +105,7 @@ consegue responder dentro da janela, reconhecer janela fechada e enviar template
 ouvir um áudio, abrir a ficha e registrar um comentário (certificação de `entrada` §5.4) — e **cinco
 dessas seis ações são construídas aqui**.
 
-⚠️ **Duas linhas do cronograma de `entrada` NÃO esperam a Onda 1 começar:** a **janela de sombra**
+⚠️ **Duas linhas do cronograma de `entrada` NÃO esperam a Onda 1 começar:** a **medição do antes**
 (T-8) e **M-13** (situação dos números na Meta, T-6) rodam ainda na Onda 0. A sombra mede o estado
 **anterior** e fecha no `primeiro_corte`; a portabilidade entre WABAs depende de um terceiro hostil,
 com até três semanas de espera. Adiar qualquer uma para o início desta onda é perdê-la.
@@ -153,7 +153,7 @@ depois: montar a lista com fetch e "ligar o tempo real depois" é reescrever o e
 | **M1.6** | **Piloto paralelo** | 2 vendedoras usando o GeraCRM em paralelo à ferramenta antiga por 1 semana, com lista aberta de "o que a antiga faz e a nossa não" |
 | **M1.7** | **`ultimo_corte`** | Frota inteira conectada; operação inteira sem a ferramenta antiga. ⚠️ O marco administrativo de encerrar o contrato antigo é **`abandono_sistema_antigo`**, e ele vem depois — nunca antes de D+30 do último lote (ADR-014) |
 
-⚠️ **M1.6 chama-se "piloto paralelo", não "piloto sombra".** *"Janela de sombra"*
+⚠️ **M1.6 chama-se "piloto paralelo", não "piloto sombra".** *"Medição do antes"*
 (`metricas-de-sucesso` §1.3) é a operação **oposta**: medir o **sistema antigo** à mão, por 2
 semanas, **antes** de a equipe saber da mudança — e ela acontece lá atrás, em T-8. Aqui, duas
 vendedoras **usam o GeraCRM**. Uma palavra para "medir o velho" e "usar o novo" é a confusão que
@@ -169,7 +169,7 @@ Não é "o inbox está pronto". São fatos constatáveis:
 | **2** | A ferramenta antiga teve **acesso revogado ou contrato cancelado** | Fato administrativo, com data |
 | **3** | **Zero conversa órfã**: toda conversa com mensagem entrante no período tem `atendimento` com dono ou está visível na fila | Consulta ao banco no fechamento |
 | **4** | **Zero evento entregue a tenant errado** e suíte de isolamento de canal verde | `geracrm-tempo-real` + log do período |
-| **5** | **Linha de base já congelada na Onda 0** (MN-01) e **conferida com o cliente**. Na Onda 1 ela é **usada**, não capturada | ⚠️ LB-10…LB-12 (conversas/dia, tempo até primeira resposta, % sem resposta) **não são reconstituíveis** (`metricas-de-sucesso` §1.1): a janela de sombra fecha no `primeiro_corte`, que acontece **dentro** desta onda. Capturá-la aqui é capturar o produto medindo a si mesmo. O que esta onda entrega é o **depois**: MO-07 e MO-08 contra LB-11 e LB-12 |
+| **5** | **Linha de base já congelada na Onda 0** (MN-01) e **conferida com o cliente**. Na Onda 1 ela é **usada**, não capturada | ⚠️ LB-10…LB-12 (conversas/dia, tempo até primeira resposta, % sem resposta) **não são reconstituíveis** (`metricas-de-sucesso` §1.1): a medição do antes fecha no `primeiro_corte`, que acontece **dentro** desta onda. Capturá-la aqui é capturar o produto medindo a si mesmo. O que esta onda entrega é o **depois**: MO-07 e MO-08 contra LB-11 e LB-12 |
 
 ### 3.4 Dependências externas
 

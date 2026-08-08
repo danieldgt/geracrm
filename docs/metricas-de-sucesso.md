@@ -95,7 +95,7 @@ gravada:
 | Tática | Como | Fonte gravada | Custo |
 |---|---|---|---|
 | **1. Exportação** | Relatório do Tailor / planilha do disparador, importado como CSV | `export_antigo` | Horas. ⚠️ Conferir **cobertura** antes de usar: relatório que só tem conversa encerrada não mede sem resposta |
-| **2. Janela de sombra** | 2 semanas com a equipe ainda no sistema antigo; alguém mede à mão: contagem diária de conversas, amostra de 30 conversas por vendedora para tempo de resposta, contagem de sem resposta às 18h | `medido` | Uma pessoa, ~1 h/dia. **Não consome engenharia** e roda em paralelo à carga histórica |
+| **2. Medição do antes** | 2 semanas com a equipe ainda no sistema antigo; alguém mede à mão: contagem diária de conversas, amostra de 30 conversas por vendedora para tempo de resposta, contagem de sem resposta às 18h | `medido` | Uma pessoa, ~1 h/dia. **Não consome engenharia** e roda em paralelo à carga histórica |
 | **3. Declarado** | O gestor responde. Registrar como **faixa** ("30 a 60 min"), nunca como número | `declarado` | Minutos, e vale o que vale |
 
 ⚠️ **Se o cliente opera em WhatsApp puro, existe uma quarta fonte quase gratuita:** a exportação de

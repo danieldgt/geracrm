@@ -241,7 +241,7 @@ em outra aba).
 
 **Decisão**: **corte seco por número**, nunca por cliente inteiro. Um número piloto primeiro, o
 restante da frota depois. Antes do corte de cada número:
-- a **janela de sombra** já rodou (medição de linha de base — sem ela não há comparação depois);
+- a **medição do antes** já encerrou (ADR-017) — sem ela não há comparação depois;
 - os templates estão aprovados e sincronizados (ADR/E3-15) — ⚠️ no minuto do corte todas as janelas
   estão fechadas;
 - a carga histórica está **conciliada**, não apenas importada.
@@ -272,12 +272,72 @@ histórica, conciliação, canal e template são exatamente o que precisa ser pr
 - Critério de saída nº 2 da Onda 0 passa a dizer "números da Gera3", e ganha a prova do template
   (E3-15) — no corte, todas as janelas nascem fechadas.
 - ⚠️ **O plano da Onda 1 deixa de ser macro e precisa ser detalhado**, no formato de
-  `plano-onda-0.md`: é nela que o cliente entra, com carga conciliada, janela de sombra, corte por
+  `plano-onda-0.md`: é nela que o cliente entra, com carga conciliada, medição do antes, corte por
   número (ADR-014) e treinamento.
 - `entrada-do-primeiro-cliente.md` passa a ser executado **na Onda 1**; o levantamento prévio e a
-  janela de sombra continuam começando **agora**, porque medem o estado anterior e são
+  medição do antes continuam começando **agora**, porque medem o estado anterior e são
   irrecuperáveis depois.
 - O que era "Plano B" do risco nº 3 (prazo da Meta) vira o plano.
+
+## ADR-016 — Chave primária composta `(tenant_id, id)`
+**Contexto**: sendo multi-tenant (ADR-001), toda tabela de domínio já carrega `tenant_id`. Restava
+decidir se a chave primária é o `id` sozinho (UUID v7) ou o par `(tenant_id, id)`.
+
+**Decisão**: **chave primária composta `(tenant_id, id)`** em toda tabela de domínio. Toda chave
+estrangeira entre tabelas de domínio também é composta e carrega o `tenant_id`.
+
+**Por quê**:
+- ⚠️ **Isolamento deixa de depender só do RLS.** Com a chave composta, é impossível referenciar um
+  registro sem dizer de qual tenant ele é — a FK não fecha. Uma segunda barreira, estrutural, que
+  não depende de a policy estar correta nem de alguém lembrar do `WHERE`.
+- **Localidade dos dados.** O índice agrupa fisicamente as linhas de cada tenant, e as consultas do
+  produto são sempre "deste tenant" — inbox, kanban, contatos. Menos páginas lidas por consulta.
+- **Um FK cruzando tenants vira erro de escrita, não bug em produção.**
+
+**Custo aceito**: FKs compostas deixam o schema e as queries mais verbosos, e algumas ferramentas
+lidam pior com elas. ⚠️ O custo é de digitação; o benefício é de isolamento — e o isolamento é o
+requisito que este produto não pode errar.
+
+**Consequências**:
+- As migrations `0001` em diante nascem com a chave composta. **Reverter depois da `0012` seria
+  reescrita de schema** — é o motivo de a decisão vir antes da primeira migration.
+- Tabelas globais sem `tenant_id` (ex.: `plano`) seguem com chave simples — a lista fechada delas
+  está em `modelo-de-dados.md` §7.2.
+- Entidades com chave local (`contato_documento`, `contato_endereco`) usam `seq` dentro do
+  agregado, não UUID — já previsto no modelo §5.3.
+- O varredor de schema ganha uma verificação: **tabela de domínio sem `tenant_id` na PK falha o CI**.
+
+## ADR-017 — Medição do antes: 2 semanas, encerrando antes do anúncio à equipe
+**Contexto**: para afirmar depois que o produto melhorou a operação, é preciso medir como ela
+funciona **antes**. Três indicadores (LB-10/11/12): conversas por vendedora por dia, tempo até a
+primeira resposta, e percentual de entrantes sem resposta em 24h.
+
+⚠️ **É o único dado irrecuperável do projeto.** Depois da virada, a operação antiga não existe mais
+e não há de onde tirar o número retroativamente.
+
+**O conflito que esta decisão resolve**: dois planos ancoravam a medição em siglas de cronograma —
+`plano-onda-0` §5.5 em "antes da S0" e `plano-onda-1`/`entrada` em "T-8". Quando o ADR-015 moveu o
+corte da Onda 0 para a Onda 1, as duas passaram a apontar para momentos com **14 semanas de
+distância**, e ninguém reancorou.
+
+**Decisão**: a medição dura **2 semanas** e é ancorada em um **fato, não em uma sigla**:
+
+> **Encerra antes de a equipe do cliente ser informada da migração.** Durante a medição, apenas o
+> dono do negócio sabe.
+
+**Por quê**: equipe que se sabe observada responde mais rápido do que responderia. Isso produz o
+pior resultado possível — o "antes" fica artificialmente bom e, na comparação, **o produto parece
+ter piorado a operação**. A medição viraria arma contra o próprio produto.
+
+**Consequências**:
+- ⚠️ O anúncio à equipe passa a ser um **marco de cronograma**, com data, e não pode acontecer antes
+  do encerramento da medição. Quem combina isso é o dono do negócio, não a gerência de vendas.
+- A medição é **independente da onda**: pode rodar durante a Onda 0, desde que a condição acima
+  valha. Não espera o corte.
+- Custo: **uma pessoa, ~1 h/dia, 2 semanas** — contagem diária de conversas, amostra de 30 conversas
+  por vendedora e contagem de sem-resposta às 18h.
+- O termo **"janela de sombra"** sai dos documentos. Passa a ser **"medição do antes"** — jargão que
+  não explica nada custa reunião, e custou uma.
 
 ## ADR-011 — Convenções
 Domínio em português (`Conversa`, `Pedido`, `Campanha`), infraestrutura em inglês, comentários em

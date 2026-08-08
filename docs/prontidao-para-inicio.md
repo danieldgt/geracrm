@@ -24,7 +24,7 @@ desenho — ela entrega dado entrando e canal em pé. O console chega na Onda 1.
 
 | # | O que | Por que trava | Esforço |
 |---|---|---|---|
-| **N-1** | **Data da janela de sombra**, e comunicá-la ao cliente | ⚠️ **O único dado irrecuperável do projeto.** Dois planos nossos discordam em 14 semanas: `plano-onda-0` §5.5 diz ≈T-22, `plano-onda-1` e `entrada` §7 dizem T-8. Uma leitura mede 5 meses antes do corte (sazonalidade contamina); a outra mede depois de a equipe já saber (comportamento muda) | Decisão |
+| **N-1** | **Data da medição do antes**, e comunicá-la ao cliente | ⚠️ **O único dado irrecuperável do projeto.** Dois planos nossos discordam em 14 semanas: `plano-onda-0` §5.5 diz ≈T-22, `plano-onda-1` e `entrada` §7 dizem T-8. Uma leitura mede 5 meses antes do corte (sazonalidade contamina); a outra mede depois de a equipe já saber (comportamento muda) | Decisão |
 | **N-2** | **PoC da PK composta `(tenant_id, id)`** + ADR-016 | Bloqueia a migration `0001` e tudo depois. ⚠️ Revisar isso depois da `0012` é reescrita de schema | 1–2 dias |
 | **N-3** | Corrigir os **4 resíduos do ADR-015** | O critério de saída nº 5 da Onda 0 hoje **não fecha**: exige LB-07, que é foto do dia do primeiro corte (Onda 1) sobre job de RFV (Onda 2). Mais o `T+1` que ainda diz "fecha o critério nº 2 da Onda 0" e a onda divergente de RFV-08 e PLT-11 | Horas |
 | **N-4** | **Política de privacidade e termos** | ⚠️ **Está no caminho crítico externo e ninguém tinha notado:** o App Review da Meta (M-07) exige a URL pública. Sem isso, M-07 não é submetido | Jurídico |
@@ -49,7 +49,7 @@ HOJE — quatro coisas, em paralelo, nenhuma é código
   ① T-1  iniciar o registro na Meta ............... semanas de espera, parado há dias
   ② T-3  pedir doc e credenciais do GeraCloud ..... bloqueia EP-02 inteiro
   ③ T-2  perguntar ao cliente sobre os números .... define entrada vs. portabilidade
-  ④ N-1  decidir a data da janela de sombra ....... irrecuperável
+  ④ N-1  decidir a data da medição do antes ....... irrecuperável
 
 ESTA SEMANA
   ⑤ N-2  PoC da PK composta + ADR-016 ............. destrava a migration 0001
@@ -88,7 +88,7 @@ a Onda 1, e os documentos que apontavam para esse marco não foram reancorados.
 
 ⚠️ **A lição é sobre datas relativas.** "T-8" e "antes da S0" pareciam âncoras estáveis e não eram —
 `T` mudou de onda e as duas passaram a significar coisas diferentes. Onde a data importa de verdade
-(a janela de sombra, que é irrecuperável), a âncora precisa ser **um fato, não uma sigla**: *duas
+(a medição do antes, que é irrecuperável), a âncora precisa ser **um fato, não uma sigla**: *duas
 semanas antes de a equipe do cliente saber que a migração vai acontecer*.
 
 ---

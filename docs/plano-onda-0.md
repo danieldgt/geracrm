@@ -438,7 +438,7 @@ teste automatizado.**
 
 | Fora do quadro | Quando | Por quê |
 |---|---|---|
-| **Janela de sombra** (LB-10, LB-11, LB-12) | **começa 2 semanas ANTES da ficha de entrada** — ou seja, antes da S0 | ⚠️ É o único dado **irrecuperável** do projeto: a janela fecha no primeiro corte e não reabre. E ela precisa rodar **antes de a equipe saber da mudança** — depois do anúncio o tempo de resposta melhora sozinho, e a Onda 1 perde o crédito por uma melhora que já tinha acontecido. Custo: uma pessoa do cliente, ~1 h/dia. **Não consome engenharia** |
+| **Medição do antes** (LB-10, LB-11, LB-12) | **começa 2 semanas ANTES da ficha de entrada** — ou seja, antes da S0 | ⚠️ É o único dado **irrecuperável** do projeto: a janela fecha no primeiro corte e não reabre. E ela precisa rodar **antes de a equipe saber da mudança** — depois do anúncio o tempo de resposta melhora sozinho, e a Onda 1 perde o crédito por uma melhora que já tinha acontecido. Custo: uma pessoa do cliente, ~1 h/dia. **Não consome engenharia** |
 | **M-13** (situação dos números na Meta) | **S0**, junto da ficha | Até 3 semanas de espera com um terceiro não cooperativo — ver §1.1 e o risco nº 10 |
 
 ### 5.6 Os varredores de schema (E1-08) — invariantes que testes de unidade não pegam

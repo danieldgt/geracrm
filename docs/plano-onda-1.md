@@ -101,7 +101,7 @@ quando, quem e o que prova.**
 
 | # | Item | Quando rodou | Se não rodou |
 |---|---|---|---|
-| **TX-02** | **Janela de sombra** (LB-10, LB-11, LB-12) — 2 semanas medindo o **sistema antigo**, antes de a equipe saber da mudança | **T-8, na Onda 0** | 🔴 **Não há remédio.** A janela fecha no `primeiro_corte` e não reabre. Sem ela, MO-07 e MO-08 desta onda não têm contra o quê ser lidos, e toda melhora vira opinião. ⚠️ **É o único item deste plano que pode inviabilizar o critério nº 7 antes da primeira linha de código** |
+| **TX-02** | **Medição do antes** (LB-10, LB-11, LB-12) — 2 semanas medindo o **sistema antigo**, antes de a equipe saber da mudança | **ADR-017** — 2 semanas encerrando antes do anúncio à equipe; roda durante a Onda 0 | 🔴 **Não há remédio.** A janela fecha no `primeiro_corte` e não reabre. Sem ela, MO-07 e MO-08 desta onda não têm contra o quê ser lidos, e toda melhora vira opinião. ⚠️ **É o único item deste plano que pode inviabilizar o critério nº 7 antes da primeira linha de código** |
 | **TX-01** | **Ficha de entrada** (`entrada` §1.A/C/D/E/F/G) assinada | T-6, na Onda 0 | Sem ela não existe data de go-live — e o dimensionamento do corte (filiais, vendedoras, números) é chute |
 | **M-13** | Situação dos números na Meta (F-02) | T-6, na Onda 0 | ⚠️ Portabilidade entre WABAs depende do **concorrente que está perdendo o cliente**, com até 3 semanas de espera. Descobrir agora é atrasar o corte, não o desenvolvimento |
 | **MN-01** | Linha de base congelada com `congelado_em` e conferida com o cliente | Onda 0 | Critério de saída nº 5 da Onda 0 — se ficou aberto, ele é dívida **desta** onda, e vence antes de S7 |
@@ -288,7 +288,7 @@ reescrever o estado da tela inteira (`plano-ondas-1-4` §3.1).
 ## 6. Métricas — o que passa a ser medido
 
 ⚠️ **A linha de base não é capturada nesta onda: ela foi congelada na Onda 0 (MN-01) e aqui é
-usada.** LB-10, LB-11 e LB-12 vieram da janela de sombra e 🔴 **não são reconstituíveis**.
+usada.** LB-10, LB-11 e LB-12 vieram da medição do antes e 🔴 **não são reconstituíveis**.
 
 | Bloco | Métricas que começam a ser medidas | Contra o quê | ⚠️ |
 |---|---|---|---|
