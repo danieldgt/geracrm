@@ -1,124 +1,101 @@
-# Prontidão para início
+# Próximos passos e o que falta
 
-> Estado em 08/08/2026. Substitui a versão de 07/08, que descrevia um estado anterior ao
-> planejamento (achado M-01 da revisão de consistência).
-
----
-
-## 1. Resposta curta
-
-| | |
-|---|---|
-| **Onda 0** | ✅ **Planejamento completo.** O que falta é execução — e o item mais urgente não depende de código |
-| **Ondas 1–4** | ⚠️ Backlog definido (*o quê*), plano de execução ausente (*como e em que ordem*) |
-| **Lacunas fora do backlog** | 🔴 Três, e nenhuma estava mapeada — §4 |
-
-⚠️ **O caminho crítico continua sendo o registro na Meta**, e ele não avançou nenhum dia desde que
-foi identificado. Business Verification → Tech Provider Program → App Review leva semanas, não
-depende de nós e bloqueia a Onda 1 inteira.
+> Estado em 08/08/2026, depois da revisão final. Este documento é reescrito a cada mudança de
+> estado — se a data acima não for de hoje, desconfie dele.
 
 ---
 
-## 2. O que está pronto
+## 1. Onde estamos
 
-| Artefato | Cobertura |
-|---|---|
-| `estudo-crms-whatsapp` · `inventario-funcionalidades-referencia` · `concorrentes-tailor` | Descoberta e mercado |
-| `escopo-funcional-geracrm` | ~150 funcionalidades, 15 módulos, 5 ondas |
-| `backlog-epicos-geracrm` | 28 épicos, backlog por onda, integração Meta e Instagram |
-| `modelo-de-dados` | 64 entidades, 60 invariantes com dono, 22 agregados, tabelas e índices |
-| `contrato-api` | Rotas por contexto, cursor, erros tipificados, SSE, ingestão pública, porta de conector |
-| `especificacao-telas` | 7 telas de operação, com os cinco estados e as transições |
-| `especificacao-telas-entrada` | Login, convite, equipe, frota, planos e onboarding do tenant |
-| `cenarios-bdd` | Ondas 0–1 completas; 60/60 invariantes com cenário |
-| `plano-onda-0` | Caminho crítico, infra, esqueleto, migrations `0001`–`0010`, tarefas por épico |
-| `stack-arquitetura` · `decisoes` · `arquitetura-visual` | Stack, 12 ADRs, 11 diagramas |
-| `identidade-visual` + `tokens.json` | Paleta, tipografia, elemento assinatura, temas claro e escuro |
-| `.claude/skills` | 35 skills: regras de código, metodologia e stack |
+**O planejamento acabou.** Ondas 0 e 1 detalhadas, 2–4 em nível macro, 16 ADRs, modelo com 70
+entidades e 60 invariantes, contrato de API, telas, cenários BDD, identidade visual e 35 skills.
+
+**O código começou.** `packages/shared` com as duas primeiras regras de domínio (janela de 24h e
+normalização de telefone), 14 testes verdes.
+
+⚠️ **Não há sistema para acessar.** Sem servidor, banco, API ou tela. A Onda 0 não tem tela por
+desenho — ela entrega dado entrando e canal em pé. O console chega na Onda 1.
 
 ---
 
-## 3. O que falta para começar a Onda 0 — tudo é execução
+## 2. 🔴 O que trava, hoje
 
-| # | Item | Depende de | Prazo |
+### 2.1 Depende só de nós — e nada disso é código
+
+| # | O que | Por que trava | Esforço |
 |---|---|---|---|
-| **1** 🔴 | **Registro na Meta** — Business Verification, Tech Provider Program, App Review | **Meta** | Semanas. **Começar hoje** |
-| **2** | Provisionar Cognito, Railway (API + Postgres + réplica), bucket, Sentry, três ambientes | Nós | Dias |
-| **3** | Esqueleto do monorepo — `package.json` de cada app, configuração de build e CI | Nós | Horas |
-| **4** | Documentação da API do GeraCloud, credenciais e ambiente de teste | Time do ERP | Dias |
-| **5** | Definir **volume real do primeiro cliente** — números, mensagens/dia, contatos, anos de histórico | Cliente | Levantar junto com a carga |
+| **N-1** | **Data da janela de sombra**, e comunicá-la ao cliente | ⚠️ **O único dado irrecuperável do projeto.** Dois planos nossos discordam em 14 semanas: `plano-onda-0` §5.5 diz ≈T-22, `plano-onda-1` e `entrada` §7 dizem T-8. Uma leitura mede 5 meses antes do corte (sazonalidade contamina); a outra mede depois de a equipe já saber (comportamento muda) | Decisão |
+| **N-2** | **PoC da PK composta `(tenant_id, id)`** + ADR-016 | Bloqueia a migration `0001` e tudo depois. ⚠️ Revisar isso depois da `0012` é reescrita de schema | 1–2 dias |
+| **N-3** | Corrigir os **4 resíduos do ADR-015** | O critério de saída nº 5 da Onda 0 hoje **não fecha**: exige LB-07, que é foto do dia do primeiro corte (Onda 1) sobre job de RFV (Onda 2). Mais o `T+1` que ainda diz "fecha o critério nº 2 da Onda 0" e a onda divergente de RFV-08 e PLT-11 | Horas |
+| **N-4** | **Política de privacidade e termos** | ⚠️ **Está no caminho crítico externo e ninguém tinha notado:** o App Review da Meta (M-07) exige a URL pública. Sem isso, M-07 não é submetido | Jurídico |
+| **N-5** | Provisionar infra — Cognito, 2 projetos Railway, Postgres + réplica, bucket, Sentry, cofre de segredos, domínios | Bloqueia a `0001` e o webhook público | 1–2 dias |
 
-⚠️ **Nada aqui é planejamento.** O item 1 deveria estar correndo em paralelo desde a semana passada.
+### 2.2 Depende de terceiro — todos parados desde o início
 
----
-
-## 4. 🔴 As três lacunas que ninguém mapeou
-
-Não estavam no backlog nem na revisão de consistência — não são "itens pendentes", são **assuntos
-ausentes**.
-
-### 4.1 Como o primeiro cliente entra
-
-O planejamento inteiro descreve **o produto**, e nenhum documento descreve **a transição**. O
-cliente hoje opera em algum lugar — Tailor, planilha, WhatsApp puro. Perguntas sem dono:
-
-- Quem carrega os anos de histórico, e como se **concilia** o que veio com o que o ERP diz?
-- O que acontece com as conversas em andamento no dia da virada?
-- Há período de **convivência** com a ferramenta antiga, ou corte seco?
-- Quem treina as vendedoras, e em quê — o produto muda a rotina delas, não só a tela?
-- Qual é o critério para dizer que a migração **falhou** e voltar atrás?
-
-⚠️ Isto define requisitos da **Onda 0**: a carga histórica precisa de relatório de conciliação, não
-só de importação. Descobrir isso na semana da virada é tarde.
-
-### 4.2 Como o time trabalha
-
-`CLAUDE.md` diz "não commitar em `main` sem os checks verdes" — e é tudo. Não existe: definição de
-pronto, política de branch, quem revisa, o que exige revisão, como uma tarefa entra e sai, o que
-acontece quando a suíte quebra em `main`.
-
-⚠️ Com agentes de IA no fluxo (`workflow-agentes-programacao`), a ausência de "definição de pronto"
-é mais cara: o agente entrega o que **parece** pronto, e sem critério escrito ninguém discorda.
-
-### 4.3 Como saber se funcionou
-
-Há critério de saída **técnico** por onda ("a equipe operou 2 semanas sem o sistema antigo"). Não há
-métrica de **produto**: o que precisa acontecer com o negócio do cliente para a onda ter valido.
-
-⚠️ Isto define o que instrumentar **desde a Onda 0**. Métrica decidida depois é métrica sem
-histórico — e o produto que promete provar ROI não pode ser o único sem linha de base.
+| # | O que | Dono | Espera | Bloqueia |
+|---|---|---|---|---|
+| **T-1** 🔴 | **M-01…M-04** — Business Manager, verificação de domínio, app, Business Verification | Meta | dias a semanas | M-05 → M-07 → o corte do cliente |
+| **T-2** 🔴 | **M-13 — os números do cliente já estão em API oficial?** | Cliente | até 3 semanas | ⚠️ Se estiverem, o onboarding é **portabilidade entre WABAs**, não conexão — e depende do concorrente que está perdendo o cliente. **Sem plano B**: número novo perde o reconhecimento da base |
+| **T-3** 🔴 | **M-09/M-10** — documentação da API do GeraCloud e credenciais de homologação isoladas | Time do ERP | dias | **EP-02 inteiro** — o coração da Onda 0 |
+| **T-4** | **M-11/M-12** — cópia da base real e volume (contatos, anos, mensagens/dia, nº de números) | Cliente | dias | Dimensionamento e o risco nº 1 (40% da base sem documento) |
+| **T-5** | **Opt-out histórico e faturas do BSP atual** | Cliente | — | ⚠️ **Somem no cancelamento do contrato antigo.** Depois não existem em lugar nenhum |
 
 ---
 
-## 5. Lacunas conhecidas, com data para resolver
+## 3. Ordem recomendada
 
-| Lacuna | Quando planejar | Por que não agora |
+```
+HOJE — quatro coisas, em paralelo, nenhuma é código
+  ① T-1  iniciar o registro na Meta ............... semanas de espera, parado há dias
+  ② T-3  pedir doc e credenciais do GeraCloud ..... bloqueia EP-02 inteiro
+  ③ T-2  perguntar ao cliente sobre os números .... define entrada vs. portabilidade
+  ④ N-1  decidir a data da janela de sombra ....... irrecuperável
+
+ESTA SEMANA
+  ⑤ N-2  PoC da PK composta + ADR-016 ............. destrava a migration 0001
+  ⑥ N-5  provisionar infra
+  ⑦ N-3  corrigir os 4 resíduos do ADR-015
+  ⑧ N-4  encomendar política e termos ............. está no caminho crítico da Meta
+
+DEPOIS — aí sim, código de produção
+  ⑨ migrations 0001…0010
+  ⑩ R-01  API Fastify + Zod + plugin de tenant
+  ⑪ EP-02 conector GeraCloud + carga histórica
+```
+
+⚠️ **Os quatro de hoje não dependem de nenhuma linha de código, e três deles dependem de pessoas
+fora do time.** Cada dia parado ali é um dia somado ao fim do projeto, não ao começo.
+
+---
+
+## 4. O que dá para fazer sem esperar ninguém
+
+Se a ideia é ver algo de pé enquanto os terceiros respondem:
+
+| Opção | O que entrega | Depende de |
 |---|---|---|
-| Plano de execução das **Ondas 1–4** | Macro agora, detalhe ao entrar em cada uma | Detalhar a Onda 3 hoje é planejar o que vai mudar |
-| **Cenários BDD** das Ondas 2–4 | Ao entrar em cada onda | Idem |
-| **Telas** de campanha, IA, catálogo, metas, Visão de Mercado, SLA, capacitação | Ao entrar em cada onda | Idem |
-| **Biblioteca de componentes** | **Antes da Onda 1** | O front começa na Onda 1; token sem componente não constrói tela |
-| **Runbook de operação** | Antes do go-live | Precisa da operação real para ser útil |
-| **LGPD formal** — política, termos, DPA com provedores | Antes do primeiro cliente real | Depende de jurídico |
-| **Precificação concreta** | Antes de vender | Decisão comercial; a recomendação (por número de WhatsApp) está em `concorrentes-tailor` §9 |
-| 11 médias e 6 baixas da revisão de consistência | Contínuo | Nenhuma bloqueia a Onda 0 |
+| **Docker Compose + API com health check** | Primeira coisa que abre no navegador; esqueleto para tudo depois | Nada |
+| Mais regras de domínio em `shared` | RFV, pedido mínimo, chave de reconciliação — puras, testáveis, sem banco | Nada |
+| Biblioteca de componentes (bloco 1) | Botão, campo, badge, tabela sobre os tokens | Nada |
+| Migrations `0001`…`0010` | O schema de pé | **N-2** (PoC da PK) |
 
 ---
 
-## 6. Ordem recomendada
+## 5. O padrão que a revisão final expôs
 
-```
-HOJE, em paralelo:
-  ① Registro na Meta ...................... não depende de nós — começar já
-  ② Provisionar infra ..................... dias
-  ③ Esqueleto do monorepo ................. horas
-  ④ Planejar as três lacunas da §4 ........ define requisitos da Onda 0
+Os quatro 🔴 de consistência têm **uma causa só**: o ADR-015 moveu o marco do corte da Onda 0 para
+a Onda 1, e os documentos que apontavam para esse marco não foram reancorados.
 
-DEPOIS:
-  ⑤ Biblioteca de componentes ............. antes da Onda 1
-  ⑥ Migrations 0001–0010 .................. o plano já as descreve
-  ⑦ Conector GeraCloud + carga histórica .. o coração da Onda 0
-```
+⚠️ **A lição é sobre datas relativas.** "T-8" e "antes da S0" pareciam âncoras estáveis e não eram —
+`T` mudou de onda e as duas passaram a significar coisas diferentes. Onde a data importa de verdade
+(a janela de sombra, que é irrecuperável), a âncora precisa ser **um fato, não uma sigla**: *duas
+semanas antes de a equipe do cliente saber que a migração vai acontecer*.
 
-⚠️ **O item ④ não é burocracia.** A conciliação da carga histórica (§4.1) e as métricas de linha de
-base (§4.3) **mudam o que a Onda 0 precisa entregar**. Planejar depois significa reabrir a onda.
+---
+
+## 6. Pendências que não bloqueiam nada agora
+
+11 médias e 6 baixas da revisão de consistência · o nono varredor (numeração de migration) · 3
+cenários BDD de comportamentos novos · 4 furos de token · 4 códigos de erro do catálogo ·
+`prontidao` a reescrever a cada mudança de estado (é este documento) · precificação · cláusula de
+desistência no meio do corte · retenção pós-saída com jurídico.
