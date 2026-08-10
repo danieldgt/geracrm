@@ -45,6 +45,10 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/crm/segmentos.pagina.js').then((m) => m.SegmentosPagina),
   inicio: () =>
     import('./funcionalidades/painel/inicio.pagina.js').then((m) => m.InicioPagina),
+  tarefas: () =>
+    import('./funcionalidades/crm/tarefas.pagina.js').then((m) => m.TarefasPagina),
+  carteiras: () =>
+    import('./funcionalidades/crm/carteiras.pagina.js').then((m) => m.CarteirasPagina),
 }
 
 const rotasFilhas = itensDoMenu().map((item) => {
