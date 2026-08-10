@@ -92,12 +92,14 @@ import { TemaServico } from './tema.servico.js'
     :host { display: block; height: 100vh; }
     /* Lateral em altura total (linhas 1–2); barra superior e conteúdo na coluna 2. */
     .grade { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto 1fr; height: 100%; }
-    .lateral { grid-row: 1 / 3; width: 250px; background: var(--superficie-elevada); border-right: 1px solid var(--borda);
-      overflow-y: auto; display: flex; flex-direction: column; }
+    /* Lateral em tom AREIA quente (estudo de identidade: surface-2), não branca —
+       harmoniza com o palco creme e destaca o conteúdo elevado. */
+    .lateral { grid-row: 1 / 3; width: 250px; background: var(--superficie); border-right: 1px solid var(--borda);
+      overflow-y: auto; display: flex; flex-direction: column; box-shadow: 4px 0 24px rgb(31 26 22 / .04); }
     .lateral.recolhida { width: 56px; }
     .marca { display: flex; align-items: center; gap: var(--espacamento-2);
       padding: var(--espacamento-3) var(--espacamento-4); height: 52px; position: sticky; top: 0;
-      background: var(--superficie-elevada); border-bottom: 1px solid var(--borda); z-index: 1; }
+      background: var(--superficie); border-bottom: 1px solid var(--borda); z-index: 1; }
     .marca .logo { display: inline-flex; align-items: center; text-decoration: none; --marca-tam: 26px; --marca-fonte: 16px; }
     .marca .logo:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
     /* Barra superior — ações do usuário à direita, sem cortar dropdowns. */
