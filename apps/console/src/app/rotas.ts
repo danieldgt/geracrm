@@ -59,6 +59,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/analitico/performance.pagina.js').then((m) => m.PerformancePagina),
   retencao: () =>
     import('./funcionalidades/crm/retencao.pagina.js').then((m) => m.RetencaoPagina),
+  nps: () =>
+    import('./funcionalidades/crm/nps.pagina.js').then((m) => m.NpsPagina),
 }
 
 const rotasFilhas = itensDoMenu().map((item) => {
