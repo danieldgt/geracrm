@@ -107,7 +107,12 @@ Objetivo: transformar o protótipo em base sustentável.
 - **Latência do conector** ✅: `medirLatencia` (soma+contagem na série temporal I-11 → média), gravada no teste de conexão; `GET /v1/integracao/latencia`. Testes: 3.
 
 ### Onda 3 — Reter / Competir
-Funil de recompra com RFV, **campanhas com ROI** e atribuição de receita, aquecimento de frota (calendário, começa na Onda 2), governança de reputação, Instagram Direct.
+**Onda 3 (2026-08-10): principais entregues.**
+- **Campanhas com ROI** ✅: campanha + audiência por segmento RFV + disparo idempotente; ROI com atribuição **exata × estimada SEPARADAS** (skill funil-de-vendas), janela declarada. Tela com criação/disparo/painel de ROI. (migration 0036; 4 testes)
+- **Aquecimento de frota** ✅: teto diário por número que sobe em rampa (ADR-021, protege o não-oficial); status na tela de Números. (migration 0037; 4 testes)
+- **Funil de recompra com RFV** ✅ (base já existia): `classificarRfv` + `metricas_contato` + telas de Clientes e Fila do Dia (urgência/RFV).
+- **Governança de reputação** ✅ (coberta): saúde da frota (entrega 24h + alertas I-10 + risco de banimento + aquecimento) na tela de Números. Tier/qualidade Meta entram com o canal oficial.
+- **Instagram Direct** ⏸️ **deferido**: precisa da API Meta/Instagram + registro — mesma classe do canal WhatsApp oficial, que você adiou. Entra junto quando ligar a Meta.
 
 ### Onda 4 — Sem paralelo
 IA no atendimento (transcrição de áudio, sugestão), analítico avançado, o que a operação real pedir.
