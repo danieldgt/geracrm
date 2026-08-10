@@ -98,7 +98,7 @@ export const MENU: readonly GrupoMenu[] = [
     itens: [
       { rota: 'retencao', rotulo: 'Retenção', icone: '🔄', status: 'pronto', onda: 'O2',
         descricao: 'Funil de recompra — quem está indo embora e como trazer de volta.' },
-      { rota: 'fidelidade', rotulo: 'Fidelidade / Cashback', icone: '🎁', status: 'construcao', onda: 'O2',
+      { rota: 'fidelidade', rotulo: 'Fidelidade / Cashback', icone: '🎁', status: 'pronto', onda: 'O2',
         descricao: 'Saldo lido do ERP; a alavancagem é nossa (ADR-020).' },
       { rota: 'segmentos', rotulo: 'Segmentos RFV', icone: '🧩', status: 'pronto', onda: 'O2',
         descricao: 'Construtor de segmento por recência, frequência e valor.' },

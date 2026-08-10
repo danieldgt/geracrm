@@ -73,6 +73,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/plataforma/config.pagina.js').then((m) => m.ConfigPagina),
   automacoes: () =>
     import('./funcionalidades/crm/automacoes.pagina.js').then((m) => m.AutomacoesPagina),
+  fidelidade: () =>
+    import('./funcionalidades/crm/fidelidade.pagina.js').then((m) => m.FidelidadePagina),
 }
 
 const rotasFilhas = itensDoMenu().map((item) => {

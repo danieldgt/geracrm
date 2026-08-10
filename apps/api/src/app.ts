@@ -17,6 +17,7 @@ import { rotasRetencao } from './contexts/crm/rotas-retencao.js'
 import { rotasNps } from './contexts/crm/rotas-nps.js'
 import { rotasSequencia } from './contexts/crm/rotas-sequencia.js'
 import { rotasAutomacao } from './contexts/crm/rotas-automacao.js'
+import { rotasFidelidade } from './contexts/crm/rotas-fidelidade.js'
 import { rotasCampanha } from './contexts/crm/rotas-campanha.js'
 import { rotasConversas } from './contexts/atendimento/rotas-conversas.js'
 import { rotasCanais } from './contexts/atendimento/rotas-canais.js'
@@ -72,6 +73,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasNps)
   await app.register(rotasSequencia)
   await app.register(rotasAutomacao)
+  await app.register(rotasFidelidade)
   await app.register(rotasCampanha)
   await app.register(rotasConversas)
   await app.register(rotasCanais)
