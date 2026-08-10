@@ -96,7 +96,7 @@ export const MENU: readonly GrupoMenu[] = [
   {
     titulo: 'Recompra & Retenção',
     itens: [
-      { rota: 'retencao', rotulo: 'Retenção', icone: '🔄', status: 'construcao', onda: 'O2',
+      { rota: 'retencao', rotulo: 'Retenção', icone: '🔄', status: 'pronto', onda: 'O2',
         descricao: 'Funil de recompra — quem está indo embora e como trazer de volta.' },
       { rota: 'fidelidade', rotulo: 'Fidelidade / Cashback', icone: '🎁', status: 'construcao', onda: 'O2',
         descricao: 'Saldo lido do ERP; a alavancagem é nossa (ADR-020).' },
