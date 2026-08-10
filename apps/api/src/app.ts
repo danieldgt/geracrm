@@ -12,6 +12,7 @@ import { rotasSegmentos } from './contexts/crm/rotas-segmentos.js'
 import { rotasTarefa } from './contexts/crm/rotas-tarefa.js'
 import { rotasCarteira } from './contexts/crm/rotas-carteira.js'
 import { rotasMeta } from './contexts/crm/rotas-meta.js'
+import { rotasLista } from './contexts/crm/rotas-lista.js'
 import { rotasCampanha } from './contexts/crm/rotas-campanha.js'
 import { rotasConversas } from './contexts/atendimento/rotas-conversas.js'
 import { rotasCanais } from './contexts/atendimento/rotas-canais.js'
@@ -23,6 +24,8 @@ import { rotasNotificacoes } from './contexts/atendimento/rotas-notificacoes.js'
 import { rotasAuditoria } from './contexts/plataforma/rotas-auditoria.js'
 import { rotasMetricas } from './contexts/plataforma/rotas-metricas.js'
 import { rotasPainel } from './contexts/plataforma/rotas-painel.js'
+import { rotasBi } from './contexts/plataforma/rotas-bi.js'
+import { rotasPerformance } from './contexts/plataforma/rotas-performance.js'
 import { rotasEventos } from './contexts/atendimento/eventos/rotas-eventos.js'
 import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
 import { rotasAuth } from './contexts/identidade/rotas-auth.js'
@@ -56,6 +59,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasTarefa)
   await app.register(rotasCarteira)
   await app.register(rotasMeta)
+  await app.register(rotasLista)
   await app.register(rotasCampanha)
   await app.register(rotasConversas)
   await app.register(rotasCanais)
@@ -67,6 +71,8 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasAuditoria)
   await app.register(rotasMetricas)
   await app.register(rotasPainel)
+  await app.register(rotasBi)
+  await app.register(rotasPerformance)
   await app.register(rotasEventos)
   await app.register(rotasPedido)
   await app.register(rotasAuth)

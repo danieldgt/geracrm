@@ -56,9 +56,9 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Disparo em massa com ROI honesto (vendas 3/7/14 dias).' },
       { rota: 'mensagens', rotulo: 'Mensagens Enviadas', icone: '📤', status: 'construcao', onda: 'O1',
         descricao: 'Log de envios individuais e em massa.' },
-      { rota: 'listas', rotulo: 'Listas', icone: '🗂️', status: 'construcao', onda: 'O3',
+      { rota: 'listas', rotulo: 'Listas', icone: '🗂️', status: 'pronto', onda: 'O3',
         descricao: 'Públicos de campanha, respeitando opt-out e bloqueio.' },
-      { rota: 'performance', rotulo: 'Performance', icone: '⏱️', status: 'construcao', onda: 'O2',
+      { rota: 'performance', rotulo: 'Performance', icone: '⏱️', status: 'pronto', onda: 'O2',
         descricao: 'SLA, tempo de primeira resposta (humana), a contra-métrica MC-05.' },
       { rota: 'canal-config', rotulo: 'Config. do Canal', icone: '⚙️', status: 'construcao', onda: 'O1',
         descricao: 'Horário de atendimento, mensagem de ausência, assinatura.' },
@@ -118,7 +118,7 @@ export const MENU: readonly GrupoMenu[] = [
   {
     titulo: 'Gestão',
     itens: [
-      { rota: 'bi', rotulo: 'Painéis (BI)', icone: '📈', status: 'construcao', onda: 'O2',
+      { rota: 'bi', rotulo: 'Painéis (BI)', icone: '📈', status: 'pronto', onda: 'O2',
         descricao: 'Vendas, ranking, top produtos, exportações.' },
       { rota: 'automacoes', rotulo: 'Automações', icone: '🤖', status: 'construcao', onda: 'O2',
         descricao: 'Gatilhos e ações automáticas.' },

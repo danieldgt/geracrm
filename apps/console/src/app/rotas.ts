@@ -51,6 +51,12 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/crm/carteiras.pagina.js').then((m) => m.CarteirasPagina),
   metas: () =>
     import('./funcionalidades/crm/metas.pagina.js').then((m) => m.MetasPagina),
+  listas: () =>
+    import('./funcionalidades/crm/listas.pagina.js').then((m) => m.ListasPagina),
+  bi: () =>
+    import('./funcionalidades/analitico/bi.pagina.js').then((m) => m.BiPagina),
+  performance: () =>
+    import('./funcionalidades/analitico/performance.pagina.js').then((m) => m.PerformancePagina),
 }
 
 const rotasFilhas = itensDoMenu().map((item) => {
