@@ -77,6 +77,13 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
                   <button (click)="testar(c)" [disabled]="servico.testando().has(c.id)">
                     {{ servico.testando().has(c.id) ? 'Testando…' : 'Testar conexão' }}
                   </button>
+                  @if (!ehOficial(c)) {
+                    @if (servico.aquecimento()[c.id]?.emAquecimento) {
+                      <span class="aquec">🔥 Aquecimento dia {{ servico.aquecimento()[c.id]!.dia }} · hoje {{ servico.aquecimento()[c.id]!.usadoHoje }}/{{ servico.aquecimento()[c.id]!.limiteHoje }}</span>
+                    } @else {
+                      <button (click)="servico.iniciarAquecimento(c.id)">Iniciar aquecimento</button>
+                    }
+                  }
                 </div>
                 @if (resultado()[c.id]; as r) {
                   <p class="resultado" [class.ok]="r.conectado" role="status">
@@ -133,6 +140,7 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
   `,
   styles: `
     :host { display: block; max-width: 760px; padding: var(--espacamento-6); }
+    .aquec { font-size: 12px; color: var(--texto-secundario); align-self: center; }
     .saude { display: flex; gap: var(--espacamento-6); padding: var(--espacamento-3) var(--espacamento-4);
       margin-bottom: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .saude .metrica { display: flex; flex-direction: column; gap: 2px; }
@@ -192,7 +200,14 @@ export class CanaisPagina implements OnInit {
     return ed ? this.servico.provedores().find((p) => p.codigo === ed.provedor) : undefined
   })
 
-  ngOnInit(): void { void this.servico.carregar() }
+  ngOnInit(): void {
+    void this.servico.carregar().then(() => {
+      // Aquecimento por número (só faz sentido no não-oficial).
+      for (const c of this.servico.canais()) {
+        if (c.tipo !== 'whatsapp_oficial') void this.servico.carregarAquecimento(c.id)
+      }
+    })
+  }
 
   pct(taxa: number | null): string { return taxa === null ? '—' : `${Math.round(taxa * 100)}%` }
 

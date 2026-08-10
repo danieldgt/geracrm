@@ -4,6 +4,7 @@ import { validarCredencial, type Credencial } from '@geracrm/conectores'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { cifrar, decifrar, resumir } from '../integracao/cofre.js'
 import { registrarMetrica } from '../plataforma/metricas.js'
+import { statusAquecimento } from './aquecimento.js'
 import { CANAIS, provedorPorCodigo } from './canais/catalogo.js'
 import { criarCanal } from './canais/fabrica.js'
 
@@ -158,6 +159,31 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
            WHERE id = ${req.params.id}`
       })
       return reply.send(resultado)
+    },
+  )
+
+  /** Status de aquecimento do número (dia, teto de hoje, uso, restante). */
+  app.get<{ Params: { id: string } }>(
+    '/v1/canais/:id/aquecimento', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const s = await req.comTenant((tx) => statusAquecimento(tx, req.params.id, new Date()))
+      return reply.send({
+        emAquecimento: s.emAquecimento, dia: s.dia,
+        limiteHoje: s.limiteHoje === Infinity ? null : s.limiteHoje,
+        usadoHoje: s.usadoHoje, restante: s.restante === Infinity ? null : s.restante,
+      })
+    },
+  )
+
+  /** Inicia (ou reinicia) o aquecimento do número. */
+  app.post<{ Params: { id: string } }>(
+    '/v1/canais/:id/aquecimento', { preHandler: exigirTenant },
+    async (req, reply) => {
+      await req.comTenant((tx) => tx`
+        INSERT INTO canal_aquecimento (tenant_id, canal_id, iniciado_em, ativo)
+        VALUES (tenant_atual(), ${req.params.id}, now(), true)
+        ON CONFLICT (tenant_id, canal_id) DO UPDATE SET iniciado_em = now(), ativo = true`)
+      return reply.code(201).send({ ok: true })
     },
   )
 }

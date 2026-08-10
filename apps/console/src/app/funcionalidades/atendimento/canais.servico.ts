@@ -94,6 +94,31 @@ export class CanaisServico {
       this.testando.update((s) => { const n = new Set(s); n.delete(id); return n })
     }
   }
+
+  // Aquecimento de frota (Onda 3): teto diário de disparo por número.
+  readonly aquecimento = signal<Record<string, Aquecimento>>({})
+
+  async carregarAquecimento(id: string): Promise<void> {
+    try {
+      const r = await firstValueFrom(this.http.get<Aquecimento>(`/v1/canais/${id}/aquecimento`))
+      this.aquecimento.update((a) => ({ ...a, [id]: r }))
+    } catch { /* silencioso */ }
+  }
+
+  async iniciarAquecimento(id: string): Promise<void> {
+    try {
+      await firstValueFrom(this.http.post(`/v1/canais/${id}/aquecimento`, {}))
+      await this.carregarAquecimento(id)
+    } catch { /* silencioso */ }
+  }
+}
+
+export interface Aquecimento {
+  readonly emAquecimento: boolean
+  readonly dia: number
+  readonly limiteHoje: number | null
+  readonly usadoHoje: number
+  readonly restante: number | null
 }
 
 function erroApiDe(e: unknown): ErroApi {
