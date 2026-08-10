@@ -39,6 +39,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/campanha/campanhas.pagina.js').then((m) => m.CampanhasPagina),
   pedidos: () =>
     import('./funcionalidades/pedido/pedidos.pagina.js').then((m) => m.PedidosPagina),
+  catalogo: () =>
+    import('./funcionalidades/catalogo/catalogo.pagina.js').then((m) => m.CatalogoPagina),
 }
 
 const rotasFilhas = itensDoMenu().map((item) => {

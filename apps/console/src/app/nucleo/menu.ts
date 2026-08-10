@@ -35,7 +35,7 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Como o negócio está hoje, em 3 segundos: vendas, ticket, ranking, top produtos.' },
       { rota: 'mercado', rotulo: 'Visão de Mercado', icone: '🌐', status: 'construcao', onda: 'O1',
         descricao: 'Sobreposição de origens (catálogo × WhatsApp × ERP) e distribuição RFV.' },
-      { rota: 'catalogo', rotulo: 'Catálogo', icone: '📦', status: 'construcao', onda: 'O1',
+      { rota: 'catalogo', rotulo: 'Catálogo', icone: '📦', status: 'pronto', onda: 'O1',
         descricao: 'Produtos e SKUs com grade cor × tamanho, saldo e preço.' },
     ],
   },
