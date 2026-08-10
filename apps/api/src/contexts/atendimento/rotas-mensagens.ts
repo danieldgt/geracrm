@@ -51,6 +51,17 @@ interface Preparo {
   estadoCanal: string
   ultimaEntranteEm: Date | null
   destinoBloqueado: boolean
+  remetenteNome: string | null
+}
+
+/**
+ * Cabeçalho de identificação do atendente na mensagem que vai ao WhatsApp: o
+ * cliente vê quem está falando. Nome em negrito (markdown do WhatsApp) + quebra.
+ * ⚠️ Decoração de TRANSPORTE: entra só no despacho, não no histórico gravado —
+ * o inbox mostra a conversa limpa, sem repetir o cabeçalho em cada linha.
+ */
+function comCabecalho(nome: string | null, texto: string): string {
+  return nome ? `*${nome}*\n${texto}` : texto
 }
 
 async function marcarStatus(
@@ -141,7 +152,11 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
           INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
           VALUES (tenant_atual(), 'mensagem.enviada', 'conversa', ${conversaId},
                   ${JSON.stringify({ conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
-        return { ...ctx, mensagemId }
+        // Nome de quem está atendendo, para o cabeçalho do WhatsApp.
+        const eu = await garantirUsuarioId(tx, req)
+        const [rem] = await tx<{ nome: string }[]>`
+          SELECT nome FROM usuario WHERE tenant_id = tenant_atual() AND id = ${eu}`
+        return { ...ctx, mensagemId, remetenteNome: rem?.nome ?? null }
       })
 
       if (!preparo) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
@@ -159,12 +174,13 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
       }
       const r = await enviarPeloGateway(ctxEnvio, new Date(), async () => {
         const canal = criarCanal(preparo.provedor!, decifrar(Buffer.from(preparo.cred!)))
-        if (entrada.tipo === 'texto') return canal.enviarTexto(preparo.destino, entrada.texto)
+        if (entrada.tipo === 'texto') return canal.enviarTexto(preparo.destino, comCabecalho(preparo.remetenteNome, entrada.texto))
         // ⚠️ Provedor busca a mídia por HTTP: manda a URL assinada (curta), não a
         //    chave nem o base64. Sem bucket, cai no valor original (base64).
         if (entrada.tipo === 'imagem') {
           const img = midiaChave ? await urlAssinada(midiaChave, 600) : entrada.imagem
-          return canal.enviarImagem(preparo.destino, img, entrada.legenda)
+          const legenda = preparo.remetenteNome ? comCabecalho(preparo.remetenteNome, entrada.legenda ?? '') : entrada.legenda
+          return canal.enviarImagem(preparo.destino, img, legenda)
         }
         const aud = midiaChave ? await urlAssinada(midiaChave, 600) : entrada.audio
         return canal.enviarAudio(preparo.destino, aud)

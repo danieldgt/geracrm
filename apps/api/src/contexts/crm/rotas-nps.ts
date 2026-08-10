@@ -3,82 +3,78 @@ import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 
-const PAGINA = 20
 const DIAS_VALIDOS = new Set([30, 90, 180, 365])
 
 /**
- * NPS — satisfação. ⚠️ O score é DERIVADO na leitura (padrão NPS):
- *   promotor 9–10, neutro 7–8, detrator 0–6; NPS = %promotores − %detratores.
- * Nada de faixa gravada. Comentários recentes vêm paginados por cursor.
- *
- * A coleta automática (perguntar na conversa) é outra história; aqui registra e
- * apura o que já foi respondido — inclusive lançamento à mão (origem='manual').
+ * NPS — satisfação PÓS-ATENDIMENTO. A nota (0–10) avalia a conversa com um
+ * vendedor, então o painel mostra o NPS POR ATENDENTE. ⚠️ Score DERIVADO na
+ * leitura (padrão): promotor 9–10, neutro 7–8, detrator 0–6;
+ * NPS = %promotores − %detratores. Nada de faixa/score gravado.
  */
+function apurar(total: number, promotores: number, detratores: number): number | null {
+  return total > 0 ? Math.round(((promotores - detratores) / total) * 100) : null
+}
+
 export async function rotasNps(app: FastifyInstance): Promise<void> {
-  // Painel: score + distribuição + comentários recentes de um período.
-  app.get<{ Querystring: { dias?: string; cursor?: string } }>(
+  app.get<{ Querystring: { dias?: string } }>(
     '/v1/nps', { preHandler: exigirTenant },
     async (req, reply) => {
       const dias = DIAS_VALIDOS.has(Number(req.query.dias)) ? Number(req.query.dias) : 90
-      let curEm: string | null = null, curId: string | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
-        curEm = em; curId = id
-      }
       const dados = await req.comTenant(async (tx) => {
         const desde = tx`now() - (${dias} || ' days')::interval`
-        const [resumo] = await tx<{
-          total: number; promotores: number; neutros: number; detratores: number
-        }[]>`
+        const [geral] = await tx<{ total: number; promotores: number; detratores: number; atribuidas: number }[]>`
           SELECT count(*)::int AS total,
                  count(*) FILTER (WHERE nota >= 9)::int AS promotores,
-                 count(*) FILTER (WHERE nota BETWEEN 7 AND 8)::int AS neutros,
-                 count(*) FILTER (WHERE nota <= 6)::int AS detratores
+                 count(*) FILTER (WHERE nota <= 6)::int AS detratores,
+                 count(*) FILTER (WHERE atendente_id IS NOT NULL)::int AS atribuidas
             FROM nps_resposta
            WHERE tenant_id = tenant_atual() AND respondido_em >= ${desde}`
 
-        const comentarios = await tx<{
-          id: string; nota: number; comentario: string | null; respondido_em: Date
-          contato_id: string | null; contato: string | null
+        const porAtendente = await tx<{
+          atendente_id: string; nome: string | null
+          total: number; promotores: number; neutros: number; detratores: number
         }[]>`
-          SELECT n.id, n.nota, n.comentario, n.respondido_em, n.contato_id, c.nome AS contato
+          SELECT n.atendente_id, u.nome,
+                 count(*)::int AS total,
+                 count(*) FILTER (WHERE n.nota >= 9)::int AS promotores,
+                 count(*) FILTER (WHERE n.nota BETWEEN 7 AND 8)::int AS neutros,
+                 count(*) FILTER (WHERE n.nota <= 6)::int AS detratores
             FROM nps_resposta n
-            LEFT JOIN contato c ON c.tenant_id = n.tenant_id AND c.id = n.contato_id
+            LEFT JOIN usuario u ON u.tenant_id = n.tenant_id AND u.id = n.atendente_id
            WHERE n.tenant_id = tenant_atual() AND n.respondido_em >= ${desde}
-             AND n.comentario IS NOT NULL AND n.comentario <> ''
-             AND ${curEm === null ? tx`true` : tx`(n.respondido_em, n.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
-           ORDER BY n.respondido_em DESC, n.id DESC LIMIT ${PAGINA + 1}`
-        return { resumo, comentarios }
+             AND n.atendente_id IS NOT NULL
+           GROUP BY n.atendente_id, u.nome`
+        return { geral, porAtendente }
       })
 
-      const r = dados.resumo
-      const total = r?.total ?? 0
-      const promotores = r?.promotores ?? 0
-      const detratores = r?.detratores ?? 0
-      const score = total > 0 ? Math.round(((promotores - detratores) / total) * 100) : null
+      const g = dados.geral
+      const atendentes = dados.porAtendente
+        .map((a) => ({
+          usuarioId: a.atendente_id,
+          nome: a.nome ?? 'Desconhecido',
+          total: a.total,
+          promotores: a.promotores,
+          neutros: a.neutros,
+          detratores: a.detratores,
+          score: apurar(a.total, a.promotores, a.detratores),
+        }))
+        // Mais respostas primeiro; score desempata (quem tem base maior é mais confiável).
+        .sort((x, y) => y.total - x.total || (y.score ?? -999) - (x.score ?? -999))
 
-      const temMais = dados.comentarios.length > PAGINA
-      const pagina = temMais ? dados.comentarios.slice(0, PAGINA) : dados.comentarios
-      const ultimo = pagina[pagina.length - 1]
       return reply.send({
         dias,
-        total,
-        score,
-        distribuicao: { promotores, neutros: r?.neutros ?? 0, detratores },
-        comentarios: pagina.map((c) => ({
-          id: c.id, nota: c.nota, comentario: c.comentario, respondidoEm: c.respondido_em,
-          contatoId: c.contato_id, contato: c.contato,
-          faixa: c.nota >= 9 ? 'promotor' : c.nota >= 7 ? 'neutro' : 'detrator',
-        })),
-        proximoCursor: temMais && ultimo
-          ? Buffer.from(`${ultimo.respondido_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
+        geral: {
+          total: g?.total ?? 0,
+          score: apurar(g?.total ?? 0, g?.promotores ?? 0, g?.detratores ?? 0),
+          semAtendente: (g?.total ?? 0) - (g?.atribuidas ?? 0),
+        },
+        porAtendente: atendentes,
       })
     },
   )
 
-  // Registrar uma resposta (à mão, ou de outra origem).
-  app.post<{ Body: { contatoId?: string | null; nota?: number; comentario?: string; origem?: string } }>(
+  // Registrar uma resposta pós-atendimento (à mão, ou de outra origem).
+  app.post<{ Body: { contatoId?: string | null; atendenteId?: string | null; nota?: number; comentario?: string; origem?: string } }>(
     '/v1/nps', { preHandler: exigirTenant },
     async (req, reply) => {
       const nota = req.body?.nota
@@ -93,14 +89,17 @@ export async function rotasNps(app: FastifyInstance): Promise<void> {
       try {
         await req.comTenant(async (tx) => {
           const eu = await garantirUsuarioId(tx, req)
-          await tx`INSERT INTO nps_resposta (tenant_id, id, contato_id, nota, comentario, origem, criado_por)
-                   VALUES (tenant_atual(), ${id}, ${req.body?.contatoId ?? null}, ${nota!},
-                           ${req.body?.comentario?.trim() || null}, ${origem}, ${eu})`
+          await tx`INSERT INTO nps_resposta (tenant_id, id, contato_id, atendente_id, nota, comentario, origem, criado_por)
+                   VALUES (tenant_atual(), ${id}, ${req.body?.contatoId ?? null}, ${req.body?.atendenteId ?? null},
+                           ${nota!}, ${req.body?.comentario?.trim() || null}, ${origem}, ${eu})`
         })
         return reply.code(201).send({ id })
       } catch (e) {
         if (e instanceof Error && e.message.includes('nps_resposta_tenant_id_contato_id_fkey')) {
           return reply.code(422).send({ erro: 'nps.contato_invalido', mensagem: 'Contato não encontrado.' })
+        }
+        if (e instanceof Error && e.message.includes('nps_resposta_atendente_fk')) {
+          return reply.code(422).send({ erro: 'nps.atendente_invalido', mensagem: 'Atendente não encontrado.' })
         }
         throw e
       }
