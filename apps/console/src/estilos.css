@@ -57,3 +57,9 @@ img, svg, video, canvas { max-width: 100%; }
 /* Conteúdo largo (tabela, código, diagrama) rola DENTRO da própria caixa — a
  * página nunca rola na horizontal. */
 .rolagem-x { overflow-x: auto; }
+
+/* Marca Drezz Hub: no rail estreito (<=640px) some o wordmark, fica só o símbolo.
+ * Regra GLOBAL (não encapsulada) porque o wordmark vive dentro de <app-marca>. */
+@media (max-width: 640px) {
+  .lateral .wordmark { display: none; }
+}

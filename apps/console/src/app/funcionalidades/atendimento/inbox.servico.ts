@@ -127,7 +127,7 @@ export class InboxServico {
     } catch (e) {
       if (e instanceof HttpErrorResponse && e.status === 403) { this.estado.set('sem_permissao'); return }
       this.erro.set(e instanceof HttpErrorResponse && e.status === 0
-        ? 'Sem conexão com o GeraCRM.' : 'Não foi possível carregar as conversas.')
+        ? 'Sem conexão com o Drezz Hub.' : 'Não foi possível carregar as conversas.')
       this.estado.set('erro')
     }
   }

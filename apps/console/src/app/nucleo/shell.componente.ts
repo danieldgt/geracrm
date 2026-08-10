@@ -3,6 +3,7 @@ import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router'
 import { MENU } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
 import { MenuUsuarioComponente } from './menu-usuario.componente.js'
+import { MarcaComponente } from '../compartilhado/ui/marca.componente.js'
 import { EventosServico } from './eventos.servico.js'
 import { AlertasServico } from './alertas.servico.js'
 import { TemaServico } from './tema.servico.js'
@@ -21,13 +22,15 @@ import { TemaServico } from './tema.servico.js'
 @Component({
   selector: 'app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente, MarcaComponente],
   template: `
     <div class="grade">
       <aside class="lateral" [class.recolhida]="recolhida()">
         <div class="marca">
           <button class="alternar" (click)="recolhida.set(!recolhida())" aria-label="Recolher menu">☰</button>
-          @if (!recolhida()) { <strong>GeraCRM</strong> }
+          <a routerLink="/inicio" class="logo" aria-label="Drezz Hub — ir para o início">
+            <app-marca [rotulo]="!recolhida()" />
+          </a>
         </div>
 
         <nav>
@@ -81,7 +84,8 @@ import { TemaServico } from './tema.servico.js'
     .marca { display: flex; align-items: center; gap: var(--espacamento-2);
       padding: var(--espacamento-3) var(--espacamento-4); height: 52px; position: sticky; top: 0;
       background: var(--superficie-elevada); border-bottom: 1px solid var(--borda); z-index: 1; }
-    .marca strong { color: var(--marca); font-size: 15px; }
+    .marca .logo { display: inline-flex; align-items: center; text-decoration: none; --marca-tam: 26px; --marca-fonte: 16px; }
+    .marca .logo:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
     /* Barra superior — ações do usuário à direita, sem cortar dropdowns. */
     .topo { grid-column: 2; grid-row: 1; height: 52px; display: flex; align-items: center;
       gap: var(--espacamento-2); padding: 0 var(--espacamento-4);
@@ -110,7 +114,7 @@ import { TemaServico } from './tema.servico.js'
        sobrepor o conteúdo (grid mantém as colunas separadas). */
     @media (max-width: 640px) {
       .lateral { width: 60px; }
-      .lateral .rotulo, .lateral .grupo, .marca strong { display: none; }
+      .lateral .rotulo, .lateral .grupo { display: none; }
     }
     .alertas { position: sticky; top: 0; z-index: 5; display: flex; flex-direction: column; }
     .alerta { padding: var(--espacamento-2) var(--espacamento-4); font-size: 13px; color: var(--texto);

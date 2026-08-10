@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/cor
 import { FormsModule } from '@angular/forms'
 import { Router } from '@angular/router'
 import { AuthServico } from './auth.servico.js'
+import { MarcaComponente } from '../compartilhado/ui/marca.componente.js'
 
 /**
  * Tela de login (produção). Usuário + senha via Cognito. Trata o primeiro
@@ -11,11 +12,11 @@ import { AuthServico } from './auth.servico.js'
   selector: 'app-login',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule],
+  imports: [FormsModule, MarcaComponente],
   template: `
     <main class="tela">
       <form class="cartao" (ngSubmit)="enviar()">
-        <h1>GeraCRM</h1>
+        <app-marca class="logo" [rotulo]="true" />
         <p class="sub">Entre para acessar o atendimento.</p>
 
         <label>Usuário
@@ -49,8 +50,7 @@ import { AuthServico } from './auth.servico.js'
     .cartao { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: var(--espacamento-3);
       background: var(--superficie-elevada); border: 1px solid var(--borda);
       border-radius: var(--raio-painel); padding: var(--espacamento-8); box-shadow: var(--elevacao-modal); }
-    h1 { margin: 0; font-size: var(--tipografia-escala-titulo-tamanho); font-weight: var(--tipografia-escala-titulo-peso);
-      letter-spacing: var(--tipografia-escala-titulo-tracking); color: var(--marca); }
+    .logo { --marca-tam: 40px; --marca-fonte: 24px; margin-bottom: var(--espacamento-1); }
     .sub { margin: 0 0 var(--espacamento-1); color: var(--texto-secundario); font-size: 14px; }
     label { display: flex; flex-direction: column; gap: var(--espacamento-2); font-size: 13px; color: var(--texto); }
     input { padding: var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);

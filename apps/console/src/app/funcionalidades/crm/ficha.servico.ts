@@ -51,7 +51,7 @@ export class FichaServico {
       if (e instanceof HttpErrorResponse) {
         if (e.status === 404) { this.estado.set('nao_encontrado'); return }
         if (e.status === 403) { this.estado.set('sem_permissao'); return }
-        this.erro.set(e.status === 0 ? 'Sem conexão com o GeraCRM.' : `Erro ${e.status}.`)
+        this.erro.set(e.status === 0 ? 'Sem conexão com o Drezz Hub.' : `Erro ${e.status}.`)
       } else {
         this.erro.set('Erro inesperado.')
       }

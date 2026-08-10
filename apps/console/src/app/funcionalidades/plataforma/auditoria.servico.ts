@@ -79,8 +79,8 @@ export class AuditoriaServico {
 
 function mensagemDe(e: unknown): string {
   if (e instanceof HttpErrorResponse) {
-    if (e.status === 0) return 'Não foi possível falar com o GeraCRM. Verifique sua conexão.'
-    return `O GeraCRM respondeu com erro (${e.status}).`
+    if (e.status === 0) return 'Não foi possível falar com o Drezz Hub. Verifique sua conexão.'
+    return `O Drezz Hub respondeu com erro (${e.status}).`
   }
   return 'Erro inesperado.'
 }
