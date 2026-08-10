@@ -14,8 +14,11 @@ body {
   background: var(--fundo);
   color: var(--texto);
   font-family: var(--tipografia-familia-interface);
-  font-size: 14px;
-  line-height: 20px;
+  /* Base um pouco maior (identidade Drezz Hub): campos e texto que herdam
+   * (`font: inherit`) ganham respiro. Os dados densos usam .txt-dados/.txt-denso
+   * (tokens), então a densidade das grades não muda. */
+  font-size: 15px;
+  line-height: 22px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -25,6 +28,22 @@ img, svg, video, canvas { max-width: 100%; }
 
 /* Foco visível consistente — acessibilidade é piso, não enfeite. */
 :focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+
+/* ─── Base confortável de campos (acabamento da identidade Drezz Hub) ──────────
+ * Piso para inputs/selects/textareas: fonte que herda a base maior, altura e
+ * respiro generosos, foco com o acento. Componentes densos podem sobrescrever;
+ * este é o default agradável de formulário. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select, textarea {
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.4;
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus-visible,
+select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--borda-foco); outline-offset: 1px;
+}
+::placeholder { color: var(--texto-suave); opacity: 1; }
 
 /* Troca de tema suave; nada anima em loop (só o anel de janela, 24h por volta). */
 @media (prefers-reduced-motion: no-preference) {

@@ -1,5 +1,5 @@
-import { Component, ChangeDetectionStrategy, signal, inject, OnInit } from '@angular/core'
-import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router'
+import { Component, ChangeDetectionStrategy, signal, computed, inject, OnInit } from '@angular/core'
+import { RouterOutlet, RouterLink, RouterLinkActive, Router } from '@angular/router'
 import { MENU } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
 import { MenuUsuarioComponente } from './menu-usuario.componente.js'
@@ -33,12 +33,23 @@ import { TemaServico } from './tema.servico.js'
           </a>
         </div>
 
+        @if (!recolhida()) {
+          <div class="busca">
+            <span class="lupa" aria-hidden="true">⌕</span>
+            <input #campo class="busca-in" type="search" [value]="filtro()"
+                   (input)="filtro.set($any($event.target).value)"
+                   (keydown.enter)="irAoPrimeiro()" (keydown.escape)="filtro.set('')"
+                   placeholder="Buscar no menu…" aria-label="Buscar no menu" />
+            @if (filtro()) { <button class="limpa" (click)="filtro.set('')" aria-label="Limpar busca">×</button> }
+          </div>
+        }
+
         <nav>
-          @for (grupo of menu; track grupo.titulo) {
+          @for (grupo of menuFiltrado(); track grupo.titulo) {
             @if (grupo.titulo && !recolhida()) { <p class="grupo">{{ grupo.titulo }}</p> }
             @for (item of grupo.itens; track item.rota) {
               <a [routerLink]="item.rota" routerLinkActive="ativo" class="item"
-                 [title]="item.rotulo + ' — ' + item.descricao">
+                 [title]="item.rotulo + ' — ' + item.descricao" (click)="filtro.set('')">
                 <span class="icone">{{ item.icone }}</span>
                 @if (!recolhida()) {
                   <span class="rotulo">{{ item.rotulo }}</span>
@@ -46,6 +57,9 @@ import { TemaServico } from './tema.servico.js'
                 }
               </a>
             }
+          }
+          @if (!recolhida() && nadaEncontrado()) {
+            <p class="nada">Nada encontrado para “{{ filtro() }}”.</p>
           }
         </nav>
       </aside>
@@ -97,7 +111,19 @@ import { TemaServico } from './tema.servico.js'
     .tema:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .alternar { border: none; background: transparent; color: var(--texto-secundario); font-size: 16px; cursor: pointer; padding: 4px; }
     .alternar:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    nav { padding: var(--espacamento-2) 0 var(--espacamento-6); }
+    /* Busca do menu — filtra por rótulo e descrição; Enter abre o primeiro. */
+    .busca { position: relative; display: flex; align-items: center; margin: var(--espacamento-3) var(--espacamento-3) var(--espacamento-1); }
+    .busca .lupa { position: absolute; left: 10px; color: var(--texto-suave); font-size: 15px; pointer-events: none; }
+    .busca-in { width: 100%; padding: var(--espacamento-2) var(--espacamento-6) var(--espacamento-2) 28px;
+      border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo);
+      color: var(--texto); font: inherit; font-size: 13px; }
+    .busca-in::-webkit-search-cancel-button { display: none; }
+    .busca-in:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 1px; border-color: var(--acao); }
+    .limpa { position: absolute; right: 6px; border: 0; background: transparent; color: var(--texto-suave);
+      font-size: 16px; cursor: pointer; padding: 0 4px; line-height: 1; }
+    .limpa:hover { color: var(--erro); }
+    .nada { margin: var(--espacamento-4); font-size: 13px; color: var(--texto-suave); }
+    nav { padding: var(--espacamento-1) 0 var(--espacamento-6); }
     .grupo { margin: var(--espacamento-4) var(--espacamento-4) var(--espacamento-1);
       font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--texto-suave); }
     .item { display: flex; align-items: center; gap: var(--espacamento-3);
@@ -124,11 +150,31 @@ import { TemaServico } from './tema.servico.js'
   `,
 })
 export class ShellComponente implements OnInit {
-  readonly menu = MENU
   readonly recolhida = signal(false)
+  readonly filtro = signal('')
   private readonly eventos = inject(EventosServico)
   readonly alertas = inject(AlertasServico)
   readonly tema = inject(TemaServico)
+  private readonly router = inject(Router)
+
+  /** Menu filtrado pela busca (rótulo ou descrição); grupos vazios somem. */
+  readonly menuFiltrado = computed(() => {
+    const q = this.filtro().trim().toLowerCase()
+    if (!q) return MENU
+    return MENU
+      .map((g) => ({ ...g, itens: g.itens.filter((i) =>
+        i.rotulo.toLowerCase().includes(q) || i.descricao.toLowerCase().includes(q)) }))
+      .filter((g) => g.itens.length > 0)
+  })
+  readonly nadaEncontrado = computed(() => this.filtro().trim().length > 0 && this.menuFiltrado().length === 0)
+
+  /** Enter na busca abre o primeiro resultado e limpa o filtro. */
+  irAoPrimeiro(): void {
+    const item = this.menuFiltrado()[0]?.itens[0]
+    if (!item) return
+    void this.router.navigateByUrl('/' + item.rota)
+    this.filtro.set('')
+  }
 
   iconeTema(): string {
     return this.tema.tema() === 'claro' ? '☀️' : this.tema.tema() === 'escuro' ? '🌙' : '🖥️'
