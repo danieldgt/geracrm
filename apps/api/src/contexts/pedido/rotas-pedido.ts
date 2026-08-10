@@ -217,6 +217,96 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       }
     },
   )
+
+  // ───────── Lista e gestão do pedido ─────────
+
+  /** Lista pedidos por cursor, filtrando por estado e/ou contato. */
+  app.get<{ Querystring: { estado?: string; contatoId?: string; cursor?: string } }>(
+    '/v1/pedidos', { preHandler: exigirTenant },
+    async (req, reply) => {
+      let curEm: string | null = null, curId: string | null = null
+      if (req.query.cursor) {
+        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
+        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
+        curEm = em; curId = id
+      }
+      const { estado, contatoId } = req.query
+      const linhas = await req.comTenant((tx) => tx<{
+        id: string; estado: string; total_centavos: string; total_pecas: string
+        contato_id: string | null; nome: string | null; numero_externo: string | null; criado_em: Date
+      }[]>`
+        SELECT p.id, p.estado, p.total_centavos::text, p.total_pecas::text, p.contato_id,
+               c.nome, p.numero_externo, p.criado_em
+          FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
+         WHERE p.tenant_id = tenant_atual()
+           AND ${estado ? tx`p.estado = ${estado}` : tx`true`}
+           AND ${contatoId ? tx`p.contato_id = ${contatoId}` : tx`true`}
+           AND ${curEm === null ? tx`true` : tx`(p.criado_em, p.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+         ORDER BY p.criado_em DESC, p.id DESC LIMIT 31`)
+      const temMais = linhas.length > 30
+      const pagina = temMais ? linhas.slice(0, 30) : linhas
+      const ultimo = pagina[pagina.length - 1]
+      return reply.send({
+        itens: pagina.map((l) => ({
+          id: l.id, estado: l.estado, contatoId: l.contato_id, nome: l.nome,
+          totalCentavos: Number(l.total_centavos), totalPecas: Number(l.total_pecas),
+          numeroExterno: l.numero_externo, criadoEm: l.criado_em,
+        })),
+        proximoCursor: temMais && ultimo
+          ? Buffer.from(`${ultimo.criado_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
+      })
+    },
+  )
+
+  /** Altera a quantidade de um item do rascunho (recalcula totais). */
+  app.patch<{ Params: { id: string; seq: string }; Body: { quantidade?: number } }>(
+    '/v1/pedidos/:id/itens/:seq', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const qtd = Number(req.body?.quantidade)
+      if (!Number.isFinite(qtd) || qtd <= 0) return reply.code(422).send({ erro: 'item.quantidade_invalida', mensagem: 'Quantidade deve ser maior que zero.' })
+      const r = await req.comTenant(async (tx) => {
+        const [p] = await tx<{ estado: string }[]>`SELECT estado FROM pedido WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        if (!p) return { erro: 404 as const }
+        if (p.estado !== 'rascunho') return { erro: 409 as const }
+        const [item] = await tx`UPDATE pedido_item SET quantidade = ${qtd}
+                  WHERE tenant_id = tenant_atual() AND pedido_id = ${req.params.id} AND seq = ${Number(req.params.seq)} RETURNING seq`
+        if (!item) return { erro: 404 as const }
+        await recalcularTotais(tx, req.params.id)
+        return { ok: true }
+      })
+      if ('erro' in r) return reply.code(r.erro).send({ erro: r.erro === 409 ? 'pedido.imutavel' : 'item.nao_encontrado' })
+      return reply.send({ ok: true })
+    },
+  )
+
+  /** Remove um item do rascunho (recalcula totais). */
+  app.delete<{ Params: { id: string; seq: string } }>(
+    '/v1/pedidos/:id/itens/:seq', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const r = await req.comTenant(async (tx) => {
+        const [p] = await tx<{ estado: string }[]>`SELECT estado FROM pedido WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        if (!p) return { erro: 404 as const }
+        if (p.estado !== 'rascunho') return { erro: 409 as const }
+        await tx`DELETE FROM pedido_item WHERE tenant_id = tenant_atual() AND pedido_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`
+        await recalcularTotais(tx, req.params.id)
+        return { ok: true }
+      })
+      if ('erro' in r) return reply.code(r.erro).send({ erro: r.erro === 409 ? 'pedido.imutavel' : 'pedido.nao_encontrado' })
+      return reply.send({ ok: true })
+    },
+  )
+
+  /** Cancela um rascunho (não efetivado). */
+  app.post<{ Params: { id: string } }>(
+    '/v1/pedidos/:id/cancelar', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const [r] = await req.comTenant((tx) => tx`
+        UPDATE pedido SET estado = 'cancelado', atualizado_em = now()
+         WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND estado = 'rascunho' RETURNING id`)
+      if (!r) return reply.code(409).send({ erro: 'pedido.nao_cancelavel', mensagem: 'Só um rascunho pode ser cancelado.' })
+      return reply.send({ ok: true })
+    },
+  )
 }
 
 /** Falha de negócio → texto com a ação corretiva (PED-08). */

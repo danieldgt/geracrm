@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { classificarRfv, normalizarTelefone } from '@geracrm/shared'
+import { classificarRfv, normalizarTelefone, normalizarDocumento } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { parseCsvContatos } from './importar-csv.js'
 
 /** Teto de linhas por importação — evita engolir um arquivo gigante numa tx. */
@@ -317,6 +318,158 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         })),
         comentarios: dados.comentarios,
       })
+    },
+  )
+
+  // ───────── Edição da ficha do contato (CRUD dos satélites) ─────────
+
+  /** Edita nome e/ou ativa/desativa (soft delete) o contato. */
+  app.patch<{ Params: { id: string }; Body: { nome?: string; ativo?: boolean } }>(
+    '/v1/contatos/:id', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const nome = req.body?.nome?.trim()
+      const ativo = req.body?.ativo
+      if (nome === undefined && ativo === undefined) return reply.code(422).send({ erro: 'contato.nada_a_mudar' })
+      if (nome !== undefined && !nome) return reply.code(422).send({ erro: 'contato.nome_obrigatorio', mensagem: 'Nome não pode ficar vazio.' })
+      const [r] = await req.comTenant((tx) => tx`
+        UPDATE contato SET
+          nome  = ${nome ?? tx`nome`},
+          ativo = ${ativo === undefined ? tx`ativo` : ativo}
+         WHERE tenant_id = tenant_atual() AND id = ${req.params.id} RETURNING id`)
+      if (!r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      return reply.send({ ok: true })
+    },
+  )
+
+  /** Adiciona um telefone ao contato (idempotente por chave_bloqueio). */
+  app.post<{ Params: { id: string }; Body: { telefone?: string; principal?: boolean } }>(
+    '/v1/contatos/:id/telefones', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const tel = normalizarTelefone(req.body?.telefone ?? '')
+      if (!tel) return reply.code(422).send({ erro: 'telefone.invalido', mensagem: 'Telefone inválido.' })
+      const r = await req.comTenant(async (tx) => {
+        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        if (!c) return { erro: 404 as const }
+        const [linhaProx] = await tx<{ prox: number }[]>`
+          SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
+        const prox = linhaProx!.prox
+        const principal = req.body?.principal === true || prox === 1 // 1º vira principal
+        if (principal) await tx`UPDATE contato_telefone SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
+        await tx`
+          INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
+          VALUES (tenant_atual(), ${req.params.id}, ${prox}, ${tel.e164}, ${tel.chaveBloqueio}, ${principal}, true, 'manual')
+          ON CONFLICT DO NOTHING`
+        return { ok: true }
+      })
+      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      return reply.code(201).send({ ok: true })
+    },
+  )
+
+  /** Define qual telefone é o principal. */
+  app.post<{ Params: { id: string; seq: string } }>(
+    '/v1/contatos/:id/telefones/:seq/principal', { preHandler: exigirTenant },
+    async (req, reply) => {
+      await req.comTenant(async (tx) => {
+        await tx`UPDATE contato_telefone SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
+        await tx`UPDATE contato_telefone SET principal = true WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`
+      })
+      return reply.send({ ok: true })
+    },
+  )
+
+  /** Remove um telefone. */
+  app.delete<{ Params: { id: string; seq: string } }>(
+    '/v1/contatos/:id/telefones/:seq', { preHandler: exigirTenant },
+    async (req, reply) => {
+      await req.comTenant((tx) => tx`
+        DELETE FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`)
+      return reply.send({ ok: true })
+    },
+  )
+
+  /** Adiciona um documento (CNPJ/CPF) validando o dígito. */
+  app.post<{ Params: { id: string }; Body: { tipo?: 'cnpj' | 'cpf'; numero?: string } }>(
+    '/v1/contatos/:id/documentos', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const tipo = req.body?.tipo
+      if (tipo !== 'cnpj' && tipo !== 'cpf') return reply.code(422).send({ erro: 'documento.tipo_invalido' })
+      const numero = normalizarDocumento(tipo, req.body?.numero ?? '')
+      if (!numero) return reply.code(422).send({ erro: 'documento.invalido', mensagem: `${tipo.toUpperCase()} inválido (dígito verificador).` })
+      const r = await req.comTenant(async (tx) => {
+        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        if (!c) return { erro: 404 as const }
+        const [linhaProx] = await tx<{ prox: number }[]>`
+          SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
+        const prox = linhaProx!.prox
+        await tx`INSERT INTO contato_documento (tenant_id, contato_id, seq, tipo, numero, fonte)
+                 VALUES (tenant_atual(), ${req.params.id}, ${prox}, ${tipo}, ${numero}, 'manual')`
+        return { ok: true }
+      })
+      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      return reply.code(201).send({ ok: true, numero })
+    },
+  )
+
+  /** Remove um documento. */
+  app.delete<{ Params: { id: string; seq: string } }>(
+    '/v1/contatos/:id/documentos/:seq', { preHandler: exigirTenant },
+    async (req, reply) => {
+      await req.comTenant((tx) => tx`
+        DELETE FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`)
+      return reply.send({ ok: true })
+    },
+  )
+
+  /** Define/atualiza o endereço principal (um por contato, seq 1). */
+  app.put<{ Params: { id: string }; Body: Record<string, string | undefined> }>(
+    '/v1/contatos/:id/endereco', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const b = req.body ?? {}
+      const r = await req.comTenant(async (tx) => {
+        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        if (!c) return { erro: 404 as const }
+        await tx`
+          INSERT INTO contato_endereco (tenant_id, contato_id, seq, logradouro, numero, complemento, bairro, cidade, uf, cep, principal, fonte)
+          VALUES (tenant_atual(), ${req.params.id}, 1, ${b['logradouro'] ?? null}, ${b['numero'] ?? null}, ${b['complemento'] ?? null},
+                  ${b['bairro'] ?? null}, ${b['cidade'] ?? null}, ${b['uf'] ?? null}, ${b['cep'] ?? null}, true, 'manual')
+          ON CONFLICT (tenant_id, contato_id, seq) DO UPDATE SET
+            logradouro = EXCLUDED.logradouro, numero = EXCLUDED.numero, complemento = EXCLUDED.complemento,
+            bairro = EXCLUDED.bairro, cidade = EXCLUDED.cidade, uf = EXCLUDED.uf, cep = EXCLUDED.cep`
+        return { ok: true }
+      })
+      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      return reply.send({ ok: true })
+    },
+  )
+
+  /** Comentários/notas do contato — histórico simples. */
+  app.get<{ Params: { id: string } }>(
+    '/v1/contatos/:id/comentarios', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const linhas = await req.comTenant((tx) => tx<{ id: string; texto: string; autor: string | null; criado_em: Date }[]>`
+        SELECT c.id, c.texto, u.nome AS autor, c.criado_em
+          FROM comentario c LEFT JOIN usuario u ON u.tenant_id = c.tenant_id AND u.id = c.autor_id
+         WHERE c.tenant_id = tenant_atual() AND c.contato_id = ${req.params.id}
+         ORDER BY c.criado_em DESC LIMIT 50`)
+      return reply.send({ itens: linhas.map((l) => ({ id: l.id, texto: l.texto, autor: l.autor, criadoEm: l.criado_em })) })
+    },
+  )
+  app.post<{ Params: { id: string }; Body: { texto?: string } }>(
+    '/v1/contatos/:id/comentarios', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const texto = req.body?.texto?.trim()
+      if (!texto) return reply.code(422).send({ erro: 'comentario.vazio', mensagem: 'Escreva algo.' })
+      const r = await req.comTenant(async (tx) => {
+        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        if (!c) return { erro: 404 as const }
+        const autorId = await garantirUsuarioId(tx, req)
+        await tx`INSERT INTO comentario (tenant_id, id, contato_id, autor_id, texto)
+                 VALUES (tenant_atual(), ${randomUUID()}, ${req.params.id}, ${autorId}, ${texto})`
+        return { ok: true }
+      })
+      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      return reply.code(201).send({ ok: true })
     },
   )
 

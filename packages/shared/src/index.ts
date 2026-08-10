@@ -3,5 +3,6 @@
 export * from './dominio/janela.js'
 export * from './dominio/telefone.js'
 export * from './dominio/rfv.js'
+export * from './dominio/documento.js'
 export * from './dominio/mensagem.js'
 export * from './dominio/protocolo.js'
