@@ -75,7 +75,7 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Kanban de leads por etapa do funil.' },
       { rota: 'crm-avancado', rotulo: 'CRM Avançado', icone: '🏆', status: 'construcao', onda: 'O1',
         descricao: 'Clientes por número de pedidos e segmento RFV.' },
-      { rota: 'funil', rotulo: 'Funil de Vendas', icone: '🫙', status: 'construcao', onda: 'O2',
+      { rota: 'funil', rotulo: 'Funil de Vendas', icone: '🫙', status: 'pronto', onda: 'O2',
         descricao: 'Etapas e taxa de conversão.' },
       { rota: 'carteiras', rotulo: 'Vendedores e Carteiras', icone: '💼', status: 'construcao', onda: 'O1',
         descricao: 'Quem é dono de qual cliente (sem sobreposição de vigência).' },

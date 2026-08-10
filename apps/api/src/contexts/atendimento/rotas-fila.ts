@@ -15,8 +15,11 @@ import { auditar } from '../plataforma/auditoria.js'
 
 /** Garante o `usuario` do chamador (por cognito_sub) e devolve o id. */
 export async function garantirUsuarioId(tx: Sql, req: FastifyRequest): Promise<string> {
-  // Dev (header x-tenant-id, sem Cognito) usa um usuário sintético estável.
-  const sub = req.usuarioSub ?? 'dev-header-sub'
+  // Dev (header x-tenant-id, sem Cognito): sub sintético POR TENANT. ⚠️ Um sub
+  // fixo entre tenants faria o ON CONFLICT (cognito_sub, único global) tentar
+  // atualizar a linha de OUTRO tenant → RLS bloqueia. Em produção o sub do
+  // Cognito já é único por usuário, então isto só afeta o dev multi-tenant.
+  const sub = req.usuarioSub ?? `dev-${req.tenantId ?? 'sem-tenant'}`
   const email = req.usuarioEmail ?? 'dogfooding@geracrm.local'
   const nome = (email.split('@')[0] ?? 'Atendente') || 'Atendente'
   const [u] = await tx<{ id: string }[]>`

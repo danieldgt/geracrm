@@ -33,6 +33,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/crm/bloqueios.pagina.js').then((m) => m.BloqueiosPagina),
   webhooks: () =>
     import('./funcionalidades/integracao/webhooks.pagina.js').then((m) => m.WebhooksPagina),
+  funil: () =>
+    import('./funcionalidades/crm/funil.pagina.js').then((m) => m.FunilPagina),
 }
 
 const rotasFilhas = itensDoMenu().map((item) => {

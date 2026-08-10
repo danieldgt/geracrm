@@ -101,7 +101,8 @@ Objetivo: transformar o protótipo em base sustentável.
 - 🔴 **Corte do primeiro cliente (ADR-015)** — o marco que abre a Onda 1 de fato.
 
 ### Onda 2 — Vender
-Kanban do funil (coluna de 11 mil cards, paginada), **pedido assistido** completo (leitura síncrona + escrita idempotente no ERP), campos no card, medição da **latência do conector** (última chance de medir antes de cobrar receita na Onda 3).
+- **Kanban do funil** ✅ (2026-08-10): eixo RELACIONAMENTO (migration 0034), endpoints por cursor (coluna paginada), mover com histórico + concorrência otimista (versao) + perda com motivo de catálogo; tela com drag-drop nativo do CDK, prompt de motivo, 5 estados. Fix: `garantirUsuarioId` com sub por-tenant no dev (RLS). Testes: 7 (criar/1-aberta-por-contato, mover+histórico, conflito 409, perda-exige-motivo, ordenação, isolamento).
+- Falta: **pedido assistido** completo (leitura síncrona + escrita idempotente no ERP, rascunho nunca perdido), medição da **latência do conector**.
 
 ### Onda 3 — Reter / Competir
 Funil de recompra com RFV, **campanhas com ROI** e atribuição de receita, aquecimento de frota (calendário, começa na Onda 2), governança de reputação, Instagram Direct.
