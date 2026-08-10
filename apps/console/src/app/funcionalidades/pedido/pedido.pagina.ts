@@ -107,11 +107,23 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
               <span>{{ ped.totalPecas }} peças</span>
               <strong class="mono">{{ reais(ped.totalCentavos) }}</strong>
             </div>
-            <!-- ⚠️ GeraCloud não tem escritaPedido idempotente: o pedido vira
-                 rascunho exportável, não vai direto ao ERP (ADR-008). -->
-            <button class="primario" disabled title="Efetivação no ERP entra com escritaPedido idempotente">
-              Exportar rascunho (efetivação no ERP: próximo passo)
+            <!-- Efetivação (ADR-005): idempotente + falha nomeada + rascunho
+                 nunca perdido. Se o ERP não escreve, DEGRADA visível (ADR-008). -->
+            <button class="primario" (click)="servico.efetivar(ped.id)"
+                    [disabled]="servico.efetivando() || ped.estado === 'efetivado'">
+              {{ ped.estado === 'efetivado' ? 'Efetivado' : servico.efetivando() ? 'Efetivando…' : 'Efetivar pedido' }}
             </button>
+            @if (servico.resultado(); as r) {
+              <div class="efet" [class.efet--ok]="r.ok" [class.efet--aviso]="!r.ok">
+                @if (r.ok) { ✅ Efetivado no ERP — nº {{ r.numeroExterno }} }
+                @else { ⚠️ {{ r.mensagem }} }
+              </div>
+            }
+            @if (ped.estado === 'falhou') {
+              <p class="efet-nota">O rascunho está intacto — ajuste e efetive de novo.</p>
+            } @else if (ped.estado === 'aguardando_conferencia') {
+              <p class="efet-nota">Conferindo no ERP se o pedido entrou. Não reenvie.</p>
+            }
           }
         } @else {
           <p class="vazio">Adicione o primeiro item para abrir o rascunho.</p>
@@ -158,6 +170,10 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
     .totais { display: flex; justify-content: space-between; align-items: center; padding: var(--espacamento-3) 0; font-size: 15px; color: var(--texto); }
     .primario { width: 100%; padding: var(--espacamento-3); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; cursor: pointer; }
     .primario:disabled { opacity: .7; cursor: default; }
+    .efet { margin-top: var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle); font-size: 13px; }
+    .efet--ok { background: var(--sucesso-suave); color: var(--texto); }
+    .efet--aviso { background: var(--atencao-suave); color: var(--texto); }
+    .efet-nota { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
     @media (max-width: 800px) { .grade-tela { grid-template-columns: 1fr; } }
   `,
 })

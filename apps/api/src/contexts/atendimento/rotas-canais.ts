@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { validarCredencial, type Credencial } from '@geracrm/conectores'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { cifrar, decifrar, resumir } from '../integracao/cofre.js'
+import { registrarMetrica } from '../plataforma/metricas.js'
 import { CANAIS, provedorPorCodigo } from './canais/catalogo.js'
 import { criarCanal } from './canais/fabrica.js'
 
@@ -132,6 +133,10 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
       }
 
       let resultado: { conectado: boolean; detalhe?: string }
+      // ⚠️ Latência do conector (Onda 2): mede a ida ao fornecedor FORA da
+      //    transação (é rede) e grava soma+contagem depois, no mesmo commit do
+      //    estado. Média = soma/n via latenciaMedia.
+      const inicio = Date.now()
       try {
         const canal = criarCanal(canalDb.provedor, decifrar(canalDb.credenciais_cifradas))
         // Só o PlugZapi (e futuros não-oficiais) têm `status`; o oficial ainda não.
@@ -141,8 +146,11 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
       } catch (e) {
         resultado = { conectado: false, detalhe: e instanceof Error ? e.message : 'falha ao testar' }
       }
+      const latenciaMs = Date.now() - inicio
 
       await req.comTenant(async (tx) => {
+        await registrarMetrica(tx, `lat_soma:${canalDb.provedor}:testar`, latenciaMs, new Date())
+        await registrarMetrica(tx, `lat_n:${canalDb.provedor}:testar`, 1, new Date())
         await tx`
           UPDATE canal_conectado
              SET estado = ${resultado.conectado ? 'conectado' : 'desconectado'},

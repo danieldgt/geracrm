@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { latenciaMedia } from './latencia.js'
 
 /** Painel de sincronização (INT-08) — o que cada fluxo trouxe e rejeitou. */
 export async function rotasSync(app: FastifyInstance): Promise<void> {
@@ -19,5 +20,11 @@ export async function rotasSync(app: FastifyInstance): Promise<void> {
         total: l.total, aceitos: l.aceitos, rejeitados: l.rejeitados, estado: l.estado,
       })),
     })
+  })
+
+  /** Latência média do conector por chamada (Onda 2). */
+  app.get('/v1/integracao/latencia', { preHandler: exigirTenant }, async (req, reply) => {
+    const itens = await req.comTenant((tx) => latenciaMedia(tx))
+    return reply.send({ itens })
   })
 }

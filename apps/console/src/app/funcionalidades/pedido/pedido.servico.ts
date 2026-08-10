@@ -1,5 +1,5 @@
 import { Injectable, inject, signal } from '@angular/core'
-import { HttpClient } from '@angular/common/http'
+import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 
 export interface SkuCatalogo {
@@ -30,6 +30,7 @@ export interface ItemPedido {
 export interface Pedido {
   readonly id: string
   readonly estado: string
+  readonly ultimoErro: { tipo: string } | null
   readonly totalCentavos: number
   readonly totalPecas: number
   readonly itens: readonly ItemPedido[]
@@ -86,4 +87,34 @@ export class PedidoServico {
   private async recarregar(id: string): Promise<void> {
     this.pedido.set(await firstValueFrom(this.http.get<Pedido>(`/v1/pedidos/${id}`)))
   }
+
+  // Efetivação (ADR-005). O resultado é tipificado: sucesso, degradação (ERP não
+  // escreve) ou falha nomeada — a tela mostra cada um, e o rascunho nunca some.
+  readonly efetivando = signal(false)
+  readonly resultado = signal<ResultadoEfetivacao | null>(null)
+
+  async efetivar(id: string): Promise<void> {
+    if (this.efetivando()) return
+    this.efetivando.set(true)
+    this.resultado.set(null)
+    try {
+      const r = await firstValueFrom(this.http.post<ResultadoEfetivacao>(`/v1/pedidos/${id}/efetivar`, {}))
+      this.resultado.set(r)
+    } catch (e) {
+      // Falha de negócio volta como 4xx com o corpo tipificado.
+      this.resultado.set(e instanceof HttpErrorResponse && e.error
+        ? (e.error as ResultadoEfetivacao) : { mensagem: 'Não foi possível efetivar.' })
+    } finally {
+      this.efetivando.set(false)
+      await this.recarregar(id) // reflete o novo estado; o rascunho continua lá
+    }
+  }
+}
+
+export interface ResultadoEfetivacao {
+  readonly ok?: boolean
+  readonly degradado?: boolean
+  readonly estado?: string
+  readonly numeroExterno?: string
+  readonly mensagem?: string
 }

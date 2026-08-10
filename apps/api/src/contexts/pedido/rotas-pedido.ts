@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { efetivarPedido } from './efetivacao.js'
 
 /**
  * Pedido assistido — o tira-pedido que nasce na conversa (ADR-005).
@@ -157,7 +158,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       const dados = await req.comTenant(async (tx) => {
         const [pedido] = await tx<{
           id: string; estado: string; total_centavos: string; total_pecas: string; contato_id: string | null
-        }[]>`SELECT id, estado, total_centavos::text, total_pecas::text, contato_id FROM pedido WHERE id = ${req.params.id}`
+          ultimo_erro: unknown
+        }[]>`SELECT id, estado, total_centavos::text, total_pecas::text, contato_id, ultimo_erro FROM pedido WHERE id = ${req.params.id}`
         if (!pedido) return null
         const itens = await tx<{
           seq: number; sku_snapshot: string; descricao_snapshot: string
@@ -174,6 +176,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         id: dados.pedido.id,
         estado: dados.pedido.estado,
         contatoId: dados.pedido.contato_id,
+        ultimoErro: dados.pedido.ultimo_erro ?? null,
         totalCentavos: Number(dados.pedido.total_centavos),
         totalPecas: Number(dados.pedido.total_pecas),
         itens: dados.itens.map((i) => ({
@@ -184,6 +187,48 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       })
     },
   )
+
+  /**
+   * Efetiva o rascunho no ERP (ADR-005). ⚠️ Idempotente, falha tipificada e o
+   * rascunho NUNCA se perde. Se o conector não escreve pedido (GeraCloud hoje),
+   * DEGRADA visível: o rascunho fica exportável (ADR-008), não some.
+   */
+  app.post<{ Params: { id: string } }>(
+    '/v1/pedidos/:id/efetivar',
+    { preHandler: exigirTenant },
+    async (req, reply) => {
+      const r = await req.comTenant(async (tx) => {
+        // Conector fonte-de-venda do tenant (para o `sistema` da identidade externa).
+        const [cx] = await tx<{ conector: string }[]>`
+          SELECT conector FROM conexao_erp WHERE tenant_id = tenant_atual() AND fonte_de_venda LIMIT 1`
+        // ⚠️ Nenhum conector atual tem escritaPedido → passamos null (degrada).
+        //    Quando um conector com escrita existir, instancia-se aqui.
+        return efetivarPedido(tx, null, cx?.conector ?? '', req.params.id, new Date())
+      })
+
+      switch (r.tipo) {
+        case 'nao_encontrado': return reply.code(404).send({ erro: 'pedido.nao_encontrado' })
+        case 'nao_rascunho':   return reply.code(409).send({ erro: 'pedido.nao_rascunho', mensagem: 'Só um rascunho pode ser efetivado.' })
+        case 'vazio':          return reply.code(422).send({ erro: 'pedido.vazio', mensagem: 'Adicione itens antes de efetivar.' })
+        case 'degradado':      return reply.send({ ok: false, degradado: true, mensagem: 'Seu ERP não recebe pedido automático. Exporte e registre no ERP.' })
+        case 'aguardando_conferencia': return reply.code(202).send({ ok: false, estado: 'aguardando_conferencia', mensagem: 'A resposta do ERP se perdeu. Estamos conferindo se o pedido entrou — não reenvie.' })
+        case 'falha':          return reply.code(409).send({ ok: false, estado: 'falhou', falha: r.falha, mensagem: mensagemFalha(r.falha) })
+        case 'efetivado':      return reply.send({ ok: true, numeroExterno: r.numeroExterno })
+      }
+    },
+  )
+}
+
+/** Falha de negócio → texto com a ação corretiva (PED-08). */
+function mensagemFalha(f: { tipo: string; skuExterno?: string; disponivel?: number; disponivelCentavos?: number }): string {
+  switch (f.tipo) {
+    case 'estoque_insuficiente': return `Estoque insuficiente do item ${f.skuExterno} (disponível: ${f.disponivel}). Ajuste a quantidade.`
+    case 'credito_bloqueado':    return `Crédito do cliente bloqueado (disponível: R$ ${((f.disponivelCentavos ?? 0) / 100).toFixed(2)}). Libere o crédito no ERP.`
+    case 'item_inativo':         return `O item ${f.skuExterno} está inativo no ERP. Remova-o do pedido.`
+    case 'cliente_sem_cadastro_fiscal': return 'O cliente não tem cadastro fiscal no ERP. Cadastre antes de faturar.'
+    case 'nao_chegou':           return 'O ERP não respondeu. Tente de novo em instantes.'
+    default:                     return 'Não foi possível efetivar o pedido.'
+  }
 }
 
 /** Recalcula totais na MESMA transação da mutação — nunca defasa da linha. */

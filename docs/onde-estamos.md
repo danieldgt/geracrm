@@ -101,8 +101,10 @@ Objetivo: transformar o protótipo em base sustentável.
 - 🔴 **Corte do primeiro cliente (ADR-015)** — o marco que abre a Onda 1 de fato.
 
 ### Onda 2 — Vender
-- **Kanban do funil** ✅ (2026-08-10): eixo RELACIONAMENTO (migration 0034), endpoints por cursor (coluna paginada), mover com histórico + concorrência otimista (versao) + perda com motivo de catálogo; tela com drag-drop nativo do CDK, prompt de motivo, 5 estados. Fix: `garantirUsuarioId` com sub por-tenant no dev (RLS). Testes: 7 (criar/1-aberta-por-contato, mover+histórico, conflito 409, perda-exige-motivo, ordenação, isolamento).
-- Falta: **pedido assistido** completo (leitura síncrona + escrita idempotente no ERP, rascunho nunca perdido), medição da **latência do conector**.
+**Onda 2 COMPLETA** (2026-08-10):
+- **Kanban do funil** ✅: eixo RELACIONAMENTO (migration 0034), endpoints por cursor (coluna paginada), mover com histórico + concorrência otimista (versao) + perda com motivo de catálogo; tela com drag-drop nativo do CDK, prompt de motivo, 5 estados. Testes: 7.
+- **Pedido assistido** ✅: efetivação (ADR-005) idempotente (chave `id:versao_conteudo`), falha de negócio NOMEADA (PED-08, migration 0035 `ultimo_erro`) com rascunho preservado, resposta perdida → `aguardando_conferencia` (INV-53), e **degradação visível** (ADR-008) quando o conector não escreve (GeraCloud). Botão Efetivar + banner de resultado. Testes: 8 (com conectores falsos cobrindo todos os caminhos).
+- **Latência do conector** ✅: `medirLatencia` (soma+contagem na série temporal I-11 → média), gravada no teste de conexão; `GET /v1/integracao/latencia`. Testes: 3.
 
 ### Onda 3 — Reter / Competir
 Funil de recompra com RFV, **campanhas com ROI** e atribuição de receita, aquecimento de frota (calendário, começa na Onda 2), governança de reputação, Instagram Direct.
