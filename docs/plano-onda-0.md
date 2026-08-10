@@ -319,6 +319,25 @@ migration de *"o recurso mais serializado do repositório"* — e a colisão do 
 `metricas` nasceu no **planejamento**, antes de existir PR para reservar coisa alguma. Migration
 prevista em documento também reserva número, e a reserva é esta linha.
 
+### Números que a execução acrescentou
+
+Aplicado: **25 migrations**, base reconstruída do zero para provar o encadeamento. As cinco abaixo
+não estavam previstas e entram na reserva agora — a reserva só vale se acompanhar o que foi feito:
+
+| Número | O que é | Por que não estava no plano |
+|---|---|---|
+| `0003b_onboarding.sql` | (já existia) | — |
+| `0012b_nota_retencao_mensagem.sql` | Só `COMMENT` | ⚠️ A FK de `midia` depende de **cada partição** de `mensagem`. Descoberto ao tentar remover uma partição: o `DROP` direto falha e o `DROP … CASCADE` que o **próprio HINT do Postgres sugere** apagaria a integridade referencial de `midia` inteira, em silêncio. O comentário mora no banco porque é lá que a pessoa vai estar quando o erro aparecer |
+| `0013b_produto_referencia_unica.sql` | `UNIQUE (tenant_id, referencia)` | A `0013` não tinha unicidade de referência, então reimportar o catálogo criava um segundo *"CONJUNTO LAILA"*, os SKUs se dividiam entre os dois e o histórico do produto passava a mostrar metade — sem erro nenhum |
+| `0016b_mv_metricas_acesso.sql` | Recria a MV; revoga acesso direto; expõe por view com `security_barrier`; acrescenta `confiavel` e `apurado_desde` | ⚠️ **D-16 pedia "policy própria" e isso é impossível: o Postgres não aceita `CREATE POLICY` sobre matview.** A `0016` deu `GRANT SELECT` ao papel da aplicação, que é leitura irrestrita de **todos** os tenants — o isolamento ficou dependendo de toda consulta lembrar de filtrar. Trocado por mecanismo |
+| `0018b_conciliacao_divergencia.sql` | A tabela filha do `DIV` | A `0018` guardou os faltantes como **amostra JSON**, que não tem dono nem estado e não se consulta. Era exatamente o "PDF morto" que a própria D-18 recusa. `conciliacao` faz o papel do `conciliacao_execucao` previsto; o nome ficou mais curto |
+| `0019_outbox.sql` | `outbox` + gatilho de `NOTIFY` | ⚠️ **Lacuna da D-01:** a `outbox` estava listada dentro da `0001_base.sql` e nunca foi criada. Não apareceu em teste porque o **consumo** é da Onda 1 — mas a **escrita** é invariante desta (INV-40), e o `NOTIFY` sozinho não basta: ele não é transacional em relação a quem escuta e some para sempre se ninguém estiver ouvindo |
+
+⚠️ **Duas linhas da §8.6 já existiam** e derrubaram a `0015` com *"relation already exists"*:
+`venda_por_contato` (criado na `0014`) e `correspondencia_pendente_abertas` (na `0007`). A lista da
+§8.6 é de índices **necessários**, não de índices **faltando** — e a diferença só aparece
+consultando `pg_indexes` antes de escrever.
+
 ### 4.1 Regras que valem para todas elas
 
 | Regra | Origem |

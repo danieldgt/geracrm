@@ -2,3 +2,6 @@
 // ⚠️ TypeScript only — no framework imports. Consumed by Angular, Expo and the API.
 export * from './dominio/janela.js'
 export * from './dominio/telefone.js'
+export * from './dominio/rfv.js'
+export * from './dominio/mensagem.js'
+export * from './dominio/protocolo.js'

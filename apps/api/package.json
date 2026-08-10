@@ -8,17 +8,26 @@
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=.env dist/server.js",
     "migrate": "tsx --env-file=../../.env src/db/migrate.ts",
+    "geracloud:explorar": "tsx src/contexts/integracao/geracloud-explorar.ts",
+    "geracloud:explorar-detalhe": "tsx src/contexts/integracao/geracloud-explorar-detalhe.ts",
+    "geracloud:carregar": "tsx --env-file=../../.env src/contexts/integracao/geracloud-carregar.ts",
+    "geracloud:conciliar": "tsx --env-file=../../.env src/contexts/integracao/geracloud-conciliar.ts",
+    "geracloud:precos": "tsx --env-file=../../.env src/contexts/integracao/geracloud-precos.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "echo 'eslint pendente'"
+    "lint": "echo 'eslint pendente'",
+    "plugzapi:validar": "tsx src/contexts/atendimento/canais/plugzapi-validar.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1106.0",
+    "@aws-sdk/s3-request-presigner": "^3.1106.0",
+    "@geracrm/conectores": "workspace:*",
     "@geracrm/shared": "workspace:*",
+    "aws-jwt-verify": "^5.2.1",
     "fastify": "^5.2.0",
     "fastify-plugin": "^5.0.1",
     "postgres": "^3.4.5",
-    "zod": "^4.4.3",
-    "@geracrm/conectores": "workspace:*"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "comment": "Fonte da verdade visual. Componente se duplica entre Angular e Expo; token, não.",
-  "exports": { "./tokens.json": "./tokens.json" },
+  "exports": {
+    "./tokens.json": "./tokens.json"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node scripts/build.mjs --check",
+    "test": "node scripts/validar.mjs",
     "typecheck": "node -e \"JSON.parse(require('fs').readFileSync('tokens.json'))\"",
-    "lint": "node scripts/build.mjs --check"
+    "lint": "node scripts/validar.mjs"
   }
 }

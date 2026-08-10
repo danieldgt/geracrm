@@ -93,6 +93,7 @@ async function ingerirUm(
     por_identidade: boolean
     por_documento: boolean
     por_telefone_principal: boolean
+    tem_algum_documento: boolean
   }[]>`
     WITH por_id AS (
       SELECT contato_id FROM contato_identidade_externa
@@ -107,11 +108,17 @@ async function ingerirUm(
       SELECT contato_id, principal FROM contato_telefone
        WHERE tenant_id = ${tenantId}
          AND e164 = ANY(${telefones.map((t) => t.e164)}::text[])
+    ),
+    com_doc AS (
+      -- ⚠️ Candidatos que POSSUEM algum documento — para detectar conflito com o
+      --    que está entrando. "Tem documento próprio e não é o meu" = outra entidade.
+      SELECT DISTINCT contato_id FROM contato_documento WHERE tenant_id = ${tenantId}
     )
     SELECT c.id AS contato_id,
            (c.id IN (SELECT contato_id FROM por_id))  AS por_identidade,
            (c.id IN (SELECT contato_id FROM por_doc)) AS por_documento,
-           (c.id IN (SELECT contato_id FROM por_tel WHERE principal)) AS por_telefone_principal
+           (c.id IN (SELECT contato_id FROM por_tel WHERE principal)) AS por_telefone_principal,
+           (c.id IN (SELECT contato_id FROM com_doc)) AS tem_algum_documento
       FROM contato c
      WHERE c.tenant_id = ${tenantId}
        AND (c.id IN (SELECT contato_id FROM por_id)
@@ -124,6 +131,9 @@ async function ingerirUm(
     porIdentidadeExterna: a.por_identidade,
     porDocumento: a.por_documento,
     porTelefonePrincipal: a.por_telefone_principal,
+    // ⚠️ Conflito = eu tenho documento, o candidato tem documento próprio, e não
+    //    é o meu (senão por_documento seria true). CNPJ diferente na mesma linha.
+    temDocumentoConflitante: documento !== undefined && a.tem_algum_documento && !a.por_documento,
   }))
 
   const decisao = decidirReconciliacao(candidatos)
@@ -174,13 +184,22 @@ async function ingerirUm(
   for (const tel of telefones) {
     // ⚠️ The first phone of a NEW contact becomes primary; on an existing one it
     // does not — the phone the salesperson chose outranks whatever the ERP has.
-    const principal = decisao.acao === 'criar' && tel === telefones[0]
+    const querPrincipal = decisao.acao === 'criar' && tel === telefones[0]
     await tx`
       INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, fonte)
       SELECT ${tenantId}, ${contatoId},
              (SELECT coalesce(max(seq), 0) + 1 FROM contato_telefone
                WHERE tenant_id = ${tenantId} AND contato_id = ${contatoId}),
-             ${tel.e164}, ${tel.chaveBloqueio}, ${principal}, 'erp'
+             ${tel.e164}, ${tel.chaveBloqueio},
+             -- ⚠️ Principal SÓ se ninguém mais já é principal deste número. Duas
+             --    empresas na mesma linha (o caso do limiar): a primeira fica
+             --    com ela como principal, a segunda herda como secundária — o
+             --    roteamento de entrada precisa de um dono só (INV do canal).
+             ${querPrincipal} AND NOT EXISTS (
+               SELECT 1 FROM contato_telefone
+                WHERE tenant_id = ${tenantId} AND e164 = ${tel.e164} AND principal
+             ),
+             'erp'
        WHERE NOT EXISTS (
          SELECT 1 FROM contato_telefone
           WHERE tenant_id = ${tenantId} AND contato_id = ${contatoId} AND e164 = ${tel.e164}

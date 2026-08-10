@@ -1,0 +1,15 @@
+# O que NÃO subir no contexto do `railway up` (build é feito na nuvem via Dockerfile).
+node_modules
+**/node_modules
+dist
+**/dist
+.turbo
+**/.turbo
+.env
+.env.*
+!.env.example
+.git
+**/*.log
+coverage
+**/coverage
+scratchpad

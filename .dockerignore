@@ -1,0 +1,17 @@
+# Reconstruídos dentro da imagem — nunca subir os locais (stale/pesados).
+node_modules
+**/node_modules
+dist
+**/dist
+.turbo
+**/.turbo
+
+# Nunca subir segredos nem lixo local.
+.env
+.env.*
+!.env.example
+.git
+**/*.log
+coverage
+**/coverage
+scratchpad

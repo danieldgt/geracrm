@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { decidirReconciliacao } from './reconciliacao.js'
 
-const c = (id: string, s: Partial<{ ext: boolean; doc: boolean; tel: boolean }> = {}) => ({
+const c = (id: string, s: Partial<{ ext: boolean; doc: boolean; tel: boolean; conflita: boolean }> = {}) => ({
   contatoId: id,
   porIdentidadeExterna: s.ext ?? false,
   porDocumento: s.doc ?? false,
   porTelefonePrincipal: s.tel ?? false,
+  temDocumentoConflitante: s.conflita ?? false,
 })
 
 describe('Reconciliação de contato na ingestão', () => {
@@ -53,5 +54,28 @@ describe('Reconciliação de contato na ingestão', () => {
   it('documento vence telefone quando ambos apontam para contatos diferentes', () => {
     const d = decidirReconciliacao([c('A', { doc: true }), c('B', { tel: true })])
     expect(d.contatoId).toBe('A')
+  })
+
+  // ⚠️ O LIMIAR novo — o que a ficha da MONICA revelou (566 CNPJs num contato).
+  it('⚠️ mesmo telefone mas documento CONFLITANTE, então NÃO funde — é outra empresa', () => {
+    const d = decidirReconciliacao([c('A', { tel: true, conflita: true })])
+    // CNPJ diferente na mesma linha (loja e dona, matriz e filial). Fundir
+    // juntaria históricos de compra de negócios distintos.
+    expect(d.acao).toBe('criar')
+    expect(d.ambiguo).toBe(false) // decisão confiante: sabemos que é outra
+    expect(d.detalhe).toContain('documento diferente')
+  })
+
+  it('telefone com um conflitante e um limpo, então vincula ao LIMPO', () => {
+    // O conflitante (CNPJ diferente) é descartado; sobra um candidato válido.
+    const d = decidirReconciliacao([c('A', { tel: true, conflita: true }), c('B', { tel: true })])
+    expect(d).toMatchObject({ acao: 'vincular', contatoId: 'B', motivo: 'telefone_principal' })
+  })
+
+  it('telefone sem conflito e sem documento (varejo), então vincula — ADR-019', () => {
+    // Cliente de varejo sem CNPJ: o telefone segura, como antes. O limiar só age
+    // quando HÁ documento conflitante — não penaliza quem não tem documento.
+    const d = decidirReconciliacao([c('A', { tel: true })])
+    expect(d).toMatchObject({ acao: 'vincular', contatoId: 'A' })
   })
 })

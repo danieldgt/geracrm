@@ -1,6 +1,24 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { sql } from './db/index.js'
 import { pluginTenant, exigirTenant } from './plugins/tenant.js'
+import { pluginTestarConexao } from './contexts/integracao/testar-conexao.js'
+import { rotasIntegracao } from './contexts/integracao/rotas.js'
+import { rotasSync } from './contexts/integracao/rotas-sync.js'
+import { rotasWebhooksSaida } from './contexts/integracao/rotas-webhooks-saida.js'
+import { rotasContatos } from './contexts/crm/rotas-contatos.js'
+import { rotasBloqueios } from './contexts/crm/rotas-bloqueios.js'
+import { rotasConversas } from './contexts/atendimento/rotas-conversas.js'
+import { rotasCanais } from './contexts/atendimento/rotas-canais.js'
+import { rotasWebhook } from './contexts/atendimento/rotas-webhook.js'
+import { rotasMensagens } from './contexts/atendimento/rotas-mensagens.js'
+import { rotasFila } from './contexts/atendimento/rotas-fila.js'
+import { rotasPresenca } from './contexts/atendimento/rotas-presenca.js'
+import { rotasNotificacoes } from './contexts/atendimento/rotas-notificacoes.js'
+import { rotasAuditoria } from './contexts/plataforma/rotas-auditoria.js'
+import { rotasMetricas } from './contexts/plataforma/rotas-metricas.js'
+import { rotasEventos } from './contexts/atendimento/eventos/rotas-eventos.js'
+import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
+import { rotasAuth } from './contexts/identidade/rotas-auth.js'
 
 /**
  * Builds the app without listening — so tests can use `app.inject()`
@@ -20,6 +38,24 @@ export async function criarApp(): Promise<FastifyInstance> {
   })
 
   await app.register(pluginTenant)
+  await app.register(pluginTestarConexao)
+  await app.register(rotasIntegracao)
+  await app.register(rotasSync)
+  await app.register(rotasWebhooksSaida)
+  await app.register(rotasContatos)
+  await app.register(rotasBloqueios)
+  await app.register(rotasConversas)
+  await app.register(rotasCanais)
+  await app.register(rotasWebhook)
+  await app.register(rotasMensagens)
+  await app.register(rotasFila)
+  await app.register(rotasPresenca)
+  await app.register(rotasNotificacoes)
+  await app.register(rotasAuditoria)
+  await app.register(rotasMetricas)
+  await app.register(rotasEventos)
+  await app.register(rotasPedido)
+  await app.register(rotasAuth)
 
   /** Liveness — no database. Answers even with the bank down, on purpose. */
   app.get('/saude', async () => ({ ok: true, versao: process.env.npm_package_version ?? '0.0.0' }))

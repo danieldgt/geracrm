@@ -1,0 +1,59 @@
+/* Camada base do design system GeraCRM.
+ * ⚠️ Cor literal em componente é divergência garantida com o app Expo em três
+ *    meses. Tudo vem de packages/design-tokens (var(--token)).
+ * Direção visual: docs/identidade-visual.md · ADR-012 · skill geracrm-layout-ui. */
+
+html { color-scheme: light dark; }
+
+/* ⚠️ box-sizing global impede padding/borda de estourarem a largura e quebrarem
+ *    o layout (sobreposição). É a base de "sem quebra de layout". */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fundo);
+  color: var(--texto);
+  font-family: var(--tipografia-familia-interface);
+  font-size: 14px;
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Mídia nunca estoura o container (regra de "sem sobreposição"). */
+img, svg, video, canvas { max-width: 100%; }
+
+/* Foco visível consistente — acessibilidade é piso, não enfeite. */
+:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+
+/* Troca de tema suave; nada anima em loop (só o anel de janela, 24h por volta). */
+@media (prefers-reduced-motion: no-preference) {
+  body { transition: background var(--movimento-estado-duracao) var(--movimento-estado-curva),
+                     color var(--movimento-estado-duracao) var(--movimento-estado-curva); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* ─── Tipografia: atalhos da escala (evita hardcode de font-size nas telas) ───
+ * Use estas classes em vez de tamanhos soltos: uma fonte de verdade para o
+ * ritmo tipográfico do produto inteiro. */
+.txt-kpi    { font-size: var(--tipografia-escala-kpi-tamanho);    font-weight: var(--tipografia-escala-kpi-peso);    line-height: var(--tipografia-escala-kpi-altura);    letter-spacing: var(--tipografia-escala-kpi-tracking);    font-variant-numeric: tabular-nums; }
+.txt-titulo { font-size: var(--tipografia-escala-titulo-tamanho); font-weight: var(--tipografia-escala-titulo-peso); line-height: var(--tipografia-escala-titulo-altura); letter-spacing: var(--tipografia-escala-titulo-tracking); }
+.txt-secao  { font-size: var(--tipografia-escala-secao-tamanho);  font-weight: var(--tipografia-escala-secao-peso);  line-height: var(--tipografia-escala-secao-altura); }
+.txt-corpo  { font-size: var(--tipografia-escala-corpo-tamanho);  font-weight: var(--tipografia-escala-corpo-peso);  line-height: var(--tipografia-escala-corpo-altura); }
+.txt-denso  { font-size: var(--tipografia-escala-denso-tamanho);  font-weight: var(--tipografia-escala-denso-peso);  line-height: var(--tipografia-escala-denso-altura); }
+.txt-rotulo { font-size: var(--tipografia-escala-rotulo-tamanho); font-weight: var(--tipografia-escala-rotulo-peso); line-height: var(--tipografia-escala-rotulo-altura); letter-spacing: var(--tipografia-escala-rotulo-tracking); text-transform: uppercase; color: var(--texto-suave); }
+.txt-dados  { font-family: var(--tipografia-familia-dados); font-size: var(--tipografia-escala-dados-tamanho); line-height: var(--tipografia-escala-dados-altura); font-variant-numeric: tabular-nums; }
+
+/* ─── Moldura de página: toda tela usa a MESMA. Densa, centrada, responsiva. ── */
+.pagina { display: block; max-width: 960px; margin: 0 auto; padding: var(--espacamento-6); }
+@media (max-width: 640px) { .pagina { padding: var(--espacamento-4); } }
+
+/* Utilitário anti-overflow: filho de flex/grid que precisa encolher (texto que
+ * trunca em vez de empurrar o vizinho). Remédio nº 1 de "quebrou o layout". */
+.encolhe { min-width: 0; }
+
+/* Conteúdo largo (tabela, código, diagrama) rola DENTRO da própria caixa — a
+ * página nunca rola na horizontal. */
+.rolagem-x { overflow-x: auto; }

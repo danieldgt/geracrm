@@ -1,5 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist", "lib": ["ES2023"] },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  // ⚠️ Testes fora do build: compilá-los para dist coloca `sonda.test.js` (que
+  //    importa vitest) ao lado do índice publicado — e um consumidor que
+  //    varre o dist ou um import errado arrasta vitest para runtime. O
+  //    typecheck dos testes roda pelo vitest, não pelo build.
+  "exclude": ["src/**/*.test.ts"]
 }

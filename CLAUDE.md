@@ -33,6 +33,11 @@ para venda B2B recorrente. Monorepo pnpm+Turborepo: `apps/api` (Fastify), `apps/
 - **Webhook: o código HTTP é instrução, não relatório** — 2xx encerra, erro faz a Meta reenviar.
   Falha permanente (401/403/404) responde 200 e vai para o log: com entrega sequencial, um evento
   que falha trava a fila de TODOS os clientes. Todo handler é idempotente.
+- **Canal WhatsApp é dual (ADR-021)**: oficial (Meta) é a **prioridade**; não-oficial (PlugZapi/Z-API)
+  é **opção**, e o cliente escolhe por qual número caminha — os dois convivem. O não-oficial
+  **carrega risco de banimento** e a interface deixa isso VISÍVEL, com alertas separados por caminho.
+  Cada tipo é **um adaptador atrás da porta genérica de canal** (`canal_conectado`), com capacidades
+  declaradas — janela de 24h e template são do oficial; o não-oficial declara as suas.
 - **`packages/shared` é TypeScript puro.** Consumido por Angular, Expo e API ao mesmo tempo — um
   `import` de framework quebra dois dos três consumidores.
 - **Deploy separado por watch path**: ao adicionar import de `packages/shared` num app, confira o

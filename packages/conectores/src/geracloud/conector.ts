@@ -1,7 +1,7 @@
 import type {
   ConectorErp, Capacidades, ClienteCanonico, SkuCanonico, SaldoCanonico,
-  PrecoCanonico, VendaCanonica, SaldoFidelidadeCanonico, Pagina, Resultado,
-  FalhaEfetivacao,
+  PrecoCanonico, TabelaPrecoCanonica, VendaCanonica, SaldoFidelidadeCanonico,
+  Pagina, Resultado, FalhaEfetivacao,
 } from '../porta.js'
 
 /**
@@ -49,9 +49,68 @@ export const CAPACIDADES_GERACLOUD: Capacidades = {
 export interface OpcoesGeraCloud {
   readonly baseUrl: string
   /** Per-tenant, decrypted just before use. Never stored on the adapter. */
-  readonly token: string
+  readonly token?: string
+  /**
+   * ⚠️ Alternativa ao `token` fixo, para carga longa. O token do Keycloak
+   * expira em ~5 min, e uma carga histórica de anos passa disso — um token
+   * fixo falharia no meio, com metade da base dentro. Quando presente, o
+   * adaptador pede um token fresco a cada chamada; quem fornece decide se
+   * reusa o cacheado ou renova.
+   */
+  readonly obterToken?: () => Promise<string>
   readonly timeoutMs?: number
   readonly buscar?: typeof fetch
+}
+
+const TAMANHO_PAGINA = 200
+
+/**
+ * ⚠️ A paginação do GeraCloud é por OFFSET (`inicio` = setFirstResult em LINHAS,
+ * `limite` = setMaxResults), NÃO por página estilo Spring. Confirmado no fonte e
+ * ao vivo: com `page`/`size` vinham 5 vendas; com `inicio`/`limite`, 200 por
+ * página, paginando de verdade. O cursor deste adaptador é o offset em linhas.
+ */
+function paramsPagina(offset: number): string {
+  return `inicio=${offset}&limite=${TAMANHO_PAGINA}`
+}
+function cursorPorOffset(qtdRecebida: number, offsetAtual: number): string | undefined {
+  return qtdRecebida >= TAMANHO_PAGINA ? String(offsetAtual + TAMANHO_PAGINA) : undefined
+}
+
+/**
+ * Data no formato do GeraCloud: `DD/MM/YYYY`. ⚠️ Confirmado ao vivo — ISO
+ * (`2026-01-01`) é ignorado silenciosamente no filtro; só o formato brasileiro
+ * realmente filtra. Enviar ISO faria a carga trazer o histórico inteiro achando
+ * que filtrou por período.
+ */
+function dataBR(d: Date): string {
+  const dd = String(d.getUTCDate()).padStart(2, '0')
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
+  return `${dd}/${mm}/${d.getUTCFullYear()}`
+}
+
+interface ItemVendaCanonico {
+  readonly skuExterno: string
+  readonly quantidade: number
+  readonly valorUnitarioCentavos: number
+}
+
+/**
+ * Um item do detalhe da venda.
+ *
+ * ⚠️ Caminhos CONFIRMADOS na sonda, e diferentes do que presumi: o SKU é
+ * `produtoPreco.codigoBarra.id` (não `codigoBarra.id` no item), e o preço
+ * unitário é `precoDoMomento` (não `valorUnitario`) — o preço no momento da
+ * venda, que é o que interessa, e não o de tabela de hoje.
+ */
+function itemDeVenda(i: Record<string, unknown>): ItemVendaCanonico {
+  const produtoPreco = (i.produtoPreco ?? {}) as Record<string, unknown>
+  const codigoBarra = (produtoPreco.codigoBarra ?? {}) as Record<string, unknown>
+  return {
+    skuExterno: String(codigoBarra.id ?? ''),
+    quantidade: Number(i.quantidade ?? 0),
+    valorUnitarioCentavos: paraCentavos(i.precoDoMomento),
+  }
 }
 
 /** Only digits — the ERP stores phone as free text. */
@@ -66,18 +125,58 @@ function paraCentavos(valor: unknown): number {
   return Number.isFinite(n) ? Math.round(n * 100) : 0
 }
 
+/**
+ * ⚠️ O GeraCloud devolve data como `DD/MM/YYYY HH:mm:ss.SSSSSS` — confirmado na
+ * sonda (`"03/08/2021 09:11:33.788328"`), NÃO ISO. `new Date()` sobre esse texto
+ * interpreta `03/08` como 3 de agosto ou 8 de março conforme o locale, ou dá
+ * Invalid Date — e a venda seria rejeitada por "data inválida". Aqui o parse é
+ * explícito, campo a campo.
+ */
+function parseDataGeraCloud(valor: unknown): Date | null {
+  if (typeof valor !== 'string') return null
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})(?:[ T](\d{2}):(\d{2}):(\d{2}))?/.exec(valor.trim())
+  if (!m) return null
+  const [, dd, mm, yyyy, hh = '0', mi = '0', ss = '0'] = m
+  const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh), Number(mi), Number(ss))
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+/**
+ * ⚠️ As listagens devolvem ARRAY CRU, não o envelope `{content, last}` do Spring
+ * Data que eu havia presumido — confirmado na sonda. Parsear como envelope daria
+ * `content = undefined` e importaria ZERO, sem erro. Este helper aceita os dois
+ * formatos para o dia em que algum endpoint use o envelope.
+ */
+function linhasDe(corpo: unknown): unknown[] {
+  if (Array.isArray(corpo)) return corpo
+  if (corpo && typeof corpo === 'object' && Array.isArray((corpo as { content?: unknown }).content)) {
+    return (corpo as { content: unknown[] }).content
+  }
+  return []
+}
+
 export class ConectorGeraCloud implements ConectorErp {
   readonly nome = 'geracloud'
   readonly capacidades = CAPACIDADES_GERACLOUD
 
   readonly #base: string
-  readonly #token: string
+  readonly #obterToken: () => Promise<string>
   readonly #timeout: number
   readonly #buscar: typeof fetch
 
   constructor(op: OpcoesGeraCloud) {
     this.#base = op.baseUrl.replace(/\/$/, '')
-    this.#token = op.token
+    // ⚠️ Token fixo OU provedor. Um dos dois é obrigatório: sem token o
+    //    adaptador não fala com o ERP, e falhar no boot é melhor que na
+    //    primeira chamada, no meio de uma carga.
+    if (op.obterToken) {
+      this.#obterToken = op.obterToken
+    } else if (op.token !== undefined) {
+      const fixo = op.token
+      this.#obterToken = () => Promise.resolve(fixo)
+    } else {
+      throw new Error('ConectorGeraCloud exige token ou obterToken')
+    }
     // ⚠️ 2s by contract. Above that the order screen must warn and block
     // submission instead of letting the salesperson assemble blind.
     this.#timeout = op.timeoutMs ?? 2_000
@@ -87,12 +186,13 @@ export class ConectorGeraCloud implements ConectorErp {
   async #pedir<T>(caminho: string, init?: RequestInit): Promise<T> {
     const abortar = new AbortController()
     const relogio = setTimeout(() => abortar.abort(), this.#timeout)
+    const token = await this.#obterToken()
     try {
       const r = await this.#buscar(`${this.#base}${caminho}`, {
         ...init,
         signal: abortar.signal,
         headers: {
-          Authorization: `Bearer ${this.#token}`,
+          Authorization: `Bearer ${token}`,
           Accept: 'application/json',
           ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
           ...init?.headers,
@@ -110,11 +210,8 @@ export class ConectorGeraCloud implements ConectorErp {
   // -------------------------------------------------------------------------
 
   async listarClientes(cursor?: string): Promise<Pagina<ClienteCanonico>> {
-    const pagina = Number(cursor ?? 0)
-    const dados = await this.#pedir<{ content?: unknown[]; last?: boolean }>(
-      `/clientespdv?page=${pagina}&size=200`,
-    )
-    const linhas = dados.content ?? []
+    const offset = Number(cursor ?? 0)
+    const linhas = linhasDe(await this.#pedir(`/clientespdv?${paramsPagina(offset)}`))
 
     return {
       itens: linhas.map((linha) => {
@@ -132,23 +229,23 @@ export class ConectorGeraCloud implements ConectorErp {
           // hence the array here even though the source gives at most one.
           telefones: telefone ? [telefone] : [],
           email: (c.email as string) || undefined,
-          // ⚠️ Existing wallet assignment, as free text. Resolved against
-          // usuario_identidade_externa (0007); unmatched becomes a pending
-          // correspondence instead of being dropped.
-          vendedorExterno: (c.usernameVendedor as string) || undefined,
+          // ⚠️ O cliente NÃO carrega username de vendedor (confirmado na sonda:
+          //    tem `corretor` — objeto por CPF — e `usernameCadastro`, que é quem
+          //    cadastrou, não o dono da carteira). A carteira é atribuída pela
+          //    VENDA, que traz `usernameVendedor`. Deixar undefined é honesto;
+          //    inventar a partir de `usernameCadastro` daria dono errado.
+          vendedorExterno: undefined,
+          // status 0 = ativo no pdv-core.
           ativo: c.status === 0 || c.status === undefined,
         }
       }),
-      cursor: dados.last === false ? String(pagina + 1) : undefined,
+      cursor: cursorPorOffset(linhas.length, offset),
     }
   }
 
   async listarSkus(cursor?: string): Promise<Pagina<SkuCanonico>> {
-    const pagina = Number(cursor ?? 0)
-    const dados = await this.#pedir<{ content?: unknown[]; last?: boolean }>(
-      `/estoques?page=${pagina}&size=200`,
-    )
-    const linhas = dados.content ?? []
+    const offset = Number(cursor ?? 0)
+    const linhas = linhasDe(await this.#pedir(`/estoques?${paramsPagina(offset)}`))
 
     return {
       itens: linhas.map((linha) => {
@@ -160,13 +257,15 @@ export class ConectorGeraCloud implements ConectorErp {
         const subTamanho = (cb.subTamanho ?? {}) as Record<string, unknown>
 
         // ⚠️ The SKU is CodigoBarra, NOT Produto. Produto is the model
-        // ("CONJUNTO LAILA"); CodigoBarra is what has stock and price.
+        // ("T SHIRTS CORES"); CodigoBarra is what has stock and price.
         // Treating Produto as sellable gets balance, price and grid all wrong.
+        // Confirmado na sonda: `codigoBarra.{cor,tamanho,produto,valor}`.
         const atributos: Record<string, string> = {}
         if (cor.descricao) atributos.cor = String(cor.descricao)
         if (tamanho.descricao) atributos.tamanho = String(tamanho.descricao)
-        // The reference ERP has sub-size as well — fixed columns would already
-        // be broken here (ADR-004).
+        // ⚠️ subTamanho é OPCIONAL — este ERP tem produtos sem ele (a sonda
+        //    mostrou T-shirt só com cor+tamanho). Por isso atributos abertos
+        //    (ADR-004): coluna fixa de subTamanho ficaria nula na maioria.
         if (subTamanho.descricao) atributos.subTamanho = String(subTamanho.descricao)
 
         return {
@@ -175,40 +274,166 @@ export class ConectorGeraCloud implements ConectorErp {
           descricao: String(produto.descricao ?? ''),
           atributos,
           codigoBarras: (cb.valor as string) || undefined,
-          ativo: true,
+          // status 0 = ativo. A mesma CodigoBarra aparece em várias linhas de
+          // estoque (uma por loja); a ingestão deduplica por identidade externa.
+          ativo: produto.status === 0 || produto.status === undefined,
         }
       }),
-      cursor: dados.last === false ? String(pagina + 1) : undefined,
+      cursor: cursorPorOffset(linhas.length, offset),
     }
   }
 
   async listarVendas(desde: Date, cursor?: string): Promise<Pagina<VendaCanonica>> {
-    const pagina = Number(cursor ?? 0)
-    const dados = await this.#pedir<{ content?: unknown[]; last?: boolean }>(
-      `/vendas?page=${pagina}&size=100&dataInicio=${desde.toISOString().slice(0, 10)}`,
-    )
-    const linhas = dados.content ?? []
+    const offset = Number(cursor ?? 0)
+    // ⚠️ `dataInicial` em DD/MM/YYYY (ISO é ignorado). `dataFinal` bem no futuro
+    //    = "de `desde` em diante"; a janela fina fica por conta de quem concilia,
+    //    que filtra por período no SQL.
+    const linhas = linhasDe(await this.#pedir(
+      `/vendas?${paramsPagina(offset)}&dataInicial=${dataBR(desde)}&dataFinal=31/12/2099`,
+    ))
+
+    // ⚠️ Rascunho NÃO é venda — é um pedido não finalizado. A sonda mostrou
+    //    `isRascunho`; importar rascunho infla o faturamento com o que ainda
+    //    não aconteceu. Filtrado ANTES de virar VendaCanonica.
+    const efetivas = linhas.filter((linha) => (linha as Record<string, unknown>).isRascunho !== true)
 
     return {
-      itens: linhas.map((linha) => {
+      itens: efetivas.map((linha) => {
         const v = linha as Record<string, unknown>
+        // ⚠️ Todos os nomes abaixo foram CORRIGIDOS contra a sonda:
+        //    `valor` (não valorTotal), `clientePDV` (não cliente),
+        //    `dataVenda` no formato DD/MM/YYYY, `status: "CANCELADA"`.
+        const cliente = (v.clientePDV ?? {}) as Record<string, unknown>
+        const ocorridaEm = parseDataGeraCloud(v.dataVenda) ?? new Date(NaN)
+        const cancelada = String(v.status ?? '').toUpperCase() === 'CANCELADA'
         const itens = (v.itens ?? []) as Record<string, unknown>[]
+
         return {
           idExterno: String(v.id),
-          clienteExterno: String((v.cliente as Record<string, unknown>)?.id ?? ''),
-          ocorridaEm: new Date(String(v.dataVenda ?? v.data)),
-          valorCentavos: paraCentavos(v.valorTotal),
+          clienteExterno: String(cliente.id ?? ''),
+          ocorridaEm,
+          valorCentavos: paraCentavos(v.valor),
           vendedorExterno: (v.usernameVendedor as string) || undefined,
           filialExterna: String((v.loja as Record<string, unknown>)?.id ?? '') || undefined,
-          itens: itens.map((i) => ({
-            skuExterno: String((i.codigoBarra as Record<string, unknown>)?.id ?? i.idCodigoBarra),
-            quantidade: Number(i.quantidade ?? 0),
-            valorUnitarioCentavos: paraCentavos(i.valorUnitario),
-          })),
+          // ⚠️ Cancelada entra com a data preenchida (para conciliar), o RFV a
+          //    exclui por ela. `ocorridaEm` como aproximação da data de
+          //    cancelamento: a listagem não traz a data exata do cancelamento.
+          ...(cancelada ? { canceladaEm: ocorridaEm } : {}),
+          // ⚠️ A listagem de vendas NÃO traz itens (confirmado na sonda) — eles
+          //    ficam no detalhe `/vendas/{id}`, via `detalharVenda()`. O RFV usa
+          //    o total da venda, então a carga funciona sem eles.
+          itens: itens.map(itemDeVenda),
         }
       }),
-      cursor: dados.last === false ? String(pagina + 1) : undefined,
+      cursor: cursorPorOffset(linhas.length, offset),
     }
+  }
+
+  /**
+   * Itens de uma venda — só o detalhe `/vendas/{id}` os traz.
+   *
+   * ⚠️ Endpoint INSTÁVEL na instância de apresentação: 500 em algumas vendas
+   * (canceladas) e 400 em outras. Por isso é chamada SEPARADA, tolerante a
+   * falha: a carga principal (RFV, que usa o total) não pode ser refém do
+   * detalhe. Devolve `null` quando o ERP falha, para o chamador registrar a
+   * pendência em vez de derrubar a carga inteira.
+   */
+  async detalharVenda(idExterno: string): Promise<readonly ItemVendaCanonico[] | null> {
+    try {
+      const v = await this.#pedir<Record<string, unknown>>(`/vendas/${idExterno}`)
+      // ⚠️ No detalhe o campo é `itens` (o Java chama `itemVendas`, mas serializa
+      //    como `itens` — confirmado na sonda). O SKU é `produtoPreco.codigoBarra.id`
+      //    e o preço unitário é `precoDoMomento`, não `valorUnitario`.
+      const itens = (v.itens ?? []) as Record<string, unknown>[]
+      return itens.map(itemDeVenda)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Saldo por SKU vindo do `/estoques` (paginado, offset). ⚠️ Cada linha é o
+   * estoque de UMA loja para uma CodigoBarra; quem chama agrega por SKU. Devolve
+   * a página crua para a carga somar entre lojas.
+   */
+  async listarSaldosEstoque(cursor?: string): Promise<Pagina<{ skuExterno: string; quantidade: number }>> {
+    const offset = Number(cursor ?? 0)
+    const linhas = linhasDe(await this.#pedir(`/estoques?${paramsPagina(offset)}`))
+    return {
+      itens: linhas.map((linha) => {
+        const e = linha as Record<string, unknown>
+        const cb = (e.codigoBarra ?? {}) as Record<string, unknown>
+        return {
+          skuExterno: String(cb.id ?? e.id),
+          quantidade: Number(e.quantidadeDecimal ?? e.quantidade ?? 0),
+        }
+      }),
+      cursor: cursorPorOffset(linhas.length, offset),
+    }
+  }
+
+  /**
+   * Tabelas de preço do ERP. ⚠️ São muitas (79 na instância de referência); uma
+   * é `padrao`. `GET /tabela-preco/todas` agrupa por loja — achatamos.
+   */
+  async listarTabelasPreco(): Promise<readonly TabelaPrecoCanonica[]> {
+    const grupos = await this.#pedir<{ tabelasPreco?: Record<string, unknown>[] }[]>('/tabela-preco/todas')
+    const vistos = new Set<string>()
+    const out: TabelaPrecoCanonica[] = []
+    for (const g of Array.isArray(grupos) ? grupos : []) {
+      for (const t of g.tabelasPreco ?? []) {
+        const id = String(t.id)
+        if (vistos.has(id)) continue // mesma tabela repete entre lojas
+        vistos.add(id)
+        out.push({ idExterno: id, descricao: String(t.descricao ?? ''), padrao: t.padrao === true })
+      }
+    }
+    return out
+  }
+
+  /**
+   * Preço de vários SKUs numa tabela — em LOTE.
+   *
+   * ⚠️ Endpoint confirmado no fonte e ao vivo:
+   * `POST /produtos-precos/{tabela}/busca-preco-por-codigos-barra` com a lista de
+   * ids de `codigoBarra` (o SKU). Devolve `{ codigoBarra.id, preco }`. Em lote
+   * porque o painel de pedido precisa do preço de uma grade inteira de uma vez.
+   */
+  async listarPrecos(
+    tabelaExterna: string,
+    skusExternos: readonly string[],
+  ): Promise<readonly PrecoCanonico[]> {
+    if (skusExternos.length === 0) return []
+    const ids = skusExternos.map((s) => Number(s)).filter((n) => Number.isFinite(n))
+    const linhas = linhasDe(await this.#pedir(
+      `/produtos-precos/${encodeURIComponent(tabelaExterna)}/busca-preco-por-codigos-barra`,
+      { method: 'POST', body: JSON.stringify(ids) },
+    ))
+    return linhas.map((linha) => {
+      const l = linha as Record<string, unknown>
+      const cb = (l.codigoBarra ?? {}) as Record<string, unknown>
+      return {
+        skuExterno: String(cb.id ?? ''),
+        tabela: tabelaExterna,
+        valorCentavos: paraCentavos(l.preco),
+      }
+    })
+  }
+
+  /**
+   * Faturamento que o ERP considera verdade — a fonte da conciliação (§8.3).
+   *
+   * ⚠️ `POST /dashboards/faturamento-geral` com `[idLojas]` ([] = todas). Devolve
+   * `{ hoje, semanal, mensal, anual }`; `anual` é do ANO CORRENTE (jan→hoje).
+   * ⚠️ É de propósito uma fonte DIFERENTE de `/vendas`: conciliar a importação
+   * contra o mesmo endpoint que a alimentou só prova que sabemos copiar.
+   */
+  async consultarFaturamentoAnualCentavos(idLojas: readonly number[] = []): Promise<number> {
+    const d = await this.#pedir<{ anual?: number }>('/dashboards/faturamento-geral', {
+      method: 'POST',
+      body: JSON.stringify(idLojas),
+    })
+    return paraCentavos(d.anual)
   }
 
   // -------------------------------------------------------------------------

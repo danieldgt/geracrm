@@ -2,7 +2,19 @@
 
 **Angular 21+** — zoneless, signals, standalone, Vitest. Servido por CDN (sem servidor de render).
 
-> Status: **não implementado**. ADR-010 decidido, aguardando design tokens e Onda 1.
+> Status: **iniciado**. Primeira tela real: **Configurações → ERP**
+> (`src/app/funcionalidades/integracao/`). O restante segue na Onda 1.
+
+⚠️ **Angular 21, não 22.** O 22 exige TypeScript >= 6.0, e o monorepo está no 5.9 —
+subir o TS por causa do console quebraria `api`, `shared` e `conectores` no mesmo commit.
+O 21 aceita 5.9 e é o que o ADR-010 pede ("21+").
+
+⚠️ **`vitest` 4 aqui, 2 no resto do monorepo.** É peer de `@angular/build` 21. Convivem porque o
+Turbo roda `test` por pacote; a divergência é deliberada e some quando o resto subir.
+
+⚠️ **`tsc --noEmit` NÃO valida template.** `strictTemplates` só roda no compilador Angular, e é lá
+que moram os erros desta tela — `erroDe(campo.nome)` sobre um `computed` passa no `tsc` e quebra no
+build. Por isso `pnpm typecheck` aqui é `ng build` **e** `tsc`, nessa ordem.
 
 ## Quem usa
 

@@ -230,8 +230,28 @@ perde contraste de texto; a versão escura usa um coral mais claro e menos satur
 ## 8. Acessibilidade
 
 - **Contraste** — 4.5:1 em texto, 3:1 em elemento de interface, verificado **por par de tokens**
-  (texto sobre superfície), não por token isolado
-- **Foco visível** — anel de 2px em `turquesa`, com deslocamento de 2px. ⚠️ Nunca `outline: none`
+  (texto sobre superfície), não por token isolado. ⚠️ **A verificação é executável**, não revisão
+  visual: `packages/design-tokens/scripts/validar.mjs` roda no `test` do pacote e confere 18 pares
+  nos dois temas. Contraste conferido a olho passa — a razão é multiplicativa e a intuição erra
+  justamente na faixa 3–4.5:1, que é onde quase tudo cai.
+- **Foco visível** — anel de 2px em `borda-foco`, com deslocamento de 2px. ⚠️ Nunca `outline: none`
+
+### ⚠️ Quatro valores mudaram quando a verificação passou a rodar
+
+A paleta desta seção foi escrita antes do validador existir, e quatro tokens não cumpriam o que
+esta mesma seção promete. A correção está em `tokens.json`; o registro fica aqui porque a razão
+importa mais que o valor novo:
+
+| Token | Era | Virou | Por quê |
+|---|---|---|---|
+| `borda-foco` (claro) | `turquesa.500` — 2.55:1 | `turquesa.700` — 4.21:1 | ⚠️ É o anel de foco. Abaixo de 3:1 quem navega por teclado **perde a posição na tela** — e essa pessoa não tem outro jeito de saber onde está |
+| `erro` (claro) | `coral.500` — 3.91:1 | `coral.700` — 5.72:1 | Mensagem de erro é texto e precisa de 4.5:1. Erro que não se lê é erro que vira chamado |
+| `texto-suave` (claro) | `neutro.400` — 2.56:1 | `neutro.450` — 3.96:1 | Degrau novo, entre o 400 (fraco demais) e o 500 (que já é `texto-secundario`) |
+| — | — | `borda-controle` (novo) | ⚠️ `borda-forte` fazia dois trabalhos: separar seções e **delimitar campo de formulário**. Só o segundo carrega informação e exige 3:1; forçar os dois ao mesmo limite deixaria toda divisória pesada e mataria a densidade |
+
+⚠️ O caso de `borda-controle` é o mais instrutivo: o validador acusou `borda-forte` reprovado, e a
+correção óbvia — escurecer o token — teria estragado a tela inteira para consertar um caso. Um token
+reprovando às vezes significa que ele tem **dois papéis**, não que a cor está errada.
 - **Alvo de toque** — 44px no app; no console, 28px com área de clique estendida
 - **Estado nunca só por cor** — sempre com rótulo, ícone ou posição
 - **`prefers-reduced-motion`** — desliga transições; o anel de janela vira arco estático

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "deploy": {
+    "preDeployCommand": ["sh -c 'if [ -f /app/apps/api/pre-deploy.sh ]; then sh /app/apps/api/pre-deploy.sh; else echo pre-deploy-nao-aplicavel-a-este-servico; fi'"]
+  }
+}

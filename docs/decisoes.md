@@ -479,3 +479,36 @@ inglês · sem `enum` do TypeScript (união de literais + `z.enum`) · sem statu
 erros de domínio tipados por contexto, nunca controle de fluxo por `string.includes()` · blobs em
 object storage com ponteiro no banco · segredos cifrados em repouso · **toda lista paginada
 server-side**, sem exceção.
+
+---
+
+## ADR-021 — Canal dual: oficial (Meta) prioritário, não-oficial (PlugZapi) como opção
+
+**Contexto.** O ADR-002 escolheu o WhatsApp Cloud API oficial (Meta) e vetou API não-oficial nas
+Ondas 0–2. O registro na Meta está no caminho crítico e trava a operação. O mercado — Tailor e
+concorrentes — opera com **os dois caminhos**: oficial como prioridade, não-oficial (Z-API/PlugZapi)
+como alternativa. O GeraCloud já integra PlugZapi em produção.
+
+**Decisão.** O produto suporta **dois tipos de canal WhatsApp**, lado a lado, e o cliente escolhe por
+qual número caminha — inclusive com números oficiais E não-oficiais integrados ao mesmo tempo:
+
+- **Oficial (Meta Cloud API)** — prioridade. Sem risco de banimento, janela de 24h + template, tier.
+- **Não-oficial (PlugZapi/Z-API)** — opção. Automatiza um WhatsApp Web (`instance`+`token`).
+  ⚠️ **Carrega risco de banimento do número** — é decisão de negócio do cliente, não nossa.
+
+**Como isso respeita a arquitetura.** A raiz `canal_conectado` já é genérica (ADR/§1.2, migration
+0011). PlugZapi entra como **mais um adaptador de canal** por trás de uma porta que o NOSSO domínio
+define (mesma filosofia dos conectores de ERP, ADR-008): capacidades declaradas, degradação visível.
+A janela de 24h e o template são capacidades do canal oficial; o não-oficial declara as suas (sem
+janela, sem template — envia texto livre, com o alerta de risco).
+
+**Consequências.**
+- Cada canal declara `tipo` (`whatsapp_oficial` | `whatsapp_nao_oficial` | `instagram`) e capacidades.
+- ⚠️ **Alertas separados por caminho**: a interface deixa claro qual número é oficial e qual é
+  não-oficial, e o risco do não-oficial é visível — nunca silencioso.
+- O gateway de saída escolhe o adaptador pelo canal; o resto do produto (RFV, pedido, campanha) não
+  sabe por qual caminho a mensagem foi.
+- **Revisa o ADR-002**, não o anula: o oficial continua sendo a prioridade e o padrão recomendado.
+
+**Aprendizado reaproveitável.** Implementar PlugZapi agora destrava o Inbox com dado real e ensina o
+fluxo de envio/recebimento; quando a Meta liberar, o oficial é só outro adaptador na mesma porta.

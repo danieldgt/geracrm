@@ -118,6 +118,22 @@ sql`SELECT ocorrencias::int AS ocorrencias FROM ...`                // quando ca
 **Regra:** toda coluna `bigint` lida para cálculo recebe cast explícito na consulta. Afeta
 `total_vendas_centavos`, `ocorrencias`, `registros_importados`, `valor` de contador e protocolo.
 
+⚠️ **Gravar `jsonb` exige `::text::jsonb`.** Com `::jsonb` sozinho o driver marca o parâmetro
+como JSON e o Postgres codifica de novo — a coluna guarda a string JSON inteira como escalar:
+
+```ts
+// ❌ jsonb_typeof(atributos) = 'string'. O INSERT passa, a coluna parece preenchida.
+sql`UPDATE sku SET atributos = ${JSON.stringify(attrs)}::jsonb WHERE ...`
+
+// ✅ ::text força o parâmetro a ir como texto puro; o Postgres faz o parse de verdade
+sql`UPDATE sku SET atributos = ${jsonbDe(attrs)}::text::jsonb WHERE ...`
+```
+
+A quebra é silenciosa e tardia: `atributos->>'tamanho'` devolve NULL para sempre, o índice GIN
+não casa com nada, e o filtro "todos os tamanho G" volta vazio sem erro. Use o helper
+`apps/api/src/db/jsonb.ts`, e **teste com `jsonb_typeof`** — o valor lido volta como string, e a
+igualdade profunda falha de um jeito que parece erro de teste, não de gravação.
+
 - Dinheiro: `numeric` no banco, **centavos inteiros** na aplicação. ⚠️ Nunca `float`.
 - Ids: **UUID v7** — ordenável por tempo, bom para índice.
 - Estado: `text` com união de literais na aplicação. ⚠️ Nunca status numérico mágico; nunca `enum`

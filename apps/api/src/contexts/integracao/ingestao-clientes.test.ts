@@ -102,13 +102,50 @@ describe('Ingestão de clientes', () => {
     const r2 = await ingerir(dados)
 
     expect(r2).toMatchObject({ criados: 0, vinculados: 1 })
-    const [{ total }] = await dono<{ total: number }[]>`SELECT count(*)::int AS total FROM contato WHERE tenant_id = ${A}`
-    expect(total).toBe(1)
+    const [linha] = await dono<{ total: number }[]>`SELECT count(*)::int AS total FROM contato WHERE tenant_id = ${A}`
+    expect(linha!.total).toBe(1)
   })
 
   it('dado cliente sem documento e sem telefone, então cria — é o normal no varejo', async () => {
     const r = await ingerir([cliente({ idExterno: '9', nome: 'Cliente Balcão' })])
     expect(r).toMatchObject({ criados: 1, rejeitados: 0 })
+  })
+
+  it('⚠️ mesmo telefone, CNPJs DIFERENTES → dois contatos (o limiar da MONICA)', async () => {
+    // A demo tinha 566 CNPJs distintos no mesmo telefone virando UM contato. Com
+    // o limiar, cada CNPJ é uma empresa: não funde por telefone quando o
+    // documento conflita.
+    const r = await ingerir([
+      cliente({ idExterno: 'e1', nome: 'Loja A', telefones: ['81998617049'], documento: '11.111.111/0001-11' }),
+      cliente({ idExterno: 'e2', nome: 'Loja B', telefones: ['81998617049'], documento: '22.222.222/0001-22' }),
+    ])
+    expect(r.criados).toBe(2)
+    expect(r.vinculados).toBe(0)
+    const [linha] = await dono<{ total: number }[]>`
+      SELECT count(*)::int AS total FROM contato WHERE tenant_id = ${A}`
+    expect(linha!.total).toBe(2)
+  })
+
+  it('mesmo telefone, MESMO CNPJ → um contato (é a mesma empresa)', async () => {
+    // O limiar não é paranoia: mesmo documento no mesmo telefone É a mesma
+    // empresa (recadastro), e deve fundir.
+    const r = await ingerir([
+      cliente({ idExterno: 'f1', nome: 'Loja X', telefones: ['81998617049'], documento: '33.333.333/0001-33' }),
+      cliente({ idExterno: 'f2', nome: 'Loja X (recadastro)', telefones: ['81998617049'], documento: '33.333.333/0001-33' }),
+    ])
+    expect(r.criados).toBe(1)
+    expect(r.vinculados).toBe(1)
+  })
+
+  it('⚠️ varejo sem documento, mesmo telefone → funde (o limiar não penaliza quem não tem CNPJ)', async () => {
+    // ADR-019: no varejo a maioria não tem documento. Sem documento não há
+    // conflito a detectar — o telefone segue segurando, como antes.
+    const r = await ingerir([
+      cliente({ idExterno: 'g1', nome: 'Cliente', telefones: ['81998617049'] }),
+      cliente({ idExterno: 'g2', nome: 'Cliente', telefones: ['81998617049'] }),
+    ])
+    expect(r.criados).toBe(1)
+    expect(r.vinculados).toBe(1)
   })
 
   it('dado cliente sem nome, então rejeita COM o motivo', async () => {
@@ -169,7 +206,8 @@ describe('Ingestão de clientes', () => {
                VALUES (${A}, ${eduarda}, ${CONEXAO}, 'EDUARDA')`
 
     await ingerir([cliente({ idExterno: '10', nome: 'Cliente', vendedorExterno: 'EDUARDA' })])
-    const [{ id: contatoId }] = await dono<{ id: string }[]>`SELECT id FROM contato WHERE tenant_id = ${A}`
+    const [linhaContato] = await dono<{ id: string }[]>`SELECT id FROM contato WHERE tenant_id = ${A}`
+    const contatoId = linhaContato!.id
 
     // A gestora transfere na tela.
     await dono`SELECT transferir_carteira(${A}, ${contatoId}, ${janaina}, NULL, 'manual')`

@@ -1,0 +1,247 @@
+import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
+import { CanaisServico, type Canal, type ProvedorCanal } from './canais.servico.js'
+import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
+
+/**
+ * Cadastro de celular / canal — Meta (oficial) e não-oficiais (PlugZapi + futuros).
+ *
+ * ⚠️ O formulário é DESENHADO do catálogo de provedores (`/v1/canais/provedores`),
+ * como a tela de ERP. Provedor novo entra no catálogo e aparece aqui sem tocar
+ * neste componente. O aviso de RISCO do não-oficial aparece em destaque (ADR-021).
+ */
+@Component({
+  selector: 'app-canais',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [FormularioCredencialComponente],
+  template: `
+    <header class="cabecalho">
+      <div>
+        <h1>Números de WhatsApp</h1>
+        <p class="sub">Conecte números oficiais (Meta) e não-oficiais. O cliente escolhe por qual caminho falar.</p>
+      </div>
+      @if (servico.estado() === 'pronto' && !servico.vazio()) {
+        <button class="primario" (click)="abrir()">Conectar número</button>
+      }
+    </header>
+
+    @switch (servico.estado()) {
+      @case ('carregando') { <div class="bloco" aria-busy="true"><div class="esqueleto"></div></div> }
+      @case ('sem_permissao') { <div class="bloco aviso"><h2>Sem acesso aos canais</h2></div> }
+      @case ('erro') { <div class="bloco aviso"><h2>Não foi possível carregar</h2>
+        <p>{{ servico.erro() }}</p><button (click)="servico.carregar()">Tentar de novo</button></div> }
+      @case ('pronto') {
+        @if (servico.vazio()) {
+          <div class="bloco vazio">
+            <h2>Nenhum número conectado</h2>
+            <p>Conecte um número oficial (Meta) ou não-oficial (PlugZapi) para começar a conversar.</p>
+            <button class="primario" (click)="abrir()">Conectar meu primeiro número</button>
+          </div>
+        } @else {
+          <!-- Saúde da frota (EP-03): o que exige olho agora. -->
+          @if (servico.saude(); as s) {
+            <div class="saude">
+              <div class="metrica">
+                <span class="rot">Entrega (24h)</span>
+                @if (s.entrega.amostras === 0) {
+                  <span class="val neutro">— sem envios</span>
+                } @else {
+                  <span class="val" [class.ruim]="(s.entrega.taxa ?? 1) < 0.7">
+                    {{ pct(s.entrega.taxa) }} <small>({{ s.entrega.falha }} falhas / {{ s.entrega.amostras }})</small>
+                  </span>
+                }
+              </div>
+              <div class="metrica">
+                <span class="rot">Alertas abertos</span>
+                <span class="val" [class.ruim]="s.alertasAbertos > 0">{{ s.alertasAbertos }}</span>
+              </div>
+            </div>
+          }
+          <ul class="lista">
+            @for (c of servico.canais(); track c.id) {
+              <li class="canal" [class]="'canal--' + c.estado">
+                <div class="linha">
+                  <div>
+                    <h2>{{ c.nomeAmigavel }}</h2>
+                    <span class="tags">
+                      <span class="tag" [class.oficial]="ehOficial(c)">{{ ehOficial(c) ? 'Oficial (Meta)' : 'Não-oficial' }}</span>
+                      <span class="tag prov">{{ nomeProvedor(c.provedor) }}</span>
+                      @if (!ehOficial(c)) { <span class="tag risco">⚠️ risco de banimento</span> }
+                    </span>
+                  </div>
+                  <span class="selo">{{ rotuloEstado(c.estado) }}</span>
+                </div>
+                @if (c.estado === 'desconectado' && c.ultimoErro) {
+                  <p class="err">{{ c.ultimoErro }}</p>
+                }
+                <div class="acoes">
+                  <button (click)="testar(c)" [disabled]="servico.testando().has(c.id)">
+                    {{ servico.testando().has(c.id) ? 'Testando…' : 'Testar conexão' }}
+                  </button>
+                </div>
+                @if (resultado()[c.id]; as r) {
+                  <p class="resultado" [class.ok]="r.conectado" role="status">
+                    {{ r.conectado ? '✅ Conectado' : '⚠️ ' + (r.detalhe || 'Desconectado') }}
+                  </p>
+                }
+              </li>
+            }
+          </ul>
+        }
+      }
+    }
+
+    @if (editando(); as ed) {
+      <div class="painel" role="dialog" aria-modal="true" aria-labelledby="tp">
+        <h2 id="tp">Conectar número</h2>
+
+        <label class="campo">
+          <span class="rotulo">Tipo de número</span>
+          <select [value]="ed.provedor" (change)="trocarProvedor($event)">
+            @for (p of servico.provedores(); track p.codigo) {
+              <option [value]="p.codigo">{{ p.nome }}</option>
+            }
+          </select>
+          <span class="ajuda">{{ provedorAtual()?.descricao }}</span>
+        </label>
+
+        <!-- ⚠️ Aviso de risco do não-oficial em DESTAQUE (ADR-021). -->
+        @if (provedorAtual()?.aviso; as aviso) {
+          <p class="aviso-risco">{{ aviso }}</p>
+        }
+
+        <label class="campo">
+          <span class="rotulo">Como chamar este número</span>
+          <input [value]="ed.nome" (input)="nomeMudou($event)" placeholder="Ex.: WhatsApp da loja" />
+          <span class="ajuda">{{ erros()['nomeAmigavel'] ?? 'Aparece nas telas e mensagens do sistema.' }}</span>
+        </label>
+
+        @if (provedorAtual(); as p) {
+          <app-formulario-credencial [esquema]="p.esquemaCredencial" [erros]="erros()"
+                                     (mudou)="credencialMudou($event)" />
+        }
+
+        @if (erroGeral(); as m) { <p class="erro-geral" role="alert">{{ m }}</p> }
+
+        <div class="acoes">
+          <button (click)="fechar()">Cancelar</button>
+          <button class="primario" (click)="salvar()" [disabled]="salvando()">
+            {{ salvando() ? 'Salvando…' : 'Salvar e testar' }}
+          </button>
+        </div>
+      </div>
+    }
+  `,
+  styles: `
+    :host { display: block; max-width: 760px; padding: var(--espacamento-6); }
+    .saude { display: flex; gap: var(--espacamento-6); padding: var(--espacamento-3) var(--espacamento-4);
+      margin-bottom: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
+    .saude .metrica { display: flex; flex-direction: column; gap: 2px; }
+    .saude .rot { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--texto-suave); }
+    .saude .val { font-size: 18px; color: var(--texto); font-variant-numeric: tabular-nums; }
+    .saude .val small { font-size: 12px; color: var(--texto-suave); }
+    .saude .val.ruim { color: var(--erro); }
+    .saude .val.neutro { font-size: 14px; color: var(--texto-suave); }
+    .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-6); }
+    h1 { margin: 0; font-size: 20px; color: var(--texto); }
+    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
+    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
+    .bloco h2 { margin: 0 0 var(--espacamento-2); font-size: 16px; color: var(--texto); }
+    .vazio, .aviso { text-align: center; } .bloco p { color: var(--texto-secundario); margin: 0 auto var(--espacamento-4); max-width: 44ch; }
+    .esqueleto { height: 60px; background: var(--superficie); border-radius: var(--raio-controle); }
+    .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }
+    .canal { padding: var(--espacamento-4); border: 1px solid var(--borda); border-left: 3px solid var(--borda-forte); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
+    .canal--conectado { border-left-color: var(--rfv-cliente-fiel); }
+    .canal--desconectado { border-left-color: var(--erro); }
+    .canal--conectando { border-left-color: var(--atencao); }
+    .linha { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-3); }
+    .canal h2 { margin: 0 0 var(--espacamento-1); font-size: 15px; color: var(--texto); }
+    .tags { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); }
+    .tag { font-size: 11px; padding: 1px 6px; border-radius: var(--raio-controle); border: 1px solid var(--borda); color: var(--texto-secundario); background: var(--superficie); }
+    .tag.oficial { color: var(--sucesso); border-color: var(--sucesso); }
+    .tag.risco { color: var(--erro); border-color: var(--erro); }
+    .selo { font-size: 12px; color: var(--texto-secundario); white-space: nowrap; }
+    .err { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--erro); }
+    .acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
+    button { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
+    button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+    button:disabled { opacity: .6; }
+    .primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
+    .resultado { margin: var(--espacamento-3) 0 0; font-size: 13px; color: var(--erro); }
+    .resultado.ok { color: var(--sucesso); }
+    .painel { margin-top: var(--espacamento-6); padding: var(--espacamento-6); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); box-shadow: var(--elevacao-modal); }
+    .painel h2 { margin: 0 0 var(--espacamento-4); font-size: 16px; }
+    .campo { display: grid; gap: var(--espacamento-1); margin-bottom: var(--espacamento-4); }
+    .rotulo { font-weight: 500; font-size: 13px; color: var(--texto); }
+    .ajuda { font-size: 12px; color: var(--texto-suave); }
+    select, .campo input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
+    .aviso-risco { padding: var(--espacamento-3); border: 1px solid var(--erro); border-radius: var(--raio-controle); background: var(--superficie); color: var(--erro); font-size: 13px; margin: 0 0 var(--espacamento-4); }
+    .erro-geral { color: var(--erro); font-size: 13px; }
+  `,
+})
+export class CanaisPagina implements OnInit {
+  readonly servico = inject(CanaisServico)
+  readonly editando = signal<{ provedor: string; nome: string } | null>(null)
+  readonly credencial = signal<Record<string, string>>({})
+  readonly erros = signal<Record<string, string>>({})
+  readonly erroGeral = signal<string | null>(null)
+  readonly salvando = signal(false)
+  readonly resultado = signal<Record<string, { conectado: boolean; detalhe?: string }>>({})
+
+  readonly provedorAtual = computed(() => {
+    const ed = this.editando()
+    return ed ? this.servico.provedores().find((p) => p.codigo === ed.provedor) : undefined
+  })
+
+  ngOnInit(): void { void this.servico.carregar() }
+
+  pct(taxa: number | null): string { return taxa === null ? '—' : `${Math.round(taxa * 100)}%` }
+
+  ehOficial(c: Canal): boolean { return c.tipo === 'whatsapp_oficial' }
+  nomeProvedor(cod: string | null): string {
+    return this.servico.provedores().find((p) => p.codigo === cod)?.nome ?? (cod ?? '—')
+  }
+  rotuloEstado(e: string): string {
+    return e === 'conectado' ? 'Conectado' : e === 'desconectado' ? 'Desconectado' : 'Aguardando teste'
+  }
+
+  abrir(): void {
+    this.limpar()
+    this.editando.set({ provedor: this.servico.provedores()[0]?.codigo ?? '', nome: '' })
+  }
+  fechar(): void { this.editando.set(null); this.limpar() }
+  private limpar(): void { this.credencial.set({}); this.erros.set({}); this.erroGeral.set(null) }
+
+  trocarProvedor(e: Event): void {
+    // ⚠️ Trocar de provedor limpa a credencial: os campos são outros.
+    this.credencial.set({}); this.erros.set({})
+    this.editando.update((ed) => (ed ? { ...ed, provedor: (e.target as HTMLSelectElement).value } : ed))
+  }
+  nomeMudou(e: Event): void {
+    this.editando.update((ed) => (ed ? { ...ed, nome: (e.target as HTMLInputElement).value } : ed))
+  }
+  credencialMudou(v: Record<string, string>): void { this.credencial.set(v) }
+
+  async salvar(): Promise<void> {
+    const ed = this.editando()
+    if (!ed) return
+    this.salvando.set(true); this.erros.set({}); this.erroGeral.set(null)
+    try {
+      const r = await this.servico.criar({ provedor: ed.provedor, nomeAmigavel: ed.nome, credencial: this.credencial() })
+      if (!r.ok) {
+        this.erros.set(r.erro.detalhe?.campos ?? (r.erro.detalhe?.campo ? { [r.erro.detalhe.campo]: r.erro.mensagem } : {}))
+        if (!r.erro.detalhe?.campos && !r.erro.detalhe?.campo) this.erroGeral.set(r.erro.mensagem)
+        return
+      }
+      this.editando.set(null); this.limpar()
+      // Salvar e testar num gesto só — salvar sem testar deixa achando que conectou.
+      await this.testar({ id: r.id } as Canal)
+    } finally {
+      this.salvando.set(false)
+    }
+  }
+
+  async testar(c: Canal): Promise<void> {
+    const r = await this.servico.testar(c.id)
+    this.resultado.update((a) => ({ ...a, [c.id]: r }))
+  }
+}

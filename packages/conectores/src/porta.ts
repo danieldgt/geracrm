@@ -89,6 +89,13 @@ export interface PrecoCanonico {
   readonly valorCentavos: number
 }
 
+export interface TabelaPrecoCanonica {
+  readonly idExterno: string
+  readonly descricao: string
+  /** ⚠️ A tabela padrão — a que o painel usa sem condição comercial específica. */
+  readonly padrao: boolean
+}
+
 export interface SaldoFidelidadeCanonico {
   readonly clienteExterno: string
   readonly disponivelCentavos: number
@@ -107,6 +114,13 @@ export interface VendaCanonica {
   readonly valorCentavos: number
   readonly vendedorExterno?: string | undefined
   readonly filialExterna?: string | undefined
+  /**
+   * Quando a venda foi cancelada no ERP. ⚠️ Cancelada NÃO é o mesmo que
+   * inexistente: ela entra (para a conciliação bater com relatórios que a
+   * contam) mas com esta data preenchida, e o RFV a exclui por ela. Descartar
+   * no import deixaria o total do CRM menor que o do ERP sem explicação.
+   */
+  readonly canceladaEm?: Date | undefined
   readonly itens: readonly {
     readonly skuExterno: string
     readonly quantidade: number

@@ -54,7 +54,79 @@ principal; os demais chegam por WhatsApp e por importação. Não é limitação
 
 ---
 
-## 3. Endpoints relevantes
+## 3. Autenticação — confirmada em produção
+
+> ⚠️ Confirmado contra `apresentacao.geracloud.com.br` (bundle do frontend) e o fonte do pdv-core.
+> Isto **corrige** a suposição inicial de `Authorization: Basic` — que o GeraCloud **não** aceita.
+
+O GeraCloud **não recebe usuário e senha na API.** Ele usa **Keycloak** (`password grant`):
+
+```
+1. POST auth.geracloud.com.br/auth/realms/GERA3/protocol/openid-connect/token
+      grant_type=password · client_id=modulo-retaguardaview · client_secret=<do bundle>
+      username=<login da retaguarda> · password=<senha>
+   → { access_token, refresh_token, expires_in }
+
+2. GET  {baseUrl}/empresas/usuario-logado
+      Authorization: Bearer <access_token>
+   → { razaoSocial, nomeFantasia, ... }   ← identifica EM QUAL empresa conectou
+```
+
+| Fato | Valor | Origem |
+|---|---|---|
+| Realm | `GERA3` | bundle do frontend |
+| Client | `modulo-retaguardaview` (confidential, tem secret) | bundle |
+| Base da API | `{host}/pdvcore/api/v1/` | `@ApplicationPath("/api/v1")` no fonte |
+| Sonda | `empresas/usuario-logado` (autenticado, identifica) | `RecursoEmpresa.java` |
+
+⚠️ **A pessoa continua digitando usuário e senha da retaguarda** — o Keycloak é detalhe do
+adaptador (`packages/conectores/src/geracloud/autenticacao.ts`), não aparece na tela.
+
+⚠️ **O `client_secret` vem do bundle público** — já é distribuído a qualquer navegador, então não é
+segredo real; é config do client. Overridável por ambiente para o dia em que a Gera3 der um client
+dedicado à integração, sem troca de código.
+
+⚠️ **Dois 401 com significados opostos:** `invalid_grant` no Keycloak é **senha errada** (ação da
+pessoa); 401 na API **com token fresco** é **endereço errado** (aponta para outro auth). E **403 na
+API** é o caso a separar: autenticou, mas falta o papel de leitura — quem libera é outra pessoa.
+
+---
+
+## 3a. Forma real das respostas — confirmada pela sonda
+
+> ⚠️ Confirmado em `apresentacao.geracloud.com.br` (instância "SHOWCASE"). **Corrige** o que eu havia
+> presumido lendo o Java — e cada divergência abaixo teria gravado lixo silencioso.
+
+| Presumi | É na verdade | Consequência se não corrigido |
+|---|---|---|
+| paginação `{content, last}` | **array cru** | `content` = undefined → **importaria zero**, sem erro |
+| venda `valorTotal` | **`valor`** | toda venda com **R$ 0** |
+| venda `cliente` | **`clientePDV`** | toda venda **"sem contato"** → RFV vazio |
+| data ISO | **`DD/MM/YYYY HH:mm:ss.SSSSSS`** | `03/08` vira 8/mar ou Invalid Date → venda **rejeitada** |
+| — | **`status: "CANCELADA"`** existe | cancelada contaria no faturamento |
+| — | **`isRascunho`** existe | rascunho contaria como venda |
+| itens na listagem de venda | **não vêm** (só no detalhe) | `item_venda` fica vazio (ok p/ RFV, que usa o total) |
+
+Cliente **não carrega username de vendedor** — tem `corretor` (por CPF) e `usernameCadastro` (quem
+cadastrou). A carteira é atribuída pela **venda** (`usernameVendedor`), não pelo cliente.
+
+⚠️ **Paginação e filtro de data — corrigidos ao vivo (a base grande revelou):**
+
+| Presumi | É na verdade | Efeito do erro |
+|---|---|---|
+| `page` / `size` (estilo Spring) | **`inicio` / `limite`** (offset em linhas: `setFirstResult`/`setMaxResults`) | vinham **5 vendas**; com o certo, **430** de 2026 |
+| `dataInicio` ISO (`2026-01-01`) | **`dataInicial` / `dataFinal` em `DD/MM/YYYY`** | ISO **ignorado em silêncio** → trazia o histórico inteiro achando que filtrou |
+
+Clientes e produtos vieram completos por acaso (base pequena); só as vendas expuseram o erro. A carga
+completa de 2026 (430 vendas, R$ 47.352,88) conciliou contra o faturamento do ERP (R$ 60.050,77):
+**divergência de R$ 12.697,89** — real e investigável (janela de emissão × liquidez, agrupamento do
+relatório), que é o produto da conciliação, não bug. Tudo travado em `conector.test.ts`.
+
+Tudo travado em `packages/conectores/src/geracloud/conector.test.ts`, com dublês na forma real.
+
+---
+
+## 3b. Endpoints relevantes
 
 | Recurso | Rota | Serve a |
 |---|---|---|

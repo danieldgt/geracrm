@@ -1,0 +1,71 @@
+name: CI
+
+# ⚠️ Bloco obrigatório (R-08): nenhum merge em `main` sem estes checks verdes.
+#    A lista é a do `processo-de-trabalho` §6.1: lint · typecheck · test · build
+#    de todos os apps · runner de migrations · os varredores de schema e o teste
+#    de isolamento de canal SSE (que rodam DENTRO do `test`).
+#    Alvo: < 8 min (§6.2). CI lento é revisão pulada.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: geracrm
+          POSTGRES_PASSWORD: geracrm_dev
+          POSTGRES_DB: geracrm
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U geracrm -d geracrm"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      # geracrm = dono (migrations); geracrm_api = app (NOBYPASSRLS).
+      DATABASE_ADMIN_URL: postgres://geracrm:geracrm_dev@localhost:5432/geracrm
+      DATABASE_URL: postgres://geracrm_api:geracrm_dev@localhost:5432/geracrm
+      CREDENCIAL_CHAVE: chave-de-ci-com-mais-de-32-caracteres-aqui-ok
+      CRYPTO_KEY: chave-de-ci-nao-usar-em-producao
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.6.3 }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # ── Banco: cenário "vazio" (⚠️ o "a partir de schema-atual.sql" é o
+      #    segundo cenário — pendente do snapshot, ver docs/onde-estamos.md).
+      - name: Migrations (banco vazio)
+        run: pnpm --filter @geracrm/api migrate
+
+      - name: Papel de app (geracrm_api, NOBYPASSRLS)
+        run: psql "$DATABASE_ADMIN_URL" -v ON_ERROR_STOP=1 -f infra/dev/setup-dev.sql
+        env:
+          PGPASSWORD: geracrm_dev
+
+      # ── Os checks. `test` inclui os varredores de schema e o isolamento SSE.
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build

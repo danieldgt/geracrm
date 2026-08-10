@@ -1,6 +1,9 @@
 import fp from 'fastify-plugin'
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify'
 import { sql, type Sql } from '../db/index.js'
+import {
+  criarVerificadorCognito, exigirCognitoEmProducao, type VerificadorCognito,
+} from './cognito.js'
 
 /**
  * Tenant plugin — the single place where "which company is this?" is decided.
@@ -16,7 +19,15 @@ import { sql, type Sql } from '../db/index.js'
 declare module 'fastify' {
   interface FastifyRequest {
     /** Tenant of the authenticated caller. Absent on public routes. */
-    tenantId?: string
+    // ⚠️ `| undefined` explícito, não só `?`. Com exactOptionalPropertyTypes,
+    // `?: string` significa "ausente OU string" — e nunca "presente valendo
+    // undefined", que é exatamente o que o hook atribui quando não há tenant.
+    tenantId?: string | undefined
+    /** `sub` do usuário Cognito autenticado. Para auditoria e log — nunca
+     *  para decidir o tenant (isso é `tenantId`). Ausente no header de dev. */
+    usuarioSub?: string | undefined
+    /** E-mail do usuário Cognito — para provisionar `usuario` (nome/email). */
+    usuarioEmail?: string | undefined
     /**
      * Runs a callback inside a transaction already scoped to this tenant.
      * Every domain query goes through here — RLS depends on it.
@@ -38,26 +49,65 @@ function permiteHeaderDeTenant(): boolean {
   return process.env.NODE_ENV !== 'production' && process.env.DEV_TENANT_HEADER === 'on'
 }
 
-function lerTenant(req: FastifyRequest, permiteHeader: boolean): string | undefined {
-  // TODO(E1-01): read `custom:tenant_id` from the verified Cognito JWT.
-  // Until Cognito exists, development uses an explicit header — behind two
-  // guards, because a header-based tenant in production is a total bypass.
+/** Lê o Bearer do header Authorization, se houver. */
+function extrairToken(req: FastifyRequest): string | undefined {
+  const auth = req.headers['authorization']
+  const valor = Array.isArray(auth) ? auth[0] : auth
+  if (valor?.startsWith('Bearer ')) return valor.slice(7)
+  return undefined
+}
+
+/**
+ * Descobre de qual empresa é o chamador.
+ *
+ * ⚠️ Ordem: Cognito PRIMEIRO. O `custom:tenant_id` do JWT assinado é a fonte
+ * real (ADR-001). O header `x-tenant-id` é o bypass de dogfooding e só entra
+ * quando NÃO há token e o modo dev está ligado — nunca por cima de um token.
+ */
+async function lerTenant(
+  req: FastifyRequest,
+  verificador: VerificadorCognito | null,
+  permiteHeader: boolean,
+): Promise<{ tenantId?: string; sub?: string; email?: string | undefined }> {
+  const token = extrairToken(req)
+  if (verificador && token) {
+    try {
+      const id = await verificador.verificar(token)
+      return { tenantId: id.tenantId, sub: id.sub, email: id.email }
+    } catch (erro) {
+      // ⚠️ Token inválido/expirado NÃO cai no header de dev: seria um caminho
+      //    para escalar de "token ruim" para "escolho meu tenant". Fica sem
+      //    tenant, e `exigirTenant` devolve 401.
+      req.log.debug({ erro: erro instanceof Error ? erro.message : String(erro) }, 'jwt cognito rejeitado')
+      return {}
+    }
+  }
+
+  // Sem token: só o header de dev, atrás de dois guardas.
   if (permiteHeader) {
     const bruto = req.headers['x-tenant-id']
     const valor = Array.isArray(bruto) ? bruto[0] : bruto
-    if (valor && UUID.test(valor)) return valor
+    if (valor && UUID.test(valor)) return { tenantId: valor }
   }
-  return undefined
+  return {}
 }
 
 export const pluginTenant: FastifyPluginAsync = fp(
   async (app) => {
     const permiteHeader = permiteHeaderDeTenant()
+    // ⚠️ O verificador é criado UMA vez (cacheia o JWKS). Criar por request
+    //    faria cada chamada rebaixar o JWKS da AWS.
+    const verificador = criarVerificadorCognito()
+    // ⚠️ Em produção sem Cognito o processo NÃO sobe — ver a trava.
+    exigirCognitoEmProducao(verificador)
 
+    if (verificador) {
+      app.log.info('Cognito ativo — o tenant vem de custom:tenant_id do JWT.')
+    }
     if (permiteHeader) {
       app.log.warn(
-        'DEV_TENANT_HEADER=on — o tenant vem do header X-Tenant-Id. ' +
-          'Isto é um bypass total de autenticação e só existe fora de produção.',
+        'DEV_TENANT_HEADER=on — o tenant pode vir do header X-Tenant-Id quando não há token. ' +
+          'Isto é um bypass e só existe fora de produção.',
       )
     }
 
@@ -83,7 +133,10 @@ export const pluginTenant: FastifyPluginAsync = fp(
     })
 
     app.addHook('onRequest', async (req) => {
-      req.tenantId = lerTenant(req, permiteHeader)
+      const { tenantId, sub, email } = await lerTenant(req, verificador, permiteHeader)
+      req.tenantId = tenantId
+      req.usuarioSub = sub
+      req.usuarioEmail = email
     })
   },
   { name: 'tenant' },
