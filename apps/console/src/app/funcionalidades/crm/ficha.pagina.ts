@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, input, effect } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, input, effect, signal } from '@angular/core'
 import { RouterLink } from '@angular/router'
 import { FichaServico, type FichaContato } from './ficha.servico.js'
 
@@ -31,7 +31,16 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
             <!-- Coluna esquerda: identidade -->
             <section class="col">
               <div class="cartao cabecalho">
-                <h1>{{ f.nome }}</h1>
+                @if (editandoNome()) {
+                  <form class="edit-nome" (submit)="salvarNome($event)">
+                    <input [value]="rascunhoNome()" (input)="rascunhoNome.set($any($event.target).value)" aria-label="Nome" />
+                    <button class="mini-btn primario" type="submit">Salvar</button>
+                    <button class="mini-btn" type="button" (click)="editandoNome.set(false)">Cancelar</button>
+                  </form>
+                } @else {
+                  <h1>{{ f.nome }} <button class="lapis" (click)="abrirNome(f.nome)" title="Editar nome">✎</button></h1>
+                }
+                @if (servico.erroEdicao(); as e) { <p class="erro-edit" role="alert">{{ e }}</p> }
                 <div class="tags">
                   @if (f.modalidade) { <span class="tag">{{ f.modalidade }}</span> }
                   @if (f.qualificado) { <span class="tag ok">Qualificado</span> }
@@ -45,30 +54,42 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                 <h3>Contato</h3>
                 @if (f.telefones.length) {
                   <ul class="linhas">
-                    @for (t of f.telefones; track t.e164) {
+                    @for (t of f.telefones; track t.seq) {
                       <li>
-                        <span class="mono">{{ t.e164 }}</span>
+                        <span class="mono encolhe">{{ t.e164 }}</span>
                         @if (t.principal) { <span class="mini">principal</span> }
+                        @else { <button class="mini-btn" (click)="servico.principalTelefone(t.seq)">tornar principal</button> }
                         @if (t.whatsapp) { <span class="mini wpp">WhatsApp</span> }
+                        <button class="x" (click)="servico.removerTelefone(t.seq)" title="Remover">×</button>
                       </li>
                     }
                   </ul>
                 } @else { <p class="vazio-mini">Sem telefone cadastrado.</p> }
+                <form class="add-linha" (submit)="salvarTelefone($event)">
+                  <input [value]="novoTel()" (input)="novoTel.set($any($event.target).value)" placeholder="Novo telefone" inputmode="tel" />
+                  <button class="mini-btn" type="submit" [disabled]="!novoTel().trim()">+ telefone</button>
+                </form>
 
+                <h3>Documentos</h3>
                 @if (f.documentos.length) {
-                  <h3>Documentos</h3>
                   <ul class="linhas">
-                    @for (d of f.documentos; track d.numero) {
-                      <li><span class="mono">{{ d.numero }}</span> <span class="mini">{{ d.tipo }}</span></li>
+                    @for (d of f.documentos; track d.seq) {
+                      <li><span class="mono encolhe">{{ d.numero }}</span> <span class="mini">{{ d.tipo }}</span>
+                        <button class="x" (click)="servico.removerDocumento(d.seq)" title="Remover">×</button></li>
                     }
                   </ul>
                   @if (f.totalDocumentos > f.documentos.length) {
-                    <!-- ⚠️ Over-merge visível: muitos documentos = a dedup por telefone
-                         fundiu vários cadastros. Não escondemos. -->
                     <p class="alerta-mini">⚠️ {{ f.totalDocumentos }} documentos neste contato —
                        provável fusão de cadastros por telefone repetido.</p>
                   }
-                }
+                } @else { <p class="vazio-mini">Sem documento.</p> }
+                <form class="add-linha" (submit)="salvarDocumento($event)">
+                  <select [value]="novoDocTipo()" (change)="novoDocTipo.set($any($event.target).value)">
+                    <option value="cnpj">CNPJ</option><option value="cpf">CPF</option>
+                  </select>
+                  <input [value]="novoDoc()" (input)="novoDoc.set($any($event.target).value)" placeholder="Número" inputmode="numeric" />
+                  <button class="mini-btn" type="submit" [disabled]="!novoDoc().trim()">+ documento</button>
+                </form>
 
                 @if (f.endereco; as e) {
                   <h3>Endereço</h3>
@@ -142,6 +163,10 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                     }
                   </ul>
                 } @else { <p class="vazio-mini">Nenhum comentário ainda.</p> }
+                <form class="add-coment" (submit)="salvarComentario($event)">
+                  <input [value]="novoComent()" (input)="novoComent.set($any($event.target).value)" placeholder="Anotar algo sobre o cliente…" />
+                  <button class="mini-btn" type="submit" [disabled]="!novoComent().trim()">Anotar</button>
+                </form>
               </div>
             </section>
           </div>
@@ -151,6 +176,19 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
   `,
   styles: `
     :host { display: block; max-width: 1040px; padding: var(--espacamento-6); }
+    .lapis { border: 0; background: transparent; color: var(--texto-suave); cursor: pointer; font-size: 14px; }
+    .lapis:hover { color: var(--acao); }
+    .edit-nome { display: flex; gap: var(--espacamento-2); align-items: center; }
+    .edit-nome input { flex: 1; padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
+    .erro-edit { color: var(--erro); font-size: 12px; margin: var(--espacamento-1) 0 0; }
+    .mini-btn { padding: 2px 8px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 11px; cursor: pointer; }
+    .mini-btn.primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
+    .mini-btn:disabled { opacity: .5; cursor: default; }
+    .x { border: 0; background: transparent; color: var(--texto-suave); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
+    .x:hover { color: var(--erro); }
+    .add-linha, .add-coment { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-2); }
+    .add-linha input, .add-coment input, .add-linha select { flex: 1; padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
+    .add-linha select { flex: 0 0 auto; }
     .voltar { display: inline-block; margin-bottom: var(--espacamento-4); color: var(--acao); text-decoration: none; font-size: 13px; }
     .voltar:hover { text-decoration: underline; }
     .grade { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(340px, 1.4fr); gap: var(--espacamento-4); align-items: start; }
@@ -201,8 +239,38 @@ export class FichaContatoPagina {
     //    navegar de um contato para outro troca o dado sem recriar o componente.
     effect(() => {
       const id = this.id()
-      if (id) void this.servico.carregar(id)
+      if (id) { this.servico.vincular(id); void this.servico.carregar(id) }
     })
+  }
+
+  // Edição
+  readonly editandoNome = signal(false)
+  readonly rascunhoNome = signal('')
+  readonly novoTel = signal('')
+  readonly novoDoc = signal('')
+  readonly novoDocTipo = signal<'cnpj' | 'cpf'>('cnpj')
+  readonly novoComent = signal('')
+
+  abrirNome(atual: string): void { this.rascunhoNome.set(atual); this.editandoNome.set(true) }
+  async salvarNome(ev: Event): Promise<void> {
+    ev.preventDefault()
+    const nome = this.rascunhoNome().trim()
+    if (nome && await this.servico.editarNome(nome)) this.editandoNome.set(false)
+  }
+  async salvarTelefone(ev: Event): Promise<void> {
+    ev.preventDefault()
+    const t = this.novoTel().trim()
+    if (t && await this.servico.addTelefone(t)) this.novoTel.set('')
+  }
+  async salvarDocumento(ev: Event): Promise<void> {
+    ev.preventDefault()
+    const d = this.novoDoc().trim()
+    if (d && await this.servico.addDocumento(this.novoDocTipo(), d)) this.novoDoc.set('')
+  }
+  async salvarComentario(ev: Event): Promise<void> {
+    ev.preventDefault()
+    const c = this.novoComent().trim()
+    if (c && await this.servico.addComentario(c)) this.novoComent.set('')
   }
 
   cor(codigo: string): string { return `var(--rfv-${codigo})` }

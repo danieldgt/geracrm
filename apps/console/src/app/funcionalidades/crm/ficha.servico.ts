@@ -11,8 +11,8 @@ export interface FichaContato {
   readonly qualificado: boolean | null
   readonly recebeCampanhas: boolean
   readonly recebeAutomacoes: boolean
-  readonly telefones: readonly { e164: string; principal: boolean; whatsapp: boolean }[]
-  readonly documentos: readonly { tipo: string; numero: string; fiscal: boolean }[]
+  readonly telefones: readonly { seq: number; e164: string; principal: boolean; whatsapp: boolean }[]
+  readonly documentos: readonly { seq: number; tipo: string; numero: string; fiscal: boolean }[]
   readonly totalDocumentos: number
   readonly endereco: {
     logradouro: string | null; numero: string | null; bairro: string | null
@@ -57,5 +57,50 @@ export class FichaServico {
       }
       this.estado.set('erro')
     }
+  }
+
+  // ───────── Edição (CRUD da ficha) ─────────
+  readonly erroEdicao = signal<string | null>(null)
+  private idAtual: string | null = null
+
+  private async apos<T>(op: Promise<T>): Promise<boolean> {
+    this.erroEdicao.set(null)
+    try {
+      await op
+      if (this.idAtual) await this.carregar(this.idAtual)
+      return true
+    } catch (e) {
+      this.erroEdicao.set(e instanceof HttpErrorResponse && (e.error as { mensagem?: string })?.mensagem
+        ? (e.error as { mensagem: string }).mensagem : 'Não foi possível salvar.')
+      return false
+    }
+  }
+
+  /** Lembra o id para recarregar após cada edição. */
+  vincular(id: string): void { this.idAtual = id }
+
+  editarNome(nome: string): Promise<boolean> {
+    return this.apos(firstValueFrom(this.http.patch(`/v1/contatos/${this.idAtual}`, { nome })))
+  }
+  addTelefone(telefone: string): Promise<boolean> {
+    return this.apos(firstValueFrom(this.http.post(`/v1/contatos/${this.idAtual}/telefones`, { telefone })))
+  }
+  principalTelefone(seq: number): Promise<boolean> {
+    return this.apos(firstValueFrom(this.http.post(`/v1/contatos/${this.idAtual}/telefones/${seq}/principal`, {})))
+  }
+  removerTelefone(seq: number): Promise<boolean> {
+    return this.apos(firstValueFrom(this.http.delete(`/v1/contatos/${this.idAtual}/telefones/${seq}`)))
+  }
+  addDocumento(tipo: 'cnpj' | 'cpf', numero: string): Promise<boolean> {
+    return this.apos(firstValueFrom(this.http.post(`/v1/contatos/${this.idAtual}/documentos`, { tipo, numero })))
+  }
+  removerDocumento(seq: number): Promise<boolean> {
+    return this.apos(firstValueFrom(this.http.delete(`/v1/contatos/${this.idAtual}/documentos/${seq}`)))
+  }
+  addComentario(texto: string): Promise<boolean> {
+    return this.apos(firstValueFrom(this.http.post(`/v1/contatos/${this.idAtual}/comentarios`, { texto })))
+  }
+  salvarEndereco(e: Record<string, string>): Promise<boolean> {
+    return this.apos(firstValueFrom(this.http.put(`/v1/contatos/${this.idAtual}/endereco`, e)))
   }
 }

@@ -248,15 +248,15 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
            WHERE c.id = ${id}
         `
 
-        const telefones = await tx<{ e164: string; principal: boolean; whatsapp: boolean }[]>`
-          SELECT e164, principal, whatsapp FROM contato_telefone
+        const telefones = await tx<{ seq: number; e164: string; principal: boolean; whatsapp: boolean }[]>`
+          SELECT seq, e164, principal, whatsapp FROM contato_telefone
            WHERE contato_id = ${id} ORDER BY principal DESC, seq`
         // ⚠️ DISTINCT + limite: a dedup por telefone pode ter fundido muitos
         //    cadastros do ERP num contato (na demo, 566 CNPJs no mesmo telefone).
         //    A ficha mostra alguns e a contagem total — o excesso é sinal de
         //    over-merge, não some escondido.
-        const documentos = await tx<{ tipo: string; numero: string; fiscal: boolean }[]>`
-          SELECT DISTINCT tipo, numero, fiscal FROM contato_documento
+        const documentos = await tx<{ seq: number; tipo: string; numero: string; fiscal: boolean }[]>`
+          SELECT seq, tipo, numero, fiscal FROM contato_documento
            WHERE contato_id = ${id} ORDER BY numero LIMIT 6`
         const [{ n: totalDocumentos } = { n: 0 }] = await tx<{ n: number }[]>`
           SELECT count(DISTINCT numero)::int AS n FROM contato_documento WHERE contato_id = ${id}`
