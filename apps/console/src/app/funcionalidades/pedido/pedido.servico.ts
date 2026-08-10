@@ -92,6 +92,8 @@ export class PedidoServico {
   // escreve) ou falha nomeada — a tela mostra cada um, e o rascunho nunca some.
   readonly efetivando = signal(false)
   readonly resultado = signal<ResultadoEfetivacao | null>(null)
+  readonly enviandoResumo = signal(false)
+  readonly resumoMsg = signal<{ ok: boolean; texto: string } | null>(null)
 
   async efetivar(id: string): Promise<void> {
     if (this.efetivando()) return
@@ -108,6 +110,34 @@ export class PedidoServico {
       this.efetivando.set(false)
       await this.recarregar(id) // reflete o novo estado; o rascunho continua lá
     }
+  }
+
+  /** Confirma com o cliente: manda o resumo do pedido na conversa (gateway único). */
+  async enviarResumo(id: string): Promise<void> {
+    if (this.enviandoResumo()) return
+    this.enviandoResumo.set(true)
+    this.resumoMsg.set(null)
+    try {
+      const r = await firstValueFrom(this.http.post<{ ok: boolean; motivo?: string }>(`/v1/pedidos/${id}/enviar-resumo`, {}))
+      this.resumoMsg.set(r.ok
+        ? { ok: true, texto: 'Resumo enviado ao cliente no chat.' }
+        : { ok: false, texto: this.motivoResumo(r.motivo) })
+    } catch (e) {
+      const erro = e instanceof HttpErrorResponse ? (e.error as { erro?: string })?.erro : undefined
+      this.resumoMsg.set({
+        ok: false,
+        texto: erro === 'pedido.sem_conversa' ? 'Este pedido não nasceu numa conversa; não há para quem enviar.'
+          : erro === 'pedido.vazio' ? 'Adicione itens antes de enviar o resumo.'
+          : 'Não foi possível enviar o resumo.',
+      })
+    } finally { this.enviandoResumo.set(false) }
+  }
+  private motivoResumo(m?: string): string {
+    return m === 'janela_fechada' ? 'A janela de 24h fechou — reabra com um template antes.'
+      : m === 'bloqueado' ? 'O cliente pediu para não receber (opt-out).'
+      : m === 'canal_sem_credencial' ? 'O canal ainda não está configurado para enviar.'
+      : m === 'canal_indisponivel' ? 'O canal está suspenso ou desconectado.'
+      : 'Não foi possível enviar o resumo agora.'
   }
 }
 

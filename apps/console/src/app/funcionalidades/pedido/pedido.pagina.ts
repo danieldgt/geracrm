@@ -109,6 +109,14 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
             </div>
             <!-- Efetivação (ADR-005): idempotente + falha nomeada + rascunho
                  nunca perdido. Se o ERP não escreve, DEGRADA visível (ADR-008). -->
+            <!-- Confirmar com o cliente: manda o resumo na conversa (só se houver itens). -->
+            <button class="secundario" (click)="servico.enviarResumo(ped.id)"
+                    [disabled]="servico.enviandoResumo() || ped.itens.length === 0">
+              {{ servico.enviandoResumo() ? 'Enviando…' : '📤 Confirmar e enviar resumo ao cliente' }}
+            </button>
+            @if (servico.resumoMsg(); as rm) {
+              <div class="efet" [class.efet--ok]="rm.ok" [class.efet--aviso]="!rm.ok">{{ rm.ok ? '✅ ' : '⚠️ ' }}{{ rm.texto }}</div>
+            }
             <button class="primario" (click)="servico.efetivar(ped.id)"
                     [disabled]="servico.efetivando() || ped.estado === 'efetivado'">
               {{ ped.estado === 'efetivado' ? 'Efetivado' : servico.efetivando() ? 'Efetivando…' : 'Efetivar pedido' }}
@@ -170,6 +178,9 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
     .totais { display: flex; justify-content: space-between; align-items: center; padding: var(--espacamento-3) 0; font-size: 15px; color: var(--texto); }
     .primario { width: 100%; padding: var(--espacamento-3); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; cursor: pointer; }
     .primario:disabled { opacity: .7; cursor: default; }
+    .secundario { width: 100%; padding: var(--espacamento-3); margin-bottom: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
+    .secundario:hover:not(:disabled) { border-color: var(--acao); color: var(--acao); }
+    .secundario:disabled { opacity: .6; cursor: default; }
     .efet { margin-top: var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle); font-size: 13px; }
     .efet--ok { background: var(--sucesso-suave); color: var(--texto); }
     .efet--aviso { background: var(--atencao-suave); color: var(--texto); }

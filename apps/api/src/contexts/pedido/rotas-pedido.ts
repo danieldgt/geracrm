@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { efetivarPedido } from './efetivacao.js'
+import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { enviarTextoNaConversa } from '../atendimento/envio-conversa.js'
+import { resumoPedidoTexto } from './resumo-pedido.js'
 
 /**
  * Pedido assistido — o tira-pedido que nasce na conversa (ADR-005).
@@ -305,6 +308,44 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
          WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND estado = 'rascunho' RETURNING id`)
       if (!r) return reply.code(409).send({ erro: 'pedido.nao_cancelavel', mensagem: 'Só um rascunho pode ser cancelado.' })
       return reply.send({ ok: true })
+    },
+  )
+
+  /**
+   * Confirma o pedido com o cliente: manda o RESUMO (itens + total) na conversa,
+   * pelo gateway único (opt-out, janela de 24h, canal). ⚠️ Só para pedido que
+   * nasceu numa conversa. Falha de envio volta TIPIFICADA (janela_fechada,
+   * bloqueado, …) para a tela dar a ação corretiva.
+   */
+  app.post<{ Params: { id: string } }>(
+    '/v1/pedidos/:id/enviar-resumo', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const dados = await req.comTenant(async (tx) => {
+        const [p] = await tx<{ conversa_id: string | null; total_centavos: string }[]>`
+          SELECT conversa_id, total_centavos::text FROM pedido
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        if (!p) return { erro: 'nao_encontrado' as const }
+        if (!p.conversa_id) return { erro: 'sem_conversa' as const }
+        const itens = await tx<{ descricao_snapshot: string; quantidade: string; valor_unitario_centavos: string }[]>`
+          SELECT descricao_snapshot, quantidade::text, valor_unitario_centavos::text
+            FROM pedido_item WHERE tenant_id = tenant_atual() AND pedido_id = ${req.params.id} ORDER BY seq ASC`
+        if (itens.length === 0) return { erro: 'vazio' as const }
+        const eu = await garantirUsuarioId(tx, req)
+        const [u] = await tx<{ nome: string }[]>`SELECT nome FROM usuario WHERE tenant_id = tenant_atual() AND id = ${eu}`
+        return {
+          conversaId: p.conversa_id, total: Number(p.total_centavos), nome: u?.nome ?? null,
+          itens: itens.map((i) => ({ descricao: i.descricao_snapshot, quantidade: Number(i.quantidade), valorUnitarioCentavos: Number(i.valor_unitario_centavos) })),
+        }
+      })
+      if ('erro' in dados) {
+        if (dados.erro === 'nao_encontrado') return reply.code(404).send({ erro: 'pedido.nao_encontrado' })
+        if (dados.erro === 'sem_conversa') return reply.code(422).send({ erro: 'pedido.sem_conversa', mensagem: 'Este pedido não nasceu numa conversa; não há para quem enviar.' })
+        return reply.code(422).send({ erro: 'pedido.vazio', mensagem: 'Adicione itens antes de enviar o resumo.' })
+      }
+      const texto = resumoPedidoTexto(dados.itens, dados.total)
+      const r = await enviarTextoNaConversa(req.tenantId!, dados.conversaId, texto, dados.nome)
+      if (!r.ok && r.motivo === 'conversa_nao_encontrada') return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
+      return reply.send({ ok: r.ok, motivo: r.ok ? undefined : r.motivo })
     },
   )
 }
