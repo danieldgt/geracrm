@@ -60,7 +60,7 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Públicos de campanha, respeitando opt-out e bloqueio.' },
       { rota: 'performance', rotulo: 'Performance', icone: '⏱️', status: 'pronto', onda: 'O2',
         descricao: 'SLA, tempo de primeira resposta (humana), a contra-métrica MC-05.' },
-      { rota: 'canal-config', rotulo: 'Config. do Canal', icone: '⚙️', status: 'construcao', onda: 'O1',
+      { rota: 'canal-config', rotulo: 'Config. do Canal', icone: '⚙️', status: 'pronto', onda: 'O1',
         descricao: 'Horário de atendimento, mensagem de ausência, assinatura.' },
     ],
   },
