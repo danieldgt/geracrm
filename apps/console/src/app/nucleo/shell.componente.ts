@@ -92,7 +92,7 @@ import { TemaServico } from './tema.servico.js'
     :host { display: block; height: 100vh; }
     /* Lateral em altura total (linhas 1–2); barra superior e conteúdo na coluna 2. */
     .grade { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto 1fr; height: 100%; }
-    .lateral { grid-row: 1 / 3; width: 236px; background: var(--superficie-elevada); border-right: 1px solid var(--borda);
+    .lateral { grid-row: 1 / 3; width: 250px; background: var(--superficie-elevada); border-right: 1px solid var(--borda);
       overflow-y: auto; display: flex; flex-direction: column; }
     .lateral.recolhida { width: 56px; }
     .marca { display: flex; align-items: center; gap: var(--espacamento-2);
@@ -116,23 +116,26 @@ import { TemaServico } from './tema.servico.js'
     .busca .lupa { position: absolute; left: 10px; color: var(--texto-suave); font-size: 15px; pointer-events: none; }
     .busca-in { width: 100%; padding: var(--espacamento-2) var(--espacamento-6) var(--espacamento-2) 28px;
       border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo);
-      color: var(--texto); font: inherit; font-size: 13px; }
+      color: var(--texto); font: inherit; font-size: 14px; }
     .busca-in::-webkit-search-cancel-button { display: none; }
     .busca-in:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 1px; border-color: var(--acao); }
     .limpa { position: absolute; right: 6px; border: 0; background: transparent; color: var(--texto-suave);
       font-size: 16px; cursor: pointer; padding: 0 4px; line-height: 1; }
     .limpa:hover { color: var(--erro); }
     .nada { margin: var(--espacamento-4); font-size: 13px; color: var(--texto-suave); }
-    nav { padding: var(--espacamento-1) 0 var(--espacamento-6); }
-    .grupo { margin: var(--espacamento-4) var(--espacamento-4) var(--espacamento-1);
-      font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--texto-suave); }
+    nav { padding: var(--espacamento-1) var(--espacamento-2) var(--espacamento-6); }
+    .grupo { margin: var(--espacamento-4) var(--espacamento-3) var(--espacamento-1);
+      font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--texto-suave); }
+    /* Item em pílula arredondada com barra de acento no ativo — padrão do estudo
+       de identidade. Fonte legível para quem passa o dia na tela. */
     .item { display: flex; align-items: center; gap: var(--espacamento-3);
-      padding: var(--espacamento-2) var(--espacamento-4); color: var(--texto-secundario);
-      text-decoration: none; font-size: 13px; border-left: 2px solid transparent; }
+      padding: var(--espacamento-2) var(--espacamento-3); margin: 1px var(--espacamento-1);
+      color: var(--texto-secundario); text-decoration: none; font-size: 14px;
+      border-radius: var(--raio-controle); }
     .item:hover { background: var(--superficie-hover); color: var(--texto); }
-    .item.ativo { color: var(--acao); background: var(--superficie-selecionada); border-left-color: var(--acao); }
+    .item.ativo { color: var(--marca); background: var(--acao-suave); font-weight: 600; box-shadow: inset 3px 0 0 var(--acao); }
     .item:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: -2px; }
-    .icone { width: 18px; text-align: center; flex: none; }
+    .icone { width: 22px; font-size: 15px; text-align: center; flex: none; }
     .rotulo { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ponto { width: 6px; height: 6px; border-radius: var(--raio-completo); background: var(--atencao); flex: none; }
     .conteudo { grid-column: 2; grid-row: 2; overflow-y: auto; min-width: 0; background: var(--fundo); }
