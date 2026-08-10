@@ -83,7 +83,7 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Quem é dono de qual cliente (sem sobreposição de vigência).' },
       { rota: 'tarefas', rotulo: 'Tarefas', icone: '✅', status: 'pronto', onda: 'O1',
         descricao: 'Agenda de follow-up: agendadas, vencidas, concluídas.' },
-      { rota: 'sequencias', rotulo: 'Sequências', icone: '🔁', status: 'construcao', onda: 'O2',
+      { rota: 'sequencias', rotulo: 'Sequências', icone: '🔁', status: 'pronto', onda: 'O2',
         descricao: 'Cadências automáticas de contato.' },
       { rota: 'metas', rotulo: 'Metas', icone: '🎯', status: 'pronto', onda: 'O2',
         descricao: 'Objetivos por período e por vendedor.' },
