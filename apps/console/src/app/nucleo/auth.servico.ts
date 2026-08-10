@@ -37,6 +37,23 @@ export class AuthServico {
   readonly idToken = signal<string | null>(localStorage.getItem(CHAVE_TOKEN))
   readonly autenticado = computed(() => this.idToken() !== null)
 
+  /** Dados do usuário decodificados do idToken (para o menu). null em dev/local. */
+  readonly usuario = computed<{ nome: string; email: string | null } | null>(() => {
+    const t = this.idToken()
+    if (!t) return null
+    try {
+      const base = t.split('.')[1]?.replace(/-/g, '+').replace(/_/g, '/') ?? ''
+      const p = JSON.parse(atob(base)) as Record<string, unknown>
+      const email = (p['email'] as string | undefined) ?? null
+      const nome = (p['name'] as string | undefined)
+        ?? (p['cognito:username'] as string | undefined)
+        ?? email?.split('@')[0] ?? 'Usuário'
+      return { nome, email }
+    } catch {
+      return null
+    }
+  })
+
   private async postar(caminho: string, corpo: object): Promise<RespostaApi> {
     const resp = await fetch(caminho, {
       method: 'POST',

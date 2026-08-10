@@ -2,6 +2,7 @@ import { Component, ChangeDetectionStrategy, signal, inject, OnInit } from '@ang
 import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router'
 import { MENU } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
+import { MenuUsuarioComponente } from './menu-usuario.componente.js'
 import { EventosServico } from './eventos.servico.js'
 import { AlertasServico } from './alertas.servico.js'
 import { TemaServico } from './tema.servico.js'
@@ -20,17 +21,13 @@ import { TemaServico } from './tema.servico.js'
 @Component({
   selector: 'app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente],
   template: `
     <div class="grade">
       <aside class="lateral" [class.recolhida]="recolhida()">
         <div class="marca">
           <button class="alternar" (click)="recolhida.set(!recolhida())" aria-label="Recolher menu">☰</button>
           @if (!recolhida()) { <strong>GeraCRM</strong> }
-          <span class="espaco"></span>
-          <button class="tema" (click)="tema.alternar()" [attr.aria-label]="'Tema: ' + tema.tema()"
-                  [title]="'Tema: ' + tema.tema() + ' (clique para trocar)'">{{ iconeTema() }}</button>
-          <app-sino />
         </div>
 
         <nav>
@@ -50,6 +47,15 @@ import { TemaServico } from './tema.servico.js'
         </nav>
       </aside>
 
+      <!-- Barra superior: ações do usuário no canto direito (padrão de app). -->
+      <header class="topo">
+        <span class="espaco"></span>
+        <button class="tema" (click)="tema.alternar()" [attr.aria-label]="'Tema: ' + tema.tema()"
+                [title]="'Tema: ' + tema.tema() + ' (clique para trocar)'">{{ iconeTema() }}</button>
+        <app-sino />
+        <app-menu-usuario />
+      </header>
+
       <div class="conteudo">
         <!-- Alertas técnicos abertos (I-10): faixa visível, ação nomeada. -->
         @if (alertas.abertos().length) {
@@ -67,14 +73,20 @@ import { TemaServico } from './tema.servico.js'
   `,
   styles: `
     :host { display: block; height: 100vh; }
-    .grade { display: grid; grid-template-columns: auto 1fr; height: 100%; }
-    .lateral { width: 236px; background: var(--superficie-elevada); border-right: 1px solid var(--borda);
+    /* Lateral em altura total (linhas 1–2); barra superior e conteúdo na coluna 2. */
+    .grade { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto 1fr; height: 100%; }
+    .lateral { grid-row: 1 / 3; width: 236px; background: var(--superficie-elevada); border-right: 1px solid var(--borda);
       overflow-y: auto; display: flex; flex-direction: column; }
     .lateral.recolhida { width: 56px; }
     .marca { display: flex; align-items: center; gap: var(--espacamento-2);
-      padding: var(--espacamento-3) var(--espacamento-4); position: sticky; top: 0;
+      padding: var(--espacamento-3) var(--espacamento-4); height: 52px; position: sticky; top: 0;
       background: var(--superficie-elevada); border-bottom: 1px solid var(--borda); z-index: 1; }
     .marca strong { color: var(--marca); font-size: 15px; }
+    /* Barra superior — ações do usuário à direita, sem cortar dropdowns. */
+    .topo { grid-column: 2; grid-row: 1; height: 52px; display: flex; align-items: center;
+      gap: var(--espacamento-2); padding: 0 var(--espacamento-4);
+      background: var(--superficie-elevada); border-bottom: 1px solid var(--borda); }
+    .topo .espaco { flex: 1; }
     .marca .espaco { flex: 1; }
     .tema { border: none; background: transparent; color: var(--texto-secundario); font-size: 15px; cursor: pointer; padding: 4px 6px; border-radius: var(--raio-controle); }
     .tema:hover { background: var(--superficie-hover); }
@@ -93,7 +105,7 @@ import { TemaServico } from './tema.servico.js'
     .icone { width: 18px; text-align: center; flex: none; }
     .rotulo { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ponto { width: 6px; height: 6px; border-radius: var(--raio-completo); background: var(--atencao); flex: none; }
-    .conteudo { overflow-y: auto; min-width: 0; background: var(--fundo); }
+    .conteudo { grid-column: 2; grid-row: 2; overflow-y: auto; min-width: 0; background: var(--fundo); }
     /* Responsivo: em telas estreitas a lateral vira trilho de ícones, sem
        sobrepor o conteúdo (grid mantém as colunas separadas). */
     @media (max-width: 640px) {
