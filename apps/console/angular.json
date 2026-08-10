@@ -17,6 +17,9 @@
               "../../packages/design-tokens/dist/tokens.css",
               "src/estilos.css"
             ],
+            "assets": [
+              { "glob": "**/*", "input": "public" }
+            ],
             "outputPath": "dist"
           },
           "configurations": {
