@@ -124,7 +124,7 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Gatilhos e ações automáticas.' },
       { rota: 'auditoria', rotulo: 'Auditoria', icone: '🔎', status: 'pronto', onda: 'O1',
         descricao: 'Quem fez o quê e quando — assunção, edição e remoção de mensagens.' },
-      { rota: 'config', rotulo: 'Configurações Gerais', icone: '🔧', status: 'construcao', onda: 'O1',
+      { rota: 'config', rotulo: 'Configurações Gerais', icone: '🔧', status: 'pronto', onda: 'O1',
         descricao: 'Empresa, usuários, papéis.' },
     ],
   },

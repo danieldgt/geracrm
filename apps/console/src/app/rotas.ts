@@ -69,6 +69,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/atendimento/canal-config.pagina.js').then((m) => m.CanalConfigPagina),
   mensagens: () =>
     import('./funcionalidades/atendimento/mensagens-enviadas.pagina.js').then((m) => m.MensagensEnviadasPagina),
+  config: () =>
+    import('./funcionalidades/plataforma/config.pagina.js').then((m) => m.ConfigPagina),
 }
 
 const rotasFilhas = itensDoMenu().map((item) => {
