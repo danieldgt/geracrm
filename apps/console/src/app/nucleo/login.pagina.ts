@@ -15,7 +15,7 @@ import { MarcaComponente } from '../compartilhado/ui/marca.componente.js'
   imports: [FormsModule, MarcaComponente],
   template: `
     <main class="tela">
-      <form class="cartao" (ngSubmit)="enviar()">
+      <form class="cartao" (ngSubmit)="enviar()" autocomplete="off">
         <div class="cabeca">
           <app-marca class="logo" [rotulo]="true" />
           <p class="sub">Atendimento e recompra, num só lugar.</p>
@@ -23,19 +23,20 @@ import { MarcaComponente } from '../compartilhado/ui/marca.componente.js'
 
         <label>Usuário
           <input name="usuario" [ngModel]="usuario()" (ngModelChange)="usuario.set($event)"
-                 autocomplete="username" [disabled]="ocupado()" />
+                 autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+                 [disabled]="ocupado()" />
         </label>
 
         @if (!exigeNovaSenha()) {
           <label>Senha
             <input name="senha" type="password" [ngModel]="senha()" (ngModelChange)="senha.set($event)"
-                   autocomplete="current-password" [disabled]="ocupado()" />
+                   autocomplete="off" [disabled]="ocupado()" />
           </label>
         } @else {
           <p class="aviso">Primeiro acesso — defina uma nova senha.</p>
           <label>Nova senha
             <input name="novaSenha" type="password" [ngModel]="novaSenha()" (ngModelChange)="novaSenha.set($event)"
-                   autocomplete="new-password" [disabled]="ocupado()" />
+                   autocomplete="off" [disabled]="ocupado()" />
           </label>
         }
 
