@@ -59,6 +59,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/analitico/performance.pagina.js').then((m) => m.PerformancePagina),
   mercado: () =>
     import('./funcionalidades/analitico/mercado.pagina.js').then((m) => m.MercadoPagina),
+  mapa: () =>
+    import('./funcionalidades/analitico/mapa.pagina.js').then((m) => m.MapaPagina),
   retencao: () =>
     import('./funcionalidades/crm/retencao.pagina.js').then((m) => m.RetencaoPagina),
   nps: () =>

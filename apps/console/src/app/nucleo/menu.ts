@@ -87,7 +87,7 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Cadências automáticas de contato.' },
       { rota: 'metas', rotulo: 'Metas', icone: '🎯', status: 'pronto', onda: 'O2',
         descricao: 'Objetivos por período e por vendedor.' },
-      { rota: 'mapa', rotulo: 'Mapa de Clientes', icone: '🗺️', status: 'construcao', onda: 'O3',
+      { rota: 'mapa', rotulo: 'Mapa de Clientes', icone: '🗺️', status: 'pronto', onda: 'O3',
         descricao: 'Distribuição geográfica da base.' },
       { rota: 'nps', rotulo: 'NPS', icone: '📊', status: 'pronto', onda: 'O3',
         descricao: 'Satisfação do cliente.' },
