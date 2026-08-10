@@ -31,7 +31,7 @@ export const MENU: readonly GrupoMenu[] = [
   {
     titulo: null,
     itens: [
-      { rota: 'inicio', rotulo: 'Início', icone: '🏠', status: 'construcao', onda: 'O1',
+      { rota: 'inicio', rotulo: 'Início', icone: '🏠', status: 'pronto', onda: 'O1',
         descricao: 'Como o negócio está hoje, em 3 segundos: vendas, ticket, ranking, top produtos.' },
       { rota: 'mercado', rotulo: 'Visão de Mercado', icone: '🌐', status: 'construcao', onda: 'O1',
         descricao: 'Sobreposição de origens (catálogo × WhatsApp × ERP) e distribuição RFV.' },
@@ -100,7 +100,7 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Funil de recompra — quem está indo embora e como trazer de volta.' },
       { rota: 'fidelidade', rotulo: 'Fidelidade / Cashback', icone: '🎁', status: 'construcao', onda: 'O2',
         descricao: 'Saldo lido do ERP; a alavancagem é nossa (ADR-020).' },
-      { rota: 'segmentos', rotulo: 'Segmentos RFV', icone: '🧩', status: 'construcao', onda: 'O2',
+      { rota: 'segmentos', rotulo: 'Segmentos RFV', icone: '🧩', status: 'pronto', onda: 'O2',
         descricao: 'Construtor de segmento por recência, frequência e valor.' },
     ],
   },

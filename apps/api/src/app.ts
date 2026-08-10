@@ -8,6 +8,7 @@ import { rotasWebhooksSaida } from './contexts/integracao/rotas-webhooks-saida.j
 import { rotasContatos } from './contexts/crm/rotas-contatos.js'
 import { rotasBloqueios } from './contexts/crm/rotas-bloqueios.js'
 import { rotasFunil } from './contexts/crm/rotas-funil.js'
+import { rotasSegmentos } from './contexts/crm/rotas-segmentos.js'
 import { rotasCampanha } from './contexts/crm/rotas-campanha.js'
 import { rotasConversas } from './contexts/atendimento/rotas-conversas.js'
 import { rotasCanais } from './contexts/atendimento/rotas-canais.js'
@@ -18,6 +19,7 @@ import { rotasPresenca } from './contexts/atendimento/rotas-presenca.js'
 import { rotasNotificacoes } from './contexts/atendimento/rotas-notificacoes.js'
 import { rotasAuditoria } from './contexts/plataforma/rotas-auditoria.js'
 import { rotasMetricas } from './contexts/plataforma/rotas-metricas.js'
+import { rotasPainel } from './contexts/plataforma/rotas-painel.js'
 import { rotasEventos } from './contexts/atendimento/eventos/rotas-eventos.js'
 import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
 import { rotasAuth } from './contexts/identidade/rotas-auth.js'
@@ -47,6 +49,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasContatos)
   await app.register(rotasBloqueios)
   await app.register(rotasFunil)
+  await app.register(rotasSegmentos)
   await app.register(rotasCampanha)
   await app.register(rotasConversas)
   await app.register(rotasCanais)
@@ -57,6 +60,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasNotificacoes)
   await app.register(rotasAuditoria)
   await app.register(rotasMetricas)
+  await app.register(rotasPainel)
   await app.register(rotasEventos)
   await app.register(rotasPedido)
   await app.register(rotasAuth)
