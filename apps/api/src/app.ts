@@ -11,6 +11,7 @@ import { rotasFunil } from './contexts/crm/rotas-funil.js'
 import { rotasSegmentos } from './contexts/crm/rotas-segmentos.js'
 import { rotasTarefa } from './contexts/crm/rotas-tarefa.js'
 import { rotasCarteira } from './contexts/crm/rotas-carteira.js'
+import { rotasMeta } from './contexts/crm/rotas-meta.js'
 import { rotasCampanha } from './contexts/crm/rotas-campanha.js'
 import { rotasConversas } from './contexts/atendimento/rotas-conversas.js'
 import { rotasCanais } from './contexts/atendimento/rotas-canais.js'
@@ -54,6 +55,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasSegmentos)
   await app.register(rotasTarefa)
   await app.register(rotasCarteira)
+  await app.register(rotasMeta)
   await app.register(rotasCampanha)
   await app.register(rotasConversas)
   await app.register(rotasCanais)

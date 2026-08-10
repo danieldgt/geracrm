@@ -136,8 +136,19 @@ describe('outbox — INV-40', () => {
   it('dada inserção, então o NOTIFY (geracrm_evento) chega com ids e SEM conteúdo', async () => {
     const ouvinte = postgres(process.env.DATABASE_ADMIN_URL!, { max: 1, onnotice: () => {} })
     try {
-      const recebido = new Promise<string>((resolve) => {
-        ouvinte.listen('geracrm_evento', (payload) => resolve(payload))
+      // ⚠️ `geracrm_evento` é UM canal global no servidor; os testes rodam em
+      // paralelo. Não basta pegar o PRÓXIMO NOTIFY — pode ser de outro arquivo.
+      // Filtra pelo tenant deste teste (A) e ignora os alheios, com timeout.
+      const recebido = new Promise<string>((resolve, reject) => {
+        const prazo = setTimeout(() => reject(new Error('NOTIFY de A não chegou a tempo')), 5000)
+        void ouvinte.listen('geracrm_evento', (payload) => {
+          try {
+            if ((JSON.parse(payload) as { tenantId?: string }).tenantId === A) {
+              clearTimeout(prazo)
+              resolve(payload)
+            }
+          } catch { /* payload não-JSON de outro produtor: ignora */ }
+        })
       })
       // Espera o LISTEN estar de fato registrado antes de inserir.
       await new Promise((r) => setTimeout(r, 200))
