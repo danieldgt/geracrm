@@ -71,6 +71,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/atendimento/mensagens-enviadas.pagina.js').then((m) => m.MensagensEnviadasPagina),
   config: () =>
     import('./funcionalidades/plataforma/config.pagina.js').then((m) => m.ConfigPagina),
+  automacoes: () =>
+    import('./funcionalidades/crm/automacoes.pagina.js').then((m) => m.AutomacoesPagina),
 }
 
 const rotasFilhas = itensDoMenu().map((item) => {
