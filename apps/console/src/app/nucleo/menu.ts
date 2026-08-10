@@ -46,6 +46,8 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'O inbox: responder, vender e não perder a janela de 24h.' },
       { rota: 'pedido', rotulo: 'Pedido Assistido', icone: '🛒', status: 'pronto', onda: 'O1',
         descricao: 'O tira-pedido pela grade do catálogo — o pedido nasce na conversa.' },
+      { rota: 'pedidos', rotulo: 'Pedidos', icone: '🧾', status: 'pronto', onda: 'O2',
+        descricao: 'Todos os pedidos: rascunho, efetivado, falhou — por estado.' },
       { rota: 'numeros', rotulo: 'Meus Números', icone: '📱', status: 'pronto', onda: 'O0',
         descricao: 'Conectar números oficiais (Meta) e não-oficiais (PlugZapi); saúde da frota.' },
       { rota: 'templates', rotulo: 'Templates (HSM)', icone: '📝', status: 'construcao', onda: 'O0',
