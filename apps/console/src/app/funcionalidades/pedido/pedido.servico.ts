@@ -31,6 +31,8 @@ export interface Pedido {
   readonly id: string
   readonly estado: string
   readonly ultimoErro: { tipo: string } | null
+  readonly formaPagamento: string | null
+  readonly observacao: string | null
   readonly totalCentavos: number
   readonly totalPecas: number
   readonly itens: readonly ItemPedido[]
@@ -58,6 +60,18 @@ export class PedidoServico {
     } finally {
       this.buscando.set(false)
     }
+  }
+
+  /** Abre (ou cria) o rascunho de uma conversa e carrega no pad. INV-52. */
+  async abrirDaConversa(conversaId: string): Promise<void> {
+    const r = await firstValueFrom(this.http.post<{ id: string }>('/v1/pedidos', { conversaId }))
+    await this.recarregar(r.id)
+  }
+
+  /** Salva o contexto de venda (forma de pagamento, observação) do rascunho. */
+  async salvarContexto(id: string, ctx: { formaPagamento?: string | null; observacao?: string | null }): Promise<void> {
+    await firstValueFrom(this.http.patch(`/v1/pedidos/${id}`, ctx))
+    await this.recarregar(id)
   }
 
   /** Garante um rascunho para o contato/conversa. Idempotente por conversa. */

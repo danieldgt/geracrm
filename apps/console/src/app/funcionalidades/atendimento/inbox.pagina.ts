@@ -1,6 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, OnInit, OnDestroy, computed, signal } from '@angular/core'
 import { FormsModule } from '@angular/forms'
-import { ActivatedRoute } from '@angular/router'
+import { ActivatedRoute, RouterLink } from '@angular/router'
 import { formatarProtocolo, parsearProtocolo } from '@geracrm/shared'
 import { InboxServico, type ItemConversa, type Mensagem, type Thread } from './inbox.servico.js'
 import { EventosServico } from '../../nucleo/eventos.servico.js'
@@ -14,7 +14,7 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
  */
 @Component({
   selector: 'app-inbox',
-  imports: [FormsModule],
+  imports: [FormsModule, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="wa">
@@ -112,6 +112,8 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
                   <span class="sub" [attr.data-estado]="t.exigeJanela24h ? t.janela.estado : 'aberta'">{{ subConversa(t) }}</span>
                 </span>
                 <div class="topo-acoes">
+                  <a class="pedido-btn" routerLink="/pedido" [queryParams]="{ conversa: t.id }"
+                     title="Montar um pedido para este cliente">🛒 Montar pedido</a>
                   @if (t.atendimento) {
                     <span class="atend-badge" [title]="'Atendimento ' + protocoloFmt(t.atendimento.protocolo)">
                       @if (t.atendimento.protocolo) { <b class="proto">{{ protocoloFmt(t.atendimento.protocolo) }}</b> }
@@ -328,6 +330,8 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
     .topo-col { display: flex; flex-direction: column; }
     .topo-acoes { margin-left: auto; }
     .assumir-btn { border: 0; background: var(--wa-green); color: #04231d; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+    .pedido-btn { font-size: 12px; color: var(--wa-text); background: rgba(255,255,255,.1); padding: 6px 12px; border-radius: 999px; text-decoration: none; white-space: nowrap; }
+    .pedido-btn:hover { background: rgba(255,255,255,.18); }
     .atend-badge { font-size: 12px; color: var(--wa-text); background: rgba(255,255,255,.1); padding: 5px 10px; border-radius: 999px; }
     .atend-badge .proto { color: #14e39c; margin-right: 4px; font-variant-numeric: tabular-nums; }
     .topo-col .nome { font-size: 15px; font-weight: 600; }

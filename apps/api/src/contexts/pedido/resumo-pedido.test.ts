@@ -18,6 +18,17 @@ describe('resumoPedidoTexto (puro)', () => {
     expect(t).toContain('• 1× Calça Preta 42 — R$\xa080,00')
     expect(t).toContain('*Total: R$\xa0180,00*')
   })
+
+  it('com contexto: saudação pelo 1º nome, pagamento, observação e CTA', () => {
+    const t = resumoPedidoTexto(
+      [{ descricao: 'Camisa', quantidade: 1, valorUnitarioCentavos: 5000 }], 5000,
+      { contatoNome: 'Maria Silva', formaPagamento: 'Pix', observacao: 'Entrega na sexta' },
+    )
+    expect(t).toContain('Olá, Maria!')
+    expect(t).toContain('Pagamento: Pix')
+    expect(t).toContain('Obs.: Entrega na sexta')
+    expect(t).toContain('Responda *SIM*')
+  })
 })
 
 /** Endpoint enviar-resumo — validações + persistência via gateway único. */
@@ -100,7 +111,7 @@ describe('POST /v1/pedidos/:id/enviar-resumo', () => {
        WHERE tenant_id = ${T} AND conversa_id = ${CONV} ORDER BY criado_em DESC LIMIT 1`
     expect(m?.direcao).toBe('saliente')
     expect(m?.status).toBe('falhou')
-    expect(m?.texto).toContain('*Resumo do seu pedido*')
+    expect(m?.texto).toContain('Olá, Cliente!') // saudação pelo 1º nome do contato
     expect(m?.texto).toContain('Camisa Azul M')
   })
 })

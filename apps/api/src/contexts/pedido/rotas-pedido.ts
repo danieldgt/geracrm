@@ -161,8 +161,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       const dados = await req.comTenant(async (tx) => {
         const [pedido] = await tx<{
           id: string; estado: string; total_centavos: string; total_pecas: string; contato_id: string | null
-          ultimo_erro: unknown
-        }[]>`SELECT id, estado, total_centavos::text, total_pecas::text, contato_id, ultimo_erro FROM pedido WHERE id = ${req.params.id}`
+          ultimo_erro: unknown; forma_pagamento: string | null; observacao: string | null
+        }[]>`SELECT id, estado, total_centavos::text, total_pecas::text, contato_id, ultimo_erro, forma_pagamento, observacao FROM pedido WHERE id = ${req.params.id}`
         if (!pedido) return null
         const itens = await tx<{
           seq: number; sku_snapshot: string; descricao_snapshot: string
@@ -180,6 +180,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         estado: dados.pedido.estado,
         contatoId: dados.pedido.contato_id,
         ultimoErro: dados.pedido.ultimo_erro ?? null,
+        formaPagamento: dados.pedido.forma_pagamento,
+        observacao: dados.pedido.observacao,
         totalCentavos: Number(dados.pedido.total_centavos),
         totalPecas: Number(dados.pedido.total_pecas),
         itens: dados.itens.map((i) => ({
@@ -299,6 +301,27 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     },
   )
 
+  /** Contexto de venda do rascunho: forma de pagamento e observação. */
+  app.patch<{ Params: { id: string }; Body: { formaPagamento?: string | null; observacao?: string | null } }>(
+    '/v1/pedidos/:id', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const r = await req.comTenant(async (tx) => {
+        const [p] = await tx<{ estado: string }[]>`SELECT estado FROM pedido WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        if (!p) return { erro: 404 as const }
+        if (p.estado !== 'rascunho') return { erro: 409 as const }
+        await tx`
+          UPDATE pedido SET
+             forma_pagamento = ${req.body?.formaPagamento?.trim() || null},
+             observacao      = ${req.body?.observacao?.trim() || null},
+             atualizado_em   = now()
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        return { ok: true }
+      })
+      if ('erro' in r) return reply.code(r.erro).send({ erro: r.erro === 409 ? 'pedido.imutavel' : 'pedido.nao_encontrado' })
+      return reply.send({ ok: true })
+    },
+  )
+
   /** Cancela um rascunho (não efetivado). */
   app.post<{ Params: { id: string } }>(
     '/v1/pedidos/:id/cancelar', { preHandler: exigirTenant },
@@ -321,9 +344,10 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     '/v1/pedidos/:id/enviar-resumo', { preHandler: exigirTenant },
     async (req, reply) => {
       const dados = await req.comTenant(async (tx) => {
-        const [p] = await tx<{ conversa_id: string | null; total_centavos: string }[]>`
-          SELECT conversa_id, total_centavos::text FROM pedido
-           WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [p] = await tx<{ conversa_id: string | null; total_centavos: string; forma_pagamento: string | null; observacao: string | null; contato: string | null }[]>`
+          SELECT p.conversa_id, p.total_centavos::text, p.forma_pagamento, p.observacao, c.nome AS contato
+            FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
+           WHERE p.tenant_id = tenant_atual() AND p.id = ${req.params.id}`
         if (!p) return { erro: 'nao_encontrado' as const }
         if (!p.conversa_id) return { erro: 'sem_conversa' as const }
         const itens = await tx<{ descricao_snapshot: string; quantidade: string; valor_unitario_centavos: string }[]>`
@@ -334,6 +358,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         const [u] = await tx<{ nome: string }[]>`SELECT nome FROM usuario WHERE tenant_id = tenant_atual() AND id = ${eu}`
         return {
           conversaId: p.conversa_id, total: Number(p.total_centavos), nome: u?.nome ?? null,
+          ctx: { contatoNome: p.contato, formaPagamento: p.forma_pagamento, observacao: p.observacao },
           itens: itens.map((i) => ({ descricao: i.descricao_snapshot, quantidade: Number(i.quantidade), valorUnitarioCentavos: Number(i.valor_unitario_centavos) })),
         }
       })
@@ -342,7 +367,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         if (dados.erro === 'sem_conversa') return reply.code(422).send({ erro: 'pedido.sem_conversa', mensagem: 'Este pedido não nasceu numa conversa; não há para quem enviar.' })
         return reply.code(422).send({ erro: 'pedido.vazio', mensagem: 'Adicione itens antes de enviar o resumo.' })
       }
-      const texto = resumoPedidoTexto(dados.itens, dados.total)
+      const texto = resumoPedidoTexto(dados.itens, dados.total, dados.ctx)
       const r = await enviarTextoNaConversa(req.tenantId!, dados.conversaId, texto, dados.nome)
       if (!r.ok && r.motivo === 'conversa_nao_encontrada') return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       return reply.send({ ok: r.ok, motivo: r.ok ? undefined : r.motivo })

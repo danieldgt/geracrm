@@ -1,5 +1,6 @@
-import { Component, ChangeDetectionStrategy, inject, signal } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { SlicePipe } from '@angular/common'
+import { ActivatedRoute } from '@angular/router'
 import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.servico.js'
 
 /**
@@ -107,6 +108,22 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
               <span>{{ ped.totalPecas }} peças</span>
               <strong class="mono">{{ reais(ped.totalCentavos) }}</strong>
             </div>
+
+            <!-- Contexto de venda: entra no resumo enviado ao cliente. -->
+            <div class="contexto">
+              <label class="ctx">Forma de pagamento
+                <input list="formas-pgto" [value]="ped.formaPagamento ?? ''"
+                       (change)="salvarContexto(ped.id, 'formaPagamento', $any($event.target).value)"
+                       placeholder="Ex.: Pix" />
+                <datalist id="formas-pgto">@for (f of formasPagamento; track f) { <option [value]="f"></option> }</datalist>
+              </label>
+              <label class="ctx">Observação
+                <textarea rows="2" [value]="ped.observacao ?? ''"
+                          (change)="salvarContexto(ped.id, 'observacao', $any($event.target).value)"
+                          placeholder="Prazo, entrega, combinados…"></textarea>
+              </label>
+            </div>
+
             <!-- Efetivação (ADR-005): idempotente + falha nomeada + rascunho
                  nunca perdido. Se o ERP não escreve, DEGRADA visível (ADR-008). -->
             <!-- Confirmar com o cliente: manda o resumo na conversa (só se houver itens). -->
@@ -178,6 +195,9 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
     .totais { display: flex; justify-content: space-between; align-items: center; padding: var(--espacamento-3) 0; font-size: 15px; color: var(--texto); }
     .primario { width: 100%; padding: var(--espacamento-3); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; cursor: pointer; }
     .primario:disabled { opacity: .7; cursor: default; }
+    .contexto { display: grid; gap: var(--espacamento-2); margin: var(--espacamento-3) 0; }
+    .ctx { display: flex; flex-direction: column; gap: var(--espacamento-1); font-size: 12px; color: var(--texto-secundario); }
+    .ctx input, .ctx textarea { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; resize: vertical; }
     .secundario { width: 100%; padding: var(--espacamento-3); margin-bottom: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
     .secundario:hover:not(:disabled) { border-color: var(--acao); color: var(--acao); }
     .secundario:disabled { opacity: .6; cursor: default; }
@@ -188,9 +208,20 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
     @media (max-width: 800px) { .grade-tela { grid-template-columns: 1fr; } }
   `,
 })
-export class PedidoAssistidoPagina {
+export class PedidoAssistidoPagina implements OnInit {
   readonly servico = inject(PedidoServico)
+  private readonly route = inject(ActivatedRoute)
   readonly resultados = this.servico.resultados
+  readonly formasPagamento = ['Pix', 'Dinheiro', 'Cartão de crédito', 'Cartão de débito', 'Boleto', 'A prazo']
+
+  /** Aberto pelo chat: ?conversa=<id> carrega o rascunho daquela conversa. */
+  ngOnInit(): void {
+    const conversa = this.route.snapshot.queryParamMap.get('conversa')
+    if (conversa) void this.servico.abrirDaConversa(conversa)
+  }
+  salvarContexto(id: string, campo: 'formaPagamento' | 'observacao', valor: string): void {
+    void this.servico.salvarContexto(id, { [campo]: valor || null })
+  }
   readonly aberto = signal<string | null>(null)
   readonly buscou = signal(false)
   readonly perfil = signal<'atacado' | 'varejo'>('atacado')
