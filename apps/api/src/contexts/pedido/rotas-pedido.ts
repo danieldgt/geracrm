@@ -81,29 +81,139 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     })
   })
 
-  // Cria (ou pega) o rascunho de uma conversa/contato.
+  // Valores disponíveis para os filtros da tela robusta (cor, tamanho, categoria).
+  app.get('/v1/catalogo/filtros', { preHandler: exigirTenant }, async (req, reply) => {
+    const dados = await req.comTenant(async (tx) => {
+      const cores = await tx<{ v: string }[]>`
+        SELECT DISTINCT s.atributos->>'cor' AS v FROM sku s
+         WHERE s.tenant_id = tenant_atual() AND s.ativo AND s.atributos->>'cor' IS NOT NULL
+         ORDER BY 1 LIMIT 200`
+      const tamanhos = await tx<{ v: string }[]>`
+        SELECT DISTINCT s.atributos->>'tamanho' AS v FROM sku s
+         WHERE s.tenant_id = tenant_atual() AND s.ativo AND s.atributos->>'tamanho' IS NOT NULL
+         ORDER BY 1 LIMIT 200`
+      const categorias = await tx<{ v: string }[]>`
+        SELECT DISTINCT categoria AS v FROM produto
+         WHERE tenant_id = tenant_atual() AND ativo AND categoria IS NOT NULL ORDER BY 1 LIMIT 200`
+      return { cores, tamanhos, categorias }
+    })
+    return reply.send({
+      cores: dados.cores.map((x) => x.v),
+      tamanhos: dados.tamanhos.map((x) => x.v),
+      categorias: dados.categorias.map((x) => x.v),
+    })
+  })
+
+  // Catálogo PAGINADO com filtros (tela robusta de montagem de pedido).
+  app.get<{ Querystring: { busca?: string; perfil?: string; cor?: string; tamanho?: string; categoria?: string; precoMin?: string; precoMax?: string; cursor?: string } }>(
+    '/v1/catalogo/busca', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const q = req.query
+      const busca = (q.busca ?? '').trim()
+      const perfilPadrao = q.perfil === 'varejo' ? '%varejo%' : '%atacado%'
+      const precoMin = q.precoMin ? Number(q.precoMin) : null
+      const precoMax = q.precoMax ? Number(q.precoMax) : null
+      let curDesc: string | null = null, curId: string | null = null
+      if (q.cursor) {
+        const [d, id] = Buffer.from(q.cursor, 'base64url').toString('utf8').split('§')
+        if (!d || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
+        curDesc = d; curId = id
+      }
+      const produtos = await req.comTenant((tx) => {
+        const precoSku = (s: string) => tx`(
+          SELECT sp.preco_centavos FROM sku_preco sp
+            JOIN tabela_preco tp ON tp.tenant_id = sp.tenant_id AND tp.id_externo = sp.tabela_externa
+           WHERE sp.tenant_id = ${tx(s)}.tenant_id AND sp.sku_id = ${tx(s)}.id
+             AND tp.descricao ILIKE ${perfilPadrao} AND tp.descricao NOT ILIKE '%cfe%' AND tp.descricao NOT ILIKE '%teste%'
+           ORDER BY tp.padrao DESC, tp.id_externo LIMIT 1)`
+        return tx<{
+          id: string; referencia: string; descricao: string; categoria: string | null
+          skus: { id: string; atributos: Record<string, string>; codigo_barras: string | null; preco_centavos: string | null; saldo: string | null; saldo_em: string | null }[]
+        }[]>`
+        SELECT p.id, p.referencia, p.descricao, p.categoria,
+               coalesce((SELECT json_agg(json_build_object(
+                    'id', s.id, 'atributos', s.atributos, 'codigo_barras', s.codigo_barras,
+                    'preco_centavos', ${precoSku('s')}::text,
+                    'saldo', (SELECT ss.quantidade::text FROM sku_saldo ss WHERE ss.tenant_id = s.tenant_id AND ss.sku_id = s.id),
+                    'saldo_em', (SELECT ss.apurado_em::text FROM sku_saldo ss WHERE ss.tenant_id = s.tenant_id AND ss.sku_id = s.id)
+                  ) ORDER BY s.atributos::text)
+                  FROM sku s WHERE s.tenant_id = p.tenant_id AND s.produto_id = p.id AND s.ativo), '[]'::json) AS skus
+          FROM produto p
+         WHERE p.tenant_id = tenant_atual() AND p.ativo
+           AND ${busca === '' ? tx`true` : tx`(p.descricao ILIKE ${'%' + busca + '%'} OR p.referencia ILIKE ${'%' + busca + '%'})`}
+           AND ${q.categoria ? tx`p.categoria = ${q.categoria}` : tx`true`}
+           AND ${q.cor ? tx`EXISTS (SELECT 1 FROM sku s WHERE s.tenant_id = p.tenant_id AND s.produto_id = p.id AND s.ativo AND s.atributos->>'cor' = ${q.cor})` : tx`true`}
+           AND ${q.tamanho ? tx`EXISTS (SELECT 1 FROM sku s WHERE s.tenant_id = p.tenant_id AND s.produto_id = p.id AND s.ativo AND s.atributos->>'tamanho' = ${q.tamanho})` : tx`true`}
+           AND ${precoMin === null && precoMax === null ? tx`true` : tx`EXISTS (
+                 SELECT 1 FROM sku s WHERE s.tenant_id = p.tenant_id AND s.produto_id = p.id AND s.ativo
+                   AND ${precoSku('s')} IS NOT NULL
+                   AND ${precoMin === null ? tx`true` : tx`${precoSku('s')} >= ${precoMin}`}
+                   AND ${precoMax === null ? tx`true` : tx`${precoSku('s')} <= ${precoMax}`})`}
+           AND ${curDesc === null ? tx`true` : tx`(p.descricao, p.id) > (${curDesc}, ${curId}::uuid)`}
+         ORDER BY p.descricao ASC, p.id ASC LIMIT ${LIMITE_CATALOGO + 1}`
+      })
+      const temMais = produtos.length > LIMITE_CATALOGO
+      const pagina = temMais ? produtos.slice(0, LIMITE_CATALOGO) : produtos
+      const ultimo = pagina[pagina.length - 1]
+      return reply.send({
+        itens: pagina.map((p) => ({
+          id: p.id, referencia: p.referencia, descricao: p.descricao, categoria: p.categoria,
+          skus: p.skus.map((s) => ({
+            id: s.id, atributos: s.atributos, codigoBarras: s.codigo_barras,
+            precoCentavos: s.preco_centavos === null ? null : Number(s.preco_centavos),
+            saldo: s.saldo === null ? null : Number(s.saldo), saldoEm: s.saldo_em,
+          })),
+        })),
+        proximoCursor: temMais && ultimo ? Buffer.from(`${ultimo.descricao}§${ultimo.id}`).toString('base64url') : null,
+      })
+    },
+  )
+
+  // Cria um rascunho para o cliente. ⚠️ Vários por cliente (0049): por padrão
+  // reaproveita o rascunho da conversa (continuidade do chat); com `novo:true`
+  // ou `nome`, cria SEMPRE um novo (a tela robusta gerencia N rascunhos).
   app.post('/v1/pedidos', { preHandler: exigirTenant }, async (req, reply) => {
-    const corpo = (req.body ?? {}) as { contatoId?: string; conversaId?: string }
+    const corpo = (req.body ?? {}) as { contatoId?: string; conversaId?: string; nome?: string; novo?: boolean }
     const id = randomUUID()
+    const forcarNovo = corpo.novo === true || !!corpo.nome?.trim()
 
     const pedido = await req.comTenant(async (tx) => {
-      // ⚠️ Reaproveita o rascunho existente da conversa (INV-52) em vez de criar
-      //    outro — a mesma tela reaberta continua o mesmo pedido.
-      if (corpo.conversaId) {
+      if (corpo.conversaId && !forcarNovo) {
         const [existente] = await tx<{ id: string }[]>`
-          SELECT id FROM pedido
-           WHERE conversa_id = ${corpo.conversaId} AND estado = 'rascunho'`
+          SELECT id FROM pedido WHERE conversa_id = ${corpo.conversaId} AND estado = 'rascunho'
+           ORDER BY atualizado_em DESC LIMIT 1`
         if (existente) return existente
       }
       const [novo] = await tx<{ id: string }[]>`
-        INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, estado)
-        VALUES (tenant_atual(), ${id}, ${corpo.contatoId ?? null}, ${corpo.conversaId ?? null}, 'rascunho')
+        INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, nome, estado)
+        VALUES (tenant_atual(), ${id}, ${corpo.contatoId ?? null}, ${corpo.conversaId ?? null}, ${corpo.nome?.trim() || null}, 'rascunho')
         RETURNING id`
       return novo!
     })
 
     return reply.code(201).send({ id: pedido.id })
   })
+
+  // Rascunhos (e recentes) de um cliente — para a tela robusta escolher/abrir.
+  app.get<{ Params: { id: string } }>(
+    '/v1/contatos/:id/pedidos', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const linhas = await req.comTenant((tx) => tx<{
+        id: string; nome: string | null; estado: string; total_centavos: string; itens: number; atualizado_em: Date
+      }[]>`
+        SELECT p.id, p.nome, p.estado, p.total_centavos::text, p.atualizado_em,
+               (SELECT count(*)::int FROM pedido_item i WHERE i.tenant_id = p.tenant_id AND i.pedido_id = p.id) AS itens
+          FROM pedido p
+         WHERE p.tenant_id = tenant_atual() AND p.contato_id = ${req.params.id}
+         ORDER BY (p.estado = 'rascunho') DESC, p.atualizado_em DESC LIMIT 50`)
+      return reply.send({
+        itens: linhas.map((l) => ({
+          id: l.id, nome: l.nome, estado: l.estado, totalCentavos: Number(l.total_centavos),
+          itens: l.itens, atualizadoEm: l.atualizado_em,
+        })),
+      })
+    },
+  )
 
   // Adiciona um item ao rascunho, com o preço-snapshot entrado na tela.
   app.post<{ Params: { id: string } }>(
@@ -161,8 +271,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       const dados = await req.comTenant(async (tx) => {
         const [pedido] = await tx<{
           id: string; estado: string; total_centavos: string; total_pecas: string; contato_id: string | null
-          ultimo_erro: unknown; forma_pagamento: string | null; observacao: string | null
-        }[]>`SELECT id, estado, total_centavos::text, total_pecas::text, contato_id, ultimo_erro, forma_pagamento, observacao FROM pedido WHERE id = ${req.params.id}`
+          ultimo_erro: unknown; forma_pagamento: string | null; observacao: string | null; nome: string | null
+        }[]>`SELECT id, estado, total_centavos::text, total_pecas::text, contato_id, ultimo_erro, forma_pagamento, observacao, nome FROM pedido WHERE id = ${req.params.id}`
         if (!pedido) return null
         const itens = await tx<{
           seq: number; sku_snapshot: string; descricao_snapshot: string
@@ -179,6 +289,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         id: dados.pedido.id,
         estado: dados.pedido.estado,
         contatoId: dados.pedido.contato_id,
+        nome: dados.pedido.nome,
         ultimoErro: dados.pedido.ultimo_erro ?? null,
         formaPagamento: dados.pedido.forma_pagamento,
         observacao: dados.pedido.observacao,
@@ -302,17 +413,20 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
   )
 
   /** Contexto de venda do rascunho: forma de pagamento e observação. */
-  app.patch<{ Params: { id: string }; Body: { formaPagamento?: string | null; observacao?: string | null } }>(
+  app.patch<{ Params: { id: string }; Body: { formaPagamento?: string | null; observacao?: string | null; nome?: string | null } }>(
     '/v1/pedidos/:id', { preHandler: exigirTenant },
     async (req, reply) => {
+      const b = req.body ?? {}
       const r = await req.comTenant(async (tx) => {
         const [p] = await tx<{ estado: string }[]>`SELECT estado FROM pedido WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!p) return { erro: 404 as const }
         if (p.estado !== 'rascunho') return { erro: 409 as const }
+        // COALESCE: só mexe no que veio no corpo (permite salvar campos isolados).
         await tx`
           UPDATE pedido SET
-             forma_pagamento = ${req.body?.formaPagamento?.trim() || null},
-             observacao      = ${req.body?.observacao?.trim() || null},
+             forma_pagamento = COALESCE(${b.formaPagamento === undefined ? null : (b.formaPagamento?.trim() || null)}, forma_pagamento),
+             observacao      = COALESCE(${b.observacao === undefined ? null : (b.observacao?.trim() || null)}, observacao),
+             nome            = COALESCE(${b.nome === undefined ? null : (b.nome?.trim() || null)}, nome),
              atualizado_em   = now()
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         return { ok: true }

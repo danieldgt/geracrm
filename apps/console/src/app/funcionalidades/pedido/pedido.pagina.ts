@@ -28,6 +28,22 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
       </span>
     </header>
 
+    <!-- Vários rascunhos por cliente: troque, crie e renomeie; envia um por um. -->
+    @if (contatoId()) {
+      <div class="rascunhos">
+        <span class="r-lab">Rascunhos:</span>
+        @for (r of servico.rascunhos(); track r.id) {
+          @if (r.estado === 'rascunho') {
+            <button class="r-chip" [class.on]="servico.pedido()?.id === r.id" (click)="trocarRascunho(r.id)">
+              {{ r.nome || 'Sem nome' }} <span class="r-n">{{ r.itens }}</span>
+            </button>
+          }
+        }
+        <button class="r-novo" (click)="novoRascunho()">+ Novo</button>
+        @if (servico.pedido()) { <button class="r-rename" (click)="renomear()" title="Renomear rascunho">✎</button> }
+      </div>
+    }
+
     <div class="grade-tela">
       <!-- Busca + grade -->
       <section class="cat">
@@ -38,6 +54,24 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
         </div>
         <input class="busca" type="search" placeholder="Buscar produto por nome ou referência…"
                [value]="termo()" (input)="onBusca($event)" />
+
+        <!-- Filtros paginados: categoria, cor, tamanho, faixa de preço. -->
+        <div class="filtros">
+          <select [value]="fCategoria()" (change)="fCategoria.set($any($event.target).value); aplicarFiltro()" aria-label="Categoria">
+            <option value="">Categoria</option>
+            @for (c of servico.filtros().categorias; track c) { <option [value]="c">{{ c }}</option> }
+          </select>
+          <select [value]="fCor()" (change)="fCor.set($any($event.target).value); aplicarFiltro()" aria-label="Cor">
+            <option value="">Cor</option>
+            @for (c of servico.filtros().cores; track c) { <option [value]="c">{{ c }}</option> }
+          </select>
+          <select [value]="fTamanho()" (change)="fTamanho.set($any($event.target).value); aplicarFiltro()" aria-label="Tamanho">
+            <option value="">Tamanho</option>
+            @for (t of servico.filtros().tamanhos; track t) { <option [value]="t">{{ t }}</option> }
+          </select>
+          <input class="preco-f" inputmode="decimal" placeholder="R$ mín" [value]="fPrecoMin()" (change)="fPrecoMin.set($any($event.target).value); aplicarFiltro()" aria-label="Preço mínimo" />
+          <input class="preco-f" inputmode="decimal" placeholder="R$ máx" [value]="fPrecoMax()" (change)="fPrecoMax.set($any($event.target).value); aplicarFiltro()" aria-label="Preço máximo" />
+        </div>
 
         @if (servico.buscando()) { <p class="dica">Buscando…</p> }
         @else if (resultados().length === 0 && buscou()) {
@@ -81,6 +115,9 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
             </li>
           }
         </ul>
+        @if (servico.proximoCursor()) {
+          <button class="mais-cat" (click)="carregarMais()" [disabled]="servico.buscando()">Carregar mais produtos</button>
+        }
       </section>
 
       <!-- Rascunho -->
@@ -205,6 +242,19 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
     .efet--ok { background: var(--sucesso-suave); color: var(--texto); }
     .efet--aviso { background: var(--atencao-suave); color: var(--texto); }
     .efet-nota { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
+    /* Troca de rascunhos (vários por cliente). */
+    .rascunhos { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; margin-bottom: var(--espacamento-3); }
+    .r-lab { font-size: 12px; color: var(--texto-suave); }
+    .r-chip { display: inline-flex; align-items: center; gap: 6px; padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
+    .r-chip.on { background: var(--acao-suave); border-color: var(--acao); color: var(--marca); font-weight: 600; }
+    .r-chip .r-n { font-size: 11px; background: var(--superficie); border-radius: var(--raio-completo); padding: 0 6px; }
+    .r-novo { padding: var(--espacamento-1) var(--espacamento-3); border: 1px dashed var(--borda-forte); border-radius: var(--raio-completo); background: transparent; color: var(--acao); font: inherit; font-size: 13px; cursor: pointer; }
+    .r-rename { border: 0; background: transparent; color: var(--texto-suave); cursor: pointer; font-size: 14px; padding: 0 4px; }
+    /* Filtros do catálogo. */
+    .filtros { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; margin: var(--espacamento-2) 0; }
+    .filtros select, .filtros .preco-f { padding: var(--espacamento-1) var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
+    .filtros .preco-f { width: 84px; }
+    .mais-cat { display: block; width: 100%; margin-top: var(--espacamento-2); padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; cursor: pointer; }
     @media (max-width: 800px) { .grade-tela { grid-template-columns: 1fr; } }
   `,
 })
@@ -214,39 +264,76 @@ export class PedidoAssistidoPagina implements OnInit {
   readonly resultados = this.servico.resultados
   readonly formasPagamento = ['Pix', 'Dinheiro', 'Cartão de crédito', 'Cartão de débito', 'Boleto', 'A prazo']
 
-  /** Aberto pelo chat: ?conversa=<id> carrega o rascunho daquela conversa. */
-  ngOnInit(): void {
-    const conversa = this.route.snapshot.queryParamMap.get('conversa')
-    if (conversa) void this.servico.abrirDaConversa(conversa)
-  }
-  salvarContexto(id: string, campo: 'formaPagamento' | 'observacao', valor: string): void {
-    void this.servico.salvarContexto(id, { [campo]: valor || null })
-  }
   readonly aberto = signal<string | null>(null)
   readonly buscou = signal(false)
   readonly perfil = signal<'atacado' | 'varejo'>('atacado')
   readonly termo = signal('')
+  // Filtros do catálogo robusto.
+  readonly fCor = signal(''); readonly fTamanho = signal(''); readonly fCategoria = signal('')
+  readonly fPrecoMin = signal(''); readonly fPrecoMax = signal('')
+  readonly contatoId = signal<string | null>(null)
+  private conversaId: string | null = null
+
+  /** Entrada: ?contato=<id> (cliente) e/ou ?conversa=<id> (chat). */
+  ngOnInit(): void {
+    const p = this.route.snapshot.queryParamMap
+    const contato = p.get('contato'); this.conversaId = p.get('conversa')
+    void this.servico.carregarFiltros()
+    void this.iniciar(contato, this.conversaId)
+    void this.servico.buscarCatalogo({ perfil: this.perfil() })
+    this.buscou.set(true)
+  }
+  private async iniciar(contato: string | null, conversa: string | null): Promise<void> {
+    if (contato) {
+      this.contatoId.set(contato)
+      await this.servico.carregarRascunhos(contato)
+      const rs = this.servico.rascunhos().filter((r) => r.estado === 'rascunho')
+      if (rs.length) await this.servico.abrirRascunho(rs[0]!.id)
+      else await this.servico.novoRascunho(contato, undefined, conversa ?? undefined)
+    } else if (conversa) {
+      await this.servico.abrirDaConversa(conversa)
+      const cid = this.servico.pedido()?.contatoId ?? null
+      this.contatoId.set(cid)
+      if (cid) await this.servico.carregarRascunhos(cid)
+    }
+  }
+
+  salvarContexto(id: string, campo: 'formaPagamento' | 'observacao', valor: string): void {
+    void this.servico.salvarContexto(id, { [campo]: valor || null })
+  }
 
   private timer: ReturnType<typeof setTimeout> | null = null
   onBusca(e: Event): void {
     this.termo.set((e.target as HTMLInputElement).value)
     if (this.timer) clearTimeout(this.timer)
-    // Debounce leve: não bate no servidor a cada tecla.
     this.timer = setTimeout(() => this.rodarBusca(), 250)
   }
+  trocarPerfil(p: 'atacado' | 'varejo'): void { this.perfil.set(p); this.rodarBusca() }
+  aplicarFiltro(): void { this.rodarBusca() }
 
-  trocarPerfil(p: 'atacado' | 'varejo'): void {
-    // ⚠️ Trocar de perfil re-busca: os preços mudam, não dá para manter na tela
-    //    os do perfil anterior.
-    this.perfil.set(p)
-    this.rodarBusca()
+  private paramsBusca() {
+    return {
+      termo: this.termo().trim() || undefined, perfil: this.perfil(),
+      cor: this.fCor() || undefined, tamanho: this.fTamanho() || undefined,
+      categoria: this.fCategoria() || undefined,
+      precoMin: this.fPrecoMin() ? String(Math.round(Number(this.fPrecoMin()) * 100)) : undefined,
+      precoMax: this.fPrecoMax() ? String(Math.round(Number(this.fPrecoMax()) * 100)) : undefined,
+    }
   }
+  private rodarBusca(): void { this.buscou.set(true); void this.servico.buscarCatalogo(this.paramsBusca()) }
+  carregarMais(): void { void this.servico.buscarCatalogo(this.paramsBusca(), true) }
 
-  private rodarBusca(): void {
-    const termo = this.termo().trim()
-    this.buscou.set(true)
-    if (termo.length >= 2) void this.servico.buscar(termo, this.perfil())
-    else this.servico.resultados.set([])
+  // Rascunhos do cliente.
+  async novoRascunho(): Promise<void> {
+    const c = this.contatoId(); if (!c) return
+    const nome = prompt('Nome do novo rascunho (ex.: Reposição):')?.trim()
+    await this.servico.novoRascunho(c, nome || undefined, this.conversaId ?? undefined)
+  }
+  async trocarRascunho(id: string): Promise<void> { await this.servico.abrirRascunho(id) }
+  async renomear(): Promise<void> {
+    const ped = this.servico.pedido(); const c = this.contatoId(); if (!ped) return
+    const nome = prompt('Renomear rascunho:', ped.nome ?? '')?.trim()
+    if (nome) await this.servico.renomear(ped.id, nome, c ?? undefined)
   }
 
   alternar(id: string): void { this.aberto.update((a) => (a === id ? null : id)) }
