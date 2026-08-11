@@ -272,7 +272,12 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         const [pedido] = await tx<{
           id: string; estado: string; total_centavos: string; total_pecas: string; contato_id: string | null
           ultimo_erro: unknown; forma_pagamento: string | null; observacao: string | null; nome: string | null
-        }[]>`SELECT id, estado, total_centavos::text, total_pecas::text, contato_id, ultimo_erro, forma_pagamento, observacao, nome FROM pedido WHERE id = ${req.params.id}`
+          contato: string | null; numero_externo: string | null; criado_em: Date; confirmado_em: Date | null
+        }[]>`SELECT p.id, p.estado, p.total_centavos::text, p.total_pecas::text, p.contato_id, p.ultimo_erro,
+                    p.forma_pagamento, p.observacao, p.nome, p.numero_externo, p.criado_em, p.confirmado_em,
+                    c.nome AS contato
+               FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
+              WHERE p.id = ${req.params.id}`
         if (!pedido) return null
         const itens = await tx<{
           seq: number; sku_snapshot: string; descricao_snapshot: string
@@ -289,7 +294,11 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         id: dados.pedido.id,
         estado: dados.pedido.estado,
         contatoId: dados.pedido.contato_id,
+        contato: dados.pedido.contato,
         nome: dados.pedido.nome,
+        numeroExterno: dados.pedido.numero_externo,
+        criadoEm: dados.pedido.criado_em,
+        confirmadoEm: dados.pedido.confirmado_em,
         ultimoErro: dados.pedido.ultimo_erro ?? null,
         formaPagamento: dados.pedido.forma_pagamento,
         observacao: dados.pedido.observacao,
@@ -349,10 +358,12 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       const { estado, contatoId } = req.query
       const linhas = await req.comTenant((tx) => tx<{
         id: string; estado: string; total_centavos: string; total_pecas: string
-        contato_id: string | null; nome: string | null; numero_externo: string | null; criado_em: Date
+        contato_id: string | null; contato: string | null; rotulo: string | null
+        numero_externo: string | null; criado_em: Date; itens: number
       }[]>`
         SELECT p.id, p.estado, p.total_centavos::text, p.total_pecas::text, p.contato_id,
-               c.nome, p.numero_externo, p.criado_em
+               c.nome AS contato, p.nome AS rotulo, p.numero_externo, p.criado_em,
+               (SELECT count(*)::int FROM pedido_item i WHERE i.tenant_id = p.tenant_id AND i.pedido_id = p.id) AS itens
           FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
          WHERE p.tenant_id = tenant_atual()
            AND ${estado ? tx`p.estado = ${estado}` : tx`true`}
@@ -364,8 +375,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       const ultimo = pagina[pagina.length - 1]
       return reply.send({
         itens: pagina.map((l) => ({
-          id: l.id, estado: l.estado, contatoId: l.contato_id, nome: l.nome,
-          totalCentavos: Number(l.total_centavos), totalPecas: Number(l.total_pecas),
+          id: l.id, estado: l.estado, contatoId: l.contato_id, contato: l.contato, rotulo: l.rotulo,
+          totalCentavos: Number(l.total_centavos), totalPecas: Number(l.total_pecas), itens: l.itens,
           numeroExterno: l.numero_externo, criadoEm: l.criado_em,
         })),
         proximoCursor: temMais && ultimo

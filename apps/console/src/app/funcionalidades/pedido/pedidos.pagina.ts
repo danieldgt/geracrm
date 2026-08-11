@@ -5,27 +5,32 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 
 interface PedidoItem {
-  readonly id: string
-  readonly estado: string
-  readonly nome: string | null
-  readonly totalCentavos: number
-  readonly totalPecas: number
-  readonly numeroExterno: string | null
-  readonly criadoEm: string
+  readonly id: string; readonly estado: string; readonly contatoId: string | null; readonly contato: string | null
+  readonly rotulo: string | null; readonly totalCentavos: number; readonly totalPecas: number
+  readonly itens: number; readonly numeroExterno: string | null; readonly criadoEm: string
+}
+interface LinhaItem { readonly descricaoSnapshot: string; readonly grade: Record<string, string>; readonly quantidade: number; readonly valorUnitarioCentavos: number }
+interface PedidoDetalhe {
+  readonly id: string; readonly estado: string; readonly contatoId: string | null; readonly contato: string | null
+  readonly nome: string | null; readonly numeroExterno: string | null; readonly criadoEm: string; readonly confirmadoEm: string | null
+  readonly formaPagamento: string | null; readonly observacao: string | null
+  readonly totalCentavos: number; readonly totalPecas: number; readonly itens: LinhaItem[]
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 const FILTROS = [
   { chave: '', rotulo: 'Todos' },
   { chave: 'rascunho', rotulo: 'Rascunhos' },
+  { chave: 'aguardando_confirmacao', rotulo: 'Aguardando SIM' },
+  { chave: 'confirmado', rotulo: 'Confirmados' },
   { chave: 'efetivado', rotulo: 'Efetivados' },
   { chave: 'falhou', rotulo: 'Falharam' },
-  { chave: 'cancelado', rotulo: 'Cancelados' },
 ]
 
 /**
- * Lista de pedidos (expansão CRUD). Filtro por estado + cursor. Segue a skill
- * geracrm-layout-ui: tokens, 5 estados, sem sobreposição.
+ * Lista de pedidos com vínculo ao cliente + detalhes por linha, e um MODAL com
+ * todos os detalhes do pedido ao clicar. Filtro por estado + cursor. Segue
+ * geracrm-layout-ui (5 estados, tokens, responsivo, sem sobreposição).
  */
 @Component({
   selector: 'app-pedidos',
@@ -34,7 +39,7 @@ const FILTROS = [
   template: `
     <header class="cabecalho">
       <h1 class="txt-titulo">Pedidos</h1>
-      <p class="sub">Todos os pedidos por estado. O rascunho nasce na conversa; o ERP efetiva.</p>
+      <p class="sub">Todos os pedidos por estado, vinculados ao cliente. Clique para ver os detalhes.</p>
     </header>
 
     <div class="filtros">
@@ -54,23 +59,81 @@ const FILTROS = [
         } @else {
           <ul class="lista">
             @for (p of itens(); track p.id) {
-              <li class="ped">
+              <li class="ped" (click)="abrir(p.id)">
                 <span class="badge" [class]="'badge--' + p.estado">{{ rotuloEstado(p.estado) }}</span>
-                <span class="nome encolhe">{{ p.nome || 'Sem cliente' }}</span>
-                <span class="pecas txt-dados">{{ p.totalPecas }} pç</span>
+                <div class="col encolhe">
+                  @if (p.contato && p.contatoId) {
+                    <a class="cliente" [routerLink]="['/contato', p.contatoId]" (click)="$event.stopPropagation()">{{ p.contato }}</a>
+                  } @else { <span class="cliente sem">Sem cliente</span> }
+                  <span class="sub-linha">
+                    @if (p.rotulo) { {{ p.rotulo }} · } {{ p.itens }} {{ p.itens === 1 ? 'item' : 'itens' }} · {{ p.totalPecas }} pç
+                    @if (p.numeroExterno) { · NF {{ p.numeroExterno }} }
+                  </span>
+                </div>
                 <span class="total txt-dados">{{ reais(p.totalCentavos) }}</span>
-                @if (p.numeroExterno) { <span class="nf txt-dados">NF {{ p.numeroExterno }}</span> }
                 <span class="data txt-dados">{{ p.criadoEm | date: 'dd/MM/yy' }}</span>
+                <span class="chevron" aria-hidden="true">›</span>
               </li>
             }
           </ul>
           @if (proximoCursor()) {
-            <button class="mais" (click)="carregarMais()" [disabled]="carregandoMais()">
-              {{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
-            </button>
+            <button class="mais" (click)="carregarMais()" [disabled]="carregandoMais()">{{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}</button>
           }
         }
       }
+    }
+
+    <!-- Modal de detalhes do pedido -->
+    @if (detalhe(); as d) {
+      <div class="overlay" (click)="fechar()">
+        <div class="modal" role="dialog" aria-modal="true" (click)="$event.stopPropagation()">
+          <header class="m-topo">
+            <div>
+              <span class="badge" [class]="'badge--' + d.estado">{{ rotuloEstado(d.estado) }}</span>
+              <h2 class="txt-secao">{{ d.nome || 'Pedido' }}</h2>
+            </div>
+            <button class="fechar" (click)="fechar()" aria-label="Fechar">×</button>
+          </header>
+
+          <div class="m-meta">
+            @if (d.contato && d.contatoId) { <a class="m-cliente" [routerLink]="['/contato', d.contatoId]">👤 {{ d.contato }}</a> }
+            <span>Criado {{ d.criadoEm | date: 'dd/MM/yy HH:mm' }}</span>
+            @if (d.confirmadoEm) { <span class="ok">✓ Confirmado pelo cliente {{ d.confirmadoEm | date: 'dd/MM HH:mm' }}</span> }
+            @if (d.numeroExterno) { <span>NF {{ d.numeroExterno }}</span> }
+          </div>
+
+          @if (carregandoDet()) { <p class="dica">Carregando itens…</p> }
+          @else {
+            <div class="rolagem-x">
+              <table class="itens-tab">
+                <thead><tr><th>Qtd</th><th>Item</th><th>Variação</th><th class="dir">Unit.</th><th class="dir">Subtotal</th></tr></thead>
+                <tbody>
+                  @for (i of d.itens; track $index) {
+                    <tr>
+                      <td class="txt-dados">{{ i.quantidade }}×</td>
+                      <td class="encolhe">{{ i.descricaoSnapshot }}</td>
+                      <td>{{ variacao(i.grade) || '—' }}</td>
+                      <td class="dir txt-dados">{{ reais(i.valorUnitarioCentavos) }}</td>
+                      <td class="dir txt-dados">{{ reais(i.quantidade * i.valorUnitarioCentavos) }}</td>
+                    </tr>
+                  }
+                  @if (d.itens.length === 0) { <tr><td colspan="5" class="vazio">Sem itens.</td></tr> }
+                </tbody>
+              </table>
+            </div>
+
+            <div class="m-ctx">
+              @if (d.formaPagamento) { <div><span class="lab">Pagamento</span> {{ d.formaPagamento }}</div> }
+              @if (d.observacao) { <div><span class="lab">Obs.</span> {{ d.observacao }}</div> }
+            </div>
+
+            <div class="m-total">
+              <span>{{ d.totalPecas }} peças · {{ d.itens.length }} {{ d.itens.length === 1 ? 'item' : 'itens' }}</span>
+              <strong class="txt-dados">{{ reais(d.totalCentavos) }}</strong>
+            </div>
+          }
+        </div>
+      </div>
     }
   `,
   styles: `
@@ -81,23 +144,49 @@ const FILTROS = [
     .filtros { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); margin-bottom: var(--espacamento-4); }
     .filtros button { padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
     .filtros button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
+    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
     .bloco a { color: var(--acao); }
-    .esq { height: 44px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
+    .esq { height: 52px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
     .lista { list-style: none; margin: 0; padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
-    .ped { display: flex; align-items: center; gap: var(--espacamento-3); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); font-size: 13px; }
+    .ped { display: flex; align-items: center; gap: var(--espacamento-3); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); font-size: 13px; cursor: pointer; }
     .ped:last-child { border-bottom: none; }
-    .nome { color: var(--texto); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-    .total { color: var(--texto); font-weight: 600; }
-    .pecas, .data, .nf { color: var(--texto-suave); }
-    .badge { font-size: 11px; padding: 2px 8px; border-radius: var(--raio-completo); white-space: nowrap; }
-    .badge--rascunho { background: var(--acao-suave); color: var(--texto); }
-    .badge--efetivado { background: var(--sucesso-suave); color: var(--texto); }
-    .badge--falhou { background: var(--erro-suave); color: var(--texto); }
+    .ped:hover { background: var(--superficie-hover); }
+    .col { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+    .cliente { color: var(--acao); text-decoration: none; font-size: 14px; }
+    .cliente.sem { color: var(--texto-suave); }
+    .sub-linha { color: var(--texto-suave); font-size: 12px; }
+    .total { color: var(--texto); font-weight: 600; flex: none; }
+    .data { color: var(--texto-suave); flex: none; }
+    .chevron { color: var(--texto-suave); flex: none; font-size: 18px; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: var(--raio-completo); white-space: nowrap; flex: none; }
+    .badge--rascunho { background: var(--superficie); color: var(--texto-secundario); }
+    .badge--aguardando_confirmacao { background: var(--atencao-suave); color: var(--atencao); }
+    .badge--confirmado { background: var(--acao-suave); color: var(--marca); }
+    .badge--efetivado { background: var(--sucesso-suave); color: var(--sucesso); }
+    .badge--falhou { background: var(--erro-suave); color: var(--erro); }
     .badge--cancelado { background: var(--superficie); color: var(--texto-suave); }
-    .badge--aguardando_conferencia { background: var(--atencao-suave); color: var(--texto); }
+    .badge--aguardando_conferencia { background: var(--atencao-suave); color: var(--atencao); }
     .mais { margin-top: var(--espacamento-4); padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
-    @media (max-width: 560px) { .pecas, .nf { display: none; } }
+    @media (max-width: 560px) { .data { display: none; } }
+    /* Modal */
+    .overlay { position: fixed; inset: 0; background: rgb(0 0 0 / .4); display: grid; place-items: center; padding: var(--espacamento-4); z-index: 50; }
+    .modal { width: 100%; max-width: 620px; max-height: 88vh; overflow-y: auto; background: var(--superficie-elevada); border: 1px solid var(--borda); border-radius: var(--raio-painel); box-shadow: var(--elevacao-modal); padding: var(--espacamento-6); }
+    .m-topo { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-3); margin-bottom: var(--espacamento-3); }
+    .m-topo h2 { margin: var(--espacamento-2) 0 0; }
+    .fechar { border: 0; background: transparent; color: var(--texto-suave); font-size: 22px; cursor: pointer; line-height: 1; }
+    .m-meta { display: flex; flex-wrap: wrap; gap: var(--espacamento-3); font-size: 12px; color: var(--texto-secundario); margin-bottom: var(--espacamento-4); }
+    .m-cliente { color: var(--acao); text-decoration: none; }
+    .m-meta .ok { color: var(--sucesso); }
+    .itens-tab { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 460px; }
+    .itens-tab th, .itens-tab td { padding: var(--espacamento-2) var(--espacamento-3); border-bottom: 1px solid var(--borda); text-align: left; }
+    .itens-tab th { color: var(--texto-suave); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+    .itens-tab .dir { text-align: right; }
+    .itens-tab .vazio { text-align: center; color: var(--texto-suave); }
+    .m-ctx { display: grid; gap: var(--espacamento-1); margin: var(--espacamento-4) 0; font-size: 13px; color: var(--texto); }
+    .m-ctx .lab { color: var(--texto-suave); margin-right: var(--espacamento-1); }
+    .m-total { display: flex; justify-content: space-between; align-items: baseline; padding-top: var(--espacamento-3); border-top: 2px solid var(--borda); font-size: 14px; }
+    .m-total strong { font-size: 18px; color: var(--texto); }
+    .dica { color: var(--texto-suave); font-size: 13px; }
   `,
 })
 export class PedidosPagina implements OnInit {
@@ -108,11 +197,21 @@ export class PedidosPagina implements OnInit {
   readonly filtro = signal('')
   readonly proximoCursor = signal<string | null>(null)
   readonly carregandoMais = signal(false)
+  readonly detalhe = signal<PedidoDetalhe | null>(null)
+  readonly carregandoDet = signal(false)
 
   ngOnInit(): void { void this.carregar() }
   reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
+  variacao(g: Record<string, string> | null | undefined): string {
+    if (!g) return ''
+    const ordem = ['cor', 'tamanho', 'subTamanho']
+    const vistos = new Set<string>(); const p: string[] = []
+    for (const k of ordem) if (g[k]) { p.push(g[k]!); vistos.add(k) }
+    for (const [k, v] of Object.entries(g)) if (!vistos.has(k) && v) p.push(v)
+    return p.join(' · ')
+  }
   rotuloEstado(e: string): string {
-    return { rascunho: 'Rascunho', efetivado: 'Efetivado', falhou: 'Falhou', cancelado: 'Cancelado', aguardando_conferencia: 'Conferência', enviando: 'Enviando', validando: 'Validando' }[e] ?? e
+    return { rascunho: 'Rascunho', aguardando_confirmacao: 'Aguardando SIM', confirmado: 'Confirmado', efetivado: 'Efetivado', falhou: 'Falhou', cancelado: 'Cancelado', aguardando_conferencia: 'Conferência', enviando: 'Enviando', validando: 'Validando' }[e] ?? e
   }
   trocar(f: string): void { this.filtro.set(f); void this.carregar() }
 
@@ -128,9 +227,7 @@ export class PedidosPagina implements OnInit {
     this.estado.set('carregando')
     try {
       const r = await firstValueFrom(this.http.get<{ itens: PedidoItem[]; proximoCursor: string | null }>(this.url(null)))
-      this.itens.set(r.itens)
-      this.proximoCursor.set(r.proximoCursor)
-      this.estado.set('pronto')
+      this.itens.set(r.itens); this.proximoCursor.set(r.proximoCursor); this.estado.set('pronto')
     } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
   }
 
@@ -140,8 +237,18 @@ export class PedidosPagina implements OnInit {
     this.carregandoMais.set(true)
     try {
       const r = await firstValueFrom(this.http.get<{ itens: PedidoItem[]; proximoCursor: string | null }>(this.url(cursor)))
-      this.itens.update((a) => [...a, ...r.itens])
-      this.proximoCursor.set(r.proximoCursor)
+      this.itens.update((a) => [...a, ...r.itens]); this.proximoCursor.set(r.proximoCursor)
     } catch { /* mantém */ } finally { this.carregandoMais.set(false) }
   }
+
+  async abrir(id: string): Promise<void> {
+    this.carregandoDet.set(true)
+    // Abre o modal já com um esqueleto mínimo enquanto carrega os itens.
+    this.detalhe.set({ id, estado: '', contatoId: null, contato: null, nome: null, numeroExterno: null, criadoEm: new Date().toISOString(), confirmadoEm: null, formaPagamento: null, observacao: null, totalCentavos: 0, totalPecas: 0, itens: [] })
+    try {
+      const d = await firstValueFrom(this.http.get<PedidoDetalhe>(`/v1/pedidos/${id}`))
+      this.detalhe.set(d)
+    } catch { this.fechar() } finally { this.carregandoDet.set(false) }
+  }
+  fechar(): void { this.detalhe.set(null) }
 }
