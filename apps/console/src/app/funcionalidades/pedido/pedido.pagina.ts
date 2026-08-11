@@ -284,24 +284,26 @@ export class PedidoAssistidoPagina implements OnInit {
     this.buscou.set(true)
   }
   private async iniciar(contato: string | null, conversa: string | null): Promise<void> {
-    // Resolve o contato. Vindo do chat (?conversa=), descobrimos o contato pelo
-    // rascunho da conversa; o pad em si é decidido abaixo (sempre limpo).
-    let cid = contato
-    if (!cid && conversa) {
+    // Vindo do chat (?conversa=): cai no rascunho NÃO finalizado daquela conversa
+    // (retoma o que estava montando); se a conversa é nova ou o pedido anterior já
+    // saiu de 'rascunho' (enviado/confirmado/efetivado), o backend cria um vazio.
+    // É a idempotência por conversa (INV-52) — a regra que o usuário quer.
+    if (conversa) {
       await this.servico.abrirDaConversa(conversa)
-      cid = this.servico.pedido()?.contatoId ?? null
+      const cid = contato ?? this.servico.pedido()?.contatoId ?? null
+      this.contatoId.set(cid)
+      if (cid) await this.servico.carregarRascunhos(cid)
+      return
     }
-    if (!cid) return
-    this.contatoId.set(cid)
-    await this.servico.carregarRascunhos(cid)
-    // ⚠️ Iniciar um pedido é começar LIMPO: nunca cair em cima dos itens de um
-    // rascunho anterior. Reusa um rascunho vazio se houver (evita acumular pads
-    // vazios); senão cria um novo. Os rascunhos COM itens ficam nos chips, para
-    // retomar com um clique — não se perdem (PED-06).
-    const rascunhos = this.servico.rascunhos().filter((r) => r.estado === 'rascunho')
-    const vazio = rascunhos.find((r) => r.itens === 0)
-    if (vazio) await this.servico.abrirRascunho(vazio.id)
-    else await this.servico.novoRascunho(cid, undefined, conversa ?? undefined)
+    // Sem conversa (aberto por ?contato=): retoma o rascunho não finalizado mais
+    // recente do cliente, ou cria um novo. Os demais ficam nos chips.
+    if (contato) {
+      this.contatoId.set(contato)
+      await this.servico.carregarRascunhos(contato)
+      const rs = this.servico.rascunhos().filter((r) => r.estado === 'rascunho')
+      if (rs.length) await this.servico.abrirRascunho(rs[0]!.id)
+      else await this.servico.novoRascunho(contato)
+    }
   }
 
   salvarContexto(id: string, campo: 'formaPagamento' | 'observacao', valor: string): void {
