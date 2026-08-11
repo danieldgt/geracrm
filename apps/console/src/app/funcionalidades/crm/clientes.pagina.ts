@@ -202,10 +202,13 @@ import { ClientesServico, type ClienteRfv } from './clientes.servico.js'
     /* ⚠️ Glifo BRANCO sobre o verde — o padrão do WhatsApp. Verde-escuro sobre
        verde some (vira "bolinha sem ícone"). #hex aqui é a cor de MARCA do
        WhatsApp (não token de design), fora da lib do lint. */
-    .wpp { border: 0; width: 32px; height: 32px; border-radius: var(--raio-completo); background: #25d366; color: #ffffff; cursor: pointer; display: inline-grid; place-items: center; justify-self: center; }
+    /* padding:0 e OBRIGATORIO: sem ele o botao herda o padding do estilo base de
+       button e, com box-sizing:border-box + width:32px, a area de conteudo fica
+       com largura 0; ai o global svg max-width:100% zera o icone. */
+    .wpp { border: 0; width: 32px; height: 32px; padding: 0; border-radius: var(--raio-completo); background: #25d366; color: #ffffff; cursor: pointer; display: inline-grid; place-items: center; justify-self: center; }
     .wpp:hover { background: #1ebe5b; }
     /* SVG inline herda baseline e cria um vão de descida — block centra no círculo. */
-    .wpp svg { display: block; }
+    .wpp svg { display: block; width: 18px; height: 18px; }
     .busca-contato { position: relative; margin-bottom: var(--espacamento-3); }
     .busca-contato .lupa { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); font-size: 12px; opacity: .6; }
     .busca-contato input { width: 100%; padding: 10px 12px 10px 34px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
