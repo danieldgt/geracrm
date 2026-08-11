@@ -65,7 +65,6 @@ const TAM_LETRA: Record<string, number> = { PP: 1, P: 2, M: 3, G: 4, GG: 5, XG: 
         @if (itens().length === 0) {
           <div class="bloco"><h2 class="txt-secao">Nada encontrado</h2><p>Refine a busca ou sincronize o catálogo do ERP.</p></div>
         } @else {
-          @if (limitado()) { <p class="dica">Mostrando os primeiros resultados — refine a busca para ver o resto.</p> }
           <ul class="lista">
             @for (p of itens(); track p.id) {
               <li class="prod">
@@ -129,6 +128,7 @@ const TAM_LETRA: Record<string, number> = { PP: 1, P: 2, M: 3, G: 4, GG: 5, XG: 
               </li>
             }
           </ul>
+          @if (temMais()) { <button class="mais" (click)="buscar(true)">Carregar mais</button> }
         }
       }
     }
@@ -146,6 +146,7 @@ const TAM_LETRA: Record<string, number> = { PP: 1, P: 2, M: 3, G: 4, GG: 5, XG: 
     .perfil button:last-child { border-radius: 0 var(--raio-controle) var(--raio-controle) 0; border-left: 0; }
     .perfil button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     .dica { font-size: 13px; color: var(--texto-suave); }
+    .mais { display: block; width: 100%; margin-top: var(--espacamento-3); padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; cursor: pointer; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
     .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }
     .prod { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
@@ -177,9 +178,10 @@ export class CatalogoPagina implements OnInit {
   private readonly http = inject(HttpClient)
   readonly estado = signal<Estado>('buscando')
   readonly itens = signal<readonly Produto[]>([])
-  readonly limitado = signal(false)
+  readonly temMais = signal(false)
   readonly busca = signal('')
   readonly perfil = signal<'atacado' | 'varejo'>('atacado')
+  private cursor: string | null = null
   private timer?: ReturnType<typeof setTimeout>
 
   ngOnInit(): void { void this.buscar() }
@@ -203,13 +205,20 @@ export class CatalogoPagina implements OnInit {
   }
   trocarPerfil(p: 'atacado' | 'varejo'): void { this.perfil.set(p); void this.buscar() }
 
-  async buscar(): Promise<void> {
-    this.estado.set('buscando')
+  /** Lista PAGINADA por cursor (regra do projeto: nada de top-N cru). `anexar`
+   *  = "carregar mais"; sem ele, recomeça a lista. */
+  async buscar(anexar = false): Promise<void> {
+    if (!anexar) { this.estado.set('buscando'); this.cursor = null }
     try {
-      const r = await firstValueFrom(this.http.get<{ itens: ProdutoApi[]; limitado: boolean }>(
-        `/v1/catalogo?perfil=${this.perfil()}&busca=${encodeURIComponent(this.busca().trim())}`))
-      this.itens.set(r.itens.map((p) => this.montarGrade(p)))
-      this.limitado.set(r.limitado)
+      const qs = new URLSearchParams({ perfil: this.perfil() })
+      if (this.busca().trim()) qs.set('busca', this.busca().trim())
+      if (anexar && this.cursor) qs.set('cursor', this.cursor)
+      const r = await firstValueFrom(this.http.get<{ itens: ProdutoApi[]; proximoCursor: string | null }>(
+        `/v1/catalogo/busca?${qs}`))
+      const grades = r.itens.map((p) => this.montarGrade(p))
+      this.itens.set(anexar ? [...this.itens(), ...grades] : grades)
+      this.cursor = r.proximoCursor
+      this.temMais.set(r.proximoCursor !== null)
       this.estado.set('pronto')
     } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
   }
