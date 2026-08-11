@@ -1,5 +1,6 @@
 // Public surface of @geracrm/shared.
 // ⚠️ TypeScript only — no framework imports. Consumed by Angular, Expo and the API.
+export * from './dominio/canal.js'
 export * from './dominio/janela.js'
 export * from './dominio/telefone.js'
 export * from './dominio/rfv.js'

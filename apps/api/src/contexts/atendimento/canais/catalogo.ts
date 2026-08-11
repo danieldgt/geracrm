@@ -1,4 +1,5 @@
 import type { EsquemaCredencial } from '@geracrm/conectores'
+import type { TipoCanal } from '@geracrm/shared'
 import type { CapacidadesCanal } from './porta.js'
 import { CAPACIDADES_PLUGZAPI } from './plugzapi.js'
 
@@ -17,7 +18,7 @@ export interface ProvedorCanal {
   readonly codigo: string
   readonly nome: string
   /** Tipo persistido em `canal_conectado.tipo`. */
-  readonly tipo: 'whatsapp_oficial' | 'whatsapp_nao_oficial'
+  readonly tipo: TipoCanal
   readonly oficial: boolean
   readonly descricao: string
   readonly esquemaCredencial: EsquemaCredencial
@@ -28,6 +29,18 @@ export interface ProvedorCanal {
 
 const CAP_OFICIAL: CapacidadesCanal = {
   janela24h: true, aceitaTemplate: true, riscoBanimento: false, textoLivreSempre: false,
+}
+
+// Instagram Direct (Graph API): janela de 24h SEM template e SEM reabertura, e SEM
+// disparo em massa (campanha bloqueia IG). Declarado aqui; o produto degrada por isto.
+const CAP_INSTAGRAM: CapacidadesCanal = {
+  janela24h: true, aceitaTemplate: false, riscoBanimento: false, textoLivreSempre: false,
+}
+
+// TikTok Business Messaging: janela de sessão, sem template e sem disparo em massa.
+// Conservador por ora — a integração real ajusta quando entrar.
+const CAP_TIKTOK: CapacidadesCanal = {
+  janela24h: true, aceitaTemplate: false, riscoBanimento: false, textoLivreSempre: false,
 }
 
 export const CANAIS: readonly ProvedorCanal[] = [
@@ -76,6 +89,54 @@ export const CANAIS: readonly ProvedorCanal[] = [
           ajuda: 'Em Credenciais → Token da instância.' },
         { nome: 'clientToken', rotulo: 'Token de segurança (Client-Token)', tipo: 'senha', obrigatorio: true,
           ajuda: 'Em Segurança → Token de segurança da conta. Obrigatório se a conta o exige.' },
+      ],
+    },
+  },
+  {
+    codigo: 'instagram_meta',
+    nome: 'Instagram Direct (Meta)',
+    tipo: 'instagram',
+    oficial: true,
+    descricao: 'Atende as mensagens diretas do Instagram pela Graph API. Janela de 24h, sem templates e sem disparo em massa.',
+    capacidades: CAP_INSTAGRAM,
+    // ⚠️ Adaptador ainda em desenvolvimento — o canal aparece e degrada honesto.
+    aviso:
+      'Integração do Instagram em desenvolvimento: o canal já aparece no atendimento, mas o envio/recebimento ' +
+      'entra quando o adaptador (Graph API) estiver ligado. Não há disparo de campanha por Instagram.',
+    esquemaCredencial: {
+      preRequisito:
+        'Requer uma conta Instagram Profissional vinculada a uma Página do Facebook, com o Instagram Business ' +
+        'Login concluído. Este cadastro é para quem já tem os dados do app da Meta.',
+      campos: [
+        { nome: 'igUserId', rotulo: 'Instagram User ID', tipo: 'texto', obrigatorio: true,
+          ajuda: 'O id da conta profissional do Instagram.' },
+        { nome: 'paginaId', rotulo: 'ID da Página do Facebook', tipo: 'texto', obrigatorio: true,
+          ajuda: 'A Página vinculada ao Instagram — é por ela que o webhook identifica.' },
+        { nome: 'token', rotulo: 'Token de acesso', tipo: 'senha', obrigatorio: true,
+          ajuda: 'Token permanente do System User com permissão de mensagens do Instagram.' },
+      ],
+    },
+  },
+  {
+    codigo: 'tiktok_business',
+    nome: 'TikTok (Business Messaging)',
+    tipo: 'tiktok',
+    oficial: true,
+    descricao: 'Atende as mensagens do TikTok pela API de Business Messaging. Janela de sessão, sem templates e sem disparo em massa.',
+    capacidades: CAP_TIKTOK,
+    // ⚠️ Adaptador ainda em desenvolvimento — o canal aparece e degrada honesto.
+    aviso:
+      'Integração do TikTok em desenvolvimento: o canal já aparece no atendimento, mas o envio/recebimento ' +
+      'entra quando o adaptador estiver ligado. A disponibilidade da API do TikTok pode variar por conta.',
+    esquemaCredencial: {
+      preRequisito:
+        'Requer uma conta TikTok for Business com o app aprovado para Business Messaging. Este cadastro é ' +
+        'para quem já tem as credenciais do app.',
+      campos: [
+        { nome: 'contaId', rotulo: 'ID da conta Business', tipo: 'texto', obrigatorio: true,
+          ajuda: 'O id da conta TikTok for Business.' },
+        { nome: 'token', rotulo: 'Token de acesso', tipo: 'senha', obrigatorio: true,
+          ajuda: 'Token de acesso do app aprovado para mensagens.' },
       ],
     },
   },

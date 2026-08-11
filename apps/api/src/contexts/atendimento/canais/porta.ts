@@ -9,7 +9,9 @@
  *
  * Vive no contexto `atendimento` da API (server-side): sai para a rede e não é
  * consumido por Angular/Expo, então não precisa da pureza de `packages/shared`.
+ * O TIPO de canal, esse sim, vem de `packages/shared` — fonte única para API e UI.
  */
+import type { TipoCanal } from '@geracrm/shared'
 
 /**
  * Capacidades declaradas do canal. O produto DEGRADA conforme isto (ADR-008):
@@ -83,7 +85,7 @@ export type EventoWebhook =
   | { tipo: 'ignorado'; motivo: string }
 
 export interface PortaCanal {
-  readonly tipo: 'whatsapp_oficial' | 'whatsapp_nao_oficial'
+  readonly tipo: TipoCanal
   readonly capacidades: CapacidadesCanal
 
   /**

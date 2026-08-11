@@ -4,6 +4,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router'
 import { formatarProtocolo, parsearProtocolo } from '@geracrm/shared'
 import { InboxServico, type ItemConversa, type Mensagem, type Thread } from './inbox.servico.js'
 import { EventosServico } from '../../nucleo/eventos.servico.js'
+import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.componente.js'
 
 /**
  * Inbox — visual inspirado no WhatsApp (tema escuro, bolhas, avatares).
@@ -14,7 +15,7 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
  */
 @Component({
   selector: 'app-inbox',
-  imports: [FormsModule, RouterLink],
+  imports: [FormsModule, RouterLink, CanalSimboloComponente],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="wa">
@@ -71,7 +72,10 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
                 @for (c of conversasFiltradas(); track c.id) {
                   <button class="item" [class.ativo]="servico.selecionadaId() === c.id"
                           (click)="servico.abrir(c.id)">
-                    <span class="avatar" [style.background]="corAvatar(c.id)">{{ iniciais(c.nome) }}</span>
+                    <span class="av-wrap">
+                      <span class="avatar" [style.background]="corAvatar(c.id)">{{ iniciais(c.nome) }}</span>
+                      <app-canal-simbolo class="canal-badge" [tipo]="c.canalTipo" [tam]="16" />
+                    </span>
                     <span class="col">
                       <span class="linha1">
                         <span class="nome">{{ c.nome }}</span>
@@ -108,7 +112,10 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
               <header class="topo">
                 <span class="avatar" [style.background]="corAvatar(t.id)">{{ iniciais(t.nome) }}</span>
                 <span class="topo-col">
-                  <span class="nome">{{ t.nome }}</span>
+                  <span class="nome-linha">
+                    <span class="nome">{{ t.nome }}</span>
+                    <app-canal-simbolo [tipo]="t.canalTipo" [tam]="18" />
+                  </span>
                   <span class="sub" [attr.data-estado]="t.exigeJanela24h ? t.janela.estado : 'aberta'">{{ subConversa(t) }}</span>
                 </span>
                 <div class="topo-acoes">
@@ -298,6 +305,9 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
     .item:hover { background: var(--wa-hover); }
     .item.ativo { background: var(--wa-hover); }
     .avatar { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 15px; font-weight: 600; }
+    /* Selo de canal no canto do avatar (multicanal). */
+    .av-wrap { flex: none; position: relative; display: inline-grid; }
+    .canal-badge { position: absolute; bottom: -3px; right: -3px; box-shadow: 0 0 0 2px var(--wa-sidebar, var(--superficie)); border-radius: 6px; }
     .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
     .linha1, .linha2 { display: flex; align-items: center; gap: 8px; }
     .nome { flex: 1; min-width: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -328,6 +338,7 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
     .topo { height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: var(--wa-panel); z-index: 1; }
     .topo .avatar { width: 40px; height: 40px; font-size: 14px; }
     .topo-col { display: flex; flex-direction: column; }
+    .nome-linha { display: flex; align-items: center; gap: 7px; }
     .topo-acoes { margin-left: auto; }
     .assumir-btn { border: 0; background: var(--wa-green); color: #04231d; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
     .pedido-btn { font-size: 12px; color: var(--wa-text); background: rgba(255,255,255,.1); padding: 6px 12px; border-radius: 999px; text-decoration: none; white-space: nowrap; }

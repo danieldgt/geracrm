@@ -127,16 +127,18 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
       ultima_mensagem_em: Date | null; ultima_entrante_em: Date | null
       ultima_direcao: string | null; arquivada: boolean
       ult_tipo: string | null; ult_conteudo: unknown; ult_direcao: string | null
-      nao_lida: boolean
+      nao_lida: boolean; canal_tipo: string
     }[]>`
       SELECT cv.id, cv.contato_id, ct.nome, cv.conduzida_por,
              cv.ultima_mensagem_em, cv.ultima_entrante_em, cv.ultima_direcao, cv.arquivada,
+             cc.tipo AS canal_tipo,
              um.tipo AS ult_tipo, um.conteudo AS ult_conteudo, um.direcao AS ult_direcao,
              -- ⚠️ Não-lida é DERIVADA (versao − lida_ate_versao) e POR USUÁRIO,
              --    nunca um contador na conversa. Só entrante conta como não-lida.
              (cv.ultima_direcao = 'entrante' AND cv.versao > coalesce(cl.lida_ate_versao, 0)) AS nao_lida
         FROM conversa cv
         JOIN contato ct ON ct.id = cv.contato_id
+        JOIN canal_conectado cc ON cc.tenant_id = cv.tenant_id AND cc.id = cv.canal_id
         LEFT JOIN conversa_leitura cl
           ON cl.tenant_id = cv.tenant_id AND cl.conversa_id = cv.id
          AND cl.usuario_id = (SELECT id FROM usuario WHERE tenant_id = tenant_atual() AND cognito_sub = ${sub})
@@ -184,6 +186,8 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
         ? { texto: previewMensagem(l.ult_tipo, l.ult_conteudo), direcao: l.ult_direcao }
         : null,
       naoLida: l.nao_lida,
+      // Tipo de canal — a lista pinta o símbolo da marca por conversa (multicanal).
+      canalTipo: l.canal_tipo,
       // ⚠️ Janela derivada do timestamp da última entrante — não uma flag.
       janela: calcularJanela(l.ultima_entrante_em, agora),
     }))
@@ -263,6 +267,8 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
         // ⚠️ A janela de 24h + template é regra SÓ do WhatsApp Oficial (Meta).
         //    No não-oficial (PlugZapi) manda texto livre a qualquer hora.
         exigeJanela24h: dados.conversa.canal_tipo === 'whatsapp_oficial',
+        // Tipo de canal — o cabeçalho da conversa pinta o símbolo da marca (multicanal).
+        canalTipo: dados.conversa.canal_tipo,
         temMaisAntigas: dados.temMais,
         janela: calcularJanela(dados.conversa.ultima_entrante_em, new Date()),
         mensagens: await Promise.all(dados.mensagens.map(async (m) => ({

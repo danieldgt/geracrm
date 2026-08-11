@@ -1,4 +1,5 @@
 import type { Credencial } from '@geracrm/conectores'
+import type { TipoCanal } from '@geracrm/shared'
 import type { PortaCanal, ResultadoEnvio, ResultadoAcaoMensagem } from './porta.js'
 import { CanalPlugZapi } from './plugzapi.js'
 
@@ -20,6 +21,13 @@ export function criarCanal(provedor: string, cred: Credencial): PortaCanal {
       // ⚠️ Ainda não implementado — depende do registro na Meta. A porta existe
       //    para o dia do corte; até lá, recusa tipificado em vez de fingir.
       return new CanalNaoImplementado('whatsapp_oficial')
+    case 'instagram_meta':
+      // ⚠️ Instagram Direct (Graph API) — adaptador em desenvolvimento. Degrada
+      //    honesto: o canal existe no modelo, o envio recusa tipificado.
+      return new CanalNaoImplementado('instagram')
+    case 'tiktok_business':
+      // ⚠️ TikTok Business Messaging — adaptador em desenvolvimento. Idem.
+      return new CanalNaoImplementado('tiktok')
     default:
       return new CanalNaoImplementado('whatsapp_nao_oficial')
   }
@@ -30,7 +38,7 @@ class CanalNaoImplementado implements PortaCanal {
   readonly capacidades = {
     janela24h: false, aceitaTemplate: false, riscoBanimento: false, textoLivreSempre: false,
   }
-  constructor(readonly tipo: 'whatsapp_oficial' | 'whatsapp_nao_oficial') {}
+  constructor(readonly tipo: TipoCanal) {}
   async enviarTexto(): Promise<ResultadoEnvio> {
     return { ok: false, motivo: 'indisponivel', detalhe: 'adaptador ainda não implementado' }
   }

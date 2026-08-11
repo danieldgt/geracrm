@@ -1,6 +1,7 @@
 import { Injectable, inject, signal, computed } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import type { TipoCanal } from '@geracrm/shared'
 
 /** Estado da janela de 24h — vem do domínio (calcularJanela), não daqui. */
 export interface Janela {
@@ -18,6 +19,8 @@ export interface ItemConversa {
   readonly ultimaDirecao: string | null
   readonly ultimaMensagem: { readonly texto: string; readonly direcao: string | null } | null
   readonly naoLida: boolean
+  /** Tipo de canal — a lista pinta o símbolo da marca por conversa (multicanal). */
+  readonly canalTipo: TipoCanal
   readonly janela: Janela
 }
 
@@ -40,6 +43,8 @@ export interface Thread {
   readonly conduzidaPor: string
   /** ⚠️ Janela de 24h + template só valem no WhatsApp Oficial (Meta). */
   readonly exigeJanela24h: boolean
+  /** Tipo de canal — o cabeçalho pinta o símbolo da marca (multicanal). */
+  readonly canalTipo: TipoCanal
   /** Atendimento aberto (EP-06): null = ninguém assumiu. */
   readonly atendimento: {
     readonly estado: string
