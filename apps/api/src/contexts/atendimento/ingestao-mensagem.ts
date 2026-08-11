@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { normalizarTelefone } from '@geracrm/shared'
 import type { MensagemEntrante } from './canais/porta.js'
+import { confirmarPedidoPorResposta } from '../pedido/confirmacao-pedido.js'
 import type { Sql } from '../../db/index.js'
 import { notificarMensagemEntrante } from './notificacao.js'
 
@@ -175,6 +176,13 @@ export async function ingerirMensagemEntrante(
     VALUES (tenant_atual(), 'mensagem.recebida', 'conversa', ${conversaId},
             ${JSON.stringify({ conversaId, canalId, versao })}::text::jsonb)
   `
+
+  // 6.5 ⚠️ Cliente respondeu SIM ao resumo? Confirma o pedido pendente da conversa
+  //     (vinculado ao cliente), no MESMO commit. Conservador: só resposta curta e
+  //     claramente afirmativa. Falha aqui não derruba a ingestão da mensagem.
+  if (msg.texto) {
+    try { await confirmarPedidoPorResposta(tx, conversaId, msg.texto, msg.recebidaEm) } catch { /* não bloqueia a mensagem */ }
+  }
 
   // 7. Notifica o atendente que assumiu esta conversa (PLT-07), no mesmo commit.
   //    Só entrante NOVA chega aqui — a duplicada já retornou lá em cima.

@@ -5,6 +5,8 @@
  */
 export interface ItemResumo {
   readonly descricao: string
+  /** Variação escolhida (cor · tamanho …), do grade_snapshot. Opcional. */
+  readonly variacao?: string | null
   readonly quantidade: number
   readonly valorUnitarioCentavos: number
 }
@@ -36,7 +38,10 @@ export function resumoPedidoTexto(
   linhas.push(saud ? `Olá, ${saud}! Segue o resumo do seu pedido 👇` : '*Resumo do seu pedido*')
   linhas.push('')
   for (const i of itens) {
-    linhas.push(`• ${qtd(i.quantidade)}× ${i.descricao} — ${reais(i.quantidade * i.valorUnitarioCentavos)}`)
+    // Referência escolhida com cor/tamanho + preço unitário + subtotal.
+    const nome = i.variacao ? `${i.descricao} (${i.variacao})` : i.descricao
+    const unit = reais(i.valorUnitarioCentavos)
+    linhas.push(`• ${qtd(i.quantidade)}× ${nome} — ${unit} = ${reais(i.quantidade * i.valorUnitarioCentavos)}`)
   }
   linhas.push('')
   linhas.push(`*Total: ${reais(totalCentavos)}*`)

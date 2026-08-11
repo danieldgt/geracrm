@@ -464,8 +464,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
            WHERE p.tenant_id = tenant_atual() AND p.id = ${req.params.id}`
         if (!p) return { erro: 'nao_encontrado' as const }
         if (!p.conversa_id) return { erro: 'sem_conversa' as const }
-        const itens = await tx<{ descricao_snapshot: string; quantidade: string; valor_unitario_centavos: string }[]>`
-          SELECT descricao_snapshot, quantidade::text, valor_unitario_centavos::text
+        const itens = await tx<{ descricao_snapshot: string; grade_snapshot: Record<string, string>; quantidade: string; valor_unitario_centavos: string }[]>`
+          SELECT descricao_snapshot, grade_snapshot, quantidade::text, valor_unitario_centavos::text
             FROM pedido_item WHERE tenant_id = tenant_atual() AND pedido_id = ${req.params.id} ORDER BY seq ASC`
         if (itens.length === 0) return { erro: 'vazio' as const }
         const eu = await garantirUsuarioId(tx, req)
@@ -473,7 +473,12 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         return {
           conversaId: p.conversa_id, total: Number(p.total_centavos), nome: u?.nome ?? null,
           ctx: { contatoNome: p.contato, formaPagamento: p.forma_pagamento, observacao: p.observacao },
-          itens: itens.map((i) => ({ descricao: i.descricao_snapshot, quantidade: Number(i.quantidade), valorUnitarioCentavos: Number(i.valor_unitario_centavos) })),
+          itens: itens.map((i) => ({
+            descricao: i.descricao_snapshot,
+            // Cor · tamanho · … na ordem cor→tamanho→resto (o que o cliente escolheu).
+            variacao: variacaoDaGrade(i.grade_snapshot),
+            quantidade: Number(i.quantidade), valorUnitarioCentavos: Number(i.valor_unitario_centavos),
+          })),
         }
       })
       if ('erro' in dados) {
@@ -484,6 +489,12 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       const texto = resumoPedidoTexto(dados.itens, dados.total, dados.ctx)
       const r = await enviarTextoNaConversa(req.tenantId!, dados.conversaId, texto, dados.nome)
       if (!r.ok && r.motivo === 'conversa_nao_encontrada') return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
+      // Enviou → fica aguardando o SIM do cliente (só a partir de rascunho).
+      if (r.ok) {
+        await req.comTenant((tx) => tx`
+          UPDATE pedido SET estado = 'aguardando_confirmacao', atualizado_em = now()
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND estado = 'rascunho'`)
+      }
       return reply.send({ ok: r.ok, motivo: r.ok ? undefined : r.motivo })
     },
   )
@@ -512,4 +523,20 @@ async function recalcularTotais(tx: import('../../db/index.js').Sql, pedidoId: s
       atualizado_em  = now()
      WHERE id = ${pedidoId}
   `
+}
+
+/** Variação escolhida a partir do grade_snapshot: cor · tamanho · resto. */
+function variacaoDaGrade(grade: Record<string, string> | null | undefined): string | null {
+  if (!grade) return null
+  const ordem = ['cor', 'tamanho', 'subTamanho', 'sub_tamanho']
+  const vistos = new Set<string>()
+  const partes: string[] = []
+  for (const k of ordem) {
+    const v = grade[k]
+    if (v) { partes.push(String(v)); vistos.add(k) }
+  }
+  for (const [k, v] of Object.entries(grade)) {
+    if (!vistos.has(k) && v) partes.push(String(v))
+  }
+  return partes.length ? partes.join(' · ') : null
 }

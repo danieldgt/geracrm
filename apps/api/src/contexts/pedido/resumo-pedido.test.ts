@@ -14,9 +14,16 @@ describe('resumoPedidoTexto (puro)', () => {
       18000,
     )
     expect(t).toContain('*Resumo do seu pedido*')
-    expect(t).toContain('• 2× Camisa Azul M — R$\xa0100,00')
-    expect(t).toContain('• 1× Calça Preta 42 — R$\xa080,00')
+    expect(t).toContain('2× Camisa Azul M')
+    expect(t).toContain('= R$\xa0100,00')
     expect(t).toContain('*Total: R$\xa0180,00*')
+  })
+
+  it('mostra a variação escolhida (cor · tamanho) na linha', () => {
+    const t = resumoPedidoTexto(
+      [{ descricao: 'Camisa Polo', variacao: 'Azul · M', quantidade: 3, valorUnitarioCentavos: 5000 }], 15000,
+    )
+    expect(t).toContain('• 3× Camisa Polo (Azul · M) — R$\xa050,00 = R$\xa0150,00')
   })
 
   it('com contexto: saudação pelo 1º nome, pagamento, observação e CTA', () => {
@@ -67,8 +74,8 @@ beforeAll(async () => {
   // Pedido na conversa, com 2 itens.
   await dono`INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, estado, total_centavos)
              VALUES (${T}, ${PED_CONV}, ${C1}, ${CONV}, 'rascunho', 18000) ON CONFLICT DO NOTHING`
-  await dono`INSERT INTO pedido_item (tenant_id, pedido_id, seq, sku_snapshot, descricao_snapshot, quantidade, valor_unitario_centavos)
-             VALUES (${T}, ${PED_CONV}, 1, 'SKU1', 'Camisa Azul M', 2, 5000)`
+  await dono`INSERT INTO pedido_item (tenant_id, pedido_id, seq, sku_snapshot, descricao_snapshot, grade_snapshot, quantidade, valor_unitario_centavos)
+             VALUES (${T}, ${PED_CONV}, 1, 'SKU1', 'Camisa Polo', ${JSON.stringify({ cor: 'Azul', tamanho: 'M' })}::text::jsonb, 2, 5000)`
   await dono`INSERT INTO pedido_item (tenant_id, pedido_id, seq, sku_snapshot, descricao_snapshot, quantidade, valor_unitario_centavos)
              VALUES (${T}, ${PED_CONV}, 2, 'SKU2', 'Calça Preta 42', 1, 8000)`
   // Pedido SEM conversa (venda de balcão).
@@ -112,6 +119,6 @@ describe('POST /v1/pedidos/:id/enviar-resumo', () => {
     expect(m?.direcao).toBe('saliente')
     expect(m?.status).toBe('falhou')
     expect(m?.texto).toContain('Olá, Cliente!') // saudação pelo 1º nome do contato
-    expect(m?.texto).toContain('Camisa Azul M')
+    expect(m?.texto).toContain('Camisa Polo (Azul · M)') // referência com cor e tamanho
   })
 })
