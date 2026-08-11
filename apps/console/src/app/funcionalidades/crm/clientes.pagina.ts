@@ -199,7 +199,10 @@ import { ClientesServico, type ClienteRfv } from './clientes.servico.js'
     .import-resultado strong { color: var(--texto); }
     .import-resultado .ruim { color: var(--erro); }
     .rejeicoes { margin: var(--espacamento-2) 0 0; padding-left: var(--espacamento-4); color: var(--texto-suave); font-size: 12px; }
-    .wpp { border: 0; width: 32px; height: 32px; border-radius: var(--raio-completo); background: #25d366; color: #073b25; cursor: pointer; display: inline-grid; place-items: center; justify-self: center; }
+    /* ⚠️ Glifo BRANCO sobre o verde — o padrão do WhatsApp. Verde-escuro sobre
+       verde some (vira "bolinha sem ícone"). #hex aqui é a cor de MARCA do
+       WhatsApp (não token de design), fora da lib do lint. */
+    .wpp { border: 0; width: 32px; height: 32px; border-radius: var(--raio-completo); background: #25d366; color: #ffffff; cursor: pointer; display: inline-grid; place-items: center; justify-self: center; }
     .wpp:hover { background: #1ebe5b; }
     /* SVG inline herda baseline e cria um vão de descida — block centra no círculo. */
     .wpp svg { display: block; }
