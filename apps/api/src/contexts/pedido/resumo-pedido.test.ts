@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
 import { criarApp } from '../../app.js'
 import { encerrarBanco } from '../../db/index.js'
-import { resumoPedidoTexto } from './resumo-pedido.js'
+import { resumoPedidoTexto, codigoReferencia } from './resumo-pedido.js'
 
 describe('resumoPedidoTexto (puro)', () => {
   it('formata itens e total com negrito do WhatsApp; qtd inteira sem casas', () => {
@@ -35,6 +35,19 @@ describe('resumoPedidoTexto (puro)', () => {
     expect(t).toContain('Pagamento: Pix')
     expect(t).toContain('Obs.: Entrega na sexta')
     expect(t).toContain('Responda *SIM*')
+  })
+
+  it('inclui os códigos do pedido e do chat para situar o registro', () => {
+    const t = resumoPedidoTexto(
+      [{ descricao: 'Camisa', quantidade: 1, valorUnitarioCentavos: 5000 }], 5000,
+      { pedidoCodigo: 'A1B2C3', chatCodigo: '4D5E6F' },
+    )
+    expect(t).toContain('Pedido #A1B2C3')
+    expect(t).toContain('Chat #4D5E6F')
+  })
+
+  it('codigoReferencia: 6 últimos hex do UUID em maiúsculas', () => {
+    expect(codigoReferencia('de54000a-9999-4000-8000-0000000ab1c2')).toBe('0AB1C2')
   })
 })
 
@@ -120,5 +133,8 @@ describe('POST /v1/pedidos/:id/enviar-resumo', () => {
     expect(m?.status).toBe('falhou')
     expect(m?.texto).toContain('Olá, Cliente!') // saudação pelo 1º nome do contato
     expect(m?.texto).toContain('Camisa Polo (Azul · M)') // referência com cor e tamanho
+    // Códigos do registro no rodapé: pedido e chat.
+    expect(m?.texto).toContain(`Pedido #${codigoReferencia(PED_CONV)}`)
+    expect(m?.texto).toContain(`Chat #${codigoReferencia(CONV)}`)
   })
 })

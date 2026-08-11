@@ -14,6 +14,15 @@ export interface ContextoResumo {
   readonly contatoNome?: string | null
   readonly formaPagamento?: string | null
   readonly observacao?: string | null
+  /** Código curto do pedido (para situar o registro). Ex.: 'A1B2C3'. */
+  readonly pedidoCodigo?: string | null
+  /** Código curto do chat/conversa (para situar a conversa). Ex.: '4D5E6F'. */
+  readonly chatCodigo?: string | null
+}
+
+/** Código curto e legível a partir de um UUID — os 6 últimos hex, maiúsculos. */
+export function codigoReferencia(id: string): string {
+  return id.replace(/-/g, '').slice(-6).toUpperCase()
 }
 
 function reais(centavos: number): string {
@@ -49,5 +58,11 @@ export function resumoPedidoTexto(
   if (ctx.observacao && ctx.observacao.trim()) linhas.push(`Obs.: ${ctx.observacao.trim()}`)
   linhas.push('')
   linhas.push('Podemos confirmar? Responda *SIM* que já finalizo. 🙂')
+  // Referência do registro (pedido · chat) para situar a conversa e organizar o
+  // histórico. Discreto, no rodapé, em itálico do WhatsApp.
+  const refs: string[] = []
+  if (ctx.pedidoCodigo && ctx.pedidoCodigo.trim()) refs.push(`Pedido #${ctx.pedidoCodigo.trim()}`)
+  if (ctx.chatCodigo && ctx.chatCodigo.trim()) refs.push(`Chat #${ctx.chatCodigo.trim()}`)
+  if (refs.length) { linhas.push(''); linhas.push(`_${refs.join(' · ')}_`) }
   return linhas.join('\n')
 }

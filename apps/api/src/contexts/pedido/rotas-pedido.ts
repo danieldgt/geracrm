@@ -4,7 +4,7 @@ import { exigirTenant } from '../../plugins/tenant.js'
 import { efetivarPedido } from './efetivacao.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { enviarTextoNaConversa } from '../atendimento/envio-conversa.js'
-import { resumoPedidoTexto } from './resumo-pedido.js'
+import { resumoPedidoTexto, codigoReferencia } from './resumo-pedido.js'
 
 /**
  * Pedido assistido — o tira-pedido que nasce na conversa (ADR-005).
@@ -184,9 +184,20 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
            ORDER BY atualizado_em DESC LIMIT 1`
         if (existente) return existente
       }
+      // ⚠️ Vincula ao contato SEMPRE que der: se veio só a conversa (nasceu no
+      //    chat), resolve o contato_id pela própria conversa. Sem isso o pedido
+      //    fica "sem cliente" na lista mesmo depois de confirmado, e não aparece
+      //    em /v1/contatos/:id/pedidos (INV-52 / pedido nasce na conversa).
       const [novo] = await tx<{ id: string }[]>`
         INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, nome, estado)
-        VALUES (tenant_atual(), ${id}, ${corpo.contatoId ?? null}, ${corpo.conversaId ?? null}, ${corpo.nome?.trim() || null}, 'rascunho')
+        VALUES (
+          tenant_atual(), ${id},
+          COALESCE(
+            ${corpo.contatoId ?? null}::uuid,
+            (SELECT cv.contato_id FROM conversa cv
+              WHERE cv.tenant_id = tenant_atual() AND cv.id = ${corpo.conversaId ?? null}::uuid)
+          ),
+          ${corpo.conversaId ?? null}, ${corpo.nome?.trim() || null}, 'rascunho')
         RETURNING id`
       return novo!
     })
@@ -483,7 +494,12 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         const [u] = await tx<{ nome: string }[]>`SELECT nome FROM usuario WHERE tenant_id = tenant_atual() AND id = ${eu}`
         return {
           conversaId: p.conversa_id, total: Number(p.total_centavos), nome: u?.nome ?? null,
-          ctx: { contatoNome: p.contato, formaPagamento: p.forma_pagamento, observacao: p.observacao },
+          ctx: {
+            contatoNome: p.contato, formaPagamento: p.forma_pagamento, observacao: p.observacao,
+            // Códigos curtos do pedido e do chat, para situar o registro.
+            pedidoCodigo: codigoReferencia(req.params.id),
+            chatCodigo: codigoReferencia(p.conversa_id),
+          },
           itens: itens.map((i) => ({
             descricao: i.descricao_snapshot,
             // Cor · tamanho · … na ordem cor→tamanho→resto (o que o cliente escolheu).
@@ -506,7 +522,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
           UPDATE pedido SET estado = 'aguardando_confirmacao', atualizado_em = now()
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND estado = 'rascunho'`)
       }
-      return reply.send({ ok: r.ok, motivo: r.ok ? undefined : r.motivo })
+      // Devolve o conversaId para o front abrir o chat onde a mensagem caiu.
+      return reply.send({ ok: r.ok, motivo: r.ok ? undefined : r.motivo, conversaId: dados.conversaId })
     },
   )
 }

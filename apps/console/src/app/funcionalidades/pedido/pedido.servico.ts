@@ -171,16 +171,20 @@ export class PedidoServico {
     }
   }
 
-  /** Confirma com o cliente: manda o resumo do pedido na conversa (gateway único). */
-  async enviarResumo(id: string): Promise<void> {
-    if (this.enviandoResumo()) return
+  /**
+   * Confirma com o cliente: manda o resumo do pedido na conversa (gateway único).
+   * Devolve o `conversaId` quando enviou — a tela abre o chat onde a mensagem caiu.
+   */
+  async enviarResumo(id: string): Promise<string | null> {
+    if (this.enviandoResumo()) return null
     this.enviandoResumo.set(true)
     this.resumoMsg.set(null)
     try {
-      const r = await firstValueFrom(this.http.post<{ ok: boolean; motivo?: string }>(`/v1/pedidos/${id}/enviar-resumo`, {}))
+      const r = await firstValueFrom(this.http.post<{ ok: boolean; motivo?: string; conversaId?: string }>(`/v1/pedidos/${id}/enviar-resumo`, {}))
       this.resumoMsg.set(r.ok
         ? { ok: true, texto: 'Resumo enviado ao cliente no chat.' }
         : { ok: false, texto: this.motivoResumo(r.motivo) })
+      return r.ok ? (r.conversaId ?? null) : null
     } catch (e) {
       const erro = e instanceof HttpErrorResponse ? (e.error as { erro?: string })?.erro : undefined
       this.resumoMsg.set({
@@ -189,6 +193,7 @@ export class PedidoServico {
           : erro === 'pedido.vazio' ? 'Adicione itens antes de enviar o resumo.'
           : 'Não foi possível enviar o resumo.',
       })
+      return null
     } finally { this.enviandoResumo.set(false) }
   }
   private motivoResumo(m?: string): string {

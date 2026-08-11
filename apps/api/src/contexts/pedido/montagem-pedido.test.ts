@@ -13,6 +13,8 @@ const PV2 = 'de550000-1111-4000-8000-000000000002'
 const PLANO = 'de550000-3333-4000-8000-000000000001'
 const MODELO = 'de550000-4444-4000-8000-000000000001'
 const C1 = 'de550000-6666-4000-8000-000000000001'
+const CANAL = 'de550000-7777-4000-8000-000000000001'
+const CONV = 'de550000-8888-4000-8000-000000000001'
 const PROD_A = 'de550000-aaaa-4000-8000-000000000001'
 const PROD_B = 'de550000-aaaa-4000-8000-000000000002'
 
@@ -33,6 +35,8 @@ beforeAll(async () => {
     })
   }
   await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${C1}, 'Cliente MP', 'teste', true) ON CONFLICT DO NOTHING`
+  await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado) VALUES (${T}, ${CANAL}, 'whatsapp_oficial', 'Zap MP', 'conectado') ON CONFLICT DO NOTHING`
+  await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id) VALUES (${T}, ${CONV}, ${CANAL}, ${C1}) ON CONFLICT DO NOTHING`
   await dono`INSERT INTO produto (tenant_id, id, referencia, descricao, categoria, ativo) VALUES (${T}, ${PROD_A}, 'REF-A', 'Camisa Polo', 'Camisas', true) ON CONFLICT DO NOTHING`
   await dono`INSERT INTO produto (tenant_id, id, referencia, descricao, categoria, ativo) VALUES (${T}, ${PROD_B}, 'REF-B', 'Calça Jeans', 'Calças', true) ON CONFLICT DO NOTHING`
   await dono`INSERT INTO sku (tenant_id, id, produto_id, atributos, ativo) VALUES (${T}, ${randomUUID()}, ${PROD_A}, ${JSON.stringify({ cor: 'Azul', tamanho: 'M' })}::text::jsonb, true)`
@@ -46,6 +50,8 @@ afterAll(async () => {
   await dono`DELETE FROM pedido WHERE tenant_id IN (${T}, ${OUTRO})`
   await dono`DELETE FROM sku WHERE tenant_id IN (${T}, ${OUTRO})`
   await dono`DELETE FROM produto WHERE tenant_id IN (${T}, ${OUTRO})`
+  await dono`DELETE FROM conversa WHERE tenant_id IN (${T}, ${OUTRO})`
+  await dono`DELETE FROM canal_conectado WHERE tenant_id IN (${T}, ${OUTRO})`
   await dono`DELETE FROM contato WHERE tenant_id IN (${T}, ${OUTRO})`
   for (const t of [T, OUTRO]) {
     await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${t}`
@@ -72,6 +78,18 @@ describe('Vários rascunhos por cliente', () => {
     expect((await chamar(T, 'PATCH', `/v1/pedidos/${id}`, { nome: 'Especial' })).statusCode).toBe(200)
     const lista = (await chamar(T, 'GET', `/v1/contatos/${C1}/pedidos`)).json() as { itens: { nome: string }[] }
     expect(lista.itens[0]!.nome).toBe('Especial')
+  })
+
+  it('⚠️ pedido criado só com a conversa herda o CONTATO dela (não fica "sem cliente")', async () => {
+    // Nasceu no chat: o front manda só conversaId. O contato precisa vir da conversa,
+    // senão a lista /pedidos mostra "sem cliente" mesmo depois de confirmado.
+    const id = (await chamar(T, 'POST', '/v1/pedidos', { conversaId: CONV }).then((r) => r.json())).id
+    const ped = (await chamar(T, 'GET', `/v1/pedidos/${id}`)).json() as { contatoId: string | null; contato: string | null }
+    expect(ped.contatoId).toBe(C1)
+    expect(ped.contato).toBe('Cliente MP')
+    // E aparece na lista de rascunhos do próprio contato.
+    const lista = (await chamar(T, 'GET', `/v1/contatos/${C1}/pedidos`)).json() as { itens: { id: string }[] }
+    expect(lista.itens.map((i) => i.id)).toContain(id)
   })
 })
 
