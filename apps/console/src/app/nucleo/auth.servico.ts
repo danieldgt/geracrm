@@ -13,6 +13,11 @@ import { Injectable, computed, signal } from '@angular/core'
  */
 
 const CHAVE_TOKEN = 'geracrm.idToken'
+const CHAVE_REFRESH = 'geracrm.refreshToken'
+const CHAVE_USUARIO = 'geracrm.usuario'
+const CHAVE_EXPIRA = 'geracrm.expiraEm'
+/** Renova ANTES de expirar, com esta folga (evita 401 por corrida de relógio). */
+const MARGEM_MS = 2 * 60 * 1000
 
 /** Produção = qualquer host que não seja a máquina do dev. */
 export function ehProducao(): boolean {
@@ -28,6 +33,8 @@ export type ResultadoLogin =
 interface RespostaApi {
   tipo?: 'ok' | 'nova_senha' | 'erro'
   idToken?: string
+  refreshToken?: string
+  expiraEm?: number
   session?: string
   mensagem?: string
 }
@@ -63,10 +70,25 @@ export class AuthServico {
     return (await resp.json().catch(() => ({}))) as RespostaApi
   }
 
+  /** Timer de renovação proativa; null quando não há sessão. */
+  private timerRefresh: ReturnType<typeof setTimeout> | null = null
+
+  constructor() {
+    // Ao abrir o app com sessão salva, agenda a renovação (ou renova já se está
+    // perto/passou do vencimento). E renova ao voltar para a aba — setTimeout é
+    // estrangulado em aba oculta e pode não disparar a tempo.
+    if (this.idToken() && localStorage.getItem(CHAVE_REFRESH)) this.agendarRefresh()
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && this.idToken()) this.agendarRefresh()
+      })
+    }
+  }
+
   async entrar(usuario: string, senha: string): Promise<ResultadoLogin> {
     const r = await this.postar('/v1/auth/login', { usuario, senha })
     if (r.tipo === 'ok' && r.idToken) {
-      this.guardar(r.idToken)
+      this.guardar(r, usuario)
       return { tipo: 'ok' }
     }
     if (r.tipo === 'nova_senha' && r.session) {
@@ -78,19 +100,56 @@ export class AuthServico {
   async definirNovaSenha(usuario: string, novaSenha: string, session: string): Promise<ResultadoLogin> {
     const r = await this.postar('/v1/auth/nova-senha', { usuario, novaSenha, session })
     if (r.tipo === 'ok' && r.idToken) {
-      this.guardar(r.idToken)
+      this.guardar(r, usuario)
       return { tipo: 'ok' }
     }
     return { tipo: 'erro', mensagem: r.mensagem ?? 'Não foi possível definir a nova senha.' }
   }
 
   sair(): void {
-    localStorage.removeItem(CHAVE_TOKEN)
+    if (this.timerRefresh) { clearTimeout(this.timerRefresh); this.timerRefresh = null }
+    for (const k of [CHAVE_TOKEN, CHAVE_REFRESH, CHAVE_USUARIO, CHAVE_EXPIRA]) localStorage.removeItem(k)
     this.idToken.set(null)
   }
 
-  private guardar(idToken: string): void {
-    localStorage.setItem(CHAVE_TOKEN, idToken)
-    this.idToken.set(idToken)
+  /**
+   * Renova o ID token com o refresh token guardado. Chamado pelo timer antes de
+   * expirar. Falhou (refresh expirado ~30 dias) → encerra a sessão para o login.
+   */
+  private async refrescar(): Promise<void> {
+    const refreshToken = localStorage.getItem(CHAVE_REFRESH)
+    const usuario = localStorage.getItem(CHAVE_USUARIO)
+    if (!refreshToken || !usuario) return
+    try {
+      const r = await this.postar('/v1/auth/refresh', { refreshToken, usuario })
+      if (r.tipo === 'ok' && r.idToken) this.guardar(r) // mantém o mesmo refresh token
+      else this.sair()
+    } catch { /* rede: mantém o token atual; o timer/visibilidade tenta de novo */ }
+  }
+
+  /** Agenda a renovação para MARGEM antes do vencimento (ou já, se perto/passou). */
+  private agendarRefresh(): void {
+    if (this.timerRefresh) { clearTimeout(this.timerRefresh); this.timerRefresh = null }
+    const expira = Number(localStorage.getItem(CHAVE_EXPIRA) ?? 0)
+    if (!expira || !localStorage.getItem(CHAVE_REFRESH)) return
+    const atraso = expira - Date.now() - MARGEM_MS
+    if (atraso <= 0) { void this.refrescar(); return }
+    // setTimeout aceita no máx ~24.8 dias; o IdToken vive ~1h, então cabe.
+    this.timerRefresh = setTimeout(() => void this.refrescar(), atraso)
+  }
+
+  /**
+   * Persiste o token e agenda a renovação. `refreshToken`/`usuario` só vêm no
+   * login; no refresh, preserva os que já estão guardados.
+   * ⚠️ O refresh token fica no localStorage, como o idToken — coerente com o
+   * modelo atual (login server-side, SPA). É o vetor a fechar se endurecer XSS.
+   */
+  private guardar(r: RespostaApi, usuario?: string): void {
+    localStorage.setItem(CHAVE_TOKEN, r.idToken!)
+    if (r.refreshToken) localStorage.setItem(CHAVE_REFRESH, r.refreshToken)
+    if (usuario) localStorage.setItem(CHAVE_USUARIO, usuario)
+    if (r.expiraEm) localStorage.setItem(CHAVE_EXPIRA, String(r.expiraEm))
+    this.idToken.set(r.idToken!)
+    this.agendarRefresh()
   }
 }

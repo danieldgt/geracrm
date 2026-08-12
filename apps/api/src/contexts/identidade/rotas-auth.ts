@@ -16,11 +16,23 @@ import type { FastifyInstance } from 'fastify'
 const REGIAO = process.env.COGNITO_REGION ?? 'us-east-1'
 
 interface RespostaCognito {
-  AuthenticationResult?: { IdToken?: string }
+  AuthenticationResult?: { IdToken?: string; RefreshToken?: string; ExpiresIn?: number }
   ChallengeName?: string
   Session?: string
   __type?: string
   message?: string
+}
+
+/**
+ * Monta a resposta de sucesso com o token e QUANDO ele expira (epoch ms), para o
+ * cliente agendar a renovação ANTES de morrer. `refreshToken` só vem no login (o
+ * fluxo de refresh não emite outro). ⚠️ ExpiresIn é do IdToken (~1h).
+ */
+function respostaOk(r: RespostaCognito['AuthenticationResult'], agora: number): { tipo: 'ok'; idToken: string; expiraEm: number; refreshToken?: string } {
+  const expiraEm = agora + (r?.ExpiresIn ?? 3600) * 1000
+  return r?.RefreshToken
+    ? { tipo: 'ok', idToken: r.IdToken!, expiraEm, refreshToken: r.RefreshToken }
+    : { tipo: 'ok', idToken: r!.IdToken!, expiraEm }
 }
 
 function secretHash(usuario: string, clientId: string, secret: string): string {
@@ -69,7 +81,7 @@ export async function rotasAuth(app: FastifyInstance): Promise<void> {
     })
 
     const idToken = corpo.AuthenticationResult?.IdToken
-    if (idToken) return reply.send({ tipo: 'ok', idToken })
+    if (idToken) return reply.send(respostaOk(corpo.AuthenticationResult, Date.now()))
     // Usuário criado pelo admin no primeiro acesso.
     if (corpo.ChallengeName === 'NEW_PASSWORD_REQUIRED' && corpo.Session) {
       return reply.send({ tipo: 'nova_senha', session: corpo.Session })
@@ -93,7 +105,30 @@ export async function rotasAuth(app: FastifyInstance): Promise<void> {
     })
 
     const idToken = corpo.AuthenticationResult?.IdToken
-    if (idToken) return reply.send({ tipo: 'ok', idToken })
+    if (idToken) return reply.send(respostaOk(corpo.AuthenticationResult, Date.now()))
     return reply.code(status === 200 ? 400 : status).send({ tipo: 'erro', mensagem: traduzErro(corpo) })
+  })
+
+  /**
+   * Renova o ID token ANTES de expirar, com o refresh token do Cognito — a sessão
+   * não morre mais em ~1h (o cliente agenda a chamada). ⚠️ O SECRET_HASH do
+   * REFRESH_TOKEN_AUTH é calculado com o USUÁRIO do login; por isso ele volta aqui.
+   * O fluxo de refresh NÃO emite outro refresh token (mantém o mesmo, até ~30 dias).
+   */
+  app.post<{ Body: { refreshToken?: string; usuario?: string } }>('/v1/auth/refresh', async (req, reply) => {
+    if (!configurado) return reply.code(503).send({ tipo: 'erro', mensagem: 'Login indisponível: Cognito não configurado no servidor.' })
+    const refreshToken = req.body?.refreshToken
+    const usuario = req.body?.usuario?.trim()
+    if (!refreshToken || !usuario) return reply.code(400).send({ tipo: 'erro', mensagem: 'Refresh token e usuário são obrigatórios.' })
+
+    const { status, corpo } = await chamarCognito('InitiateAuth', {
+      AuthFlow: 'REFRESH_TOKEN_AUTH',
+      ClientId: clientId,
+      AuthParameters: { REFRESH_TOKEN: refreshToken, SECRET_HASH: secretHash(usuario, clientId!, secret!) },
+    })
+
+    if (corpo.AuthenticationResult?.IdToken) return reply.send(respostaOk(corpo.AuthenticationResult, Date.now()))
+    // Refresh token expirado/revogado → 401: o cliente cai para o login.
+    return reply.code(status === 200 ? 401 : status).send({ tipo: 'erro', mensagem: traduzErro(corpo) })
   })
 }
