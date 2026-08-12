@@ -70,7 +70,7 @@ const cssDe = (mapa, indent = '  ') =>
 // --- CSS -------------------------------------------------------------------
 
 const compartilhados = new Map()
-for (const grupo of ['rfv', 'janela', 'tipografia', 'espacamento', 'raio', 'elevacao', 'movimento', 'densidade']) {
+for (const grupo of ['rfv', 'janela', 'tipografia', 'largura', 'espacamento', 'raio', 'elevacao', 'movimento', 'densidade']) {
   if (tokens[grupo]) achatar({ [grupo]: tokens[grupo] }, [], compartilhados)
 }
 
@@ -108,7 +108,7 @@ export const tokens = ${JSON.stringify(
     claro: Object.fromEntries([...achatar(tokens.semantico.claro)].map(([k, v]) => [k, resolver(v, k)])),
     escuro: Object.fromEntries([...achatar(tokens.semantico.escuro)].map(([k, v]) => [k, resolver(v, k)])),
     ...Object.fromEntries(
-      ['rfv', 'janela', 'tipografia', 'espacamento', 'raio', 'elevacao', 'movimento', 'densidade']
+      ['rfv', 'janela', 'tipografia', 'largura', 'espacamento', 'raio', 'elevacao', 'movimento', 'densidade']
         .filter((g) => tokens[g])
         .map((g) => [g, Object.fromEntries([...achatar(tokens[g])].map(([k, v]) => [k, resolver(v, k)]))]),
     ),

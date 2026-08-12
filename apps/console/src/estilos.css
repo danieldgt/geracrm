@@ -65,9 +65,18 @@ select:focus-visible, textarea:focus-visible {
 .txt-rotulo { font-size: var(--tipografia-escala-rotulo-tamanho); font-weight: var(--tipografia-escala-rotulo-peso); line-height: var(--tipografia-escala-rotulo-altura); letter-spacing: var(--tipografia-escala-rotulo-tracking); text-transform: uppercase; color: var(--texto-suave); }
 .txt-dados  { font-family: var(--tipografia-familia-dados); font-size: var(--tipografia-escala-dados-tamanho); line-height: var(--tipografia-escala-dados-altura); font-variant-numeric: tabular-nums; }
 
-/* ─── Moldura de página: toda tela usa a MESMA. Densa, centrada, responsiva. ── */
+/* ─── Molduras de página. Duas famílias (ADR de ocupação de espaço) ───────────
+ * `.pagina-densa`  → tabela/kanban/BI: FULL-BLEED, ocupa 100% da largura útil.
+ * `.pagina-forma`  → formulário/config: largura legível (token) e CENTRADA.
+ * ⚠️ O que causava a "caixa cortada" era max-width no :host SEM margin auto — o
+ *    conteúdo encostava à esquerda e sobrava faixa branca à direita. Aqui todas
+ *    ou ocupam tudo, ou centram. Sem largura literal por tela (vem do token). */
 .pagina { display: block; max-width: 960px; margin: 0 auto; padding: var(--espacamento-6); }
-@media (max-width: 640px) { .pagina { padding: var(--espacamento-4); } }
+.pagina-densa { display: block; width: 100%; padding: var(--espacamento-6); }
+.pagina-forma { display: block; width: 100%; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
+@media (max-width: 640px) {
+  .pagina, .pagina-densa, .pagina-forma { padding: var(--espacamento-4); }
+}
 
 /* Utilitário anti-overflow: filho de flex/grid que precisa encolher (texto que
  * trunca em vez de empurrar o vizinho). Remédio nº 1 de "quebrou o layout". */

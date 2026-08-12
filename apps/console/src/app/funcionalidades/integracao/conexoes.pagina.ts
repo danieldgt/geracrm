@@ -211,7 +211,7 @@ import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from '
     }
   `,
   styles: `
-    :host { display: block; max-width: 720px; padding: var(--espacamento-6); }
+    :host { display: block; width: 100%; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
     .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-6); }
     h1 { margin: 0; font-size: 20px; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }

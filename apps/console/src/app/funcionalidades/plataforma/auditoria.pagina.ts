@@ -69,7 +69,7 @@ import { AuditoriaServico, type EntradaAuditoria } from './auditoria.servico.js'
     }
   `,
   styles: `
-    :host { display: block; max-width: 820px; padding: var(--espacamento-6); }
+    :host { display: block; width: 100%; padding: var(--espacamento-6); }
     .cabecalho { margin-bottom: var(--espacamento-6); }
     h1 { margin: 0; font-size: 20px; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }

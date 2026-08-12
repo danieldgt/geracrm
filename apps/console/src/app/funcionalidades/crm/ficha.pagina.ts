@@ -175,7 +175,7 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
     }
   `,
   styles: `
-    :host { display: block; max-width: 1040px; padding: var(--espacamento-6); }
+    :host { display: block; width: 100%; padding: var(--espacamento-6); }
     .lapis { border: 0; background: transparent; color: var(--texto-suave); cursor: pointer; font-size: 14px; }
     .lapis:hover { color: var(--acao); }
     .edit-nome { display: flex; gap: var(--espacamento-2); align-items: center; }

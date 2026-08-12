@@ -72,7 +72,7 @@ const ORDEM = ['ativo', 'inativo', 'perdido', 'sem_compra']
     }
   `,
   styles: `
-    :host { display: block; max-width: 960px; padding: var(--espacamento-6); }
+    :host { display: block; width: 100%; padding: var(--espacamento-6); }
     .cabecalho { margin-bottom: var(--espacamento-4); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }

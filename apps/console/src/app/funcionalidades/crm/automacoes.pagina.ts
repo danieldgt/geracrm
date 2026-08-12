@@ -130,7 +130,7 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
     }
   `,
   styles: `
-    :host { display: block; max-width: 820px; padding: var(--espacamento-6); }
+    :host { display: block; width: 100%; padding: var(--espacamento-6); }
     .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-4); flex-wrap: wrap; }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; max-width: 60ch; }

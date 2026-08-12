@@ -139,7 +139,7 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
     }
   `,
   styles: `
-    :host { display: block; max-width: 760px; padding: var(--espacamento-6); }
+    :host { display: block; width: 100%; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
     .aquec { font-size: 12px; color: var(--texto-secundario); align-self: center; }
     .saude { display: flex; gap: var(--espacamento-6); padding: var(--espacamento-3) var(--espacamento-4);
       margin-bottom: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }

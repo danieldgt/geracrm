@@ -183,7 +183,7 @@ import { ClientesServico, type ClienteRfv } from './clientes.servico.js'
     }
   `,
   styles: `
-    :host { display: block; max-width: 1040px; padding: var(--espacamento-6); }
+    :host { display: block; width: 100%; padding: var(--espacamento-6); }
     .cabecalho { margin-bottom: var(--espacamento-5); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
     .novo-contato { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: center; margin-bottom: var(--espacamento-5); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .novo-contato input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
