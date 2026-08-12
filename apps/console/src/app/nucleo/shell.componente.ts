@@ -4,6 +4,8 @@ import { MENU } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
 import { MenuUsuarioComponente } from './menu-usuario.componente.js'
 import { MarcaComponente } from '../compartilhado/ui/marca.componente.js'
+import { ChatRailComponente } from '../funcionalidades/atendimento/chat-rail.componente.js'
+import { InboxServico } from './inbox.servico.js'
 import { EventosServico } from './eventos.servico.js'
 import { AlertasServico } from './alertas.servico.js'
 import { TemaServico } from './tema.servico.js'
@@ -22,7 +24,7 @@ import { TemaServico } from './tema.servico.js'
 @Component({
   selector: 'app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente, MarcaComponente],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente, MarcaComponente, ChatRailComponente],
   template: `
     <div class="grade">
       <aside class="lateral" [class.recolhida]="recolhida()">
@@ -48,14 +50,27 @@ import { TemaServico } from './tema.servico.js'
           @for (grupo of menuFiltrado(); track grupo.titulo) {
             @if (grupo.titulo && !recolhida()) { <p class="grupo">{{ grupo.titulo }}</p> }
             @for (item of grupo.itens; track item.rota) {
-              <a [routerLink]="item.rota" routerLinkActive="ativo" class="item"
-                 [title]="item.rotulo + ' — ' + item.descricao" (click)="filtro.set('')">
-                <span class="icone">{{ item.icone }}</span>
-                @if (!recolhida()) {
-                  <span class="rotulo">{{ item.rotulo }}</span>
-                  @if (item.status === 'construcao') { <span class="ponto" title="Em construção"></span> }
-                }
-              </a>
+              @if (item.acao === 'rail') {
+                <!-- Conversas: abre/recolhe o chat rail em vez de navegar. -->
+                <button type="button" class="item" [class.ativo]="inbox.railAberto()"
+                        [title]="item.rotulo + ' — ' + item.descricao"
+                        (click)="inbox.alternarRail(); filtro.set('')">
+                  <span class="icone">{{ item.icone }}</span>
+                  @if (!recolhida()) {
+                    <span class="rotulo">{{ item.rotulo }}</span>
+                    @if (inbox.naoLidasTotal() > 0) { <span class="ponto" [title]="inbox.naoLidasTotal() + ' não lidas'"></span> }
+                  }
+                </button>
+              } @else {
+                <a [routerLink]="item.rota" routerLinkActive="ativo" class="item"
+                   [title]="item.rotulo + ' — ' + item.descricao" (click)="filtro.set('')">
+                  <span class="icone">{{ item.icone }}</span>
+                  @if (!recolhida()) {
+                    <span class="rotulo">{{ item.rotulo }}</span>
+                    @if (item.status === 'construcao') { <span class="ponto" title="Em construção"></span> }
+                  }
+                </a>
+              }
             }
           }
           @if (!recolhida() && nadaEncontrado()) {
@@ -63,6 +78,11 @@ import { TemaServico } from './tema.servico.js'
           }
         </nav>
       </aside>
+
+      <!-- Chat rail: o chat é a funcionalidade principal, sempre à mão (coluna 2,
+           altura total). Recolhido é uma faixa de avatares; expandido empurra o
+           conteúdo. Estado no InboxServico, sobrevive à navegação. -->
+      <app-chat-rail />
 
       <!-- Barra superior: ações do usuário no canto direito (padrão de app). -->
       <header class="topo">
@@ -90,8 +110,10 @@ import { TemaServico } from './tema.servico.js'
   `,
   styles: `
     :host { display: block; height: 100vh; }
-    /* Lateral em altura total (linhas 1–2); barra superior e conteúdo na coluna 2. */
-    .grade { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto 1fr; height: 100%; }
+    /* 3 colunas: menu · chat-rail · (barra superior + conteúdo). Menu e rail em
+       altura total (linhas 1–2); topo e conteúdo na coluna 3. */
+    .grade { display: grid; grid-template-columns: auto auto 1fr; grid-template-rows: auto 1fr; height: 100%; }
+    app-chat-rail { grid-column: 2; grid-row: 1 / 3; min-width: 0; }
     /* Lateral em tom AREIA quente (estudo de identidade: surface-2), não branca —
        harmoniza com o palco creme e destaca o conteúdo elevado. */
     .lateral { grid-row: 1 / 3; width: 250px; background: var(--superficie); border-right: 1px solid var(--borda);
@@ -103,7 +125,7 @@ import { TemaServico } from './tema.servico.js'
     .marca .logo { display: inline-flex; align-items: center; text-decoration: none; --marca-tam: 26px; --marca-fonte: 16px; }
     .marca .logo:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
     /* Barra superior — ações do usuário à direita, sem cortar dropdowns. */
-    .topo { grid-column: 2; grid-row: 1; height: 52px; display: flex; align-items: center;
+    .topo { grid-column: 3; grid-row: 1; height: 52px; display: flex; align-items: center;
       gap: var(--espacamento-2); padding: 0 var(--espacamento-4);
       background: var(--superficie-elevada); border-bottom: 1px solid var(--borda); }
     .topo .espaco { flex: 1; }
@@ -134,13 +156,15 @@ import { TemaServico } from './tema.servico.js'
       padding: var(--espacamento-2) var(--espacamento-3); margin: 1px var(--espacamento-1);
       color: var(--texto-secundario); text-decoration: none; font-size: 14px;
       border-radius: var(--raio-controle); }
+    /* .item também é usado num <button> (Conversas → toggle do rail). */
+    button.item { border: 0; background: none; font: inherit; font-size: 14px; width: calc(100% - 2 * var(--espacamento-1)); cursor: pointer; text-align: left; }
     .item:hover { background: var(--superficie-hover); color: var(--texto); }
     .item.ativo { color: var(--marca); background: var(--acao-suave); font-weight: 600; box-shadow: inset 3px 0 0 var(--acao); }
     .item:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: -2px; }
     .icone { width: 22px; font-size: 15px; text-align: center; flex: none; }
     .rotulo { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ponto { width: 6px; height: 6px; border-radius: var(--raio-completo); background: var(--atencao); flex: none; }
-    .conteudo { grid-column: 2; grid-row: 2; overflow-y: auto; min-width: 0; background: var(--fundo); }
+    .conteudo { grid-column: 3; grid-row: 2; overflow-y: auto; min-width: 0; background: var(--fundo); }
     /* Responsivo: em telas estreitas a lateral vira trilho de ícones, sem
        sobrepor o conteúdo (grid mantém as colunas separadas). */
     @media (max-width: 640px) {
@@ -160,6 +184,7 @@ export class ShellComponente implements OnInit {
   private readonly eventos = inject(EventosServico)
   readonly alertas = inject(AlertasServico)
   readonly tema = inject(TemaServico)
+  readonly inbox = inject(InboxServico)
   private readonly router = inject(Router)
 
   /** Menu filtrado pela busca (rótulo ou descrição); grupos vazios somem. */

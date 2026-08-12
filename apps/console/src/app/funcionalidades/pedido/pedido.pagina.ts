@@ -1,7 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { SlicePipe } from '@angular/common'
-import { ActivatedRoute, Router } from '@angular/router'
+import { ActivatedRoute } from '@angular/router'
 import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.servico.js'
+import { InboxServico } from '../../nucleo/inbox.servico.js'
 
 /**
  * Pedido Assistido — o tira-pedido que nasce na conversa (ADR-005, §3.9 do mapa).
@@ -261,7 +262,7 @@ import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.
 export class PedidoAssistidoPagina implements OnInit {
   readonly servico = inject(PedidoServico)
   private readonly route = inject(ActivatedRoute)
-  private readonly router = inject(Router)
+  private readonly inbox = inject(InboxServico)
   readonly resultados = this.servico.resultados
   readonly formasPagamento = ['Pix', 'Dinheiro', 'Cartão de crédito', 'Cartão de débito', 'Boleto', 'A prazo']
 
@@ -340,11 +341,11 @@ export class PedidoAssistidoPagina implements OnInit {
   }
   async trocarRascunho(id: string): Promise<void> { await this.servico.abrirRascunho(id) }
 
-  /** Confirma e envia o resumo; ao enviar, abre o chat onde a mensagem caiu. */
+  /** Confirma e envia o resumo; ao enviar, abre o chat (rail) onde a mensagem caiu. */
   async enviarResumo(id: string): Promise<void> {
     const conversaId = await this.servico.enviarResumo(id)
     const alvo = conversaId ?? this.conversaId
-    if (alvo) await this.router.navigate(['/conversas'], { queryParams: { abrir: alvo } })
+    if (alvo) void this.inbox.abrir(alvo)
   }
   async renomear(): Promise<void> {
     const ped = this.servico.pedido(); const c = this.contatoId(); if (!ped) return

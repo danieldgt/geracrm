@@ -79,7 +79,10 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/crm/fidelidade.pagina.js').then((m) => m.FidelidadePagina),
 }
 
-const rotasFilhas = itensDoMenu().map((item) => {
+const rotasFilhas = itensDoMenu()
+  // ⚠️ Item de rail (Conversas) NÃO gera rota — o chat vive na casca como rail.
+  .filter((item) => item.acao !== 'rail')
+  .map((item) => {
   const real = TELAS_REAIS[item.rota]
   if (item.status === 'pronto' && real) {
     return { path: item.rota, loadComponent: real }
@@ -106,6 +109,8 @@ export const ROTAS: Routes = [
     canActivate: [guardaAuth],
     children: [
       { path: '', pathMatch: 'full', redirectTo: 'contatos' },
+      // Link antigo /conversas (bookmarks) → base; o chat agora é o rail lateral.
+      { path: 'conversas', pathMatch: 'full', redirectTo: 'contatos' },
       // Ficha do contato: rota de detalhe (não vai no menu). `id` liga ao input
       // do componente via withComponentInputBinding.
       {

@@ -1,8 +1,8 @@
-import { Component, ChangeDetectionStrategy, inject, OnInit, OnDestroy, computed, signal } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, OnDestroy, computed, signal } from '@angular/core'
 import { FormsModule } from '@angular/forms'
-import { ActivatedRoute, RouterLink } from '@angular/router'
+import { RouterLink } from '@angular/router'
 import { formatarProtocolo, parsearProtocolo } from '@geracrm/shared'
-import { InboxServico, type ItemConversa, type Mensagem, type Thread } from './inbox.servico.js'
+import { InboxServico, type ItemConversa, type Mensagem, type Thread } from '../../nucleo/inbox.servico.js'
 import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.componente.js'
 
@@ -423,11 +423,9 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
     }
   `,
 })
-export class InboxPagina implements OnInit, OnDestroy {
+export class InboxPagina implements OnDestroy {
   readonly servico = inject(InboxServico)
   readonly eventos = inject(EventosServico)
-  private readonly rota = inject(ActivatedRoute)
-  private cancelarEscuta?: () => void
 
   readonly busca = signal('')
   // Busca por protocolo (E5-08): "#000318" | "318" → número.
@@ -442,25 +440,10 @@ export class InboxPagina implements OnInit, OnDestroy {
     )
   })
 
-  ngOnInit(): void {
-    void this.servico.carregar()
-    // "Puxar contato para o chat": a tela de contatos navega com ?abrir=<id>.
-    // `abrir` busca a thread direto, então funciona mesmo se ainda não está na lista.
-    const abrir = this.rota.snapshot.queryParamMap.get('abrir')
-    if (abrir) void this.servico.abrir(abrir)
-    // ⚠️ Tempo real: a cada aviso de mensagem, atualiza lista e thread aberta.
-    this.eventos.conectar()
-    this.cancelarEscuta = this.eventos.escutar('*', (ev) => {
-      if (!ev.tipo.startsWith('mensagem') && ev.tipo !== 'atendimento.mudou') return
-      void this.servico.atualizar()
-      if (ev.conversaId) void this.servico.atualizarThread(ev.conversaId)
-    })
-  }
-
   ngOnDestroy(): void {
-    this.cancelarEscuta?.()
-    // ⚠️ NÃO desconecta o SSE: a casca (shell) é dona da conexão global e o sino
-    //    de notificações depende dela viva. A tela só cancela o próprio ouvinte.
+    // ⚠️ Apresentacional: o carregamento da lista, o ouvinte SSE e o ?abrir= agora
+    //    vivem no ChatRailComponente (sempre montado). Ao recolher o rail este
+    //    componente some, então sair da conversa (presença) é o certo aqui.
     this.servico.pararPresenca()
   }
 

@@ -103,6 +103,15 @@ export class InboxServico {
   }
   readonly vazio = computed(() => this.estado() === 'pronto' && this.conversas().length === 0)
 
+  // Rail lateral do chat (contraível). O chat é a funcionalidade principal e vive
+  // SEMPRE montado na casca: recolhido mostra a faixa de avatares; expandido, o
+  // inbox completo ao lado do conteúdo. Estado no serviço p/ sobreviver à navegação.
+  readonly railAberto = signal(false)
+  readonly naoLidasTotal = computed(() => this.conversas().filter((c) => c.naoLida).length)
+  abrirRail(): void { this.railAberto.set(true) }
+  fecharRail(): void { this.railAberto.set(false); this.pararPresenca() }
+  alternarRail(): void { this.railAberto() ? this.fecharRail() : this.abrirRail() }
+
   // Thread selecionada
   readonly estadoThread = signal<EstadoThread>('nenhuma')
   readonly thread = signal<Thread | null>(null)
@@ -138,6 +147,9 @@ export class InboxServico {
   }
 
   async abrir(id: string): Promise<void> {
+    // Abrir uma conversa expande o rail — vale para o strip, o sino, "conversar"
+    // do contato e o enviar-resumo do pedido (todos chamam abrir()).
+    this.railAberto.set(true)
     // Sai da anterior antes de entrar na nova (some na hora para os colegas).
     this.pararPresenca()
     this.selecionadaId.set(id)

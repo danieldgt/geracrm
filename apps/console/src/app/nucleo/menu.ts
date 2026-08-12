@@ -20,6 +20,8 @@ export interface ItemMenu {
   readonly onda: string
   /** Descrição do "job" da tela — vira o subtítulo, inclusive no placeholder. */
   readonly descricao: string
+  /** 'rail' = não gera rota; o item abre/recolhe o chat rail (Conversas). */
+  readonly acao?: 'rail'
 }
 
 export interface GrupoMenu {
@@ -42,7 +44,7 @@ export const MENU: readonly GrupoMenu[] = [
   {
     titulo: 'Atendimento',
     itens: [
-      { rota: 'conversas', rotulo: 'Conversas', icone: '💬', status: 'pronto', onda: 'O1',
+      { rota: 'conversas', rotulo: 'Conversas', icone: '💬', status: 'pronto', onda: 'O1', acao: 'rail',
         descricao: 'O inbox: responder, vender e não perder a janela de 24h.' },
       { rota: 'pedido', rotulo: 'Pedido Assistido', icone: '🛒', status: 'pronto', onda: 'O1',
         descricao: 'O tira-pedido pela grade do catálogo — o pedido nasce na conversa.' },

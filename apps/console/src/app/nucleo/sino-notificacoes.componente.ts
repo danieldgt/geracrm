@@ -1,8 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, OnInit, OnDestroy, signal } from '@angular/core'
 import { DatePipe } from '@angular/common'
-import { Router } from '@angular/router'
 import { NotificacoesServico, type Notificacao } from './notificacoes.servico.js'
 import { EventosServico } from './eventos.servico.js'
+import { InboxServico } from './inbox.servico.js'
 
 /**
  * Sino de notificações (PLT-07). Fica no shell, sempre montado.
@@ -88,7 +88,7 @@ import { EventosServico } from './eventos.servico.js'
 export class SinoNotificacoesComponente implements OnInit, OnDestroy {
   readonly servico = inject(NotificacoesServico)
   private readonly eventos = inject(EventosServico)
-  private readonly router = inject(Router)
+  private readonly inbox = inject(InboxServico)
   readonly aberto = signal(false)
   private cancelar?: () => void
 
@@ -125,6 +125,7 @@ export class SinoNotificacoesComponente implements OnInit, OnDestroy {
   abrir(n: Notificacao): void {
     if (!n.lida) void this.servico.marcarLida(n.id)
     this.fechar()
-    if (n.conversaId) void this.router.navigate(['/conversas'], { queryParams: { abrir: n.conversaId } })
+    // Abre a conversa no rail lateral (não navega — o chat vive na casca).
+    if (n.conversaId) void this.inbox.abrir(n.conversaId)
   }
 }

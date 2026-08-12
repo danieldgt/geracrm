@@ -1,7 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, OnInit, signal } from '@angular/core'
-import { RouterLink, Router } from '@angular/router'
+import { RouterLink } from '@angular/router'
 import { FormsModule } from '@angular/forms'
 import { ClientesServico, type ClienteRfv } from './clientes.servico.js'
+import { InboxServico } from '../../nucleo/inbox.servico.js'
 
 /**
  * Clientes com RFV — a primeira tela que mostra o valor do produto.
@@ -268,7 +269,7 @@ import { ClientesServico, type ClienteRfv } from './clientes.servico.js'
 })
 export class ClientesPagina implements OnInit {
   readonly servico = inject(ClientesServico)
-  private readonly router = inject(Router)
+  private readonly inbox = inject(InboxServico)
 
   // Novo contato
   readonly mostrarForm = signal(false)
@@ -285,10 +286,10 @@ export class ClientesPagina implements OnInit {
     if (irConversar) await this.conversar(id)
   }
 
-  /** "Puxa o contato para o chat": inicia/abre a conversa e navega para o Inbox. */
+  /** "Puxa o contato para o chat": inicia/abre a conversa e a abre no rail lateral. */
   async conversar(contatoId: string): Promise<void> {
     const conversaId = await this.servico.iniciarConversa(contatoId)
-    if (conversaId) await this.router.navigate(['/conversas'], { queryParams: { abrir: conversaId } })
+    if (conversaId) void this.inbox.abrir(conversaId)
   }
 
   // Importação CSV
