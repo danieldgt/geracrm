@@ -89,29 +89,67 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                 <span class="qtd-var">{{ p.skus.length }} variações</span>
               </button>
               @if (aberto() === p.id) {
-                <ul class="grade">
-                  @for (s of p.skus; track s.id) {
-                    <li class="sku">
-                      <span class="attrs">
-                        @for (a of atributos(s); track a) { <span class="attr">{{ a }}</span> }
-                      </span>
-                      <!-- ⚠️ Preço do ERP (tabela do perfil), não digitado. Sem preço
-                           cadastrado → não dá para adicionar (não inventa valor). -->
-                      <span class="preco-erp mono">
-                        {{ s.precoCentavos !== null ? reais(s.precoCentavos) : 'sem preço' }}
-                        <!-- ⚠️ Saldo da última sincronização + data — NÃO ao vivo. -->
-                        @if (s.saldo !== null) {
-                          <small class="saldo" [class.zerado]="s.saldo <= 0" [title]="'apurado em ' + (s.saldoEm | slice:0:10)">
-                            {{ s.saldo <= 0 ? 'sem saldo' : s.saldo + ' un' }}
-                          </small>
+                @if (temGrade(p)) {
+                  <!-- Grade cor × tamanho (skill grade-cor-tamanho): matriz reutilizável.
+                       Célula sem SKU = "—" (grade não retangular). Quantidade por célula
+                       + "Adicionar" em lote. Preço/saldo vêm do ERP no title. -->
+                  <div class="rolagem-x grade-wrap">
+                    <table class="grade-mtx">
+                      <thead>
+                        <tr>
+                          <th class="canto"></th>
+                          @for (t of tamanhosDe(p); track t) { <th>{{ t }}</th> }
+                        </tr>
+                      </thead>
+                      <tbody>
+                        @for (cor of coresDe(p); track cor) {
+                          <tr>
+                            <th class="cor-lab" scope="row">{{ cor }}</th>
+                            @for (t of tamanhosDe(p); track t) {
+                              @if (skuDe(p, cor, t); as s) {
+                                <td class="cel" [class.sem-preco]="s.precoCentavos === null" [title]="celTitulo(s)">
+                                  @if (s.precoCentavos !== null) {
+                                    <input class="q" type="number" min="0" inputmode="numeric" placeholder="0"
+                                           [class.tem]="temQtd(s.id)" [value]="qtdGradeDe(s.id)"
+                                           (input)="setQtdGrade(s.id, $any($event.target).value)" />
+                                  } @else { <span class="sp" title="Sem preço no ERP">s/ preço</span> }
+                                </td>
+                              } @else { <td class="cel vazia" aria-hidden="true">—</td> }
+                            }
+                          </tr>
                         }
-                      </span>
-                      <input class="qtd" type="number" min="1" value="1" #qtd />
-                      <button class="add" [disabled]="servico.salvandoItem() || s.precoCentavos === null"
-                              (click)="adicionar(p, s, qtd.value)">Adicionar</button>
-                    </li>
-                  }
-                </ul>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="grade-acoes">
+                    <span class="dica-g">Preço: tabela do ERP · saldo da última sync (passe o mouse na célula)</span>
+                    <button class="add" [disabled]="servico.salvandoItem() || !algumaQtd(p)"
+                            (click)="adicionarGrade(p)">Adicionar selecionados</button>
+                  </div>
+                } @else {
+                  <!-- Sem eixo cor×tamanho: lista plana (o par de eixos generaliza, mas
+                       nem todo produto tem os dois). -->
+                  <ul class="grade">
+                    @for (s of p.skus; track s.id) {
+                      <li class="sku">
+                        <span class="attrs">
+                          @for (a of atributos(s); track a) { <span class="attr">{{ a }}</span> }
+                        </span>
+                        <span class="preco-erp mono">
+                          {{ s.precoCentavos !== null ? reais(s.precoCentavos) : 'sem preço' }}
+                          @if (s.saldo !== null) {
+                            <small class="saldo" [class.zerado]="s.saldo <= 0" [title]="'apurado em ' + (s.saldoEm | slice:0:10)">
+                              {{ s.saldo <= 0 ? 'sem saldo' : s.saldo + ' un' }}
+                            </small>
+                          }
+                        </span>
+                        <input class="qtd" type="number" min="1" value="1" #qtd />
+                        <button class="add" [disabled]="servico.salvandoItem() || s.precoCentavos === null"
+                                (click)="adicionar(p, s, qtd.value)">Adicionar</button>
+                      </li>
+                    }
+                  </ul>
+                }
               }
             </li>
           }
@@ -223,7 +261,22 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .attr { font-size: 11px; background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-controle); padding: 0 6px; color: var(--texto-secundario); }
     .qtd, .preco { padding: 4px var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-family: var(--tipografia-familia-dados); width: 100%; }
     .add { padding: 4px var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto); font: inherit; cursor: pointer; white-space: nowrap; }
-    .add:disabled { opacity: .6; }
+    .add:disabled { opacity: .6; cursor: not-allowed; }
+    /* Grade cor × tamanho (matriz) */
+    .grade-wrap { padding-bottom: var(--espacamento-2); }
+    .grade-mtx { border-collapse: collapse; font-size: 12px; }
+    .grade-mtx th, .grade-mtx td { border: 1px solid var(--borda); padding: 2px; text-align: center; }
+    .grade-mtx thead th { background: var(--superficie); color: var(--texto-suave); font-weight: 600; padding: 4px 6px; font-variant-numeric: tabular-nums; }
+    .grade-mtx .canto { border: 0; background: transparent; }
+    .grade-mtx .cor-lab { background: var(--superficie); text-align: left; padding: 4px 10px; white-space: nowrap; font-weight: 500; color: var(--texto); position: sticky; left: 0; }
+    .cel { min-width: 46px; }
+    .cel.vazia { color: var(--texto-suave); background: var(--superficie); }
+    .cel .q { width: 42px; padding: 3px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); text-align: center; font: inherit; font-family: var(--tipografia-familia-dados); font-size: 12px; background: var(--fundo); color: var(--texto); }
+    .cel .q.tem { border-color: var(--acao); background: var(--acao-suave); color: var(--marca); font-weight: 600; }
+    .cel .q:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 0; }
+    .cel .sp { font-size: 10px; color: var(--texto-suave); }
+    .grade-acoes { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-3); flex-wrap: wrap; padding-bottom: var(--espacamento-3); }
+    .dica-g { font-size: 11px; color: var(--texto-suave); }
     .rascunho h2 { margin: 0 0 var(--espacamento-3); font-size: 16px; color: var(--texto); }
     .vazio { font-size: 13px; color: var(--texto-suave); }
     .itens li { display: grid; grid-template-columns: 1fr auto auto; gap: var(--espacamento-2); align-items: center; padding: var(--espacamento-2) 0; border-bottom: 1px solid var(--borda); font-size: 13px; }
@@ -356,6 +409,65 @@ export class PedidoAssistidoPagina implements OnInit {
   alternar(id: string): void { this.aberto.update((a) => (a === id ? null : id)) }
 
   atributos(s: SkuCatalogo): string[] { return Object.values(s.atributos) }
+
+  // ── Grade cor × tamanho (skill grade-cor-tamanho) ────────────────────────────
+  /** Quantidade por SKU digitada na matriz (chave = sku.id). */
+  readonly qtdGrade = signal<Record<string, string>>({})
+  // Ordem de tamanho NUNCA é alfabética (skill §2). Letras conhecidas primeiro,
+  // depois numéricos crescentes; o resto vai ao fim.
+  private static readonly ORDEM_TAM = ['PP', 'P', 'M', 'G', 'GG', 'XG', 'XGG', 'XXG', 'EG', 'EGG', 'U', 'UN', 'UNICO', 'ÚNICO']
+
+  temGrade(p: ProdutoCatalogo): boolean {
+    return p.skus.some((s) => s.atributos['cor'] !== undefined && s.atributos['tamanho'] !== undefined)
+  }
+  coresDe(p: ProdutoCatalogo): string[] {
+    const vistos = new Set<string>(); const out: string[] = []
+    for (const s of p.skus) { const c = s.atributos['cor']; if (c && !vistos.has(c)) { vistos.add(c); out.push(c) } }
+    return out
+  }
+  tamanhosDe(p: ProdutoCatalogo): string[] {
+    const set = new Set<string>()
+    for (const s of p.skus) { const t = s.atributos['tamanho']; if (t) set.add(t) }
+    return [...set].sort((a, b) => this.rankTam(a) - this.rankTam(b) || a.localeCompare(b))
+  }
+  private rankTam(t: string): number {
+    const u = t.toUpperCase().trim()
+    const i = PedidoAssistidoPagina.ORDEM_TAM.indexOf(u)
+    if (i >= 0) return i
+    const n = Number(u.replace(',', '.'))
+    if (!Number.isNaN(n)) return 100 + n
+    return 100000
+  }
+  /** SKU do cruzamento (cor,tamanho); undefined = célula inválida (grade não retangular). */
+  skuDe(p: ProdutoCatalogo, cor: string, tam: string): SkuCatalogo | undefined {
+    return p.skus.find((s) => s.atributos['cor'] === cor && s.atributos['tamanho'] === tam)
+  }
+  celTitulo(s: SkuCatalogo): string {
+    const preco = s.precoCentavos !== null ? this.reais(s.precoCentavos) : 'sem preço'
+    const saldo = s.saldo !== null ? (s.saldo <= 0 ? 'sem saldo' : `${s.saldo} un`) : ''
+    return saldo ? `${preco} · ${saldo}` : preco
+  }
+  qtdGradeDe(id: string): string { return this.qtdGrade()[id] ?? '' }
+  temQtd(id: string): boolean { return (Number(this.qtdGrade()[id]) || 0) > 0 }
+  setQtdGrade(id: string, v: string): void { this.qtdGrade.update((m) => ({ ...m, [id]: v })) }
+  algumaQtd(p: ProdutoCatalogo): boolean {
+    return p.skus.some((s) => s.precoCentavos !== null && (Number(this.qtdGrade()[s.id]) || 0) > 0)
+  }
+  /** Adiciona ao rascunho todas as células da grade com quantidade > 0. */
+  async adicionarGrade(p: ProdutoCatalogo): Promise<void> {
+    const mapa = this.qtdGrade()
+    const alvos = p.skus.filter((s) => s.precoCentavos !== null && (Number(mapa[s.id]) || 0) > 0)
+    if (alvos.length === 0) return
+    const pedidoId = await this.servico.garantirPedido()
+    for (const s of alvos) {
+      await this.servico.adicionar(pedidoId, {
+        skuId: s.id, skuSnapshot: s.codigoBarras ?? p.referencia, descricaoSnapshot: p.descricao,
+        grade: s.atributos, quantidade: Number(mapa[s.id]) || 0, valorUnitarioCentavos: s.precoCentavos!,
+      })
+    }
+    // Limpa as quantidades já adicionadas.
+    this.qtdGrade.update((m) => { const n = { ...m }; for (const s of alvos) delete n[s.id]; return n })
+  }
   atributosGrade(g: Record<string, string>): string[] { return Object.values(g) }
 
   async adicionar(p: ProdutoCatalogo, s: SkuCatalogo, qtd: string): Promise<void> {
