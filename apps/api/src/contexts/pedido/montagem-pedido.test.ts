@@ -93,6 +93,29 @@ describe('Vários rascunhos por cliente', () => {
   })
 })
 
+describe('Próximas etapas (pós-confirmação)', () => {
+  it('só o pedido CONFIRMADO segue; a etapa degrada honesto sem GeraCloud', async () => {
+    const id = (await chamar(T, 'POST', '/v1/pedidos', { contatoId: C1, novo: true }).then((r) => r.json())).id
+    // rascunho → 409 (ainda não confirmado pelo cliente)
+    expect((await chamar(T, 'POST', `/v1/pedidos/${id}/etapa/orcamento`)).statusCode).toBe(409)
+    // confirma direto no banco e aciona a etapa
+    await dono`UPDATE pedido SET estado = 'confirmado' WHERE tenant_id = ${T} AND id = ${id}`
+    const r = await chamar(T, 'POST', `/v1/pedidos/${id}/etapa/orcamento`)
+    expect(r.statusCode).toBe(200)
+    // ⚠️ Degrada visível: ok:false + motivo, nunca finge sucesso (ADR-008).
+    expect(r.json() as { ok: boolean; motivo: string }).toMatchObject({ ok: false, motivo: 'integracao_pendente' })
+  })
+
+  it('etapa desconhecida → 400; e o GET do pedido confirmado lista as etapas', async () => {
+    const id = (await chamar(T, 'POST', '/v1/pedidos', { contatoId: C1, novo: true }).then((r) => r.json())).id
+    await dono`UPDATE pedido SET estado = 'confirmado' WHERE tenant_id = ${T} AND id = ${id}`
+    expect((await chamar(T, 'POST', `/v1/pedidos/${id}/etapa/inexistente`)).statusCode).toBe(400)
+    const det = (await chamar(T, 'GET', `/v1/pedidos/${id}`)).json() as { proximasEtapas: { etapa: string }[] }
+    expect(det.proximasEtapas.map((e) => e.etapa)).toContain('orcamento')
+    expect(det.proximasEtapas.map((e) => e.etapa)).toContain('cobranca_pix')
+  })
+})
+
 describe('Catálogo filtrado e paginado', () => {
   it('filtra por cor e por categoria', async () => {
     const azul = (await chamar(T, 'GET', '/v1/catalogo/busca?cor=Azul')).json() as { itens: { referencia: string }[] }

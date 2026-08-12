@@ -5,6 +5,7 @@ import { efetivarPedido } from './efetivacao.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { enviarTextoNaConversa } from '../atendimento/envio-conversa.js'
 import { resumoPedidoTexto, codigoReferencia } from './resumo-pedido.js'
+import { ETAPAS_POS_CONFIRMACAO, etapaPos } from './proximas-etapas.js'
 
 /**
  * Pedido assistido — o tira-pedido que nasce na conversa (ADR-005).
@@ -320,7 +321,36 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
           grade: i.grade_snapshot, quantidade: Number(i.quantidade),
           valorUnitarioCentavos: Number(i.valor_unitario_centavos),
         })),
+        // Próximas etapas da jornada — só fazem sentido depois do cliente confirmar.
+        // Penduradas no pedido.confirmado; hoje DEGRADAM (GeraCloud não ligado).
+        proximasEtapas: dados.pedido.estado === 'confirmado' ? ETAPAS_POS_CONFIRMACAO : [],
       })
+    },
+  )
+
+  /**
+   * Aciona uma próxima etapa de um pedido CONFIRMADO (orçamento, cobrança PIX…).
+   * ⚠️ Retorno TIPIFICADO, nunca exceção. Enquanto o GeraCloud não está ligado, a
+   * etapa DEGRADA de forma visível (ADR-008): responde 200 com `ok:false` +
+   * motivo, sem fingir que gerou nada. É o ponto de costura para o conector.
+   */
+  app.post<{ Params: { id: string; etapa: string } }>(
+    '/v1/pedidos/:id/etapa/:etapa', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const def = etapaPos(req.params.etapa)
+      if (!def) return reply.code(400).send({ erro: 'etapa.desconhecida', mensagem: 'Etapa inválida.' })
+      const [p] = await req.comTenant((tx) => tx<{ estado: string }[]>`
+        SELECT estado FROM pedido WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`)
+      if (!p) return reply.code(404).send({ erro: 'pedido.nao_encontrado', mensagem: 'Pedido não encontrado.' })
+      if (p.estado !== 'confirmado') {
+        return reply.code(409).send({ erro: 'pedido.nao_confirmado', mensagem: 'Só o pedido confirmado pelo cliente pode seguir para as próximas etapas.' })
+      }
+      if (!def.disponivel) {
+        // Degradação honesta: a etapa existe, mas o conector não. 200 tipificado.
+        return reply.send({ ok: false, etapa: def.etapa, motivo: 'integracao_pendente', mensagem: def.motivoIndisponivel })
+      }
+      // Quando o GeraCloud for ligado, a ação real de cada etapa entra aqui.
+      return reply.send({ ok: true, etapa: def.etapa })
     },
   )
 

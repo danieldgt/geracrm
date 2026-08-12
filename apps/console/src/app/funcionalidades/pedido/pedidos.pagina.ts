@@ -10,11 +10,13 @@ interface PedidoItem {
   readonly itens: number; readonly numeroExterno: string | null; readonly criadoEm: string
 }
 interface LinhaItem { readonly descricaoSnapshot: string; readonly grade: Record<string, string>; readonly quantidade: number; readonly valorUnitarioCentavos: number }
+interface EtapaDef { readonly etapa: string; readonly rotulo: string; readonly descricao: string; readonly disponivel: boolean; readonly motivoIndisponivel?: string }
 interface PedidoDetalhe {
   readonly id: string; readonly estado: string; readonly contatoId: string | null; readonly contato: string | null
   readonly nome: string | null; readonly numeroExterno: string | null; readonly criadoEm: string; readonly confirmadoEm: string | null
   readonly formaPagamento: string | null; readonly observacao: string | null
   readonly totalCentavos: number; readonly totalPecas: number; readonly itens: LinhaItem[]
+  readonly proximasEtapas?: readonly EtapaDef[]
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
@@ -131,6 +133,31 @@ const FILTROS = [
               <span>{{ d.totalPecas }} peças · {{ d.itens.length }} {{ d.itens.length === 1 ? 'item' : 'itens' }}</span>
               <strong class="txt-dados">{{ reais(d.totalCentavos) }}</strong>
             </div>
+
+            <!-- Próximas etapas: só no pedido confirmado. Cada uma DEGRADA honesto
+                 enquanto o GeraCloud não está ligado (ADR-008) — nunca finge sucesso. -->
+            @if (d.estado === 'confirmado' && d.proximasEtapas?.length) {
+              <div class="m-etapas">
+                <h3 class="txt-secao">Próximas etapas</h3>
+                <p class="dica">O cliente confirmou. Estes passos entram quando o GeraCloud for conectado.</p>
+                @for (e of d.proximasEtapas!; track e.etapa) {
+                  <div class="etapa">
+                    <div class="e-txt">
+                      <span class="e-rot">{{ e.rotulo }}</span>
+                      <span class="e-desc">{{ e.descricao }}</span>
+                    </div>
+                    <button class="e-btn" [disabled]="!e.disponivel || acionando() === e.etapa"
+                            (click)="acionarEtapa(d.id, e.etapa)"
+                            [title]="e.disponivel ? '' : (e.motivoIndisponivel || '')">
+                      @if (!e.disponivel) { 🔒 Em breve } @else { {{ acionando() === e.etapa ? '…' : 'Gerar' }} }
+                    </button>
+                  </div>
+                }
+                @if (etapaMsg(); as m) {
+                  <div class="e-msg" [class.e-msg--ok]="m.ok">{{ m.ok ? '✅ ' : '⚠️ ' }}{{ m.texto }}</div>
+                }
+              </div>
+            }
           }
         </div>
       </div>
@@ -187,6 +214,20 @@ const FILTROS = [
     .m-total { display: flex; justify-content: space-between; align-items: baseline; padding-top: var(--espacamento-3); border-top: 2px solid var(--borda); font-size: 14px; }
     .m-total strong { font-size: 18px; color: var(--texto); }
     .dica { color: var(--texto-suave); font-size: 13px; }
+    /* Próximas etapas (pós-confirmação) */
+    .m-etapas { margin-top: var(--espacamento-5); padding-top: var(--espacamento-4); border-top: 1px solid var(--borda); }
+    .m-etapas h3 { margin: 0 0 var(--espacamento-1); }
+    .m-etapas .dica { margin: 0 0 var(--espacamento-3); }
+    .etapa { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-3); padding: var(--espacamento-2) 0; border-bottom: 1px solid var(--borda); }
+    .etapa:last-of-type { border-bottom: none; }
+    .e-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .e-rot { color: var(--texto); font-size: 14px; }
+    .e-desc { color: var(--texto-suave); font-size: 12px; }
+    .e-btn { flex: none; padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
+    .e-btn:not(:disabled) { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); cursor: pointer; }
+    .e-btn:disabled { cursor: not-allowed; opacity: .85; }
+    .e-msg { margin-top: var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--atencao); font-size: 13px; }
+    .e-msg--ok { background: var(--sucesso-suave); color: var(--sucesso); }
   `,
 })
 export class PedidosPagina implements OnInit {
@@ -199,6 +240,8 @@ export class PedidosPagina implements OnInit {
   readonly carregandoMais = signal(false)
   readonly detalhe = signal<PedidoDetalhe | null>(null)
   readonly carregandoDet = signal(false)
+  readonly acionando = signal<string | null>(null)
+  readonly etapaMsg = signal<{ ok: boolean; texto: string } | null>(null)
 
   ngOnInit(): void { void this.carregar() }
   reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
@@ -250,5 +293,18 @@ export class PedidosPagina implements OnInit {
       this.detalhe.set(d)
     } catch { this.fechar() } finally { this.carregandoDet.set(false) }
   }
-  fechar(): void { this.detalhe.set(null) }
+  fechar(): void { this.detalhe.set(null); this.etapaMsg.set(null); this.acionando.set(null) }
+
+  /** Aciona uma próxima etapa. Hoje DEGRADA honesto: mostra o motivo, não finge. */
+  async acionarEtapa(id: string, etapa: string): Promise<void> {
+    if (this.acionando()) return
+    this.acionando.set(etapa); this.etapaMsg.set(null)
+    try {
+      const r = await firstValueFrom(this.http.post<{ ok: boolean; motivo?: string; mensagem?: string }>(`/v1/pedidos/${id}/etapa/${etapa}`, {}))
+      this.etapaMsg.set({ ok: r.ok, texto: r.mensagem || (r.ok ? 'Feito.' : 'Etapa ainda não disponível.') })
+    } catch (e) {
+      const erro = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string })?.mensagem : undefined
+      this.etapaMsg.set({ ok: false, texto: erro || 'Não foi possível acionar a etapa.' })
+    } finally { this.acionando.set(null) }
+  }
 }
