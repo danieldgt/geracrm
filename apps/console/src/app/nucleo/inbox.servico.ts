@@ -103,14 +103,41 @@ export class InboxServico {
   }
   readonly vazio = computed(() => this.estado() === 'pronto' && this.conversas().length === 0)
 
-  // Rail lateral do chat (contraível). O chat é a funcionalidade principal e vive
-  // SEMPRE montado na casca: recolhido mostra a faixa de avatares; expandido, o
-  // inbox completo ao lado do conteúdo. Estado no serviço p/ sobreviver à navegação.
+  // Rail do chat (contraível), ancorado À DIREITA. O chat é a funcionalidade
+  // principal e vive SEMPRE montado na casca: recolhido = faixa de avatares;
+  // expandido = inbox completo. Estado no serviço p/ sobreviver à navegação.
+  //
+  // ⚠️ Dois eixos configuráveis pelo usuário, PERSISTIDOS:
+  //  · sobrepor: expandido EMPURRA o conteúdo (false) ou SOBREPÕE em overlay (true);
+  //  · largura: quantos px o painel ocupa (o usuário arrasta a borda).
+  private static readonly LARG_MIN = 300
+  private static readonly LARG_MAX = 900
   readonly railAberto = signal(false)
+  readonly railSobrepor = signal(localStorage.getItem('geracrm.rail.sobrepor') === '1')
+  readonly railLargura = signal(this.larguraSalva())
   readonly naoLidasTotal = computed(() => this.conversas().filter((c) => c.naoLida).length)
+
+  private larguraSalva(): number {
+    const n = Number(localStorage.getItem('geracrm.rail.largura'))
+    return Number.isFinite(n) && n > 0
+      ? Math.min(InboxServico.LARG_MAX, Math.max(InboxServico.LARG_MIN, n))
+      : 440
+  }
+
   abrirRail(): void { this.railAberto.set(true) }
   fecharRail(): void { this.railAberto.set(false); this.pararPresenca() }
   alternarRail(): void { this.railAberto() ? this.fecharRail() : this.abrirRail() }
+  alternarSobrepor(): void {
+    const v = !this.railSobrepor()
+    this.railSobrepor.set(v)
+    localStorage.setItem('geracrm.rail.sobrepor', v ? '1' : '0')
+  }
+  /** Redimensiona (arrastar a borda); grava a proporção escolhida. */
+  definirLargura(px: number): void {
+    const v = Math.min(InboxServico.LARG_MAX, Math.max(InboxServico.LARG_MIN, Math.round(px)))
+    this.railLargura.set(v)
+    localStorage.setItem('geracrm.rail.largura', String(v))
+  }
 
   // Thread selecionada
   readonly estadoThread = signal<EstadoThread>('nenhuma')

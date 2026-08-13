@@ -5,16 +5,16 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { InboxPagina } from './inbox.pagina.js'
 
 /**
- * Rail lateral do CHAT — a funcionalidade principal, sempre à mão.
+ * Rail do CHAT — a funcionalidade principal, sempre à mão, ancorado À DIREITA.
  *
- * Montado uma vez pela casca (shell), ao lado do menu. Recolhido: faixa fina com
- * os avatares das conversas + não-lidas + estado da conexão. Expandido: o inbox
- * completo (lista + diálogo) empurrando o conteúdo; recolhe quando terminar.
+ * Montado uma vez pela casca (shell). Recolhido: faixa fina de avatares na borda
+ * direita. Expandido: o inbox completo. O usuário controla, e o serviço persiste:
+ *  · LARGURA — arrasta a borda esquerda do painel (puxador);
+ *  · MODO — botão alterna EMPURRAR o conteúdo (padrão) × SOBREPOR (overlay).
  *
- * ⚠️ Dono do ciclo persistente que antes vivia no InboxPagina: carrega a lista uma
- * vez, conecta o SSE (idempotente — a casca também conecta) e ESCUTA mensagens a
- * sessão inteira. Assim o rail avisa de mensagem nova em qualquer tela, sem
- * re-registrar ouvinte a cada navegação.
+ * ⚠️ Dono do ciclo persistente (antes no InboxPagina): carrega a lista uma vez,
+ * conecta o SSE (idempotente) e ESCUTA mensagens a sessão inteira — avisa de
+ * mensagem nova em qualquer tela, sem re-registrar ouvinte por navegação.
  */
 @Component({
   selector: 'app-chat-rail',
@@ -22,7 +22,15 @@ import { InboxPagina } from './inbox.pagina.js'
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [InboxPagina, SlicePipe],
   template: `
-    <div class="rail" [class.aberto]="servico.railAberto()">
+    <div class="rail" [class.aberto]="servico.railAberto()"
+         [class.sobrepor]="servico.railAberto() && servico.railSobrepor()"
+         [style.--rail-w]="servico.railLargura() + 'px'">
+      @if (servico.railAberto()) {
+        <!-- Puxador de redimensionamento na BORDA ESQUERDA do painel. -->
+        <div class="puxador" (pointerdown)="iniciarResize($event)"
+             title="Arraste para redimensionar" role="separator" aria-label="Redimensionar chat"></div>
+      }
+
       @if (!servico.railAberto()) {
         <!-- RECOLHIDO: faixa de avatares -->
         <button class="topo-btn" (click)="servico.abrirRail()" title="Abrir chat" aria-label="Abrir chat">
@@ -32,8 +40,7 @@ import { InboxPagina } from './inbox.pagina.js'
         <div class="avs">
           @for (c of servico.conversas() | slice:0:16; track c.id) {
             <button class="av" [style.background]="corAvatar(c.id)"
-                    (click)="servico.abrir(c.id)" [title]="c.nome"
-                    [class.nao-lida]="c.naoLida">
+                    (click)="servico.abrir(c.id)" [title]="c.nome" [class.nao-lida]="c.naoLida">
               {{ iniciais(c.nome) }}
               @if (c.naoLida) { <span class="pino" aria-hidden="true"></span> }
             </button>
@@ -41,10 +48,19 @@ import { InboxPagina } from './inbox.pagina.js'
         </div>
         <span class="conex" [attr.data-estado]="eventos.estado()" [title]="'Conexão: ' + eventos.estado()"></span>
       } @else {
-        <!-- EXPANDIDO: barra de recolher + inbox completo -->
+        <!-- EXPANDIDO: cabeçalho (modo + recolher) + inbox completo -->
         <div class="cab">
           <span class="cab-tit">Conversas</span>
-          <button class="recolher" (click)="servico.fecharRail()" title="Recolher chat" aria-label="Recolher chat">‹</button>
+          <span class="cab-acoes">
+            <button class="modo" (click)="servico.alternarSobrepor()"
+                    [attr.aria-pressed]="servico.railSobrepor()"
+                    [title]="servico.railSobrepor()
+                      ? 'Sobrepondo o conteúdo — clique para empurrar'
+                      : 'Empurrando o conteúdo — clique para sobrepor'">
+              {{ servico.railSobrepor() ? '⧉' : '⇥' }}
+            </button>
+            <button class="recolher" (click)="servico.fecharRail()" title="Recolher chat" aria-label="Recolher chat">›</button>
+          </span>
         </div>
         <app-inbox class="corpo" />
       }
@@ -52,10 +68,19 @@ import { InboxPagina } from './inbox.pagina.js'
   `,
   styles: [`
     :host { display: block; height: 100%; }
-    .rail { height: 100%; display: flex; flex-direction: column; align-items: stretch;
-            background: var(--superficie); border-right: 1px solid var(--borda);
-            width: 66px; box-shadow: 4px 0 24px rgb(31 26 22 / .04); }
-    .rail.aberto { width: min(760px, 62vw); }
+    .rail { position: relative; height: 100%; display: flex; flex-direction: column; align-items: stretch;
+            background: var(--superficie); border-left: 1px solid var(--borda);
+            width: 66px; box-shadow: -4px 0 24px rgb(31 26 22 / .04); }
+    .rail.aberto { width: var(--rail-w); }
+    /* Overlay: painel flutua sobre o conteúdo (o host colapsa, o conteúdo ocupa tudo). */
+    .rail.aberto.sobrepor { position: fixed; top: 0; right: 0; height: 100vh; z-index: 60;
+                            box-shadow: -10px 0 34px rgb(31 26 22 / .16); }
+
+    /* Puxador de redimensionamento. */
+    .puxador { position: absolute; left: -3px; top: 0; bottom: 0; width: 8px; cursor: ew-resize;
+               z-index: 3; touch-action: none; }
+    .puxador::after { content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; }
+    .puxador:hover::after, .puxador:active::after { background: var(--acao); }
 
     /* Recolhido */
     .topo-btn { position: relative; height: 52px; border: 0; border-bottom: 1px solid var(--borda);
@@ -79,15 +104,21 @@ import { InboxPagina } from './inbox.pagina.js'
 
     /* Expandido */
     .cab { height: 40px; display: flex; align-items: center; justify-content: space-between;
-           padding: 0 8px 0 14px; border-bottom: 1px solid var(--borda); background: var(--superficie); }
+           padding: 0 6px 0 14px; border-bottom: 1px solid var(--borda); background: var(--superficie); }
     .cab-tit { font-size: 13px; font-weight: 600; color: var(--texto-secundario); text-transform: uppercase; letter-spacing: .05em; }
-    .recolher { border: 0; background: transparent; color: var(--texto-secundario); font-size: 22px; cursor: pointer; line-height: 1; padding: 4px 8px; border-radius: var(--raio-controle); }
-    .recolher:hover { background: var(--superficie-hover); color: var(--texto); }
+    .cab-acoes { display: flex; align-items: center; gap: 2px; }
+    .modo, .recolher { border: 0; background: transparent; color: var(--texto-secundario); cursor: pointer;
+                       line-height: 1; padding: 5px 8px; border-radius: var(--raio-controle); }
+    .modo { font-size: 15px; }
+    .modo[aria-pressed="true"] { color: var(--marca); background: var(--acao-suave); }
+    .recolher { font-size: 22px; }
+    .modo:hover, .recolher:hover { background: var(--superficie-hover); color: var(--texto); }
     .corpo { flex: 1; min-height: 0; display: block; }
 
-    /* Em telas estreitas, expandido vira overlay (não espreme o conteúdo). */
+    /* Em tela estreita, expandido SEMPRE sobrepõe (não esmaga o conteúdo). */
     @media (max-width: 900px) {
-      .rail.aberto { position: fixed; inset: 0 0 0 0; width: 100vw; z-index: 60; box-shadow: none; }
+      .rail.aberto { position: fixed; top: 0; right: 0; height: 100vh; z-index: 60;
+                     width: min(var(--rail-w), 100vw); box-shadow: -10px 0 34px rgb(31 26 22 / .16); }
     }
   `],
 })
@@ -98,9 +129,7 @@ export class ChatRailComponente implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     void this.servico.carregar()
-    // Idempotente: a casca também conecta; garante o stream se o rail montar antes.
     this.eventos.conectar()
-    // Ouvinte que vive a sessão inteira: mensagem/atendimento → atualiza lista e thread.
     this.cancelarEscuta = this.eventos.escutar('*', (ev) => {
       if (!ev.tipo.startsWith('mensagem') && ev.tipo !== 'atendimento.mudou') return
       void this.servico.atualizar()
@@ -109,8 +138,22 @@ export class ChatRailComponente implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    // Cancela o ouvinte; NÃO desconecta o SSE (a casca é dona da conexão global).
     this.cancelarEscuta?.()
+  }
+
+  /** Arrasta a borda esquerda: largura = borda direita da viewport − ponteiro. */
+  iniciarResize(ev: PointerEvent): void {
+    ev.preventDefault()
+    const alvo = ev.target as HTMLElement
+    alvo.setPointerCapture(ev.pointerId)
+    const mover = (e: PointerEvent) => this.servico.definirLargura(window.innerWidth - e.clientX)
+    const soltar = (e: PointerEvent) => {
+      try { alvo.releasePointerCapture(e.pointerId) } catch { /* já solto */ }
+      alvo.removeEventListener('pointermove', mover)
+      alvo.removeEventListener('pointerup', soltar)
+    }
+    alvo.addEventListener('pointermove', mover)
+    alvo.addEventListener('pointerup', soltar)
   }
 
   // Avatar: iniciais + cor estável por id (mesmo esquema do inbox).

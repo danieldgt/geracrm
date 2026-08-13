@@ -79,9 +79,10 @@ import { TemaServico } from './tema.servico.js'
         </nav>
       </aside>
 
-      <!-- Chat rail: o chat é a funcionalidade principal, sempre à mão (coluna 2,
-           altura total). Recolhido é uma faixa de avatares; expandido empurra o
-           conteúdo. Estado no InboxServico, sobrevive à navegação. -->
+      <!-- Chat rail: o chat é a funcionalidade principal, sempre à mão, ancorado
+           À DIREITA (coluna 3, altura total). Recolhido = faixa de avatares;
+           expandido empurra OU sobrepõe (escolha do usuário), com largura
+           redimensionável. Estado no InboxServico, sobrevive à navegação. -->
       <app-chat-rail />
 
       <!-- Barra superior: ações do usuário no canto direito (padrão de app). -->
@@ -110,10 +111,11 @@ import { TemaServico } from './tema.servico.js'
   `,
   styles: `
     :host { display: block; height: 100vh; }
-    /* 3 colunas: menu · chat-rail · (barra superior + conteúdo). Menu e rail em
-       altura total (linhas 1–2); topo e conteúdo na coluna 3. */
-    .grade { display: grid; grid-template-columns: auto auto 1fr; grid-template-rows: auto 1fr; height: 100%; }
-    app-chat-rail { grid-column: 2; grid-row: 1 / 3; min-width: 0; }
+    /* 3 colunas: menu · (barra superior + conteúdo) · chat-rail À DIREITA. Menu e
+       rail em altura total (linhas 1–2); topo e conteúdo na coluna 2. Em overlay
+       o rail é position:fixed, então a coluna 3 colapsa e o conteúdo ocupa tudo. */
+    .grade { display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: auto 1fr; height: 100%; }
+    app-chat-rail { grid-column: 3; grid-row: 1 / 3; min-width: 0; }
     /* Lateral em tom AREIA quente (estudo de identidade: surface-2), não branca —
        harmoniza com o palco creme e destaca o conteúdo elevado. */
     .lateral { grid-row: 1 / 3; width: 250px; background: var(--superficie); border-right: 1px solid var(--borda);
@@ -125,7 +127,7 @@ import { TemaServico } from './tema.servico.js'
     .marca .logo { display: inline-flex; align-items: center; text-decoration: none; --marca-tam: 26px; --marca-fonte: 16px; }
     .marca .logo:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
     /* Barra superior — ações do usuário à direita, sem cortar dropdowns. */
-    .topo { grid-column: 3; grid-row: 1; height: 52px; display: flex; align-items: center;
+    .topo { grid-column: 2; grid-row: 1; height: 52px; display: flex; align-items: center;
       gap: var(--espacamento-2); padding: 0 var(--espacamento-4);
       background: var(--superficie-elevada); border-bottom: 1px solid var(--borda); }
     .topo .espaco { flex: 1; }
@@ -164,7 +166,7 @@ import { TemaServico } from './tema.servico.js'
     .icone { width: 22px; font-size: 15px; text-align: center; flex: none; }
     .rotulo { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ponto { width: 6px; height: 6px; border-radius: var(--raio-completo); background: var(--atencao); flex: none; }
-    .conteudo { grid-column: 3; grid-row: 2; overflow-y: auto; min-width: 0; background: var(--fundo); }
+    .conteudo { grid-column: 2; grid-row: 2; overflow-y: auto; min-width: 0; background: var(--fundo); }
     /* Responsivo: em telas estreitas a lateral vira trilho de ícones, sem
        sobrepor o conteúdo (grid mantém as colunas separadas). */
     @media (max-width: 640px) {
