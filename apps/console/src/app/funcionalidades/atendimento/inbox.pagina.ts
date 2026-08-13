@@ -18,7 +18,7 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
   imports: [FormsModule, RouterLink, CanalSimboloComponente],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="wa">
+    <div class="wa" [class.tem-conversa]="servico.selecionadaId()">
       <!-- ───────── Lista ───────── -->
       <aside class="lista">
         <header class="barra">
@@ -110,6 +110,8 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
           @case ('pronto') {
             @if (servico.thread(); as t) {
               <header class="topo">
+                <!-- Só no modo estreito (lista OU diálogo): volta para a lista. -->
+                <button class="voltar" (click)="servico.voltarParaLista()" title="Voltar às conversas" aria-label="Voltar às conversas">‹</button>
                 <span class="avatar" [style.background]="corAvatar(t.id)">{{ iniciais(t.nome) }}</span>
                 <span class="topo-col">
                   <span class="nome-linha">
@@ -273,12 +275,22 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
       --wa-text: var(--texto); --wa-sec: var(--texto-secundario); --wa-green: var(--acao);
       --wa-line: var(--borda);
       display: block; height: 100%; min-height: 0; color: var(--wa-text);
+      /* ⚠️ O inbox reage à PRÓPRIA largura (é filho do rail redimensionável),
+         não à da janela — container query em vez de @media. */
+      container-type: inline-size;
     }
     .wa {
-      height: 100%; display: grid; grid-template-columns: minmax(300px, 32%) 1fr;
+      /* Lista com largura FIXA (~300px) e o diálogo cresce com o resto — assim o
+         diálogo aproveita toda a largura extra do painel, sem a lista inchar. */
+      height: 100%; display: grid; grid-template-columns: 300px 1fr;
       background: var(--wa-chat); overflow: hidden;
       font-family: var(--tipografia-familia-interface);
     }
+    /* Botão "voltar" só no modo estreito (lista OU diálogo). */
+    .voltar { display: none; border: 0; background: transparent; color: var(--wa-sec);
+      font-size: 22px; line-height: 1; cursor: pointer; padding: 4px 8px; margin-left: -4px;
+      border-radius: var(--raio-controle); flex: none; }
+    .voltar:hover { background: var(--wa-hover); color: var(--wa-text); }
 
     /* ── Lista ── */
     .lista { display: flex; flex-direction: column; background: var(--wa-sidebar); border-right: 1px solid var(--wa-line); min-height: 0; }
@@ -417,9 +429,16 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
     .fechada { flex: 1; font-size: 13px; color: #e0b341; text-align: center; }
     .erro-envio { width: 100%; margin: 0; font-size: 12px; color: #ff6b5e; }
 
-    @media (max-width: 720px) {
+    /* Rail estreito: uma coluna só. Sem conversa aberta → lista; com conversa →
+       diálogo em largura total + botão "voltar". Assim o diálogo nunca fica
+       espremido, mesmo num painel estreito. Baseado na largura do PRÓPRIO inbox. */
+    @container (max-width: 680px) {
       .wa { grid-template-columns: 1fr; }
+      .lista { border-right: 0; }
       .conversa { display: none; }
+      .wa.tem-conversa .lista { display: none; }
+      .wa.tem-conversa .conversa { display: flex; }
+      .voltar { display: inline-flex; align-items: center; }
     }
   `,
 })

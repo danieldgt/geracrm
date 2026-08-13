@@ -110,8 +110,8 @@ export class InboxServico {
   // ⚠️ Dois eixos configuráveis pelo usuário, PERSISTIDOS:
   //  · sobrepor: expandido EMPURRA o conteúdo (false) ou SOBREPÕE em overlay (true);
   //  · largura: quantos px o painel ocupa (o usuário arrasta a borda).
-  private static readonly LARG_MIN = 300
-  private static readonly LARG_MAX = 900
+  private static readonly LARG_MIN = 320
+  private static readonly LARG_MAX = 1600
   readonly railAberto = signal(false)
   readonly railSobrepor = signal(localStorage.getItem('geracrm.rail.sobrepor') === '1')
   readonly railLargura = signal(this.larguraSalva())
@@ -121,7 +121,7 @@ export class InboxServico {
     const n = Number(localStorage.getItem('geracrm.rail.largura'))
     return Number.isFinite(n) && n > 0
       ? Math.min(InboxServico.LARG_MAX, Math.max(InboxServico.LARG_MIN, n))
-      : 440
+      : 760
   }
 
   abrirRail(): void { this.railAberto.set(true) }
@@ -171,6 +171,14 @@ export class InboxServico {
         ? 'Sem conexão com o Drezz Hub.' : 'Não foi possível carregar as conversas.')
       this.estado.set('erro')
     }
+  }
+
+  /** Volta para a lista (modo estreito: lista OU diálogo). Some da conversa. */
+  voltarParaLista(): void {
+    this.pararPresenca()
+    this.selecionadaId.set(null)
+    this.thread.set(null)
+    this.estadoThread.set('nenhuma')
   }
 
   async abrir(id: string): Promise<void> {
