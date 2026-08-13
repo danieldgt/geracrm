@@ -278,7 +278,6 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
       /* ⚠️ O inbox reage à PRÓPRIA largura (é filho do rail redimensionável),
          não à da janela — container query em vez de @media. */
       container-type: inline-size;
-      --inboxbuild-b13: 1;
     }
     .wa {
       /* Lista com largura FIXA (~300px) e o diálogo cresce com o resto — assim o
