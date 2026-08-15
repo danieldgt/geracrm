@@ -17,7 +17,64 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
         <h1 class="txt-titulo">Funil de vendas</h1>
         <p class="sub">Arraste o card conforme a relação com o cliente evolui.</p>
       </div>
+      <button class="btn-metricas" [class.on]="mostrarMetricas()" (click)="alternarMetricas()">
+        📊 {{ mostrarMetricas() ? 'Ocultar métricas' : 'Métricas' }}
+      </button>
     </header>
+
+    @if (mostrarMetricas()) {
+      @if (servico.carregandoMetricas() && !servico.metricas()) {
+        <div class="metricas"><p class="dica-m">Calculando métricas…</p></div>
+      } @else if (servico.metricas(); as m) {
+        <div class="metricas">
+          <!-- KPIs de recompra (a métrica central do recorrente) -->
+          <div class="kpis">
+            <div class="kpi">
+              <span class="k-rot">Taxa de recompra</span>
+              <span class="k-val txt-dados">{{ m.recompra.taxa !== null ? m.recompra.taxa + '%' : '—' }}</span>
+              <span class="k-sub">{{ m.recompra.recompraram }} de {{ m.recompra.comCompra }} clientes compraram 2+ vezes</span>
+            </div>
+            <div class="kpi">
+              <span class="k-rot">Tempo até o 2º pedido</span>
+              <span class="k-val txt-dados">{{ m.tempoSegundoPedido.medianaDias !== null ? m.tempoSegundoPedido.medianaDias + 'd' : '—' }}</span>
+              <span class="k-sub">mediana · média {{ m.tempoSegundoPedido.mediaDias !== null ? m.tempoSegundoPedido.mediaDias + 'd' : '—' }} (n={{ m.tempoSegundoPedido.base }})</span>
+            </div>
+            <div class="kpi">
+              <span class="k-rot">Perda no funil</span>
+              <span class="k-val txt-dados">{{ m.perda.taxaPerda !== null ? m.perda.taxaPerda + '%' : '—' }}</span>
+              <span class="k-sub">{{ m.perda.perdidas }} de {{ m.perda.fechadas }} fechadas</span>
+            </div>
+          </div>
+
+          <!-- Conversão + tempo por estágio -->
+          <div class="rolagem-x">
+            <table class="tab-etapas">
+              <thead><tr><th>Estágio</th><th class="dir">Entraram</th><th class="dir">Tempo médio</th><th class="dir">Conversão → próximo</th></tr></thead>
+              <tbody>
+                @for (e of m.etapas; track e.chave) {
+                  <tr>
+                    <td>{{ e.nome }}</td>
+                    <td class="dir txt-dados">{{ e.entraram }}</td>
+                    <td class="dir txt-dados">{{ e.tempoMedioDias !== null ? e.tempoMedioDias + 'd' : '—' }}</td>
+                    <td class="dir txt-dados">{{ e.conversaoParaProxima !== null ? e.conversaoParaProxima + '%' : '—' }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+
+          @if (m.perda.motivos.length) {
+            <div class="motivos-perda">
+              <span class="mp-rot">Motivos de perda:</span>
+              @for (mv of m.perda.motivos; track mv.codigo) {
+                <span class="mp-chip">{{ mv.nome }} <b>{{ mv.qtd }}</b></span>
+              }
+            </div>
+          }
+          <p class="dica-m">Conversão A→B: quantos dos que entraram no estágio avançaram ao próximo. Tempo médio conta só estadias concluídas.</p>
+        </div>
+      }
+    }
 
     @if (servico.erroMove(); as e) { <p class="erro-move" role="alert">{{ e }}</p> }
 
@@ -77,7 +134,24 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
   `,
   styles: `
     :host { display: block; height: 100%; padding: var(--espacamento-6); overflow: hidden; display: flex; flex-direction: column; }
-    .cabecalho { margin-bottom: var(--espacamento-4); }
+    .cabecalho { margin-bottom: var(--espacamento-4); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
+    .btn-metricas { flex: none; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 13px; cursor: pointer; }
+    .btn-metricas.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
+    /* Painel de métricas */
+    .metricas { margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--espacamento-3); margin-bottom: var(--espacamento-4); }
+    .kpi { display: flex; flex-direction: column; gap: 2px; padding: var(--espacamento-3); border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); }
+    .k-rot { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--texto-suave); }
+    .k-val { font-size: 24px; font-weight: 600; color: var(--texto); }
+    .k-sub { font-size: 12px; color: var(--texto-secundario); }
+    .tab-etapas { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .tab-etapas th, .tab-etapas td { padding: var(--espacamento-2) var(--espacamento-3); border-bottom: 1px solid var(--borda); text-align: left; white-space: nowrap; }
+    .tab-etapas th { color: var(--texto-suave); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+    .tab-etapas .dir { text-align: right; }
+    .motivos-perda { display: flex; flex-wrap: wrap; align-items: center; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
+    .mp-rot { font-size: 12px; color: var(--texto-suave); }
+    .mp-chip { font-size: 12px; padding: 2px 8px; border-radius: var(--raio-completo); background: var(--erro-suave); color: var(--erro); }
+    .dica-m { margin: var(--espacamento-3) 0 0; font-size: 11px; color: var(--texto-suave); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
@@ -125,8 +199,14 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
 export class FunilPagina implements OnInit {
   readonly servico = inject(FunilServico)
   readonly perdendo = signal<{ card: Card; deEtapa: string; indice: number } | null>(null)
+  readonly mostrarMetricas = signal(false)
 
   ngOnInit(): void { void this.servico.carregar() }
+
+  alternarMetricas(): void {
+    this.mostrarMetricas.update((v) => !v)
+    if (this.mostrarMetricas()) void this.servico.carregarMetricas()
+  }
 
   reais(centavos: number): string {
     return (centavos / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })

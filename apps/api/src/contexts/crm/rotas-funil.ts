@@ -170,4 +170,104 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
       return reply.send({ ok: true })
     },
   )
+
+  /**
+   * Métricas do funil + recompra (skill funil-de-vendas §"Métricas que valem").
+   * Tudo derivado do que já existe: `oportunidade_etapa_historico` (tempo em
+   * estágio + conversão A→B), `oportunidade`/`motivo_perda` (perda) e `venda`
+   * (recompra + tempo até o 2º pedido). Leitura agregada, sob RLS.
+   */
+  app.get('/v1/funil/metricas', { preHandler: exigirTenant }, async (req, reply) => {
+    const dados = await req.comTenant(async (tx) => {
+      // Por estágio: quantos ENTRARAM (histórico) e tempo médio de permanência
+      // (só estadias concluídas — saiu_em preenchido — para não inflar com o now()).
+      const etapas = await tx<{
+        chave: string; nome: string; ordem: number; tipo: string
+        entraram: number; tempo_medio_dias: number | null
+      }[]>`
+        SELECT e.chave, e.nome, e.ordem, e.tipo,
+               count(DISTINCT h.oportunidade_id)::int AS entraram,
+               round((avg(EXTRACT(EPOCH FROM (h.saiu_em - h.entrou_em)) / 86400.0)
+                      FILTER (WHERE h.saiu_em IS NOT NULL))::numeric, 1) AS tempo_medio_dias
+          FROM funil_etapa e
+          LEFT JOIN oportunidade_etapa_historico h
+            ON h.tenant_id = e.tenant_id AND h.etapa_id = e.id
+         WHERE e.tenant_id = tenant_atual() AND e.ativo
+         GROUP BY e.chave, e.nome, e.ordem, e.tipo
+         ORDER BY e.ordem`
+
+      // Recompra: dos clientes com ao menos 1 venda, quantos compraram 2+.
+      const [recompra] = await tx<{ com_compra: number; recompraram: number }[]>`
+        SELECT count(*) FILTER (WHERE qtd_vendas >= 1)::int AS com_compra,
+               count(*) FILTER (WHERE qtd_vendas >= 2)::int AS recompraram
+          FROM metricas_contato WHERE tenant_id = tenant_atual()`
+
+      // Tempo até o 2º pedido: (data da 2ª venda − 1ª), média E mediana (a skill
+      // pede a mediana ao lado — um outlier gigante distorce a média).
+      const [segundo] = await tx<{ base: number; media_dias: number | null; mediana_dias: number | null }[]>`
+        WITH ord AS (
+          SELECT contato_id, ocorrida_em,
+                 row_number() OVER (PARTITION BY contato_id ORDER BY ocorrida_em) AS rn
+            FROM venda
+           WHERE tenant_id = tenant_atual() AND contato_id IS NOT NULL AND cancelada_em IS NULL
+        ),
+        ps AS (
+          SELECT contato_id,
+                 min(ocorrida_em) FILTER (WHERE rn = 1) AS v1,
+                 min(ocorrida_em) FILTER (WHERE rn = 2) AS v2
+            FROM ord WHERE rn <= 2 GROUP BY contato_id
+        ),
+        dif AS (SELECT (v2::date - v1::date) AS dias FROM ps WHERE v2 IS NOT NULL)
+        SELECT count(*)::int AS base,
+               round(avg(dias)::numeric, 1) AS media_dias,
+               round((percentile_cont(0.5) WITHIN GROUP (ORDER BY dias))::numeric, 1) AS mediana_dias
+          FROM dif`
+
+      // Perda/churn do funil: fechadas × perdidas + top motivos.
+      const [perda] = await tx<{ fechadas: number; perdidas: number }[]>`
+        SELECT count(*) FILTER (WHERE estado IN ('ganha','perdida'))::int AS fechadas,
+               count(*) FILTER (WHERE estado = 'perdida')::int AS perdidas
+          FROM oportunidade WHERE tenant_id = tenant_atual()`
+      const motivos = await tx<{ codigo: string; nome: string; qtd: number }[]>`
+        SELECT o.motivo_perda_codigo AS codigo, m.nome, count(*)::int AS qtd
+          FROM oportunidade o
+          JOIN motivo_perda m ON m.tenant_id = o.tenant_id AND m.codigo = o.motivo_perda_codigo
+         WHERE o.tenant_id = tenant_atual() AND o.estado = 'perdida'
+         GROUP BY o.motivo_perda_codigo, m.nome
+         ORDER BY qtd DESC`
+      return { etapas, recompra, segundo, perda, motivos }
+    })
+
+    // Conversão por estágio (A→B): quantos dos que entraram no estágio avançaram
+    // para o próximo, na ordem. É onde o gargalo aparece (skill: meça A→B).
+    const etapas = dados.etapas.map((e, i) => {
+      const prox = dados.etapas[i + 1]
+      const conversao = prox && e.entraram > 0 ? Math.round((prox.entraram / e.entraram) * 1000) / 10 : null
+      return {
+        chave: e.chave, nome: e.nome, tipo: e.tipo,
+        entraram: e.entraram,
+        tempoMedioDias: e.tempo_medio_dias !== null ? Number(e.tempo_medio_dias) : null,
+        conversaoParaProxima: conversao, // % ; null no último estágio ou sem base
+      }
+    })
+    const r = dados.recompra ?? { com_compra: 0, recompraram: 0 }
+    const p = dados.perda ?? { fechadas: 0, perdidas: 0 }
+    return reply.send({
+      etapas,
+      recompra: {
+        comCompra: r.com_compra, recompraram: r.recompraram,
+        taxa: r.com_compra > 0 ? Math.round((r.recompraram / r.com_compra) * 1000) / 10 : null,
+      },
+      tempoSegundoPedido: {
+        base: dados.segundo?.base ?? 0,
+        mediaDias: dados.segundo?.media_dias !== null && dados.segundo?.media_dias !== undefined ? Number(dados.segundo.media_dias) : null,
+        medianaDias: dados.segundo?.mediana_dias !== null && dados.segundo?.mediana_dias !== undefined ? Number(dados.segundo.mediana_dias) : null,
+      },
+      perda: {
+        fechadas: p.fechadas, perdidas: p.perdidas,
+        taxaPerda: p.fechadas > 0 ? Math.round((p.perdidas / p.fechadas) * 1000) / 10 : null,
+        motivos: dados.motivos,
+      },
+    })
+  })
 }

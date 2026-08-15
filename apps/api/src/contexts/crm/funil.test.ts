@@ -148,4 +148,48 @@ describe('Onda 2: Kanban do funil', () => {
     const col = await chamar(T, 'GET', `/v1/funil/coluna/${lead}`)
     expect((col.json() as { itens: unknown[] }).itens.length).toBe(0)
   })
+
+  it('métricas: entraram por estágio, conversão A→B, tempo médio e perda com motivo', async () => {
+    const lead = await etapaId(T, 'lead'), conversa = await etapaId(T, 'conversa')
+    const pedido = await etapaId(T, 'pedido')
+    const c1 = await novoContato(T, 'M1'), c2 = await novoContato(T, 'M2'), c3 = await novoContato(T, 'M3')
+    const op1 = randomUUID(), op2 = randomUUID(), op3 = randomUUID()
+    // c1: passou por lead→conversa→pedido (aberta em pedido). c2: lead→conversa.
+    // c3: só lead, PERDIDA com motivo. Histórico direto p/ tempos determinísticos.
+    await dono`INSERT INTO oportunidade (tenant_id, id, contato_id, etapa_id, estado) VALUES
+      (${T}, ${op1}, ${c1}, ${pedido}, 'aberta'),
+      (${T}, ${op2}, ${c2}, ${conversa}, 'aberta')`
+    // ⚠️ Perdida precisa do motivo no PRÓPRIO insert (CHECK no banco).
+    await dono`INSERT INTO oportunidade (tenant_id, id, contato_id, etapa_id, estado, motivo_perda_codigo, fechada_em)
+      VALUES (${T}, ${op3}, ${c3}, ${lead}, 'perdida', 'preco', now())`
+    const h = (op: string, et: string, d1: number, d2: number | null) =>
+      dono`INSERT INTO oportunidade_etapa_historico (tenant_id, id, oportunidade_id, etapa_id, entrou_em, saiu_em)
+           VALUES (${T}, ${randomUUID()}, ${op}, ${et}, now() - ${d1 + ' days'}::interval,
+                   ${d2 === null ? null : dono`now() - ${d2 + ' days'}::interval`})`
+    await h(op1, lead, 10, 8); await h(op1, conversa, 8, 5); await h(op1, pedido, 5, null)
+    await h(op2, lead, 6, 4); await h(op2, conversa, 4, null)
+    await h(op3, lead, 3, null)
+
+    const m = (await chamar(T, 'GET', '/v1/funil/metricas').then((r) => r.json())) as {
+      etapas: { chave: string; entraram: number; conversaoParaProxima: number | null; tempoMedioDias: number | null }[]
+      perda: { perdidas: number; fechadas: number; motivos: { codigo: string; qtd: number }[] }
+      recompra: { comCompra: number; taxa: number | null }
+      tempoSegundoPedido: { base: number }
+    }
+    const et = (k: string) => m.etapas.find((e) => e.chave === k)!
+    expect(et('lead').entraram).toBe(3)
+    expect(et('conversa').entraram).toBe(2)
+    expect(et('pedido').entraram).toBe(1)
+    // conversão lead→conversa = 2/3 = 66.7% ; conversa→pedido = 1/2 = 50%
+    expect(et('lead').conversaoParaProxima).toBe(66.7)
+    expect(et('conversa').conversaoParaProxima).toBe(50)
+    // tempo médio no lead: só estadias concluídas (c1=2d, c2=2d; c3 em aberto não conta) = 2d
+    expect(et('lead').tempoMedioDias).toBe(2)
+    // perda: 1 perdida de 1 fechada, motivo 'preco'
+    expect(m.perda.perdidas).toBe(1)
+    expect(m.perda.motivos.find((x) => x.codigo === 'preco')?.qtd).toBe(1)
+    // estrutura de recompra presente (valores vêm da MV de vendas)
+    expect(m.recompra).toHaveProperty('comCompra')
+    expect(m.tempoSegundoPedido).toHaveProperty('base')
+  })
 })

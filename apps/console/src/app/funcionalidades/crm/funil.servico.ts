@@ -25,6 +25,22 @@ export interface Coluna {
   carregandoMais: boolean
 }
 export interface Motivo { readonly codigo: string; readonly nome: string }
+
+export interface MetricaEtapa {
+  readonly chave: string; readonly nome: string; readonly tipo: string
+  readonly entraram: number
+  readonly tempoMedioDias: number | null
+  readonly conversaoParaProxima: number | null
+}
+export interface Metricas {
+  readonly etapas: readonly MetricaEtapa[]
+  readonly recompra: { readonly comCompra: number; readonly recompraram: number; readonly taxa: number | null }
+  readonly tempoSegundoPedido: { readonly base: number; readonly mediaDias: number | null; readonly medianaDias: number | null }
+  readonly perda: {
+    readonly fechadas: number; readonly perdidas: number; readonly taxaPerda: number | null
+    readonly motivos: readonly { readonly codigo: string; readonly nome: string; readonly qtd: number }[]
+  }
+}
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
@@ -40,6 +56,19 @@ export class FunilServico {
   readonly colunas = signal<readonly Coluna[]>([])
   readonly motivos = signal<readonly Motivo[]>([])
   readonly erroMove = signal<string | null>(null)
+  readonly metricas = signal<Metricas | null>(null)
+  readonly carregandoMetricas = signal(false)
+
+  /** Métricas do funil + recompra (skill funil-de-vendas). Carrega sob demanda. */
+  async carregarMetricas(): Promise<void> {
+    if (this.metricas() || this.carregandoMetricas()) return
+    this.carregandoMetricas.set(true)
+    try {
+      this.metricas.set(await firstValueFrom(this.http.get<Metricas>('/v1/funil/metricas')))
+    } catch { /* silencioso: métrica não pode derrubar o kanban */ } finally {
+      this.carregandoMetricas.set(false)
+    }
+  }
 
   async carregar(): Promise<void> {
     this.estado.set('carregando')
