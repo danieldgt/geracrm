@@ -1,5 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, input, effect, signal } from '@angular/core'
+import { DatePipe } from '@angular/common'
 import { RouterLink } from '@angular/router'
+import { rotuloSegmento } from '@geracrm/shared'
 import { FichaServico, type FichaContato } from './ficha.servico.js'
 
 /**
@@ -14,7 +16,7 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
 @Component({
   selector: 'app-ficha-contato',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink],
+  imports: [RouterLink, DatePipe],
   template: `
     <a routerLink="/contatos" class="voltar">← Contatos</a>
 
@@ -120,6 +122,22 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                 }
               </div>
 
+              <!-- Evolução do segmento RFV: a TRAJETÓRIA importa mais que a foto
+                   (skill funil-de-vendas). Só aparece quando há transição (2+). -->
+              @if (servico.segmentoHistorico().length > 1) {
+                <div class="cartao">
+                  <h3>Evolução do segmento</h3>
+                  <ol class="trajetoria">
+                    @for (h of servico.segmentoHistorico(); track $index) {
+                      <li>
+                        <span class="tag rfv" [style.--c]="cor(h.segmento)">{{ rotuloSeg(h.segmento) }}</span>
+                        <span class="mini quando">{{ h.capturadoEm | date: 'dd/MM/yy' }}</span>
+                      </li>
+                    }
+                  </ol>
+                </div>
+              }
+
               <div class="cartao">
                 <h3>Categorias mais compradas</h3>
                 @if (f.categorias.length) {
@@ -220,6 +238,10 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
     .metricas dt { font-size: 11px; color: var(--texto-suave); }
     .metricas dd { margin: 2px 0 0; font-size: 14px; color: var(--texto); }
     .acao-rfv { margin: var(--espacamento-3) 0 0; font-size: 13px; font-weight: 500; color: var(--acao); }
+    /* Evolução do segmento: mais recente no topo. */
+    .trajetoria { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--espacamento-2); }
+    .trajetoria li { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-2); }
+    .trajetoria .quando { border: 0; }
     .barras { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }
     .barras li { display: grid; grid-template-columns: 110px 1fr auto; align-items: center; gap: var(--espacamento-2); font-size: 12px; }
     .rot { color: var(--texto-secundario); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -274,6 +296,7 @@ export class FichaContatoPagina {
   }
 
   cor(codigo: string): string { return `var(--rfv-${codigo})` }
+  rotuloSeg(codigo: string): string { return rotuloSegmento(codigo) }
   reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
   arred(n: number): number { return Math.round(n) }
   pct(v: number, max: number): number { return max > 0 ? Math.round((v / max) * 100) : 0 }

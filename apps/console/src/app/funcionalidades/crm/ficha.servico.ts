@@ -38,15 +38,22 @@ export class FichaServico {
   readonly estado = signal<EstadoFicha>('ocioso')
   readonly ficha = signal<FichaContato | null>(null)
   readonly erro = signal<string | null>(null)
+  /** Trajetória do segmento RFV (transições no tempo). */
+  readonly segmentoHistorico = signal<readonly { segmento: string; capturadoEm: string }[]>([])
 
   async carregar(id: string): Promise<void> {
     this.estado.set('carregando')
     this.erro.set(null)
     this.ficha.set(null)
+    this.segmentoHistorico.set([])
     try {
       const f = await firstValueFrom(this.http.get<FichaContato>(`/v1/contatos/${id}`))
       this.ficha.set(f)
       this.estado.set('pronto')
+      // Trajetória de segmento — não pode derrubar a ficha se falhar.
+      void firstValueFrom(this.http.get<{ itens: { segmento: string; capturadoEm: string }[] }>(`/v1/contatos/${id}/segmento/historico`))
+        .then((r) => this.segmentoHistorico.set(r.itens))
+        .catch(() => { /* sem histórico */ })
     } catch (e) {
       if (e instanceof HttpErrorResponse) {
         if (e.status === 404) { this.estado.set('nao_encontrado'); return }

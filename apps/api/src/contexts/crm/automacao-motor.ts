@@ -1,6 +1,7 @@
 import { classificarRfv } from '@geracrm/shared'
 import postgres from 'postgres'
 import type { Sql } from '../../db/index.js'
+import { capturarSegmentos } from './segmento-historico.js'
 
 /**
  * Motor de automações — VARREDURA AGENDADA, ações INTERNAS (decisão de produto,
@@ -217,9 +218,16 @@ function conexaoDono(): ReturnType<typeof postgres> {
 export function executarAutomacoesDoTenant(tid: string, agora: Date): Promise<number> {
   return executarNoTenant(conexaoDono() as unknown as Sql, tid, agora)
 }
-/** Passada agendada (server.ts), usando a conexão dono compartilhada. */
-export function varrerAgendado(agora: Date): Promise<number> {
-  return varrerAutomacoes(conexaoDono() as unknown as Sql, agora)
+/**
+ * Passada agendada (server.ts), na conexão dono compartilhada: varre as
+ * automações E captura a trajetória de segmento RFV (só transições). Sequencial —
+ * a conexão dono é max:1.
+ */
+export async function varrerAgendado(agora: Date): Promise<number> {
+  const sql = conexaoDono() as unknown as Sql
+  const auto = await varrerAutomacoes(sql, agora)
+  const seg = await capturarSegmentos(sql)
+  return auto + seg
 }
 export async function encerrarDonoAutomacao(): Promise<void> {
   if (dono) { await dono.end(); dono = undefined }

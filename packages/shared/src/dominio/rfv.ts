@@ -83,3 +83,21 @@ export function classificarRfv(m: MetricasRfv): SegmentoRfv {
 function seg(codigo: CodigoSegmentoRfv, rotulo: string, acao: string, urgencia: number): SegmentoRfv {
   return { codigo, rotulo, acao, urgencia }
 }
+
+/**
+ * Rótulo CANÔNICO por código — para exibir a TRAJETÓRIA (histórico de segmento),
+ * onde só o código foi guardado. ⚠️ O rótulo do `classificarRfv` varia com o
+ * contexto (o mesmo `em-risco` é "Atrasado" ou "Primeira compra parada"); aqui é
+ * um nome único e estável por código, sem duplicar cor (essa sai do token `rfv.*`).
+ */
+const ROTULO_SEGMENTO: Record<CodigoSegmentoRfv, string> = {
+  'cliente-recente': 'Cliente novo',
+  'cliente-fiel': 'Em dia',
+  'nao-perder': 'Na hora da recompra',
+  'em-risco': 'Em risco',
+  'semi-perdido': 'Sumindo',
+  'hibernando': 'Hibernando',
+}
+export function rotuloSegmento(codigo: string): string {
+  return ROTULO_SEGMENTO[codigo as CodigoSegmentoRfv] ?? codigo
+}

@@ -455,6 +455,20 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       return reply.send({ itens: linhas.map((l) => ({ id: l.id, texto: l.texto, autor: l.autor, criadoEm: l.criado_em })) })
     },
   )
+
+  /** Trajetória do segmento RFV (transições ao longo do tempo). Skill funil-de-vendas. */
+  app.get<{ Params: { id: string } }>(
+    '/v1/contatos/:id/segmento/historico', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const linhas = await req.comTenant((tx) => tx<{ segmento: string; capturado_em: Date }[]>`
+        SELECT segmento, capturado_em
+          FROM contato_segmento_historico
+         WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}
+         ORDER BY capturado_em DESC LIMIT 50`)
+      return reply.send({ itens: linhas.map((l) => ({ segmento: l.segmento, capturadoEm: l.capturado_em })) })
+    },
+  )
+
   app.post<{ Params: { id: string }; Body: { texto?: string } }>(
     '/v1/contatos/:id/comentarios', { preHandler: exigirTenant },
     async (req, reply) => {
