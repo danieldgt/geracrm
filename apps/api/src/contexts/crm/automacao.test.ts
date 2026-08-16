@@ -13,6 +13,7 @@ const MODELO = 'a17a0000-4444-4000-8000-000000000001'
 const C_INATIVO = 'a17a0000-6666-4000-8000-000000000001' // comprou há 60 dias
 const C_LEAD = 'a17a0000-6666-4000-8000-000000000002'    // nunca comprou, cadastrado há 40 dias
 const C_NPS = 'a17a0000-6666-4000-8000-000000000003'     // deu NPS 3
+const C_RITMO = 'a17a0000-6666-4000-8000-000000000004'   // 3 vendas, atraso ~0,83× (janela de antecipação)
 const LISTA = 'a17a0000-9999-4000-8000-000000000001'
 const SEQ = 'a17a0000-aaaa-4000-8000-000000000001'
 
@@ -44,6 +45,15 @@ beforeAll(async () => {
   await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo, qtd_vendas, criado_em)
              VALUES (${T}, ${C_NPS}, 'Insatisfeito', 'teste', true, 1, ${ago(10)}) ON CONFLICT DO NOTHING`
   await dono`INSERT INTO nps_resposta (tenant_id, id, contato_id, nota, origem) VALUES (${T}, ${randomUUID()}, ${C_NPS}, 3, 'manual')`
+  // Ritmo do cliente: 3 vendas em ~85/55/25 dias atrás → média 30d, recência 25d,
+  // atraso ≈ 0,83 (na janela de antecipação [0,8; 1,0)). Alimenta a MV.
+  await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo, qtd_vendas, ultima_venda_em, criado_em)
+             VALUES (${T}, ${C_RITMO}, 'No ritmo', 'teste', true, 3, ${ago(25)}, ${ago(120)}) ON CONFLICT DO NOTHING`
+  for (const d of [85, 55, 25]) {
+    await dono`INSERT INTO venda (tenant_id, id, contato_id, ocorrida_em, valor_centavos)
+               VALUES (${T}, ${randomUUID()}, ${C_RITMO}, now() - (${d} || ' days')::interval, 20000)`
+  }
+  await dono`SELECT atualizar_metricas_contato()`
   await dono`INSERT INTO lista (tenant_id, id, nome) VALUES (${T}, ${LISTA}, 'Resgate') ON CONFLICT DO NOTHING`
   await dono`INSERT INTO sequencia (tenant_id, id, nome) VALUES (${T}, ${SEQ}, 'Pós-detrator') ON CONFLICT DO NOTHING`
   await dono`INSERT INTO sequencia_passo (tenant_id, sequencia_id, seq, offset_dias, titulo) VALUES (${T}, ${SEQ}, 1, 0, 'Ligar hoje')`
@@ -59,6 +69,8 @@ beforeEach(async () => {
 afterAll(async () => {
   await dono`DELETE FROM automacao WHERE tenant_id IN (${T}, ${OUTRO})`
   await dono`DELETE FROM tarefa WHERE tenant_id IN (${T}, ${OUTRO})`
+  await dono`DELETE FROM venda WHERE tenant_id IN (${T}, ${OUTRO})`
+  await dono`SELECT atualizar_metricas_contato()`
   await dono`DELETE FROM nps_resposta WHERE tenant_id IN (${T}, ${OUTRO})`
   await dono`DELETE FROM sequencia WHERE tenant_id IN (${T}, ${OUTRO})`
   await dono`DELETE FROM lista WHERE tenant_id IN (${T}, ${OUTRO})`
@@ -102,6 +114,20 @@ describe('Motor de automações', () => {
     expect(n).toBe(1)
     const tarefas = await dono<{ titulo: string }[]>`SELECT titulo FROM tarefa WHERE tenant_id=${T} AND contato_id=${C_NPS} ORDER BY vence_em`
     expect(tarefas.map((x) => x.titulo)).toEqual(['Ligar hoje', 'Verificar'])
+  })
+
+  it('⚠️ reposicao_ritmo: age na janela de antecipação (0,8× o ritmo) e reincide no próximo ciclo', async () => {
+    const id = await novaAutomacao('reposicao_ritmo', { fator: 0.8 }, 'criar_tarefa', { titulo: 'Oferecer reposição', paraDono: false })
+    expect(await executarNoTenant(sql, T, AGORA)).toBe(1)
+    const [t] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tarefa WHERE tenant_id=${T} AND contato_id=${C_RITMO}`
+    expect(t!.n).toBe(1)
+    // 2ª passada no MESMO ciclo NÃO recria (dedup ciente do ciclo).
+    expect(await executarNoTenant(sql, T, AGORA)).toBe(0)
+    // Novo ciclo (o cliente comprou de novo → o carimbo fica ANTES da última
+    // compra): a régua reincide. Simulo recuando o executado_em.
+    await dono`UPDATE automacao_execucao SET executado_em = now() - interval '90 days'
+               WHERE tenant_id=${T} AND automacao_id=${id} AND contato_id=${C_RITMO}`
+    expect(await executarNoTenant(sql, T, AGORA)).toBe(1)
   })
 
   it('⚠️ isolamento: automação de um tenant não age na base do outro', async () => {

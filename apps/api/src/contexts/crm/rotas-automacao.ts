@@ -4,7 +4,7 @@ import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { executarAutomacoesDoTenant } from './automacao-motor.js'
 
-const GATILHOS = new Set(['rfv_segmento', 'dias_sem_comprar', 'lead_frio', 'nps_detrator'])
+const GATILHOS = new Set(['rfv_segmento', 'dias_sem_comprar', 'lead_frio', 'nps_detrator', 'reposicao_ritmo'])
 const ACOES = new Set(['criar_tarefa', 'aplicar_sequencia', 'adicionar_lista'])
 
 /**

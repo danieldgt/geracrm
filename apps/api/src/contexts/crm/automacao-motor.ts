@@ -82,6 +82,33 @@ async function candidatos(sql: Sql, tid: string, a: Automacao): Promise<string[]
     return ids
   }
 
+  if (a.gatilho === 'reposicao_ritmo') {
+    // Régua de recompra (skill funil-de-vendas): oferecer reposição na JANELA DE
+    // ANTECIPAÇÃO — quando o cliente chega a `fator`× a média entre compras DELE
+    // (padrão 0,8), antes de virar atraso. Compara ao ritmo do próprio cliente
+    // (atraso_relativo), nunca a uma régua única.
+    // ⚠️ RECORRENTE: age de novo a cada ciclo. O dedup é ciente do ciclo —
+    //    candidato só se NÃO agimos DESDE a última compra (executado_em vs
+    //    ultima_venda_em); o registro é UPSERT (executado_em = now()).
+    const fator = Number(p['fator'] ?? 0.8)
+    const teto = Number(p['teto'] ?? 1.0)
+    const linhas = await sql<{ contato_id: string }[]>`
+      SELECT m.contato_id
+        FROM mv_metricas_contato m
+       WHERE m.tenant_id = ${tid}
+         AND m.qtd_vendas >= 2                 -- precisa de ritmo (2+ compras)
+         AND m.atraso_relativo IS NOT NULL
+         AND m.atraso_relativo >= ${fator}
+         AND m.atraso_relativo <  ${teto}
+         AND NOT EXISTS (
+           SELECT 1 FROM automacao_execucao ae
+            WHERE ae.tenant_id = ${tid} AND ae.automacao_id = ${a.id}
+              AND ae.contato_id = m.contato_id
+              AND ae.executado_em >= m.ultima_venda_em)   -- já agimos NESTE ciclo
+       LIMIT ${CAP_POR_REGRA}`
+    return linhas.map((l) => l.contato_id)
+  }
+
   return []
 }
 
@@ -143,9 +170,13 @@ export async function executarNoTenant(sql: Sql, tid: string, agora: Date): Prom
       // Ação + dedup na MESMA transação: ou faz e registra, ou nenhum dos dois.
       await sql.begin(async (tx) => {
         await aplicarAcao(tx as unknown as Sql, tid, a, contatoId)
+        // ⚠️ UPSERT do carimbo: gatilhos de uma vez (rfv/dias/lead/nps) nunca
+        //    reincidem (o candidato usa NOT EXISTS de QUALQUER linha), então o
+        //    UPDATE é inócuo para eles; a régua recorrente (reposicao_ritmo)
+        //    depende de `executado_em` avançar para fechar o ciclo atual.
         await tx`INSERT INTO automacao_execucao (tenant_id, automacao_id, contato_id)
                  VALUES (${tid}, ${a.id}, ${contatoId})
-                 ON CONFLICT (tenant_id, automacao_id, contato_id) DO NOTHING`
+                 ON CONFLICT (tenant_id, automacao_id, contato_id) DO UPDATE SET executado_em = now()`
       })
       total += 1
     }

@@ -19,7 +19,7 @@ const SEGMENTOS: Ref[] = [
   { id: 'em-risco', nome: 'Em Risco' }, { id: 'precisa-atencao', nome: 'Precisa de Atenção' },
   { id: 'semi-perdido', nome: 'Semi Perdido' }, { id: 'hibernando', nome: 'Hibernando' }, { id: 'perdido', nome: 'Perdido' },
 ]
-const GAT_ROTULO: Record<string, string> = { rfv_segmento: 'Cruzou segmento RFV', dias_sem_comprar: 'Dias sem comprar', lead_frio: 'Lead frio', nps_detrator: 'NPS detrator' }
+const GAT_ROTULO: Record<string, string> = { rfv_segmento: 'Cruzou segmento RFV', dias_sem_comprar: 'Dias sem comprar', lead_frio: 'Lead frio', nps_detrator: 'NPS detrator', reposicao_ritmo: 'Régua de recompra (ritmo do cliente)' }
 const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', aplicar_sequencia: 'Aplicar sequência', adicionar_lista: 'Adicionar à lista' }
 
 /**
@@ -64,6 +64,11 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
               @case ('dias_sem_comprar') { <label class="campo">Dias sem comprar ></label><input class="num" type="number" min="1" [value]="dias()" (input)="dias.set(+$any($event.target).value)" /> }
               @case ('lead_frio') { <label class="campo">Sem 1ª compra há > (dias)</label><input class="num" type="number" min="1" [value]="dias()" (input)="dias.set(+$any($event.target).value)" /> }
               @case ('nps_detrator') { <label class="campo">Nota ≤</label><input class="num" type="number" min="0" max="10" [value]="notaMax()" (input)="notaMax.set(+$any($event.target).value)" /> }
+              @case ('reposicao_ritmo') {
+                <label class="campo">Antecipação (× o ritmo do cliente)</label>
+                <input class="num" type="number" min="0.1" max="1.2" step="0.05" [value]="fator()" (input)="fator.set(+$any($event.target).value)" />
+                <span class="ajuda-g">0,8 = age quando o cliente chega a 80% da média entre as compras DELE (antes de atrasar).</span>
+              }
             }
           </div>
         </div>
@@ -141,6 +146,7 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
     .ok { color: var(--sucesso); font-size: 13px; margin: 0 0 var(--espacamento-3); }
     .nova { display: grid; gap: var(--espacamento-3); margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .campo { display: flex; flex-direction: column; gap: var(--espacamento-2); color: var(--texto); font-size: 13px; }
+    .ajuda-g { font-size: 12px; color: var(--texto-suave); }
     .campo.full { }
     .campo input, .campo select, .nova input, .nova select { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .dupla { display: grid; grid-template-columns: 200px 1fr; gap: var(--espacamento-3); align-items: end; }
@@ -175,7 +181,7 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
 })
 export class AutomacoesPagina implements OnInit {
   private readonly http = inject(HttpClient)
-  readonly gatilhos = ['rfv_segmento', 'dias_sem_comprar', 'lead_frio', 'nps_detrator']
+  readonly gatilhos = ['rfv_segmento', 'dias_sem_comprar', 'lead_frio', 'nps_detrator', 'reposicao_ritmo']
   readonly acoes = ['criar_tarefa', 'aplicar_sequencia', 'adicionar_lista']
   readonly segmentos = SEGMENTOS
   readonly estado = signal<Estado>('carregando')
@@ -185,6 +191,7 @@ export class AutomacoesPagina implements OnInit {
   // form
   readonly nome = signal(''); readonly gatilho = signal('dias_sem_comprar'); readonly acao = signal('criar_tarefa')
   readonly segmento = signal('em-risco'); readonly dias = signal(60); readonly notaMax = signal(6)
+  readonly fator = signal(0.8) // régua de recompra: × o ritmo do cliente
   readonly titulo = signal(''); readonly paraDono = signal(true); readonly sequenciaId = signal(''); readonly listaId = signal('')
   readonly salvando = signal(false); readonly erroForm = signal<string | null>(null)
 
@@ -198,6 +205,7 @@ export class AutomacoesPagina implements OnInit {
       a.gatilho === 'rfv_segmento' ? `virou ${this.segNome(String(g['segmento'] ?? ''))}`
       : a.gatilho === 'dias_sem_comprar' ? `passou de ${g['dias']} dias sem comprar`
       : a.gatilho === 'lead_frio' ? `lead sem compra há ${g['dias']} dias`
+      : a.gatilho === 'reposicao_ritmo' ? `chegou a ${g['fator'] ?? 0.8}× o ritmo de compra dele`
       : `NPS ≤ ${g['notaMax'] ?? 6}`
     const faz =
       a.acao === 'criar_tarefa' ? `criar tarefa “${ap['titulo'] ?? a.nome}”`
@@ -232,6 +240,7 @@ export class AutomacoesPagina implements OnInit {
       case 'dias_sem_comprar': return { dias: this.dias() }
       case 'lead_frio': return { dias: this.dias() }
       case 'nps_detrator': return { notaMax: this.notaMax(), janelaDias: 30 }
+      case 'reposicao_ritmo': return { fator: this.fator() }
       default: return {}
     }
   }
