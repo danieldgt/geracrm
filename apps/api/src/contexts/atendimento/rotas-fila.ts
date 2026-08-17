@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Sql } from '../../db/index.js'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { auditar } from '../plataforma/auditoria.js'
+import { garantirEtapasAtendimento } from './rotas-atendimento-kanban.js'
 
 /**
  * Fila e assunção (EP-06).
@@ -86,18 +87,27 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
         if (!conv) return { tipo: 'nao_encontrada' as const }
 
         const usuarioId = await garantirUsuarioId(tx, req)
+        // O atendimento nasce já na 1ª etapa do kanban (tipo 'atendimento').
+        await garantirEtapasAtendimento(tx)
+        const atId = randomUUID()
 
         // ⚠️ Vencedor atômico: o índice parcial único recusa um 2º aberto.
-        const [criado] = await tx<{ protocolo: string }[]>`
+        const [criado] = await tx<{ protocolo: string; etapa_id: string | null }[]>`
           INSERT INTO atendimento
-            (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id, estado, assumido_em)
-          SELECT tenant_atual(), ${randomUUID()}, ${conversaId}, ${conv.canal_id},
-                 proximo_numero(tenant_atual(), 'protocolo'), ${usuarioId}, 'em_atendimento', now()
+            (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id, estado, assumido_em, etapa_id, entrou_etapa_em)
+          SELECT tenant_atual(), ${atId}, ${conversaId}, ${conv.canal_id},
+                 proximo_numero(tenant_atual(), 'protocolo'), ${usuarioId}, 'em_atendimento', now(),
+                 (SELECT id FROM atendimento_etapa WHERE tenant_id = tenant_atual() AND tipo = 'atendimento' AND ativo ORDER BY ordem LIMIT 1),
+                 now()
           ON CONFLICT (tenant_id, conversa_id) WHERE estado <> 'encerrado'
           DO NOTHING
-          RETURNING protocolo`
+          RETURNING protocolo, etapa_id`
 
         if (criado) {
+          if (criado.etapa_id) {
+            await tx`INSERT INTO atendimento_etapa_historico (tenant_id, id, atendimento_id, etapa_id, entrou_em, ator_id)
+                     VALUES (tenant_atual(), ${randomUUID()}, ${atId}, ${criado.etapa_id}, now(), ${usuarioId})`
+          }
           await emitirEvento(tx, conversaId)
           await auditar(tx, {
             atorId: usuarioId, acao: 'atendimento.assumido', entidade: 'conversa',

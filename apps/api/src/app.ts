@@ -26,6 +26,7 @@ import { rotasMensagensLog } from './contexts/atendimento/rotas-mensagens-log.js
 import { rotasWebhook } from './contexts/atendimento/rotas-webhook.js'
 import { rotasMensagens } from './contexts/atendimento/rotas-mensagens.js'
 import { rotasFila } from './contexts/atendimento/rotas-fila.js'
+import { rotasAtendimentoKanban } from './contexts/atendimento/rotas-atendimento-kanban.js'
 import { rotasPresenca } from './contexts/atendimento/rotas-presenca.js'
 import { rotasNotificacoes } from './contexts/atendimento/rotas-notificacoes.js'
 import { rotasAuditoria } from './contexts/plataforma/rotas-auditoria.js'
@@ -83,6 +84,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasWebhook)
   await app.register(rotasMensagens)
   await app.register(rotasFila)
+  await app.register(rotasAtendimentoKanban)
   await app.register(rotasPresenca)
   await app.register(rotasNotificacoes)
   await app.register(rotasAuditoria)
