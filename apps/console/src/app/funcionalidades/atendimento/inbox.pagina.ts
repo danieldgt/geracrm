@@ -208,7 +208,7 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
                           <span class="tique" [class.lida]="m.status === 'lida'">{{ tique(m.status) }}</span>
                         }
                       </span>
-                      <button class="menu-btn" title="Opções" (click)="toggleMenu(m.id, $event)">⌄</button>
+                      <button class="menu-btn" title="Opções" (click)="toggleMenu(m.id, $event)">▾</button>
                       @if (menuAbertoId() === m.id) {
                         <div class="menu" (click)="$event.stopPropagation()">
                           @if (m.direcao === 'saliente' && m.tipo === 'texto') {
@@ -391,20 +391,18 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
     @keyframes pulsa { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
     .meta { float: right; margin: 6px 0 -2px 8px; display: inline-flex; align-items: center; gap: 3px; }
     .meta .h { font-size: 10.5px; color: var(--wa-sec); }
-    .bolha.saliente .meta .h { color: rgba(233,237,239,.6); }
-    .tique { font-size: 11px; color: rgba(233,237,239,.6); }
-    .tique.lida { color: var(--acao); }
+    .tique { font-size: 12px; color: var(--wa-sec); font-weight: 600; }
+    .tique.lida { color: var(--acao); font-weight: 700; }
     .editada { font-size: 10.5px; color: var(--wa-sec); font-style: italic; margin-right: 2px; }
-    .bolha.saliente .editada { color: rgba(233,237,239,.55); }
     /* Apagada: NÃO some — fica riscada/esmaecida, marcada como "desconsiderar". */
     .bolha.apagada { opacity: .9; }
     .apagada .txt.apagada-txt { text-decoration: line-through; opacity: .55; }
     .apagada-img { opacity: .4; filter: grayscale(.6); }
     .apg-badge { font-size: 10px; color: #ff9a8e; font-style: italic; margin-right: 4px; }
     /* Menu de opções da bolha */
-    .menu-btn { position: absolute; top: 1px; right: 2px; border: 0; background: rgba(0,0,0,.18); color: var(--wa-text); cursor: pointer; font-size: 15px; line-height: 1; opacity: .6; padding: 1px 5px 3px; border-radius: 10px; }
+    .menu-btn { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; display: grid; place-items: center; padding: 0; border: 0; background: var(--wa-hover); color: var(--wa-sec); cursor: pointer; font-size: 11px; line-height: 1; opacity: .55; border-radius: 50%; }
     .bolha:hover .menu-btn { opacity: 1; }
-    .menu-btn:hover { background: rgba(0,0,0,.35); }
+    .menu-btn:hover { background: var(--wa-line); color: var(--wa-text); }
     .menu { position: absolute; top: 20px; right: 4px; z-index: 5; background: var(--wa-panel); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.45); overflow: hidden; min-width: 150px; }
     .menu button { display: block; width: 100%; text-align: left; padding: 9px 14px; border: 0; background: none; color: var(--wa-text); font: inherit; font-size: 13.5px; cursor: pointer; }
     .menu button:hover { background: var(--wa-hover); }
