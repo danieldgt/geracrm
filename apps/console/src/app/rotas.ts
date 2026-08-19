@@ -35,6 +35,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/integracao/webhooks.pagina.js').then((m) => m.WebhooksPagina),
   funil: () =>
     import('./funcionalidades/crm/funil.pagina.js').then((m) => m.FunilPagina),
+  crm: () =>
+    import('./funcionalidades/crm/leads.pagina.js').then((m) => m.LeadsPagina),
   'atendimento-kanban': () =>
     import('./funcionalidades/atendimento/atendimento-kanban.pagina.js').then((m) => m.AtendimentoKanbanPagina),
   campanhas: () =>
