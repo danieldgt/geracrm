@@ -31,7 +31,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     <form class="add" (submit)="adicionar($event)">
       <input [value]="url()" (input)="url.set($any($event.target).value)"
              placeholder="https://seu-sistema.com/webhook" inputmode="url" aria-label="URL do webhook" />
-      <button class="primario" type="submit" [disabled]="salvando() || !url().trim()">
+      <button class="btn btn--primario" type="submit" [disabled]="salvando() || !url().trim()">
         {{ salvando() ? 'Criando…' : 'Adicionar' }}
       </button>
     </form>
@@ -49,7 +49,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
       @case ('carregando') { <div class="bloco"><div class="esqueleto"></div></div> }
       @case ('sem_permissao') { <div class="bloco aviso"><h2>Sem acesso</h2></div> }
       @case ('erro') { <div class="bloco aviso"><h2>Não foi possível carregar</h2>
-        <button (click)="carregar()">Tentar de novo</button></div> }
+        <button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (itens().length === 0) {
           <div class="bloco vazio"><h2>Nenhum webhook</h2>
@@ -66,7 +66,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                     @if (w.ultimoErro) { · <span class="ruim">⚠️ {{ w.ultimoErro }}</span> }
                   </span>
                 </div>
-                <button class="remover" (click)="remover(w.id)" [disabled]="removendo().has(w.id)">
+                <button class="btn btn--perigo btn--pequeno remover" (click)="remover(w.id)" [disabled]="removendo().has(w.id)">
                   {{ removendo().has(w.id) ? '…' : 'Remover' }}
                 </button>
               </li>
@@ -83,10 +83,6 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .add { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-2); }
     .add input { flex: 1; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    button { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
-    button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    button:disabled { opacity: .6; cursor: default; }
-    .primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     .erro { color: var(--erro); font-size: 13px; margin: 0 0 var(--espacamento-3); }
     .segredo { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3) var(--espacamento-4); border: 1px solid var(--ativo); border-radius: var(--raio-painel); background: var(--superficie-elevada); font-size: 13px; color: var(--texto-secundario); }
     .segredo .valor { display: block; margin-top: var(--espacamento-2); padding: var(--espacamento-2); background: var(--fundo); border-radius: var(--raio-controle); font-family: var(--tipografia-familia-dados, monospace); font-size: 12px; color: var(--texto); word-break: break-all; }
@@ -101,7 +97,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .url { font-size: 13px; color: var(--texto); font-family: var(--tipografia-familia-dados, monospace); word-break: break-all; }
     .meta { font-size: 12px; color: var(--texto-suave); }
     .meta .ruim { color: var(--erro); }
-    .remover { font-size: 12px; padding: 4px 10px; flex: none; }
+    .remover { flex: none; }
   `,
 })
 export class WebhooksPagina implements OnInit {

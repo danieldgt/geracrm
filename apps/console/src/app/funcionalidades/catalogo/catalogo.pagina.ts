@@ -60,7 +60,7 @@ const TAM_LETRA: Record<string, number> = { PP: 1, P: 2, M: 3, G: 4, GG: 5, XG: 
     @switch (estado()) {
       @case ('buscando') { <p class="dica">Buscando…</p> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso ao catálogo</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="buscar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="buscar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (itens().length === 0) {
           <div class="bloco"><h2 class="txt-secao">Nada encontrado</h2><p>Refine a busca ou sincronize o catálogo do ERP.</p></div>
@@ -128,7 +128,7 @@ const TAM_LETRA: Record<string, number> = { PP: 1, P: 2, M: 3, G: 4, GG: 5, XG: 
               </li>
             }
           </ul>
-          @if (temMais()) { <button class="mais" (click)="buscar(true)">Carregar mais</button> }
+          @if (temMais()) { <button class="btn btn--secundario btn--bloco mais" (click)="buscar(true)">Carregar mais</button> }
         }
       }
     }
@@ -146,7 +146,7 @@ const TAM_LETRA: Record<string, number> = { PP: 1, P: 2, M: 3, G: 4, GG: 5, XG: 
     .perfil button:last-child { border-radius: 0 var(--raio-controle) var(--raio-controle) 0; border-left: 0; }
     .perfil button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     .dica { font-size: 13px; color: var(--texto-suave); }
-    .mais { display: block; width: 100%; margin-top: var(--espacamento-3); padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; cursor: pointer; }
+    .mais { margin-top: var(--espacamento-3); }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
     .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }
     .prod { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }

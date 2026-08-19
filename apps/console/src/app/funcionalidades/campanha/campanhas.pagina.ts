@@ -44,7 +44,7 @@ const SEGMENTOS = [
         <h1 class="txt-titulo">Campanhas</h1>
         <p class="sub">Fale com um segmento e meça o retorno — atribuição exata e estimada, separadas.</p>
       </div>
-      <button class="primario" (click)="mostrarNova.set(!mostrarNova())">{{ mostrarNova() ? 'Fechar' : '+ Nova campanha' }}</button>
+      <button class="btn btn--primario" (click)="mostrarNova.set(!mostrarNova())">{{ mostrarNova() ? 'Fechar' : '+ Nova campanha' }}</button>
     </header>
 
     @if (mostrarNova()) {
@@ -57,7 +57,7 @@ const SEGMENTOS = [
         <label class="janela">Janela ROI (dias)
           <input type="number" min="1" max="90" [value]="janela()" (input)="janela.set(+$any($event.target).value)" />
         </label>
-        <button class="primario" type="submit" [disabled]="salvando() || !nome().trim() || !mensagem().trim()">
+        <button class="btn btn--primario" type="submit" [disabled]="salvando() || !nome().trim() || !mensagem().trim()">
           {{ salvando() ? 'Criando…' : 'Criar' }}
         </button>
       </form>
@@ -67,7 +67,7 @@ const SEGMENTOS = [
       @case ('carregando') { <div class="bloco"><div class="esq"></div><div class="esq"></div></div> }
       @case ('sem_permissao') { <div class="bloco aviso"><h2 class="txt-secao">Sem acesso a campanhas</h2></div> }
       @case ('erro') { <div class="bloco aviso"><h2 class="txt-secao">Não foi possível carregar</h2>
-        <button (click)="carregar()">Tentar de novo</button></div> }
+        <button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (itens().length === 0) {
           <div class="bloco vazio"><h2 class="txt-secao">Nenhuma campanha ainda</h2>
@@ -83,12 +83,12 @@ const SEGMENTOS = [
                   </div>
                   <div class="camp-acoes">
                     @if (c.estado === 'rascunho') {
-                      <button (click)="verAudiencia(c.id)">Audiência</button>
-                      <button class="primario" (click)="disparar(c.id)" [disabled]="ocupada().has(c.id)">
+                      <button class="btn btn--secundario" (click)="verAudiencia(c.id)">Audiência</button>
+                      <button class="btn btn--primario" (click)="disparar(c.id)" [disabled]="ocupada().has(c.id)">
                         {{ ocupada().has(c.id) ? '…' : 'Disparar' }}
                       </button>
                     } @else {
-                      <button (click)="verRoi(c.id)">Ver ROI</button>
+                      <button class="btn btn--secundario" (click)="verRoi(c.id)">Ver ROI</button>
                     }
                   </div>
                 </div>
@@ -127,10 +127,7 @@ const SEGMENTOS = [
     .nova .msg { flex: 1; min-width: 180px; }
     .janela { font-size: 12px; color: var(--texto-suave); display: flex; align-items: center; gap: var(--espacamento-2); }
     .janela input { width: 60px; }
-    button { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
     button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    button:disabled { opacity: .6; cursor: default; }
-    .primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .esq { height: 60px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
     .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }

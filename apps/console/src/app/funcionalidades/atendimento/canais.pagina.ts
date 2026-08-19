@@ -20,7 +20,7 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
         <p class="sub">Conecte números oficiais (Meta) e não-oficiais. O cliente escolhe por qual caminho falar.</p>
       </div>
       @if (servico.estado() === 'pronto' && !servico.vazio()) {
-        <button class="primario" (click)="abrir()">Conectar número</button>
+        <button class="btn btn--primario" (click)="abrir()">Conectar número</button>
       }
     </header>
 
@@ -28,13 +28,13 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
       @case ('carregando') { <div class="bloco" aria-busy="true"><div class="esqueleto"></div></div> }
       @case ('sem_permissao') { <div class="bloco aviso"><h2>Sem acesso aos canais</h2></div> }
       @case ('erro') { <div class="bloco aviso"><h2>Não foi possível carregar</h2>
-        <p>{{ servico.erro() }}</p><button (click)="servico.carregar()">Tentar de novo</button></div> }
+        <p>{{ servico.erro() }}</p><button class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (servico.vazio()) {
           <div class="bloco vazio">
             <h2>Nenhum número conectado</h2>
             <p>Conecte um número oficial (Meta) ou não-oficial (PlugZapi) para começar a conversar.</p>
-            <button class="primario" (click)="abrir()">Conectar meu primeiro número</button>
+            <button class="btn btn--primario" (click)="abrir()">Conectar meu primeiro número</button>
           </div>
         } @else {
           <!-- Saúde da frota (EP-03): o que exige olho agora. -->
@@ -74,14 +74,14 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
                   <p class="err">{{ c.ultimoErro }}</p>
                 }
                 <div class="acoes">
-                  <button (click)="testar(c)" [disabled]="servico.testando().has(c.id)">
+                  <button class="btn btn--secundario" (click)="testar(c)" [disabled]="servico.testando().has(c.id)">
                     {{ servico.testando().has(c.id) ? 'Testando…' : 'Testar conexão' }}
                   </button>
                   @if (!ehOficial(c)) {
                     @if (servico.aquecimento()[c.id]?.emAquecimento) {
                       <span class="aquec">🔥 Aquecimento dia {{ servico.aquecimento()[c.id]!.dia }} · hoje {{ servico.aquecimento()[c.id]!.usadoHoje }}/{{ servico.aquecimento()[c.id]!.limiteHoje }}</span>
                     } @else {
-                      <button (click)="servico.iniciarAquecimento(c.id)">Iniciar aquecimento</button>
+                      <button class="btn btn--secundario" (click)="servico.iniciarAquecimento(c.id)">Iniciar aquecimento</button>
                     }
                   }
                 </div>
@@ -130,8 +130,8 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
         @if (erroGeral(); as m) { <p class="erro-geral" role="alert">{{ m }}</p> }
 
         <div class="acoes">
-          <button (click)="fechar()">Cancelar</button>
-          <button class="primario" (click)="salvar()" [disabled]="salvando()">
+          <button class="btn btn--secundario" (click)="fechar()">Cancelar</button>
+          <button class="btn btn--primario" (click)="salvar()" [disabled]="salvando()">
             {{ salvando() ? 'Salvando…' : 'Salvar e testar' }}
           </button>
         </div>
@@ -170,10 +170,6 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
     .selo { font-size: 12px; color: var(--texto-secundario); white-space: nowrap; }
     .err { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--erro); }
     .acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
-    button { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
-    button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    button:disabled { opacity: .6; }
-    .primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     .resultado { margin: var(--espacamento-3) 0 0; font-size: 13px; color: var(--erro); }
     .resultado.ok { color: var(--sucesso); }
     .painel { margin-top: var(--espacamento-6); padding: var(--espacamento-6); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); box-shadow: var(--elevacao-modal); }

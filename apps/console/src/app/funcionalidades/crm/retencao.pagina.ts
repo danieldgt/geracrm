@@ -35,7 +35,7 @@ const ORDEM = ['ativo', 'inativo', 'perdido', 'sem_compra']
     @switch (estado()) {
       @case ('carregando') { <div class="funil"><div class="esq"></div><div class="esq"></div><div class="esq"></div></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (d(); as r) {
           <form class="config" (submit)="salvar($event)">
@@ -44,7 +44,7 @@ const ORDEM = ['ativo', 'inativo', 'perdido', 'sem_compra']
             <span class="cfg-txt">dias · Inativo até</span>
             <input type="number" min="2" [value]="inativo()" (input)="inativo.set(+$any($event.target).value)" aria-label="Dias para inativo" />
             <span class="cfg-txt">dias · acima = Perdido</span>
-            @if (mudou()) { <button class="primario" type="submit" [disabled]="salvando()">{{ salvando() ? 'Salvando…' : 'Aplicar' }}</button> }
+            @if (mudou()) { <button class="btn btn--primario btn--pequeno" type="submit" [disabled]="salvando()">{{ salvando() ? 'Salvando…' : 'Aplicar' }}</button> }
             @if (erroCfg()) { <span class="erro">{{ erroCfg() }}</span> }
           </form>
 
@@ -79,8 +79,6 @@ const ORDEM = ['ativo', 'inativo', 'perdido', 'sem_compra']
     .config { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; margin-bottom: var(--espacamento-4); padding: var(--espacamento-3) var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .cfg-txt { font-size: 13px; color: var(--texto-secundario); }
     .config input { width: 64px; padding: var(--espacamento-1) var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; text-align: center; }
-    .primario { padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; font-size: 13px; cursor: pointer; }
-    .primario:disabled { opacity: .6; cursor: default; }
     .erro { color: var(--erro); font-size: 13px; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
     .funil { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--espacamento-3); }

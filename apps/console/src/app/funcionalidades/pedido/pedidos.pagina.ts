@@ -53,7 +53,7 @@ const FILTROS = [
     @switch (estado()) {
       @case ('carregando') { <div class="lista"><div class="esq"></div><div class="esq"></div><div class="esq"></div></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso aos pedidos</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (itens().length === 0) {
           <div class="bloco"><h2 class="txt-secao">Nenhum pedido aqui</h2>
@@ -79,7 +79,7 @@ const FILTROS = [
             }
           </ul>
           @if (proximoCursor()) {
-            <button class="mais" (click)="carregarMais()" [disabled]="carregandoMais()">{{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}</button>
+            <button class="btn btn--secundario mais" (click)="carregarMais()" [disabled]="carregandoMais()">{{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}</button>
           }
         }
       }
@@ -193,7 +193,7 @@ const FILTROS = [
     .badge--falhou { background: var(--erro-suave); color: var(--erro); }
     .badge--cancelado { background: var(--superficie); color: var(--texto-suave); }
     .badge--aguardando_conferencia { background: var(--atencao-suave); color: var(--atencao); }
-    .mais { margin-top: var(--espacamento-4); padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
+    .mais { margin-top: var(--espacamento-4); }
     @media (max-width: 560px) { .data { display: none; } }
     /* Modal */
     .overlay { position: fixed; inset: 0; background: rgb(0 0 0 / .4); display: grid; place-items: center; padding: var(--espacamento-4); z-index: 50; }

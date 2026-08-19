@@ -155,7 +155,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
           }
         </ul>
         @if (servico.proximoCursor()) {
-          <button class="mais-cat" (click)="carregarMais()" [disabled]="servico.buscando()">Carregar mais produtos</button>
+          <button class="btn btn--secundario btn--bloco mais-cat" (click)="carregarMais()" [disabled]="servico.buscando()">Carregar mais produtos</button>
         }
       </section>
 
@@ -203,14 +203,14 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
             <!-- Efetivação (ADR-005): idempotente + falha nomeada + rascunho
                  nunca perdido. Se o ERP não escreve, DEGRADA visível (ADR-008). -->
             <!-- Confirmar com o cliente: manda o resumo na conversa (só se houver itens). -->
-            <button class="secundario" (click)="enviarResumo(ped.id)"
+            <button class="btn btn--secundario btn--bloco secundario" (click)="enviarResumo(ped.id)"
                     [disabled]="servico.enviandoResumo() || ped.itens.length === 0">
               {{ servico.enviandoResumo() ? 'Enviando…' : '📤 Confirmar e enviar resumo ao cliente' }}
             </button>
             @if (servico.resumoMsg(); as rm) {
               <div class="efet" [class.efet--ok]="rm.ok" [class.efet--aviso]="!rm.ok">{{ rm.ok ? '✅ ' : '⚠️ ' }}{{ rm.texto }}</div>
             }
-            <button class="primario" (click)="servico.efetivar(ped.id)"
+            <button class="btn btn--primario btn--bloco" (click)="servico.efetivar(ped.id)"
                     [disabled]="servico.efetivando() || ped.estado === 'efetivado'">
               {{ ped.estado === 'efetivado' ? 'Efetivado' : servico.efetivando() ? 'Efetivando…' : 'Efetivar pedido' }}
             </button>
@@ -284,14 +284,10 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .mono { font-family: var(--tipografia-familia-dados); font-variant-numeric: tabular-nums; }
     .sub-total { font-weight: 600; color: var(--texto); }
     .totais { display: flex; justify-content: space-between; align-items: center; padding: var(--espacamento-3) 0; font-size: 15px; color: var(--texto); }
-    .primario { width: 100%; padding: var(--espacamento-3); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; cursor: pointer; }
-    .primario:disabled { opacity: .7; cursor: default; }
     .contexto { display: grid; gap: var(--espacamento-2); margin: var(--espacamento-3) 0; }
     .ctx { display: flex; flex-direction: column; gap: var(--espacamento-1); font-size: 12px; color: var(--texto-secundario); }
     .ctx input, .ctx textarea { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; resize: vertical; }
-    .secundario { width: 100%; padding: var(--espacamento-3); margin-bottom: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
-    .secundario:hover:not(:disabled) { border-color: var(--acao); color: var(--acao); }
-    .secundario:disabled { opacity: .6; cursor: default; }
+    .secundario { margin-bottom: var(--espacamento-2); }
     .efet { margin-top: var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle); font-size: 13px; }
     .efet--ok { background: var(--sucesso-suave); color: var(--texto); }
     .efet--aviso { background: var(--atencao-suave); color: var(--texto); }
@@ -308,7 +304,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .filtros { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; margin: var(--espacamento-2) 0; }
     .filtros select, .filtros .preco-f { padding: var(--espacamento-1) var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
     .filtros .preco-f { width: 84px; }
-    .mais-cat { display: block; width: 100%; margin-top: var(--espacamento-2); padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; cursor: pointer; }
+    .mais-cat { margin-top: var(--espacamento-2); }
     @media (max-width: 800px) { .grade-tela { grid-template-columns: 1fr; } }
   `,
 })

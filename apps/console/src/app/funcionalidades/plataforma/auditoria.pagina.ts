@@ -38,7 +38,7 @@ import { AuditoriaServico, type EntradaAuditoria } from './auditoria.servico.js'
         <div class="bloco aviso">
           <h2>Não foi possível carregar a auditoria</h2>
           <p>{{ servico.erro() }}</p>
-          <button (click)="servico.carregar()">Tentar de novo</button>
+          <button class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button>
         </div>
       }
       @case ('pronto') {
@@ -60,7 +60,7 @@ import { AuditoriaServico, type EntradaAuditoria } from './auditoria.servico.js'
           </ol>
 
           @if (servico.proximoCursor()) {
-            <button class="mais" (click)="servico.carregarMais()" [disabled]="servico.carregandoMais()">
+            <button class="btn btn--secundario mais" (click)="servico.carregarMais()" [disabled]="servico.carregandoMais()">
               {{ servico.carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
             </button>
           }
@@ -84,10 +84,7 @@ import { AuditoriaServico, type EntradaAuditoria } from './auditoria.servico.js'
     .ator { color: var(--texto); font-weight: 500; }
     .acao { color: var(--texto-secundario); }
     .detalhe { color: var(--texto-suave); }
-    .mais { margin-top: var(--espacamento-4); padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
-    .mais:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    .mais:disabled { opacity: .6; cursor: default; }
-    button { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
+    .mais { margin-top: var(--espacamento-4); }
     @media (max-width: 640px) {
       .linha { grid-template-columns: 1fr; gap: 2px; }
     }

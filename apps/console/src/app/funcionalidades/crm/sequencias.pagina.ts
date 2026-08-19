@@ -24,13 +24,13 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     @switch (estado()) {
       @case ('carregando') { <div class="grade"><div class="col"><div class="esq"></div><div class="esq"></div></div></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         <div class="grade">
           <section class="col">
             <form class="nova" (submit)="criar($event)">
               <input [value]="novoNome()" (input)="novoNome.set($any($event.target).value)" placeholder="Nova sequência (ex.: Pós-venda)" aria-label="Nome" />
-              <button class="primario" type="submit" [disabled]="criando() || !novoNome().trim()">+</button>
+              <button class="btn btn--primario" type="submit" [disabled]="criando() || !novoNome().trim()">+</button>
               @if (erroNova()) { <p class="erro">{{ erroNova() }}</p> }
             </form>
             <ul class="seqs">
@@ -71,7 +71,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                 <span class="dp">D+</span>
                 <input class="off" type="number" min="0" [value]="pOffset()" (input)="pOffset.set(+$any($event.target).value)" aria-label="Dias" />
                 <input class="pt" [value]="pTitulo()" (input)="pTitulo.set($any($event.target).value)" placeholder="O que fazer neste toque" aria-label="Título do passo" />
-                <button class="primario" type="submit" [disabled]="addP() || !pTitulo().trim()">Adicionar</button>
+                <button class="btn btn--primario" type="submit" [disabled]="addP() || !pTitulo().trim()">Adicionar</button>
               </form>
 
               <div class="aplicar">
@@ -106,8 +106,6 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .nova { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-3); flex-wrap: wrap; }
     .nova input { flex: 1; min-width: 140px; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .erro { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
-    .primario { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; font-size: 13px; cursor: pointer; }
-    .primario:disabled { opacity: .6; cursor: default; }
     .seqs { list-style: none; margin: 0; padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
     .sq { display: flex; align-items: center; gap: var(--espacamento-2); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); cursor: pointer; }
     .sq:last-child { border-bottom: none; }

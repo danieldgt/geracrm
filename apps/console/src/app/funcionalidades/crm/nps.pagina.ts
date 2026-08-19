@@ -35,7 +35,7 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
             <button [class.on]="dias() === p.dias" (click)="trocar(p.dias)">{{ p.r }}</button>
           }
         </div>
-        <button class="primario" (click)="mostrarNova.set(!mostrarNova())">{{ mostrarNova() ? 'Fechar' : '+ Registrar' }}</button>
+        <button class="btn btn--primario" (click)="mostrarNova.set(!mostrarNova())">{{ mostrarNova() ? 'Fechar' : '+ Registrar' }}</button>
       </div>
     </header>
 
@@ -50,7 +50,7 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
             <button type="button" class="nb" [class.sel]="nota() === n" [attr.data-faixa]="faixaDe(n)" (click)="nota.set(n)">{{ n }}</button>
           }
         </div>
-        <button class="primario" type="submit" [disabled]="salvando() || nota() === null || !atendente()">{{ salvando() ? 'Salvando…' : 'Salvar' }}</button>
+        <button class="btn btn--primario" type="submit" [disabled]="salvando() || nota() === null || !atendente()">{{ salvando() ? 'Salvando…' : 'Salvar' }}</button>
         @if (erroForm()) { <p class="erro">{{ erroForm() }}</p> }
       </form>
     }
@@ -58,7 +58,7 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
     @switch (estado()) {
       @case ('carregando') { <div class="lista"><div class="esq"></div><div class="esq"></div></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (d(); as n) {
           @if (n.porAtendente.length === 0) {
@@ -106,8 +106,6 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
     .abas { display: flex; gap: var(--espacamento-1); }
     .abas button { padding: var(--espacamento-1) var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 12px; cursor: pointer; }
     .abas button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
-    .primario { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; font-size: 13px; cursor: pointer; }
-    .primario:disabled { opacity: .6; cursor: default; }
     .nova { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: center; margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .atd { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .notas { display: flex; gap: 4px; flex-wrap: wrap; }

@@ -25,7 +25,7 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
     @switch (estado()) {
       @case ('carregando') { <div class="bloco esq"></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         <section class="painel">
           <h2 class="txt-secao">Empresa</h2>
@@ -40,7 +40,7 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
             </label>
             <div class="linha-plano"><span class="txt-rotulo">Plano</span><span class="plano">{{ empresa()?.plano }}</span></div>
             <div class="acoes">
-              <button class="primario" type="submit" [disabled]="salvando() || !nome().trim()">{{ salvando() ? 'Salvando…' : 'Salvar' }}</button>
+              <button class="btn btn--primario" type="submit" [disabled]="salvando() || !nome().trim()">{{ salvando() ? 'Salvando…' : 'Salvar' }}</button>
               @if (msg()) { <span class="ok">{{ msg() }}</span> }
             </div>
           </form>
@@ -89,8 +89,6 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
     .linha-plano { display: flex; align-items: baseline; gap: var(--espacamento-2); }
     .plano { color: var(--texto); font-size: 14px; }
     .acoes { display: flex; align-items: center; gap: var(--espacamento-3); margin-top: var(--espacamento-1); }
-    .primario { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; cursor: pointer; }
-    .primario:disabled { opacity: .6; cursor: default; }
     .ok { color: var(--sucesso); font-size: 13px; }
     .vazio { color: var(--texto-suave); font-size: 13px; margin: 0; }
     .equipe { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }

@@ -36,8 +36,8 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                 @if (editandoNome()) {
                   <form class="edit-nome" (submit)="salvarNome($event)">
                     <input [value]="rascunhoNome()" (input)="rascunhoNome.set($any($event.target).value)" aria-label="Nome" />
-                    <button class="mini-btn primario" type="submit">Salvar</button>
-                    <button class="mini-btn" type="button" (click)="editandoNome.set(false)">Cancelar</button>
+                    <button class="btn btn--primario btn--pequeno" type="submit">Salvar</button>
+                    <button class="btn btn--secundario btn--pequeno" type="button" (click)="editandoNome.set(false)">Cancelar</button>
                   </form>
                 } @else {
                   <h1>{{ f.nome }} <button class="lapis" (click)="abrirNome(f.nome)" title="Editar nome">✎</button></h1>
@@ -60,7 +60,7 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                       <li>
                         <span class="mono encolhe">{{ t.e164 }}</span>
                         @if (t.principal) { <span class="mini">principal</span> }
-                        @else { <button class="mini-btn" (click)="servico.principalTelefone(t.seq)">tornar principal</button> }
+                        @else { <button class="btn btn--secundario btn--pequeno" (click)="servico.principalTelefone(t.seq)">tornar principal</button> }
                         @if (t.whatsapp) { <span class="mini wpp">WhatsApp</span> }
                         <button class="x" (click)="servico.removerTelefone(t.seq)" title="Remover">×</button>
                       </li>
@@ -69,7 +69,7 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                 } @else { <p class="vazio-mini">Sem telefone cadastrado.</p> }
                 <form class="add-linha" (submit)="salvarTelefone($event)">
                   <input [value]="novoTel()" (input)="novoTel.set($any($event.target).value)" placeholder="Novo telefone" inputmode="tel" />
-                  <button class="mini-btn" type="submit" [disabled]="!novoTel().trim()">+ telefone</button>
+                  <button class="btn btn--secundario btn--pequeno" type="submit" [disabled]="!novoTel().trim()">+ telefone</button>
                 </form>
 
                 <h3>Documentos</h3>
@@ -90,7 +90,7 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                     <option value="cnpj">CNPJ</option><option value="cpf">CPF</option>
                   </select>
                   <input [value]="novoDoc()" (input)="novoDoc.set($any($event.target).value)" placeholder="Número" inputmode="numeric" />
-                  <button class="mini-btn" type="submit" [disabled]="!novoDoc().trim()">+ documento</button>
+                  <button class="btn btn--secundario btn--pequeno" type="submit" [disabled]="!novoDoc().trim()">+ documento</button>
                 </form>
 
                 @if (f.endereco; as e) {
@@ -183,7 +183,7 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                 } @else { <p class="vazio-mini">Nenhum comentário ainda.</p> }
                 <form class="add-coment" (submit)="salvarComentario($event)">
                   <input [value]="novoComent()" (input)="novoComent.set($any($event.target).value)" placeholder="Anotar algo sobre o cliente…" />
-                  <button class="mini-btn" type="submit" [disabled]="!novoComent().trim()">Anotar</button>
+                  <button class="btn btn--secundario btn--pequeno" type="submit" [disabled]="!novoComent().trim()">Anotar</button>
                 </form>
               </div>
             </section>
@@ -199,9 +199,6 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
     .edit-nome { display: flex; gap: var(--espacamento-2); align-items: center; }
     .edit-nome input { flex: 1; padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .erro-edit { color: var(--erro); font-size: 12px; margin: var(--espacamento-1) 0 0; }
-    .mini-btn { padding: 2px 8px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 11px; cursor: pointer; }
-    .mini-btn.primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
-    .mini-btn:disabled { opacity: .5; cursor: default; }
     .x { border: 0; background: transparent; color: var(--texto-suave); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
     .x:hover { color: var(--erro); }
     .add-linha, .add-coment { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-2); }

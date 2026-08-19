@@ -38,8 +38,8 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
         <p class="sub">Quando um cliente cruzar uma condição, o sistema cria a tarefa. Nada é enviado ao cliente sozinho.</p>
       </div>
       <div class="dir">
-        <button class="sec" (click)="rodar()" [disabled]="rodando()">{{ rodando() ? 'Rodando…' : 'Rodar agora' }}</button>
-        <button class="primario" (click)="mostrarNova.set(!mostrarNova())">{{ mostrarNova() ? 'Fechar' : '+ Nova regra' }}</button>
+        <button class="btn btn--secundario" (click)="rodar()" [disabled]="rodando()">{{ rodando() ? 'Rodando…' : 'Rodar agora' }}</button>
+        <button class="btn btn--primario" (click)="mostrarNova.set(!mostrarNova())">{{ mostrarNova() ? 'Fechar' : '+ Nova regra' }}</button>
       </div>
     </header>
 
@@ -98,7 +98,7 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
         </div>
 
         <div class="acoes-form">
-          <button class="primario" type="submit" [disabled]="salvando() || !nome().trim()">{{ salvando() ? 'Criando…' : 'Criar regra' }}</button>
+          <button class="btn btn--primario" type="submit" [disabled]="salvando() || !nome().trim()">{{ salvando() ? 'Criando…' : 'Criar regra' }}</button>
           @if (erroForm()) { <span class="erro">{{ erroForm() }}</span> }
         </div>
       </form>
@@ -107,7 +107,7 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
     @switch (estado()) {
       @case ('carregando') { <div class="lista"><div class="esq"></div><div class="esq"></div></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (itens().length === 0) {
           <div class="bloco"><h2 class="txt-secao">Nenhuma automação ainda</h2><p>Crie a primeira regra acima.</p></div>
@@ -140,9 +140,6 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; max-width: 60ch; }
     .dir { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }
-    .primario { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; font-size: 13px; cursor: pointer; }
-    .primario:disabled { opacity: .6; cursor: default; }
-    .sec { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
     .ok { color: var(--sucesso); font-size: 13px; margin: 0 0 var(--espacamento-3); }
     .nova { display: grid; gap: var(--espacamento-3); margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .campo { display: flex; flex-direction: column; gap: var(--espacamento-2); color: var(--texto); font-size: 13px; }

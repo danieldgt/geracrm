@@ -23,7 +23,7 @@ import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from '
         </p>
       </div>
       @if (servico.estado() === 'pronto' && !servico.vazio()) {
-        <button class="primario" (click)="abrirNovo()">Conectar outro ERP</button>
+        <button class="btn btn--primario" (click)="abrirNovo()">Conectar outro ERP</button>
       }
     </header>
 
@@ -46,7 +46,7 @@ import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from '
         <div class="bloco aviso">
           <h2>Não foi possível carregar as integrações</h2>
           <p>{{ servico.erro() }}</p>
-          <button (click)="servico.carregar()">Tentar de novo</button>
+          <button class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button>
         </div>
       }
       @case ('pronto') {
@@ -57,7 +57,7 @@ import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from '
               Conecte seu ERP para trazer a base de clientes e o histórico de compras.
               É o que faz a recompra e o RFV funcionarem desde o primeiro dia.
             </p>
-            <button class="primario" (click)="abrirNovo()">Conectar meu ERP</button>
+            <button class="btn btn--primario" (click)="abrirNovo()">Conectar meu ERP</button>
           </div>
         } @else {
           <ul class="lista">
@@ -114,10 +114,10 @@ import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from '
                 }
 
                 <div class="acoes">
-                  <button (click)="testar(conexao)" [disabled]="servico.testando().has(conexao.id)">
+                  <button class="btn btn--secundario" (click)="testar(conexao)" [disabled]="servico.testando().has(conexao.id)">
                     {{ servico.testando().has(conexao.id) ? 'Testando…' : 'Testar conexão' }}
                   </button>
-                  <button (click)="abrirCredencial(conexao)">
+                  <button class="btn btn--secundario" (click)="abrirCredencial(conexao)">
                     {{ conexao.credencial.configurada ? 'Trocar credenciais' : 'Preencher credenciais' }}
                   </button>
                 </div>
@@ -202,8 +202,8 @@ import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from '
         @if (erroGeral(); as msg) { <p class="erro-geral" role="alert">{{ msg }}</p> }
 
         <div class="acoes">
-          <button (click)="fechar()">Cancelar</button>
-          <button class="primario" (click)="salvar()" [disabled]="salvando()">
+          <button class="btn btn--secundario" (click)="fechar()">Cancelar</button>
+          <button class="btn btn--primario" (click)="salvar()" [disabled]="salvando()">
             {{ salvando() ? 'Salvando…' : 'Salvar e testar' }}
           </button>
         </div>
@@ -242,10 +242,6 @@ import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from '
     .degradacao summary { cursor: pointer; color: var(--texto-secundario); }
     .degradacao ul { margin: var(--espacamento-2) 0 0; padding-left: var(--espacamento-4); color: var(--texto-secundario); line-height: 1.6; }
     .acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-4); }
-    button { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
-    button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    button:disabled { opacity: .6; cursor: default; }
-    .primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     .resultado { margin: var(--espacamento-3) 0 0; font-size: 13px; color: var(--erro); }
     .resultado--ok { color: var(--sucesso); }
     .painel { margin-top: var(--espacamento-6); padding: var(--espacamento-6); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); box-shadow: var(--elevacao-modal); }
