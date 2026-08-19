@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify'
+import { sql, comTenantServico } from '../../db/index.js'
 import { parseWebhookMeta, verificarAssinaturaMeta } from './canais/meta.js'
+import { ingerirMensagemEntrante, registrarStatusMensagem } from './ingestao-mensagem.js'
 
 /**
  * Webhook da Meta (WhatsApp Cloud API / Instagram Direct).
@@ -50,10 +52,46 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
     }
 
     const eventos = parseWebhookMeta(req.body)
-    // Fase 1: valida + reconhece + loga. A ingestão nas conversas entra quando
-    // houver WABA onboardada (mapeamento phone_number_id → canal). Sempre 200.
     for (const ev of eventos) {
-      if (ev.tipo !== 'ignorado') req.log.info({ tipo: ev.tipo }, 'webhook meta recebido')
+      // Status/qualidade do número e status de template: por WABA, não por
+      // número — tratamento próprio entra depois. Por ora, loga (200).
+      if (ev.tipo === 'ignorado' || ev.tipo === 'template_status' || ev.tipo === 'qualidade') {
+        if (ev.tipo !== 'ignorado') req.log.info({ tipo: ev.tipo }, 'webhook meta (adiado)')
+        continue
+      }
+
+      // Roteia por phone_number_id → tenant/canal (função SECURITY DEFINER).
+      const [canal] = await sql<{ tenant_id: string; canal_id: string; estado: string }[]>`
+        SELECT tenant_id, canal_id, estado FROM canal_por_identificador_externo(${ev.phoneNumberId})`
+      if (!canal) {
+        // ⚠️ Roteamento sem alvo é falha PERMANENTE: 200 + log, senão a Meta
+        //    reenvia para sempre e trava a fila de todos.
+        req.log.warn({ phoneNumberId: ev.phoneNumberId }, 'webhook meta: canal não encontrado')
+        continue
+      }
+
+      try {
+        if (ev.tipo === 'mensagem') {
+          // Fase 3: texto completo. Mídia (imagem/áudio) exige baixar pelo media
+          // id + token — entra depois; por ora reconhece e segue (200).
+          if (ev.conteudo.tipo !== 'texto') {
+            req.log.info({ tipo: ev.conteudo.tipo }, 'webhook meta: mídia adiada')
+            continue
+          }
+          await comTenantServico(canal.tenant_id, (tx) =>
+            ingerirMensagemEntrante(tx, canal.canal_id, {
+              deE164: ev.de, idExterno: ev.idExterno, tipo: 'texto', texto: ev.conteudo.texto,
+              nomeRemetente: ev.nomePerfil ?? undefined, recebidaEm: new Date(ev.timestamp * 1000),
+            }))
+        } else if (ev.status === 'enviada' || ev.status === 'entregue' || ev.status === 'lida') {
+          await comTenantServico(canal.tenant_id, (tx) => registrarStatusMensagem(tx, ev.idExterno, ev.status as 'enviada' | 'entregue' | 'lida'))
+        }
+        // status 'falhou' → tratamento (marcar mensagem falhou) entra depois.
+      } catch (erro) {
+        // ⚠️ Erro NOSSO (transitório, ex.: banco) → 500 para a Meta reenviar.
+        req.log.error({ erro, phoneNumberId: ev.phoneNumberId }, 'webhook meta: falha ao processar')
+        return reply.code(500).send({ erro: 'erro.interno' })
+      }
     }
     return reply.code(200).send({ ok: true, eventos: eventos.length })
   })

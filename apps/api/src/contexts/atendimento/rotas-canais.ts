@@ -98,18 +98,33 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
       return falha(reply, 422, 'canal.credencial_invalida', 'Confira os campos destacados.', { campos: validacao.erros })
     }
 
+    // ⚠️ Id de ROTEAMENTO do webhook (em claro), extraído da credencial: o
+    //    phone_number_id do WhatsApp / a conta do Instagram. É por ele que o
+    //    webhook da Meta acha o canal — a credencial cifrada não é pesquisável.
+    const cred = (corpo.credencial ?? {}) as Record<string, unknown>
+    const identificadorExterno = provedor.codigo === 'meta_oficial' ? (cred['phoneNumberId'] as string | undefined)
+      : provedor.codigo === 'instagram_meta' ? (cred['paginaId'] as string | undefined) : undefined
+
     const id = randomUUID()
-    await req.comTenant(async (tx) => {
-      await tx`
-        INSERT INTO canal_conectado (tenant_id, id, tipo, provedor, nome_amigavel,
-                                     credenciais_cifradas, capacidades, estado)
-        VALUES (tenant_atual(), ${id}, ${provedor.tipo}, ${provedor.codigo}, ${corpo.nomeAmigavel!.trim()},
-                ${cifrar(corpo.credencial as Credencial)},
-                ${JSON.stringify(provedor.capacidades)}::text::jsonb,
-                -- ⚠️ Nasce 'conectando': conectado é o que o TESTE diz.
-                'conectando')
-      `
-    })
+    try {
+      await req.comTenant(async (tx) => {
+        await tx`
+          INSERT INTO canal_conectado (tenant_id, id, tipo, provedor, nome_amigavel,
+                                       credenciais_cifradas, capacidades, estado, identificador_externo)
+          VALUES (tenant_atual(), ${id}, ${provedor.tipo}, ${provedor.codigo}, ${corpo.nomeAmigavel!.trim()},
+                  ${cifrar(corpo.credencial as Credencial)},
+                  ${JSON.stringify(provedor.capacidades)}::text::jsonb,
+                  -- ⚠️ Nasce 'conectando': conectado é o que o TESTE diz.
+                  'conectando', ${identificadorExterno ?? null})
+        `
+      })
+    } catch (e) {
+      // Único global: outro canal já usa este phone_number_id / conta.
+      if ((e as { code?: string }).code === '23505') {
+        return falha(reply, 409, 'canal.numero_ja_conectado', 'Este número/conta já está conectado em outro canal.')
+      }
+      throw e
+    }
     return reply.code(201).send({ id })
   })
 

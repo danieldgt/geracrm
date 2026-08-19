@@ -2,6 +2,7 @@ import type { Credencial } from '@geracrm/conectores'
 import type { TipoCanal } from '@geracrm/shared'
 import type { PortaCanal, ResultadoEnvio, ResultadoAcaoMensagem } from './porta.js'
 import { CanalPlugZapi } from './plugzapi.js'
+import { CanalMetaOficial } from './meta-oficial.js'
 
 /**
  * Constrói o adaptador de canal a partir do provedor + credencial.
@@ -18,9 +19,10 @@ export function criarCanal(provedor: string, cred: Credencial): PortaCanal {
         ...(cred['clientToken'] ? { clientToken: cred['clientToken'] } : {}),
       })
     case 'meta_oficial':
-      // ⚠️ Ainda não implementado — depende do registro na Meta. A porta existe
-      //    para o dia do corte; até lá, recusa tipificado em vez de fingir.
-      return new CanalNaoImplementado('whatsapp_oficial')
+      return new CanalMetaOficial({
+        phoneNumberId: cred['phoneNumberId'] ?? '',
+        token: cred['token'] ?? '',
+      })
     case 'instagram_meta':
       // ⚠️ Instagram Direct (Graph API) — adaptador em desenvolvimento. Degrada
       //    honesto: o canal existe no modelo, o envio recusa tipificado.
