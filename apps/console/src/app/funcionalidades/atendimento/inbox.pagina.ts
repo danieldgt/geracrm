@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, OnDestroy, computed, signal } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, OnDestroy, computed, signal, viewChild, effect, untracked, ElementRef } from '@angular/core'
 import { FormsModule } from '@angular/forms'
 import { RouterLink } from '@angular/router'
 import { formatarProtocolo, parsearProtocolo } from '@geracrm/shared'
@@ -141,9 +141,9 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
                 </div>
               }
 
-              <div class="msgs" (click)="menuAbertoId.set(null); mostrarEmojis.set(false)">
+              <div class="msgs" #msgs (scroll)="aoRolar()" (click)="menuAbertoId.set(null); mostrarEmojis.set(false)">
                 @if (t.temMaisAntigas) {
-                  <button class="carregar-mais" type="button" (click)="servico.carregarAnteriores()"
+                  <button class="carregar-mais" type="button" (click)="carregarAntigas()"
                           [disabled]="servico.carregandoAnteriores()">
                     {{ servico.carregandoAnteriores() ? 'Carregando…' : 'Ver mensagens anteriores' }}
                   </button>
@@ -456,6 +456,71 @@ export class InboxPagina implements OnDestroy {
       (c) => c.nome.toLowerCase().includes(q) || (c.ultimaMensagem?.texto ?? '').toLowerCase().includes(q),
     )
   })
+
+  // ── Scroll das mensagens ────────────────────────────────────────────────
+  // O container rolável (só existe com uma conversa aberta).
+  readonly msgsEl = viewChild<ElementRef<HTMLElement>>('msgs')
+  private conversaRolada: string | null = null
+  private ultimaMsgId: string | null = null
+  private prepondo = false // carregando antigas: NÃO rolar para o fim.
+
+  constructor() {
+    // Abrir conversa → rola até o fim. Nova mensagem (enviada/recebida) → rola
+    // se o usuário já estava perto do fim. Prepender antigas não mexe no fim.
+    effect(() => {
+      const t = this.servico.thread()
+      const sel = this.servico.selecionadaId()
+      if (!t) { this.conversaRolada = null; this.ultimaMsgId = null; return }
+      const ultima = t.mensagens.length ? t.mensagens[t.mensagens.length - 1]!.id : null
+      // Mede a posição ANTES do render crescer (o effect roda pré-flush).
+      const perto = this.pertoDoFim()
+      untracked(() => {
+        if (this.prepondo) return
+        if (sel !== this.conversaRolada) {
+          this.conversaRolada = sel
+          this.ultimaMsgId = ultima
+          this.rolarParaFim('auto') // abriu a conversa: vai direto ao fim
+        } else if (ultima !== this.ultimaMsgId) {
+          this.ultimaMsgId = ultima
+          if (perto) this.rolarParaFim('smooth') // mensagem nova estando perto
+        }
+      })
+    })
+  }
+
+  private pertoDoFim(): boolean {
+    const el = this.msgsEl()?.nativeElement
+    if (!el) return true
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 140
+  }
+
+  private rolarParaFim(modo: ScrollBehavior): void {
+    // rAF: espera o @for pintar as bolhas antes de medir scrollHeight.
+    requestAnimationFrame(() => {
+      const el = this.msgsEl()?.nativeElement
+      if (el) el.scrollTo({ top: el.scrollHeight, behavior: modo })
+    })
+  }
+
+  /** Rolou para o topo → carrega o bloco anterior mantendo a posição visual. */
+  aoRolar(): void {
+    const el = this.msgsEl()?.nativeElement
+    if (el && el.scrollTop < 80) void this.carregarAntigas()
+  }
+
+  async carregarAntigas(): Promise<void> {
+    const el = this.msgsEl()?.nativeElement
+    if (!el || !this.servico.thread()?.temMaisAntigas || this.servico.carregandoAnteriores()) return
+    const alturaAntes = el.scrollHeight
+    const topoAntes = el.scrollTop
+    this.prepondo = true
+    await this.servico.carregarAnteriores()
+    // Depois que o bloco antigo entrou no topo, ancora o viewport onde estava.
+    requestAnimationFrame(() => {
+      el.scrollTop = topoAntes + (el.scrollHeight - alturaAntes)
+      this.prepondo = false
+    })
+  }
 
   ngOnDestroy(): void {
     // ⚠️ Apresentacional: o carregamento da lista, o ouvinte SSE e o ?abrir= agora
