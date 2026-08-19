@@ -30,7 +30,7 @@ const ERRO_CRIAR: Record<string, string> = {
         <h1 class="txt-titulo">Templates (HSM)</h1>
         <p class="sub">Mensagens aprovadas na Meta — o que reabre a janela de 24h.</p>
       </div>
-      <button class="btn-novo" (click)="abrirNovo()">＋ Novo template</button>
+      <button class="btn btn--primario" (click)="abrirNovo()">＋ Novo template</button>
     </header>
 
     <p class="nota">ℹ️ A aprovação vem da Meta. Enquanto o canal oficial não está conectado, o template fica <b>Aguardando Meta</b> — o envio só usa os <b>Aprovados</b>.</p>
@@ -44,7 +44,7 @@ const ERRO_CRIAR: Record<string, string> = {
         @if (servico.itens().length === 0) {
           <div class="bloco"><h2 class="txt-secao">Nenhum template ainda</h2>
             <p class="vazio-sub">Crie o primeiro — ele nasce como rascunho até a Meta aprovar.</p>
-            <button class="btn-novo" (click)="abrirNovo()">＋ Novo template</button></div>
+            <button class="btn btn--primario" (click)="abrirNovo()">＋ Novo template</button></div>
         } @else {
           <div class="grade">
             @for (t of servico.itens(); track t.id) {
@@ -68,8 +68,8 @@ const ERRO_CRIAR: Record<string, string> = {
                   <p class="rejeicao">✕ {{ t.motivoRejeicao }}</p>
                 }
                 <footer class="tpl-acoes">
-                  <button (click)="abrirEdicao(t)">Editar (nova versão)</button>
-                  @if (!t.submetido) { <button class="del" (click)="apagar(t)">Apagar</button> }
+                  <button class="btn btn--secundario btn--pequeno" (click)="abrirEdicao(t)">Editar (nova versão)</button>
+                  @if (!t.submetido) { <button class="btn btn--perigo btn--pequeno" (click)="apagar(t)">Apagar</button> }
                 </footer>
               </article>
             }
@@ -113,9 +113,9 @@ const ERRO_CRIAR: Record<string, string> = {
         </label>
         <label class="campo"><span>Rodapé (opcional)</span><input [(ngModel)]="r.footer" maxlength="60" placeholder="Sua loja" /></label>
         <label class="campo"><span>Botões (opcional, até 3, separados por vírgula)</span><input [(ngModel)]="r.botoes" placeholder="Ver ofertas, Falar com vendedor" /></label>
-        <div class="m-acoes">
-          <button class="cancelar" (click)="fechar()">Cancelar</button>
-          <button class="salvar" (click)="salvar(r)" [disabled]="salvando() || !r.nome.trim() || !r.body.trim()">
+        <div class="form-acoes">
+          <button class="btn btn--fantasma" (click)="fechar()">Cancelar</button>
+          <button class="btn btn--primario" (click)="salvar(r)" [disabled]="salvando() || !r.nome.trim() || !r.body.trim()">
             {{ salvando() ? 'Salvando…' : r.id ? 'Salvar nova versão' : 'Criar rascunho' }}
           </button>
         </div>
@@ -127,7 +127,6 @@ const ERRO_CRIAR: Record<string, string> = {
     .cabecalho { margin-bottom: var(--espacamento-3); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .btn-novo { flex: none; padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; font-size: 13px; cursor: pointer; }
     .nota { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3); border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto-secundario); font-size: 12px; }
     .erro { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
@@ -161,15 +160,6 @@ const ERRO_CRIAR: Record<string, string> = {
     .m-topo { display: flex; align-items: center; justify-content: space-between; }
     .m-topo h2 { margin: 0; color: var(--texto); }
     .m-x { border: 0; background: transparent; color: var(--texto-secundario); font-size: 16px; }
-    .campo { display: flex; flex-direction: column; gap: 4px; }
-    .campo span { font-size: 12px; color: var(--texto-secundario); font-weight: 500; }
-    .campo small { font-size: 11px; color: var(--texto-suave); }
-    .campo input, .campo select, .campo textarea { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto); font: inherit; font-size: 13px; }
-    .campo textarea { resize: vertical; }
-    .m-acoes { display: flex; justify-content: flex-end; gap: var(--espacamento-2); margin-top: var(--espacamento-2); }
-    .cancelar { padding: var(--espacamento-2) var(--espacamento-4); border: 0; background: transparent; color: var(--texto-secundario); font: inherit; }
-    .salvar { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; }
-    .salvar:disabled { opacity: .5; }
     @media (max-width: 640px) { :host { padding: var(--espacamento-3); } }
   `,
 })

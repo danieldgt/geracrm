@@ -20,7 +20,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
         <h1 class="txt-titulo">Painel de Atendimentos</h1>
         <p class="sub">Arraste conforme o atendimento avança. O fluxo é configurável pela sua empresa.</p>
       </div>
-      <button class="btn-config" (click)="abrirConfig()">⚙️ Configurar fluxo</button>
+      <button class="btn btn--secundario" (click)="abrirConfig()">⚙️ Configurar fluxo</button>
     </header>
 
     @if (servico.erroMove(); as e) { <p class="erro-move" role="alert">{{ e }}</p> }
@@ -110,8 +110,6 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
   styles: `
     :host { display: block; height: 100%; padding: var(--espacamento-6); overflow: hidden; display: flex; flex-direction: column; }
     .cabecalho { margin-bottom: var(--espacamento-4); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
-    .btn-config { flex: none; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 13px; cursor: pointer; }
-    .btn-config:hover { background: var(--superficie-hover); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }

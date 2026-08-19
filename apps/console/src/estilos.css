@@ -78,6 +78,48 @@ select:focus-visible, textarea:focus-visible {
   .pagina, .pagina-densa, .pagina-forma { padding: var(--espacamento-4); }
 }
 
+/* ─── Botões: uma fonte de verdade para forma, cor e estado ───────────────────
+ * Use `.btn` + variante em vez de estilizar botão por tela. É isto que impede
+ * cada CRUD de nascer com um botão levemente diferente. Componente denso pode
+ * sobrescrever pontualmente; este é o acabamento padrão. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--espacamento-2);
+  padding: var(--espacamento-2) var(--espacamento-4);
+  border: 1px solid transparent; border-radius: var(--raio-controle);
+  font: inherit; font-size: 13px; font-weight: 500; line-height: 1.2;
+  cursor: pointer; white-space: nowrap; text-decoration: none;
+  transition: background var(--movimento-estado-duracao) var(--movimento-estado-curva),
+              border-color var(--movimento-estado-duracao) var(--movimento-estado-curva),
+              color var(--movimento-estado-duracao) var(--movimento-estado-curva);
+}
+.btn:disabled, .btn[disabled] { opacity: .5; cursor: default; }
+.btn--primario { background: var(--acao); color: var(--acao-texto); border-color: var(--acao); }
+.btn--primario:not(:disabled):hover { background: var(--acao-hover); border-color: var(--acao-hover); }
+.btn--secundario { background: var(--superficie-elevada); color: var(--texto); border-color: var(--borda-controle); }
+.btn--secundario:not(:disabled):hover { background: var(--superficie-hover); }
+.btn--fantasma { background: transparent; color: var(--texto-secundario); }
+.btn--fantasma:not(:disabled):hover { background: var(--superficie-hover); color: var(--texto); }
+/* Secundário que vira vermelho no hover — para ações destrutivas leves (apagar). */
+.btn--perigo { background: var(--superficie-elevada); color: var(--texto-secundario); border-color: var(--borda-controle); }
+.btn--perigo:not(:disabled):hover { background: var(--erro-suave); color: var(--erro); border-color: var(--erro); }
+.btn--pequeno { padding: var(--espacamento-1) var(--espacamento-3); font-size: 12px; }
+.btn--bloco { width: 100%; }
+
+/* ─── Campos de formulário: rótulo + controle, respiro e hint padronizados ─────
+ * `.campo` embrulha um rótulo (<span> ou .campo__rotulo), o controle e um hint
+ * opcional (<small>). O piso confortável de input/select/textarea vem da base
+ * global acima; aqui vem a moldura (borda, fundo, raio) e o ritmo. */
+.campo { display: flex; flex-direction: column; gap: 4px; }
+.campo > span, .campo__rotulo { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
+.campo input, .campo select, .campo textarea {
+  padding: var(--espacamento-2) var(--espacamento-3);
+  border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
+  background: var(--superficie); color: var(--texto);
+}
+.campo textarea { resize: vertical; }
+.campo small, .campo__dica { font-size: 11px; color: var(--texto-suave); }
+.form-acoes { display: flex; justify-content: flex-end; gap: var(--espacamento-2); }
+
 /* Utilitário anti-overflow: filho de flex/grid que precisa encolher (texto que
  * trunca em vez de empurrar o vizinho). Remédio nº 1 de "quebrou o layout". */
 .encolhe { min-width: 0; }
