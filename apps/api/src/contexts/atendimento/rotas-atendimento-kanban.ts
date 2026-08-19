@@ -18,6 +18,7 @@ const DIAS_ENCERRADO = 30 // colunas 'encerrado' mostram só os recentes
 const ETAPAS_PADRAO = [
   { ordem: 1, chave: 'em_atendimento', nome: 'Em atendimento', tipo: 'atendimento' },
   { ordem: 2, chave: 'aguardando_cliente', nome: 'Aguardando cliente', tipo: 'atendimento' },
+  { ordem: 3, chave: 'aguardando_nos', nome: 'Aguardando nós', tipo: 'atendimento' },
   { ordem: 9, chave: 'resolvido', nome: 'Resolvido', tipo: 'encerrado' },
 ]
 

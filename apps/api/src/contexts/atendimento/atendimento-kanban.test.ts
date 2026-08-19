@@ -70,7 +70,7 @@ const etapaId = (e: Etapas, chave: string) => e.itens.find((x) => x.chave === ch
 describe('Kanban de atendimentos', () => {
   it('etapas auto-semeadas + fila derivada; assumir cai na 1ª etapa; card sem conteúdo', async () => {
     const e = await etapas()
-    expect(e.itens.map((x) => x.chave)).toEqual(['em_atendimento', 'aguardando_cliente', 'resolvido'])
+    expect(e.itens.map((x) => x.chave)).toEqual(['em_atendimento', 'aguardando_cliente', 'aguardando_nos', 'resolvido'])
     expect(e.aguardando.total).toBe(1) // a conversa entrante sem atendimento
 
     // Assumir → cria atendimento na 1ª etapa 'atendimento'.
