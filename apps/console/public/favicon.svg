@@ -1,15 +1,1 @@
-<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Drezz Hub">
-  <title>Drezz Hub</title>
-  <rect width="128" height="128" rx="28" fill="#FFF8EC"/>
-  <g fill="#FF6732" transform="translate(6 4) scale(0.9)">
-    <rect x="44" y="26" width="16" height="76" rx="2"/>
-    <path d="M52 26 H74 a38 38 0 0 1 0 76 H52 V86 h22 a22 22 0 0 0 0-44 H52 Z"/>
-    <path d="M45 88 L32 110 L61 99 Z"/>
-    <rect x="24" y="56" width="10" height="10" rx="2"/>
-    <rect x="12" y="56" width="10" height="10" rx="2"/>
-    <rect x="24" y="44" width="10" height="10" rx="2"/>
-  </g>
-  <!-- entalhe (corte pixel) desenhado como creme sobre o D — sem <mask>, para
-       renderizar no slot de favicon de todos os browsers -->
-  <rect x="44" y="26" width="12" height="12" fill="#FFF8EC" transform="translate(6 4) scale(0.9)"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48"><rect width="48" height="48" rx="11" fill="#1A1512"/><rect x="6" y="6" width="9" height="9" rx="2.5200000000000005" fill="#9C4520"/><rect x="6" y="33" width="9" height="9" rx="2.5200000000000005" fill="#9C4520"/><rect x="33" y="6" width="9" height="9" rx="2.5200000000000005" fill="#9C4520"/><rect x="33" y="33" width="9" height="9" rx="2.5200000000000005" fill="#9C4520"/><rect x="6" y="19.5" width="36" height="9" rx="2.5200000000000005" fill="#FF6732"/></svg>

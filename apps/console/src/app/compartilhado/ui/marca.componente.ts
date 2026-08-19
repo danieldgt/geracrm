@@ -1,11 +1,13 @@
 import { Component, ChangeDetectionStrategy, input } from '@angular/core'
 
 /**
- * Marca Drezz Hub — o monograma "D" da identidade Drezz, adaptado ao contexto:
- * o cluster de pixels da Drezz vira os NÓS de um hub, e a cauda em ponta lê como
- * um balão de conversa (é um CRM de atendimento). A cor sai de `var(--marca)`
- * (token) — nada de hex aqui, para respeitar o lint R-12 da biblioteca; a máscara
- * usa `white`/`black` (palavras, não hex) porque luminância é o que importa nela.
+ * Marca Drezz Hub — o arranjo de blocos do sistema da família drezz: duas pilhas
+ * laterais (a empresa e o cliente) e uma peça que atravessa e une os dois lados.
+ * A união é o único elemento em cor cheia, porque é ela o assunto do produto.
+ *
+ * A cor sai de `currentColor` (que herda `var(--marca)`) — nada de hex aqui, para
+ * respeitar o lint R-12 da biblioteca. O segundo tom do sistema é obtido por
+ * opacidade sobre a mesma cor, não por um hex terracota.
  *
  * `rotulo` liga o wordmark "Drezz Hub" ao lado do símbolo (o lockup padrão).
  */
@@ -14,21 +16,14 @@ import { Component, ChangeDetectionStrategy, input } from '@angular/core'
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <svg class="simbolo" viewBox="0 0 128 128" aria-hidden="true" focusable="false">
-      <defs>
-        <mask id="marca-recorte">
-          <rect width="128" height="128" fill="white" />
-          <rect x="40" y="20" width="14" height="14" fill="black" />
-        </mask>
-      </defs>
       <g fill="currentColor">
-        <g mask="url(#marca-recorte)">
-          <rect x="40" y="20" width="18" height="88" rx="2" />
-          <path d="M49 20 H74 a44 44 0 0 1 0 88 H49 V90 h25 a26 26 0 0 0 0-52 H49 Z" />
+        <g opacity="0.55">
+          <rect x="16" y="16" width="24" height="24" rx="7" />
+          <rect x="88" y="16" width="24" height="24" rx="7" />
+          <rect x="16" y="88" width="24" height="24" rx="7" />
+          <rect x="88" y="88" width="24" height="24" rx="7" />
         </g>
-        <path d="M41 90 L26 116 L59 103 Z" />
-        <rect x="17" y="53" width="11" height="11" rx="2" />
-        <rect x="3"  y="53" width="11" height="11" rx="2" />
-        <rect x="17" y="39" width="11" height="11" rx="2" />
+        <rect x="16" y="52" width="96" height="24" rx="7" />
       </g>
     </svg>
     @if (rotulo()) {
