@@ -37,14 +37,14 @@ const ABAS = [
         <h1 class="txt-titulo">Tarefas</h1>
         <p class="sub">Seu follow-up: com quem falar e quando.</p>
       </div>
-      <button class="primario" (click)="mostrarNova.set(!mostrarNova())">{{ mostrarNova() ? 'Fechar' : '+ Nova tarefa' }}</button>
+      <button class="btn btn--primario" (click)="mostrarNova.set(!mostrarNova())">{{ mostrarNova() ? 'Fechar' : '+ Nova tarefa' }}</button>
     </header>
 
     @if (mostrarNova()) {
       <form class="nova" (submit)="criar($event)">
         <input class="titulo" [value]="titulo()" (input)="titulo.set($any($event.target).value)" placeholder="O que fazer? (ex.: ligar para o cliente)" />
         <input type="datetime-local" [value]="vence()" (input)="vence.set($any($event.target).value)" aria-label="Vencimento" />
-        <button class="primario" type="submit" [disabled]="salvando() || !titulo().trim() || !vence()">
+        <button class="btn btn--primario" type="submit" [disabled]="salvando() || !titulo().trim() || !vence()">
           {{ salvando() ? 'Criando…' : 'Criar' }}
         </button>
         @if (erroForm()) { <p class="erro">{{ erroForm() }}</p> }
@@ -60,7 +60,7 @@ const ABAS = [
     @switch (estado()) {
       @case ('carregando') { <div class="lista"><div class="esq"></div><div class="esq"></div></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (itens().length === 0) {
           <div class="bloco"><h2 class="txt-secao">Nada por aqui</h2><p>Sem tarefas nesta aba.</p></div>
@@ -102,7 +102,6 @@ const ABAS = [
     .abas button { padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
     .abas button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     button { cursor: pointer; }
-    .primario { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; }
     .primario:disabled { opacity: .6; cursor: default; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .esq { height: 52px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }

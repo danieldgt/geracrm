@@ -30,7 +30,7 @@ type Alvo = { tipo: 'vendedor'; id: string; nome: string } | { tipo: 'orfaos' } 
     @switch (estado()) {
       @case ('carregando') { <div class="grade"><div class="col"><div class="esq"></div><div class="esq"></div></div></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         <div class="grade">
           <!-- Coluna 1: as carteiras (vendedores + órfãos) -->
@@ -84,13 +84,13 @@ type Alvo = { tipo: 'vendedor'; id: string; nome: string } | { tipo: 'orfaos' } 
                           }
                         </select>
                         @if (alvo()?.tipo === 'vendedor') {
-                          <button class="soltar" [disabled]="movendo() === c.id" (click)="soltar(c.id)" title="Deixar sem dono">Soltar</button>
+                          <button class="btn btn--perigo btn--pequeno" [disabled]="movendo() === c.id" (click)="soltar(c.id)" title="Deixar sem dono">Soltar</button>
                         }
                       </div>
                     </li>
                   }
                 </ul>
-                @if (temMais()) { <button class="mais" (click)="carregarContatos(true)">Carregar mais</button> }
+                @if (temMais()) { <button class="btn btn--secundario btn--bloco" (click)="carregarContatos(true)">Carregar mais</button> }
               }
             }
           </section>
@@ -130,9 +130,7 @@ type Alvo = { tipo: 'vendedor'; id: string; nome: string } | { tipo: 'orfaos' } 
     .cli-meta { font-size: 12px; color: var(--texto-suave); }
     .acoes { display: flex; align-items: center; gap: var(--espacamento-2); flex: none; }
     .sel { padding: var(--espacamento-1) var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 12px; }
-    .soltar { padding: 3px 10px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 12px; cursor: pointer; }
-    .soltar:hover { color: var(--erro); border-color: var(--erro); }
-    .mais { display: block; width: 100%; margin-top: var(--espacamento-2); padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; cursor: pointer; }
+    .btn--bloco { margin-top: var(--espacamento-2); }
     button:disabled, select:disabled { opacity: .6; cursor: default; }
   `,
 })

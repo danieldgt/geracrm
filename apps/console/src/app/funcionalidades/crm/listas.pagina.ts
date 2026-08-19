@@ -24,13 +24,13 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     @switch (estado()) {
       @case ('carregando') { <div class="grade"><div class="col"><div class="esq"></div><div class="esq"></div></div></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         <div class="grade">
           <section class="col">
             <form class="nova" (submit)="criar($event)">
               <input [value]="novoNome()" (input)="novoNome.set($any($event.target).value)" placeholder="Nova lista (ex.: Feira 2026)" aria-label="Nome da lista" />
-              <button class="primario" type="submit" [disabled]="criando() || !novoNome().trim()">+</button>
+              <button class="btn btn--primario" type="submit" [disabled]="criando() || !novoNome().trim()">+</button>
               @if (erroNova()) { <p class="erro">{{ erroNova() }}</p> }
             </form>
             <ul class="listas">
@@ -74,7 +74,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                       <button class="x" (click)="remover(m.id)" title="Remover da lista">×</button></li>
                   }
                 </ul>
-                @if (temMais()) { <button class="mais" (click)="carregarMembros(true)">Carregar mais</button> }
+                @if (temMais()) { <button class="btn btn--secundario btn--bloco" (click)="carregarMembros(true)">Carregar mais</button> }
               }
             }
           </section>
@@ -95,8 +95,6 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .nova { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-3); flex-wrap: wrap; }
     .nova input { flex: 1; min-width: 140px; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .erro { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
-    .primario { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; font-size: 16px; cursor: pointer; }
-    .primario:disabled { opacity: .6; cursor: default; }
     .listas { list-style: none; margin: 0; padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
     .lista { display: flex; align-items: center; gap: var(--espacamento-2); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); cursor: pointer; }
     .lista:last-child { border-bottom: none; }
@@ -120,7 +118,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .m-nome { flex: 1; color: var(--texto); font-size: 14px; }
     .x { border: 0; background: transparent; color: var(--texto-suave); font-size: 16px; padding: 0 4px; cursor: pointer; flex: none; }
     .x:hover { color: var(--erro); }
-    .mais { display: block; width: 100%; margin-top: var(--espacamento-2); padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; cursor: pointer; }
+    .btn--bloco { margin-top: var(--espacamento-2); }
   `,
 })
 export class ListasPagina implements OnInit {

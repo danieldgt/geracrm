@@ -38,7 +38,7 @@ import type { ClienteRfv } from './clientes.servico.js'
       @case ('erro') {
         <div class="bloco"><h2>Não foi possível montar a fila</h2>
           <p>{{ servico.erro() }}</p>
-          <button class="primario" (click)="servico.carregar()">Tentar de novo</button></div>
+          <button class="btn btn--primario" (click)="servico.carregar()">Tentar de novo</button></div>
       }
       @case ('pronto') {
         @if (servico.vazio()) {
@@ -76,7 +76,7 @@ import type { ClienteRfv } from './clientes.servico.js'
 
           @if (servico.temMais()) {
             <div class="mais">
-              <button (click)="servico.carregarMais()" [disabled]="servico.buscandoMais()">
+              <button class="btn btn--secundario" (click)="servico.carregarMais()" [disabled]="servico.buscandoMais()">
                 {{ servico.buscandoMais() ? 'Carregando…' : 'Ver mais da fila' }}
               </button>
             </div>
@@ -114,10 +114,6 @@ import type { ClienteRfv } from './clientes.servico.js'
     .acao { font-size: 13px; font-weight: 500; color: var(--acao); }
     .num { font-family: var(--tipografia-familia-dados); font-size: 12px; color: var(--texto-suave); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .mais { text-align: center; padding: var(--espacamento-4); }
-    button { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
-    button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    button:disabled { opacity: .6; cursor: default; }
-    .primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     .parcial { text-align: center; color: var(--atencao); font-size: 13px; }
   `,
 })

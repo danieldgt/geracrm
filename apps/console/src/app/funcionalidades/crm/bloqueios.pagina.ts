@@ -29,7 +29,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     <form class="add" (submit)="adicionar($event)">
       <input [value]="telefone()" (input)="telefone.set($any($event.target).value)"
              placeholder="Telefone (ex.: 81 99999-0000)" inputmode="tel" aria-label="Telefone a bloquear" />
-      <button class="primario" type="submit" [disabled]="salvando() || !telefone().trim()">
+      <button class="btn btn--primario" type="submit" [disabled]="salvando() || !telefone().trim()">
         {{ salvando() ? 'Bloqueando…' : 'Bloquear' }}
       </button>
     </form>
@@ -43,7 +43,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
       }
       @case ('erro') {
         <div class="bloco aviso"><h2>Não foi possível carregar</h2>
-          <button (click)="carregar()">Tentar de novo</button></div>
+          <button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div>
       }
       @case ('pronto') {
         @if (itens().length === 0) {
@@ -56,14 +56,14 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                 <span class="tel">{{ formatarChave(b.chave) }}</span>
                 <span class="motivo">{{ rotuloMotivo(b.motivo) }}</span>
                 <span class="quando">{{ b.bloqueadoEm | date: 'dd/MM/yy' }}</span>
-                <button class="remover" (click)="remover(b.chave)" [disabled]="removendo().has(b.chave)">
+                <button class="btn btn--secundario btn--pequeno" (click)="remover(b.chave)" [disabled]="removendo().has(b.chave)">
                   {{ removendo().has(b.chave) ? '…' : 'Desbloquear' }}
                 </button>
               </li>
             }
           </ul>
           @if (proximoCursor()) {
-            <button class="mais" (click)="carregarMais()" [disabled]="carregandoMais()">
+            <button class="btn btn--secundario mais" (click)="carregarMais()" [disabled]="carregandoMais()">
               {{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
             </button>
           }
@@ -79,11 +79,6 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .add { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-2); }
     .add input { flex: 1; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
       border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    button { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle);
-      border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
-    button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    button:disabled { opacity: .6; cursor: default; }
-    .primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     .erro-add { color: var(--erro); font-size: 13px; margin: 0 0 var(--espacamento-3); }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; margin-top: var(--espacamento-4); }
     .bloco h2 { margin: 0 0 var(--espacamento-2); font-size: 16px; color: var(--texto); }
@@ -96,7 +91,6 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .tel { font-family: var(--tipografia-familia-dados); color: var(--texto); }
     .motivo { color: var(--texto-secundario); }
     .quando { color: var(--texto-suave); font-family: var(--tipografia-familia-dados); }
-    .remover { padding: 4px 10px; font-size: 12px; }
     .mais { margin-top: var(--espacamento-4); }
   `,
 })

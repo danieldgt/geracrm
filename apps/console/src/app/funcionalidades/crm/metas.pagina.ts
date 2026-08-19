@@ -47,7 +47,7 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
         <span class="prefixo">R$</span>
         <input inputmode="numeric" [value]="valor()" (input)="valor.set($any($event.target).value)" placeholder="0,00" aria-label="Alvo em reais" />
       </div>
-      <button class="primario" type="submit" [disabled]="salvando() || !valorNumerico()">
+      <button class="btn btn--primario" type="submit" [disabled]="salvando() || !valorNumerico()">
         {{ salvando() ? 'Salvando…' : 'Definir meta' }}
       </button>
       @if (erroForm()) { <p class="erro">{{ erroForm() }}</p> }
@@ -56,7 +56,7 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
     @switch (estado()) {
       @case ('carregando') { <div class="lista"><div class="esq"></div><div class="esq"></div></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
+      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (itens().length === 0) {
           <div class="bloco"><h2 class="txt-secao">Sem metas neste mês</h2>
@@ -101,8 +101,6 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
     .campo-valor input { flex: 1; padding: var(--espacamento-2) var(--espacamento-3); border: 0; background: transparent; color: var(--texto); font: inherit; }
     .campo-valor input:focus { outline: none; }
     .erro { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
-    .primario { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; cursor: pointer; }
-    .primario:disabled { opacity: .6; cursor: default; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
     .esq { height: 76px; border-radius: var(--raio-painel); background: var(--superficie); margin-bottom: var(--espacamento-2); }
     .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }

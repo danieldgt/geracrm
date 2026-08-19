@@ -26,10 +26,10 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
         <p class="sub">Ordenados por quanto já compraram. A cor mostra onde cada um está no ciclo de recompra.</p>
       </div>
       <div class="acoes-topo">
-        <button class="secundario" type="button" (click)="mostrarImport.set(!mostrarImport())">
+        <button class="btn btn--secundario" type="button" (click)="mostrarImport.set(!mostrarImport())">
           {{ mostrarImport() ? 'Fechar' : '↑ Importar CSV' }}
         </button>
-        <button class="primario" type="button" (click)="mostrarForm.set(!mostrarForm())">
+        <button class="btn btn--primario" type="button" (click)="mostrarForm.set(!mostrarForm())">
           {{ mostrarForm() ? 'Fechar' : '+ Novo contato' }}
         </button>
       </div>
@@ -46,7 +46,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                   [ngModel]="csvTexto()" (ngModelChange)="csvTexto.set($event)" rows="5"
                   [disabled]="servico.importando()"></textarea>
         <div class="import-acoes">
-          <button class="primario" type="button" (click)="importar()"
+          <button class="btn btn--primario" type="button" (click)="importar()"
                   [disabled]="servico.importando() || !csvTexto().trim()">
             {{ servico.importando() ? 'Importando…' : 'Importar' }}
           </button>
@@ -74,10 +74,10 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                [disabled]="servico.salvandoContato()" />
         <input name="tel" placeholder="Telefone (DDD + número)" [ngModel]="novoTelefone()"
                (ngModelChange)="novoTelefone.set($event)" [disabled]="servico.salvandoContato()" />
-        <button class="primario" type="submit" [disabled]="servico.salvandoContato() || !valido()">
+        <button class="btn btn--primario" type="submit" [disabled]="servico.salvandoContato() || !valido()">
           {{ servico.salvandoContato() ? 'Salvando…' : 'Adicionar' }}
         </button>
-        <button class="secundario" type="button" (click)="adicionar(true)"
+        <button class="btn btn--secundario" type="button" (click)="adicionar(true)"
                 [disabled]="servico.salvandoContato() || !valido()">Adicionar e conversar</button>
         @if (servico.erroForm()) { <p class="erro-form">{{ servico.erroForm() }}</p> }
       </form>
@@ -123,7 +123,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
         <div class="bloco">
           <h2>Não foi possível carregar os clientes</h2>
           <p>{{ servico.erro() }}</p>
-          <button class="primario" (click)="servico.carregar()">Tentar de novo</button>
+          <button class="btn btn--primario" (click)="servico.carregar()">Tentar de novo</button>
         </div>
       }
       @case ('pronto') {
@@ -170,7 +170,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
 
           @if (servico.temMais()) {
             <div class="mais">
-              <button (click)="servico.carregarMais()" [disabled]="servico.buscandoMais()">
+              <button class="btn btn--secundario" (click)="servico.carregarMais()" [disabled]="servico.buscandoMais()">
                 {{ servico.buscandoMais() ? 'Carregando…' : 'Carregar mais' }}
               </button>
             </div>
@@ -188,8 +188,6 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .cabecalho { margin-bottom: var(--espacamento-5); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
     .novo-contato { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: center; margin-bottom: var(--espacamento-5); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .novo-contato input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .secundario { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); cursor: pointer; }
-    .secundario:disabled, .primario:disabled { opacity: .55; cursor: default; }
     .erro-form { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
     .acoes-topo { display: flex; gap: var(--espacamento-2); }
     .import { display: flex; flex-direction: column; gap: var(--espacamento-2); margin-bottom: var(--espacamento-5); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
@@ -255,10 +253,6 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .acao { font-size: 12px; color: var(--texto-secundario); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .mais { text-align: center; padding: var(--espacamento-4); }
-    button { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; cursor: pointer; }
-    button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    button:disabled { opacity: .6; cursor: default; }
-    .primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     .parcial { text-align: center; color: var(--atencao); font-size: 13px; }
 
     @media (max-width: 720px) {
