@@ -79,7 +79,7 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'A base de clientes com o RFV humanizado.' },
       { rota: 'crm', rotulo: 'CRM (Leads)', icone: '🧲', status: 'pronto', onda: 'O1',
         descricao: 'Kanban de qualificação: Leads, Qualificados e Descartados.' },
-      { rota: 'crm-avancado', rotulo: 'CRM Avançado', icone: '🏆', status: 'construcao', onda: 'O1',
+      { rota: 'crm-avancado', rotulo: 'CRM Avançado', icone: '🏆', status: 'pronto', onda: 'O1',
         descricao: 'Clientes por número de pedidos e segmento RFV.' },
       { rota: 'funil', rotulo: 'Funil de Vendas', icone: '🫙', status: 'pronto', onda: 'O2',
         descricao: 'Etapas e taxa de conversão.' },
