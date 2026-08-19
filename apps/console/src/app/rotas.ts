@@ -39,6 +39,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/crm/leads.pagina.js').then((m) => m.LeadsPagina),
   'crm-avancado': () =>
     import('./funcionalidades/crm/crm-avancado.pagina.js').then((m) => m.CrmAvancadoPagina),
+  templates: () =>
+    import('./funcionalidades/atendimento/templates.pagina.js').then((m) => m.TemplatesPagina),
   'atendimento-kanban': () =>
     import('./funcionalidades/atendimento/atendimento-kanban.pagina.js').then((m) => m.AtendimentoKanbanPagina),
   campanhas: () =>

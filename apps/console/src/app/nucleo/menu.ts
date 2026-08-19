@@ -54,7 +54,7 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Kanban dos atendimentos por etapa — fluxo configurável por empresa. A visão do gestor.' },
       { rota: 'numeros', rotulo: 'Meus Números', icone: '📱', status: 'pronto', onda: 'O0',
         descricao: 'Conectar números oficiais (Meta) e não-oficiais (PlugZapi); saúde da frota.' },
-      { rota: 'templates', rotulo: 'Templates (HSM)', icone: '📝', status: 'construcao', onda: 'O0',
+      { rota: 'templates', rotulo: 'Templates (HSM)', icone: '📝', status: 'pronto', onda: 'O0',
         descricao: 'Catálogo de templates aprovados na Meta — o que reabre a janela.' },
       { rota: 'campanhas', rotulo: 'Campanhas', icone: '📣', status: 'pronto', onda: 'O3',
         descricao: 'Disparo em massa com ROI honesto (vendas 3/7/14 dias).' },
