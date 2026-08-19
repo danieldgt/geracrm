@@ -17,7 +17,7 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
         <h1 class="txt-titulo">Funil de vendas</h1>
         <p class="sub">Arraste o card conforme a relação com o cliente evolui.</p>
       </div>
-      <button class="btn-metricas" [class.on]="mostrarMetricas()" (click)="alternarMetricas()">
+      <button class="btn" [class.btn--primario]="mostrarMetricas()" [class.btn--secundario]="!mostrarMetricas()" (click)="alternarMetricas()">
         📊 {{ mostrarMetricas() ? 'Ocultar métricas' : 'Métricas' }}
       </button>
     </header>
@@ -128,15 +128,13 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
             <button class="motivo" (click)="confirmarPerda(m.codigo)">{{ m.nome }}</button>
           }
         </div>
-        <button class="cancelar" (click)="cancelarPerda()">Cancelar</button>
+        <button class="btn btn--fantasma btn--bloco" (click)="cancelarPerda()">Cancelar</button>
       </div>
     }
   `,
   styles: `
     :host { display: block; height: 100%; padding: var(--espacamento-6); overflow: hidden; display: flex; flex-direction: column; }
     .cabecalho { margin-bottom: var(--espacamento-4); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
-    .btn-metricas { flex: none; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 13px; cursor: pointer; }
-    .btn-metricas.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
     /* Painel de métricas */
     .metricas { margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--espacamento-3); margin-bottom: var(--espacamento-4); }
@@ -192,7 +190,6 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
     .motivo { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
       background: var(--superficie-elevada); color: var(--texto); font: inherit; text-align: left; }
     .motivo:hover { background: var(--superficie-hover); }
-    .cancelar { margin-top: var(--espacamento-4); width: 100%; padding: var(--espacamento-2); border: 0; background: transparent; color: var(--texto-secundario); font: inherit; }
     @media (max-width: 640px) { :host { padding: var(--espacamento-3); } .coluna, .col-esq { width: 240px; } }
   `,
 })

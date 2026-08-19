@@ -62,7 +62,7 @@ const DIAS = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['
                     <div><strong>Disparo pausado</strong> — {{ cf.pausadoMotivo }}
                       @if (cf.pausadoEm) { <span class="desde">desde {{ cf.pausadoEm | date: 'dd/MM HH:mm' }}</span> }
                     </div>
-                    <button class="retomar" (click)="retomar()" [disabled]="salvandoPausa()">Retomar disparo</button>
+                    <button class="btn btn--primario btn--pequeno" (click)="retomar()" [disabled]="salvandoPausa()">Retomar disparo</button>
                   </div>
                 }
 
@@ -90,8 +90,8 @@ const DIAS = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['
                   </fieldset>
 
                   <div class="acoes">
-                    <button class="primario" type="submit" [disabled]="salvando()">{{ salvando() ? 'Salvando…' : 'Salvar configuração' }}</button>
-                    @if (!cf.disparoPausado) { <button class="pausar" type="button" (click)="pausar()" [disabled]="salvandoPausa()">Pausar disparo…</button> }
+                    <button class="btn btn--primario" type="submit" [disabled]="salvando()">{{ salvando() ? 'Salvando…' : 'Salvar configuração' }}</button>
+                    @if (!cf.disparoPausado) { <button class="btn btn--secundario" type="button" (click)="pausar()" [disabled]="salvandoPausa()">Pausar disparo…</button> }
                     @if (msg()) { <span class="ok">{{ msg() }}</span> }
                   </div>
                 </form>
@@ -124,7 +124,6 @@ const DIAS = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['
     .cn-estado[data-e="suspenso"], .cn-estado[data-e="desconectado"] { color: var(--erro); }
     .pausa-aviso { display: flex; justify-content: space-between; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; padding: var(--espacamento-3) var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--atencao-suave); color: var(--texto); margin-bottom: var(--espacamento-4); font-size: 13px; }
     .desde { color: var(--texto-suave); margin-left: var(--espacamento-1); }
-    .retomar { padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; font-size: 13px; cursor: pointer; }
     .form { display: grid; gap: var(--espacamento-4); }
     .campo { display: flex; flex-direction: column; gap: var(--espacamento-2); color: var(--texto); font-size: 13px; }
     .campo input, .campo textarea { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; resize: vertical; }
@@ -136,9 +135,6 @@ const DIAS = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['
     .ate { color: var(--texto-suave); font-size: 12px; }
     .fechado { color: var(--texto-suave); font-size: 13px; }
     .acoes { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; }
-    .primario { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; cursor: pointer; }
-    .primario:disabled { opacity: .6; cursor: default; }
-    .pausar { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
     .pausar:hover { color: var(--erro); border-color: var(--erro); }
     .ok { color: var(--sucesso); font-size: 13px; }
   `,

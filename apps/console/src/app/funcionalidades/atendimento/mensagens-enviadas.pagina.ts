@@ -62,7 +62,7 @@ const STATUS_ROTULO: Record<string, string> = { pendente: 'pendente', enviada: '
               </li>
             }
           </ul>
-          @if (temMais()) { <button class="mais" (click)="carregar(true)">Carregar mais</button> }
+          @if (temMais()) { <button class="btn btn--secundario btn--bloco" (click)="carregar(true)">Carregar mais</button> }
         }
       }
     }
@@ -89,7 +89,7 @@ const STATUS_ROTULO: Record<string, string> = { pendente: 'pendente', enviada: '
     .status[data-s="enviada"], .status[data-s="entregue"], .status[data-s="lida"] { background: var(--sucesso-suave); color: var(--sucesso); }
     .status[data-s="falhou"] { background: var(--erro-suave); color: var(--erro); }
     .status[data-s="pendente"] { background: var(--atencao-suave); color: var(--atencao); }
-    .mais { display: block; width: 100%; margin-top: var(--espacamento-2); padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; cursor: pointer; }
+    .btn--bloco { margin-top: var(--espacamento-2); }
   `,
 })
 export class MensagensEnviadasPagina implements OnInit {
