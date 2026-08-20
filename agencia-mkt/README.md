@@ -53,6 +53,7 @@ o GeraCRM já tem meio construído, porque conhece a venda efetivada no ERP.
 | [`guardrails.md`](guardrails.md) | Dinheiro real, políticas de plataforma, LGPD, kill switch |
 | [`roteiro.md`](roteiro.md) | As fases, na ordem em que reduzem risco |
 | [`backlog-tecnico.md`](backlog-tecnico.md) | Os épicos AQ-xx: o que falta programar, com dependências |
+| [`implementacao.md`](implementacao.md) | **O que já foi construído** e as decisões técnicas por trás |
 | [`decisoes.md`](decisoes.md) | ADRs desta operação (AMK-xxx) |
 | [`perguntas-em-aberto.md`](perguntas-em-aberto.md) | O que depende de decisão do dono do produto |
 
@@ -71,7 +72,9 @@ As mesmas do repositório (ver `../CLAUDE.md`), sem exceção:
 
 ## Estado
 
-**Planejamento.** Nada implementado. O primeiro passo do [`roteiro.md`](roteiro.md) é a Fase 0
+**Fundação em código** (2026-08-20): schema de mídia, origem do lead, conversão de custo na borda e a porta de plataforma — tudo agnóstico de plataforma, verificado por 9 varredores de schema e 461 testes. Ver [`implementacao.md`](implementacao.md).
+
+O resto é planejamento. O primeiro passo do [`roteiro.md`](roteiro.md) é a Fase 0
 (só leitura), que não gasta um centavo de mídia e já produz valor.
 
 **Onde começa** (AMK-011): na **família drezz/GeraCloud** — a própria Gera3 primeiro, depois

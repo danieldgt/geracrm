@@ -6,6 +6,32 @@
 
 ⚠️ Este é o backlog do **contexto novo**. Ele não altera a forma do núcleo do GeraCRM — só adiciona.
 
+## Estado da implementação (2026-08-20)
+
+| Legenda | Significa |
+|---|---|
+| ✅ | pronto e testado |
+| 🔨 | parcial — a parte de baixo (schema/domínio) existe, falta rota/tela/worker |
+| (sem marca) | não começado |
+
+**Feito até aqui** — branch `docs/agencia-mkt`, 3 commits:
+
+| Entrega | Onde |
+|---|---|
+| Schema de estrutura, custo e `modo_entrada` | `infra/migrations/0058_midia_estrutura.sql` |
+| Schema de origem do lead + sessão da LP | `infra/migrations/0059_midia_lead_origem.sql` |
+| Conversão de custo na borda (micros · decimal · soma · ROAS) | `packages/shared/src/dominio/midia-custo.ts` |
+| Código de origem (gerar · montar · **extrair**) | `packages/shared/src/dominio/midia-origem.ts` |
+| Porta de plataforma com capacidades declaradas | `apps/api/src/contexts/aquisicao/plataformas/porta.ts` |
+
+**Verificado:** 9 varredores de schema · 385 testes na API · 76 no `shared` · typecheck ok.
+
+⚠️ **O que ainda NÃO existe:** nenhum adaptador real (Google ou Meta), nenhum worker de
+sincronização, nenhuma rota, nenhuma tela. O que foi construído é a **fundação agnóstica de
+plataforma** — de propósito, porque AMK-012/015 estão em reexame e nada disso depende do desfecho.
+
+---
+
 ## Antes de tudo: o que NÃO está aqui porque já existe
 
 Isolamento multi-tenant, cadastro de lead sem documento, kanban de qualificação, opt-out
@@ -19,17 +45,17 @@ pedido do ERP. É a metade cara, e está construída.
 
 | # | Épico | Depende de | Peso |
 |---|---|---|---|
-| **AQ-01** | Schema `midia_*`: conta, campanha, conjunto, anúncio, criativo. RLS em todas, chave composta `(tenant_id, id)`, id externo da plataforma com `UNIQUE(tenant_id, plataforma, id_externo)` | — | P |
-| **AQ-02** | `midia_metrica_dia`: impressão, clique, **custo em centavos**, conversões reivindicadas pela plataforma. ⚠️ Conversão de micros (Google) e float (Meta) **no adaptador** | AQ-01 | P |
+| ✅ **AQ-01** | Schema `midia_*`: conta, campanha, conjunto, anúncio, criativo. RLS em todas, chave composta `(tenant_id, id)`, id externo da plataforma com `UNIQUE(tenant_id, plataforma, id_externo)` | — | P |
+| ✅ **AQ-02** | `midia_metrica_dia`: impressão, clique, **custo em centavos**, conversões reivindicadas pela plataforma. ⚠️ Conversão de micros (Google) e float (Meta) **no adaptador** | AQ-01 | P |
 | **AQ-04** | ⚠️ **Adaptador Google — leitura** (agora o primeiro, AMK-015). Exige *developer token* e conta **MCC** — começar o credenciamento já | developer token | M |
 | **AQ-03** | Adaptador **Meta — leitura**, ⚠️ **restrito à conta da própria Gera3** (Rede A). Sem App Review não lê conta de cliente (AMK-012) | — | M |
 | **AQ-05** | Worker de sincronização agendado, em **modo dono** com advisory lock, com `registrarOperacao()` (lidos/aceitos/rejeitados) — mesmo padrão do integrador GeraCloud | AQ-02/03 | M |
 | **AQ-06** | Painel de mídia no console: conta → campanha → anúncio, **paginado por cursor**, com os 5 estados | AQ-02 | M |
 | **AQ-07** | **Vigia de anomalia** sobre `metrica_janela`/`alerta` (`0031`): gasto fora de banda, veiculação parada, ⚠️ evento parou de chegar | AQ-02 | P |
 | **AQ-08** | **Resumo diário** por WhatsApp (gasto, leads, CPL, o que mudou) + exceções na hora | AQ-07 | P |
-| **AQ-36** | **`modo_entrada` na campanha** (AMK-016): `inbound_wa` \| `outbound_formulario`, com a consequência aplicada **em código** no roteamento e o preço do modo visível na tela de criação | AQ-01 | M |
+| 🔨 **AQ-36** | **`modo_entrada` na campanha** (AMK-016): `inbound_wa` \| `outbound_formulario`, com a consequência aplicada **em código** no roteamento e o preço do modo visível na tela de criação | AQ-01 | M |
 | **AQ-44** | ⚠️ **LP com botão `wa.me` + código de sessão**: gera id por sessão, guarda `gclid`/UTM/página contra ele, injeta no `?text=`. **Caminho crítico** — sem destino não há campanha Google (AMK-015) | AQ-01 | G |
-| **AQ-45** | **Parser do código na primeira mensagem**: aceita em qualquer posição, degrada para origem **parcial** se ausente, e mede a ⚠️ **taxa de código perdido** como métrica de saúde | AQ-44 | M |
+| 🔨 **AQ-45** | **Parser do código na primeira mensagem**: aceita em qualquer posição, degrada para origem **parcial** se ausente, e mede a ⚠️ **taxa de código perdido** como métrica de saúde | AQ-44 | M |
 
 **Critério de saída:** lemos as contas dos clientes todo dia, produzimos relatório que eles não
 tinham, e **não tocamos em nada**.
@@ -40,7 +66,7 @@ tinham, e **não tocamos em nada**.
 
 | # | Épico | Depende de | Peso |
 |---|---|---|---|
-| **AQ-09** | `midia_lead_origem` 1:1 com `contato`: UTM, ids de plataforma, `click_id` (`fbclid`/`gclid`/`wbraid`), LP, referrer, **consentimento (texto + timestamp)**, `capturado_em` do servidor | AQ-01 | P |
+| ✅ **AQ-09** | `midia_lead_origem` **1:N** com `contato`: UTM, ids de plataforma, `click_id` (`fbclid`/`gclid`/`wbraid`), LP, referrer, **consentimento (texto + timestamp)**, `capturado_em` do servidor | AQ-01 | P |
 | **AQ-10** | Ingestão **Lead Ads** (webhook Meta), handler idempotente. ⚠️ Código HTTP é instrução: falha permanente responde 200 e vai para o log | AQ-09 | M |
 | **AQ-11** | ~~Ingestão **Click-to-WhatsApp**~~ — ⏸️ **fora de escopo** enquanto AMK-012 valer (CTWA é formato Meta). Substituído por AQ-44/45. Volta sem retrabalho se o registro sair | — | — |
 | **AQ-12** | Ingestão **formulário de LP**: endpoint público com rate limit e anti-spam | AQ-09 | P |

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import postgres from 'postgres'
+import { PLATAFORMAS } from '@geracrm/shared'
 
 /**
  * Isolamento e invariantes do schema de mídia (0058/0059).
@@ -182,5 +183,30 @@ describe('Código da sessão de LP (AQ-44/45)', () => {
       dono`INSERT INTO midia_sessao_lp (tenant_id, id, codigo)
            VALUES (${A}, gen_random_uuid(), 'a7k2q-minusculo')`,
     ).rejects.toThrow(/midia_sessao_codigo_formato/)
+  })
+})
+
+describe('Coerência entre o tipo e o banco', () => {
+  /**
+   * ⚠️ INV-48 proíbe enum no banco, então `Plataforma` (TypeScript) e o CHECK
+   * `midia_conta_plataforma_valida` (SQL) são duas listas escritas à mão. Sem
+   * este teste, acrescentar uma plataforma no TypeScript compila, passa em tudo,
+   * e só falha em produção no primeiro INSERT.
+   */
+  it('toda plataforma do tipo é aceita pelo CHECK', async () => {
+    for (const p of PLATAFORMAS) {
+      const id = await dono<{ id: string }[]>`
+        INSERT INTO midia_conta (tenant_id, id, plataforma, id_externo, nome)
+        VALUES (${A}, gen_random_uuid(), ${p}, ${'coerencia-' + p}, 'Teste')
+        RETURNING id`
+      expect(id).toHaveLength(1)
+    }
+  })
+
+  it('e uma plataforma fora do tipo é recusada pelo CHECK', async () => {
+    await expect(
+      dono`INSERT INTO midia_conta (tenant_id, id, plataforma, id_externo, nome)
+           VALUES (${A}, gen_random_uuid(), 'linkedin', 'x', 'Teste')`,
+    ).rejects.toThrow(/midia_conta_plataforma_valida/)
   })
 })
