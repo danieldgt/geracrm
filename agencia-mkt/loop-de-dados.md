@@ -15,7 +15,10 @@ clique ──▶ landing page ──▶ formulário/CTWA ──▶ contato ─�
    └── click_id └── utm_*          └── lead_id ─────────── mesmo id ────────────────────┘
 ```
 
-O que precisa ser capturado e persistido **no momento da entrada**, uma linha 1:1 com o `contato`:
+O que precisa ser capturado e persistido **no momento da entrada**. ⚠️ **É 1:N com o `contato`,
+não 1:1** — o mesmo contato pode chegar por um anúncio hoje e por outro daqui a três meses, e a
+origem nova **não apaga a primeira**. Guardamos todos os toques e declaramos o modelo de
+atribuição na consulta (primeiro toque × último toque), pela mesma disciplina de AMK-009:
 
 | Campo | Origem | Observação |
 |---|---|---|
