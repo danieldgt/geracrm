@@ -181,3 +181,43 @@ Depende da resposta à pergunta nº 0 de [`perguntas-em-aberto.md`](perguntas-em
 
 ⚠️ Em qualquer dos dois, **o que foi construído continua valendo** — foi por isso que
 a fundação veio antes do adaptador.
+
+---
+
+## 6. O roteamento — provado por exaustão, não por amostra
+
+`rotearLead` (`packages/shared/src/dominio/roteamento-lead.ts`) decide quem atende: agente ou
+pessoa. Nove regras em ordem, a primeira que casa decide.
+
+### "Rede A/B" virou política do tenant
+
+AMK-014 falava em Rede A × Rede B. Na implementação virou `politicaAgente`:
+`autonomo` | `copiloto` | `desligado`.
+
+⚠️ **O domínio não precisa saber quem é a Gera3 e quem é a loja.** "Rede A" é o nosso organograma,
+e organograma dentro de regra de negócio envelhece mal. De quebra, um cliente também pode preferir
+copiloto — o que a formulação original não permitia — e o kill switch passa a caber na mesma
+dimensão em vez de virar flag paralela.
+
+### A explicação mora junto da regra
+
+`EXPLICACAO` mapeia cada motivo para o texto que a tela mostra ao gestor. ⚠️ Se a explicação
+morasse no console, ela divergiria do comportamento no primeiro ajuste — e o gestor leria uma razão
+que não foi a razão.
+
+### Prova por exaustão
+
+O teste enumera as **288 combinações** possíveis de entrada e verifica propriedades sobre **todas**,
+não sobre os casos que alguém lembrou de escrever:
+
+| Propriedade | Por que importa |
+|---|---|
+| A função é **total** | Toda entrada produz decisão; não existe estado sem resposta |
+| Com `desligado`, **nada** chega ao agente | ⚠️ É o que faz o kill switch ser um kill switch |
+| Em campanha outbound, **nada** chega ao agente | AMK-016 aplicado, não confiado ao operador |
+| Cliente de alto valor **nunca** cai no agente | A regra inegociável, provada |
+| Quem tem dono de carteira **nunca** cai no agente | A relação não é interrompida |
+| A **maioria** das combinações termina em fila humana | O padrão é humano, e isso é mensurável |
+
+⚠️ Testar os caminhos que se imagina prova que eles funcionam. Enumerar o espaço prova que **não há
+caminho que escape** — e é a diferença entre um kill switch que parece funcionar e um que funciona.

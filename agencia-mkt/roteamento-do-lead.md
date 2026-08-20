@@ -61,6 +61,19 @@ resolve nada. A defesa já está no banco, e a regra é:
 - A métrica que importa não é tempo de resposta: é **tempo até qualificação** e **taxa de
   conversa que vira pedido**. Resposta rápida é meio, não resultado.
 
+## 3.5. ⚠️ Refinamento na implementação: "Rede A/B" virou política do tenant
+
+AMK-014 formulou a regra como **Rede A × Rede B**. Ao implementar (`rotearLead`), isso virou
+**`politicaAgente`** — `autonomo` | `copiloto` | `desligado` — declarada por tenant.
+
+A regra é a mesma; a expressão é melhor por três motivos:
+
+- ⚠️ **O domínio não precisa saber quem é a Gera3 e quem é a loja.** "Rede A" é o nosso organograma,
+  não um conceito do produto — e organograma dentro de regra de negócio envelhece mal.
+- Um **cliente também pode preferir copiloto**, e nada na formulação original permitia isso.
+- **O kill switch cabe na mesma dimensão** (`desligado`) em vez de virar uma flag paralela — o que
+  torna possível provar que nenhuma combinação escapa dele.
+
 ## 4. As regras de roteamento
 
 Avaliadas em ordem, em código — ⚠️ não no prompt (AMK-007). A primeira que casar decide.

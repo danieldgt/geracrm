@@ -54,6 +54,7 @@ o GeraCRM já tem meio construído, porque conhece a venda efetivada no ERP.
 | [`roteiro.md`](roteiro.md) | As fases, na ordem em que reduzem risco |
 | [`backlog-tecnico.md`](backlog-tecnico.md) | Os épicos AQ-xx: o que falta programar, com dependências |
 | [`implementacao.md`](implementacao.md) | **O que já foi construído** e as decisões técnicas por trás |
+| [`pesquisa-acesso-meta.md`](pesquisa-acesso-meta.md) | ⚠️ **A resposta à pergunta nº 0** — e o que ela reabre |
 | [`decisoes.md`](decisoes.md) | ADRs desta operação (AMK-xxx) |
 | [`perguntas-em-aberto.md`](perguntas-em-aberto.md) | O que depende de decisão do dono do produto |
 

@@ -116,10 +116,11 @@ AMK. É reversível e barato; só não deve ficar ambíguo por muito tempo.
 
 ## ⚠️ Aberto pelas decisões de 2026-08-20
 
-0. 🔴 **O padrão "App do cliente" serve para a Marketing API?** É a pergunta que decide se a Meta
-   volta ao desenho (e com ela o CTWA e o `ctwa_clid`). O canal de WhatsApp oficial **já funciona
-   assim** — o cliente traz o próprio App e o `META_APP_SECRET` vem dele. ⚠️ Se valer para
-   anúncios, **AMK-012 e AMK-015 precisam ser revistas**. Verificar na prática, não assumir.
+0. ✅ **RESPONDIDA (2026-08-20) — o padrão "App do cliente" SERVE para a Marketing API.**
+   Ver [`pesquisa-acesso-meta.md`](pesquisa-acesso-meta.md). Em resumo: a documentação da Meta diz
+   que App Review só é exigido para gerenciar conta **de terceiros**; o App do próprio cliente,
+   lendo a conta de anúncio **dele**, roda sem revisão, com **5.000 chamadas/hora** — folgado para
+   sincronizar uma conta por dia. ⚠️ **Isso reabre AMK-012 e AMK-015 para decisão sua.**
 1. **Quanto custa a assinatura/módulo?** AMK-013 tirou o % do investimento da mesa e não pôs número
    no lugar. É a próxima decisão comercial.
 2. **`apps/catalogo` completo ou LP mínima?** AQ-44 virou caminho crítico. Construir o catálogo da
