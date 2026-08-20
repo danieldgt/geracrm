@@ -221,3 +221,74 @@ não sobre os casos que alguém lembrou de escrever:
 
 ⚠️ Testar os caminhos que se imagina prova que eles funcionam. Enumerar o espaço prova que **não há
 caminho que escape** — e é a diferença entre um kill switch que parece funcionar e um que funciona.
+
+---
+
+## 7. O ROI — e por que aqui não existe "atribuição exata"
+
+`roiDaVeiculacao` (`apps/api/src/contexts/aquisicao/roi.ts`) responde a pergunta que sustenta a
+oferta: **quanto este anúncio custou e quanto ele fez faturar no ERP.**
+
+### A distinção que eu tinha errado nos documentos
+
+`AMK-009` herdou de `0036` a régua "exata × estimada". ⚠️ **Ela não transfere para mídia.**
+
+Um pedido de disparo de WhatsApp **nasce vinculado** à campanha — `pedido.campanha_id` é um fato
+registrado no instante da criação. A venda de um lead de anúncio acontece semanas depois, num pedido
+que não carrega referência nenhuma ao anúncio. Ligar os dois é **sempre um modelo**.
+
+Chamar isso de "exata" seria pegar emprestada uma credibilidade que o dado não tem. O que a função
+devolve, separado e rotulado:
+
+| Número | Natureza |
+|---|---|
+| custo · impressões · cliques | **fato** — veio da plataforma |
+| leads | **fato** — a origem foi registrada na entrada |
+| custo por lead | fato ÷ fato |
+| receita atribuída | ⚠️ **modelo declarado** (primeiro × último toque) + janela |
+| receita **sem ambiguidade** | o subconjunto onde os dois modelos concordam |
+
+### `semAmbiguidade` — a medida de quanto o número é escolha nossa
+
+O subconjunto de vendas cujo contato teve **um único toque de mídia**. Para eles, primeiro e último
+toque são o mesmo, então o número **não depende do modelo**.
+
+⚠️ **A distância entre o atribuído e o sem-ambiguidade mede quanto do ROAS é artefato de
+modelagem.** Perto: o número se sustenta. Longe: ele é uma escolha nossa — e o cliente merece saber
+disso **antes** de assinar performance em cima.
+
+Não conheço nenhuma agência que reporte isso. É barato de calcular e é o que separa um número
+auditável de um número convincente.
+
+### Detalhes que o SQL esconde
+
+- ⚠️ **`venda` é particionada por `ocorrida_em`.** As consultas carregam limites **absolutos** de
+  data além da comparação relativa ao toque — sem constante, o planejador não poda partição e varre
+  a tabela inteira.
+- ⚠️ **`cancelada_em IS NULL`** em toda receita. É a convenção da casa (BI, painel, funil, ficha do
+  contato) e o teste prova que a venda cancelada não entra em modelo nenhum.
+- **Janela empurra o limite superior**: um lead captado no último dia do período ainda pode comprar
+  dentro da janela, então a busca de vendas vai até `ate + janela`.
+- `null` em vez de `Infinity` no custo-por-lead e no ROAS quando o denominador é zero.
+
+### O teste prova a divergência, não a concordância
+
+O cenário tem um contato tocado por **A e depois por B**. Primeiro toque credita a venda ao A;
+último credita ao B. ⚠️ Um teste com um toque por contato passaria com qualquer modelo e não
+provaria nada sobre o que o módulo existe para dizer.
+
+---
+
+## ⚠️ Achado fora do escopo: `campanha-analise.ts` conta venda cancelada
+
+Ao conferir a convenção, encontrei que `apps/api/src/contexts/crm/campanha-analise.ts` (o ROI de
+campanha de WhatsApp, `0036`) **não filtra `cancelada_em`** na receita estimada — enquanto BI,
+painel, funil e ficha do contato filtram (14 usos no repositório).
+
+**Efeito:** a receita estimada de campanha inclui vendas canceladas, inflando o ROI **na direção que
+agrada** — que é o tipo de erro que ninguém reporta.
+
+**Correção:** uma linha (`AND v.cancelada_em IS NULL`) na consulta da estimada.
+
+⚠️ **Não corrigido aqui** — é outro módulo, com testes próprios, e mudar cálculo de receita sem ser
+pedido surpreende quem depende do número. Fica registrado para decisão.

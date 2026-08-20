@@ -24,8 +24,9 @@
 | Código de origem (gerar · montar · **extrair**) | `packages/shared/src/dominio/midia-origem.ts` |
 | Porta de plataforma com capacidades declaradas | `apps/api/src/contexts/aquisicao/plataformas/porta.ts` |
 | Motor de roteamento (regra pura, 9 regras em ordem) | `packages/shared/src/dominio/roteamento-lead.ts` |
+| ROI da veiculação (custo · leads · atribuição por modelo) | `apps/api/src/contexts/aquisicao/roi.ts` |
 
-**Verificado:** 9 varredores de schema · 385 testes na API · 94 no `shared` · typecheck ok.
+**Verificado:** 9 varredores de schema · 396 testes na API · 94 no `shared` · typecheck ok.
 
 ⚠️ **O que ainda NÃO existe:** nenhum adaptador real (Google ou Meta), nenhum worker de
 sincronização, nenhuma rota, nenhuma tela. O que foi construído é a **fundação agnóstica de
@@ -74,7 +75,7 @@ tinham, e **não tocamos em nada**.
 | **AQ-13** | Reconciliação com contato existente pelo **telefone normalizado** (`0008`, ADR-019). ⚠️ Lead que já é cliente ganha origem nova, não contato novo | AQ-09 | P |
 | **AQ-14** | **CAPI / Enhanced Conversions** com `event_id` compartilhado com o pixel (dedup) e PII **hasheada** | AQ-09 | M |
 | **AQ-15** | **Conversor**: devolve `Compra` com **valor real do pedido efetivado**, com cursor no outbox, retry, dead-letter e ⚠️ falha de janela **nomeada** — mesma forma do despachante de `webhook_saida` (`0033`) | AQ-14, pedido | M |
-| **AQ-16** | **ROAS exato × estimado** com custo: endpoint + tela. ⚠️ Nunca somados, janela sempre declarada (régua de `0036`) | AQ-02, AQ-15 | M |
+| 🔨 **AQ-16** | **ROI da veiculação** com custo: cálculo pronto, falta endpoint + tela. ⚠️ "Exata × estimada" não transfere para mídia — ver `implementacao.md` §7. ⚠️ Nunca somados, janela sempre declarada (régua de `0036`) | AQ-02, AQ-15 | M |
 | **AQ-37** | **Sincronização de públicos** (Google **Customer Match**): sobe lista a partir de compradores reais do ERP e das faixas RFV, PII **hasheada**, re-sync periódico. ⚠️ Customer Match tem **requisitos de elegibilidade** — verificar **antes** de prometer ao cliente (AMK-015) | AQ-14 | M |
 | **AQ-38** | **Públicos de exclusão**: já é cliente, já está em conversa e ⚠️ **opt-out** (`recebe_campanhas = false` deve alcançar a mídia paga, não só a mensagem) | AQ-37 | P |
 | **AQ-39** | **Funil por origem** como instrumento de diagnóstico: impressão → clique → lead → qualificado → pedido → venda, com custo em cada etapa | AQ-16, AQ-18 | M |

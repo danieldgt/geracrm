@@ -82,11 +82,17 @@ exceção (regra da casa, PED-08).
 
 `0036` e `campanha-analise.ts` já codificam a disciplina certa. Ela se traduz assim para mídia:
 
+⚠️ **Correção (2026-08-20, ao implementar):** a régua de `0036` **não transfere direto**. Lá, o
+pedido nasce vinculado à campanha — `pedido.campanha_id` é fato registrado na criação. Aqui, a venda
+acontece semanas depois num pedido que não referencia o anúncio: ligar os dois é **sempre modelo**.
+Chamar de "exata" seria pegar emprestada credibilidade que o dado não tem. A régua real:
+
 | Camada | Definição | Natureza |
 |---|---|---|
-| **Exata** | o lead entrou com `click_id`/`anuncio_externo_id` **e** virou pedido efetivado | fato |
-| **Estimada** | comprou dentro da janela declarada, sem vínculo direto | correlação |
-| **Custo** | soma de `midia_metrica_dia.custo_centavos` no mesmo recorte | fato |
+| **Custo · cliques · impressões** | soma de `midia_metrica_dia` no recorte | **fato** |
+| **Leads** | origem registrada na entrada | **fato** |
+| **Receita atribuída** | vendas do contato tocado, dentro da janela | ⚠️ **modelo declarado** (primeiro × último toque) |
+| **Sem ambiguidade** | subconjunto de contatos com **um único toque** — os dois modelos concordam | fato sobre o modelo |
 
 ⚠️ **Nunca somar exata e estimada.** A janela é **sempre declarada** ao lado do número. Um painel
 que mostra "R$ 120 mil atribuídos" sem dizer a janela e sem separar as camadas está mentindo — e
