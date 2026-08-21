@@ -299,3 +299,76 @@ receita em 155%. Só então entrou o `AND v.cancelada_em IS NULL`.
 ⚠️ A **exata** não precisava do filtro: `cancelado` é *estado* do pedido (`0038`), mutuamente
 exclusivo com `efetivado` — o `estado = 'efetivado'` já bastava. Conferir isso evitou uma "correção"
 redundante do outro lado da conta.
+
+---
+
+## 8. Resolução tardia da origem — o descompasso é estrutural
+
+O lead entra pelo webhook em **segundos**; a estrutura de veiculação só chega na sincronização
+seguinte, **horas depois**. Por isso `midia_lead_origem` guarda `anuncio_externo_id` sempre e as FKs
+nascem nulas (migration `0059`).
+
+`resolverOrigensPendentes` roda depois de cada sincronização e preenche a hierarquia inteira —
+anúncio, campanha e conta —, em modo dono, com `tenant_id` explícito.
+
+### Nunca adivinha
+
+⚠️ `midia_anuncio.id_externo` é único por **conjunto**, não por tenant. Dois candidatos para o mesmo
+id externo → a linha **fica pendente**. Atribuir ao primeiro creditaria a venda ao anúncio errado, e
+o número ficaria plausível. É a mesma regra de `extrairCodigoOrigem`, pelo mesmo motivo: **errar de
+forma visível é melhor que errar de forma convincente.**
+
+O retorno separa `resolvidas`, `ambiguas` e `pendentes` — ambiguidade é um estado que alguém precisa
+ver, não um silêncio.
+
+### A janela de 30 dias existe para a varredura terminar
+
+⚠️ Se o anúncio não apareceu em 30 dias, ele não vai aparecer — foi apagado, veio de outra conta, ou
+o id chegou errado. Sem o corte, cada passada arrasta para sempre um resíduo que nunca resolve.
+
+A origem antiga **não é perdida**: continua com `anuncio_externo_id` e vale como **origem parcial** —
+sabemos que veio de anúncio, não de qual.
+
+### Idempotente por construção
+
+Só toca linhas com `anuncio_id IS NULL`. Rodar duas vezes seguidas não muda nada na segunda — o que
+importa porque ela roda a cada sincronização.
+
+---
+
+## 9. `midia_conversao` — a devolução do sinal
+
+`0060`. É o que fecha o loop: sem ela, a plataforma otimiza pelo que enxerga (lead barato); com ela,
+recebe de volta a venda efetivada no ERP **com o valor real** e passa a procurar quem compra.
+
+### Entidade separada de `venda`, de propósito
+
+⚠️ A devolução é um **fato com entrega própria**: falha, precisa de retry, dead-letter e registro.
+Colapsá-la em `venda` esconderia a falha de entrega — e o painel continuaria bonito com o loop
+aberto. Mesma forma do despachante de `webhook_saida` (`0033`).
+
+### Os CHECKs que carregam a tese do produto
+
+| Invariante | Por quê |
+|---|---|
+| **compra exige `valor_centavos > 0`** | ⚠️ É o ponto inteiro da tabela. Devolver compra **sem valor** faz a plataforma voltar a otimizar por volume de lead |
+| compra exige `venda_id` | Sem a venda de origem, não há o que auditar |
+| **INV-62** — uma venda por plataforma por tipo | ⚠️ Reprocessar duplicaria a receita no painel da plataforma — e o número ficaria **maior**, então ninguém reclamaria |
+| **`event_id` único** | É a chave de dedup **da plataforma**, compartilhada com o pixel. Repetir faz a plataforma descartar um evento em silêncio |
+
+### `descartada` ≠ `falhou`
+
+⚠️ Dois estados porque são **causas diferentes com ações diferentes**:
+
+- **`falhou`** — tentamos e a plataforma recusou até esgotar as tentativas. Ação: investigar.
+- **`descartada`** — **nós** decidimos não enviar (fora da janela de importação, origem sem
+  `click_id`). Ação: nenhuma; é esperado.
+
+Juntá-las num só estado esconderia qual é qual no painel, e a operação passaria a tratar o normal
+como incidente — ou, pior, o incidente como normal.
+
+### Sem FK para `venda`
+
+⚠️ `venda` é particionada e a PK é composta com a chave de partição. O precedente da casa é
+`item_venda` (`0014`): carrega `venda_id` + `venda_ocorrida_em` e dispensa a FK. Seguimos o mesmo,
+com CHECK garantindo que as duas colunas andam juntas.
