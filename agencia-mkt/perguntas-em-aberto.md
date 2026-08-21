@@ -131,5 +131,12 @@ AMK. É reversível e barato; só não deve ficar ambíguo por muito tempo.
 3. **Customer Match do Google está elegível para as contas dos clientes?** AQ-37 depende disso, e há
    requisitos de histórico e conformidade. ⚠️ **Verificar antes de prometer** — é a promessa mais
    forte da oferta.
-4. **Qual o teto de volume do SDR por número?** AMK-014 aceita o risco do não-oficial de forma
+4. 🔴 **Como a landing page se identifica?** A LP roda no navegador do lead e não tem sessão — mas
+   ⚠️ **o ADR-001 proíbe tenant vindo de parâmetro**, e aceitar `tenantId` no corpo abriria a porta
+   para qualquer um poluir a base de qualquer cliente. Os webhooks resolvem isso **resolvendo** o
+   tenant de um identificador (`phone_number_id` → canal → tenant, migration 0057). A LP precisa
+   do equivalente: uma **chave pública por tenant**. É superfície de segurança e não deve ser
+   inventada de passagem. Enquanto isso, `POST /v1/aquisicao/sessoes` é **autenticada** — serve
+   para testar o fluxo inteiro e para LP com backend próprio.
+5. **Qual o teto de volume do SDR por número?** AMK-014 aceita o risco do não-oficial de forma
    medida; falta o número que a rampa de aquecimento (`0037`) deve respeitar com agente ligado.

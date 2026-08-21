@@ -478,3 +478,54 @@ delas tem prazo.
 ⚠️ Escrevi comentários SQL com **crases** (`` `event_id` ``) dentro de um template literal — e a
 crase **fecha a string**. O erro do TypeScript apontava para linhas que pareciam inocentes. Dentro
 de `sql\`...\``, comentário usa aspas.
+
+---
+
+## 12. As rotas — e o ADR que quase furei
+
+`rotas-aquisicao.ts` expõe a camada por HTTP: contas, painel de anúncios, ROI, sessão da LP e um
+diagnóstico do extrator.
+
+### ⚠️ A rota pública que não foi feita
+
+O desenho natural era `POST /publico/lp/sessao` recebendo o `tenantId` no corpo — a landing page roda
+no navegador do lead e não tem sessão, afinal. **Isso viola o ADR-001 de frente:** tenant nunca vem
+de parâmetro. Qualquer um poderia poluir a base de qualquer cliente.
+
+Os webhooks, que também recebem chamada externa, **não confiam no que chega** — eles *resolvem* o
+tenant a partir de um identificador (`phone_number_id` → `canal_conectado` → tenant, migration
+`0057`). A LP precisa do equivalente: uma **chave pública por tenant**, resolvível.
+
+Isso é superfície de segurança e é decisão de produto — não algo para inventar de passagem. Ficou
+registrado em [`perguntas-em-aberto.md`](perguntas-em-aberto.md), e enquanto isso a criação de sessão
+é **autenticada**: serve para testar o fluxo inteiro e para uma LP com backend próprio.
+
+### O modelo de atribuição é obrigatório na query
+
+`GET /v1/aquisicao/anuncios/:id/roi` **recusa (422)** sem `modelo`. ⚠️ Não há default: um número de
+atribuição sem o modelo ao lado é exatamente a promessa que o produto não sustenta (AMK-009).
+Escolher por conta própria seria devolver uma opinião com cara de fato.
+
+### Diagnóstico do código — para poder testar à mão
+
+`POST /v1/aquisicao/diagnostico/codigo` recebe uma mensagem colada e responde se o código foi achado
+e a qual sessão pertence. Não escreve nada. Existe porque testar a atribuição não deveria exigir
+mandar mensagem de verdade — e porque a **taxa de código perdido** é a métrica de saúde da operação
+(AMK-017), então precisa ser fácil de inspecionar.
+
+### Conflito é 409, não 500
+
+Cadastrar conta já existente devolve `409 conta.ja_cadastrada`. ⚠️ Falha de negócio é retorno
+tipificado, não exceção (PED-08) — a tela precisa do motivo nomeado para dizer o que fazer.
+
+---
+
+## O erro do `pnpm lint`, resolvido
+
+`packages/shared` declarava `"lint": "eslint src"`, mas **não há eslint nem config em lugar nenhum do
+monorepo** — todos os outros pacotes usam `echo 'eslint pendente'`. O script entrou por acidente num
+commit de **documentação** (`cf1ee3e`): nunca funcionou.
+
+Alinhei com os demais. ⚠️ **Isso deixa `pnpm lint` verde sem adicionar linting de verdade** — montar
+eslint no monorepo é decisão separada e maior. O que foi consertado é a inconsistência, não a
+ausência.
