@@ -292,3 +292,46 @@ AMK-012 e AMK-015 ficam **marcadas para reexame** com o dono do produto. Nada é
 unilateralmente: as decisões foram tomadas e valem até serem revistas. O trabalho técnico que segue
 (schema `midia_*`) é **agnóstico de plataforma** por desenho, então avança sem depender deste
 desfecho.
+
+---
+
+## AMK-017 — AMK-012 e AMK-015 são CONFIRMADAS, agora com informação completa
+**Decisão do dono do produto (2026-08-21).**
+
+**Contexto**: as duas decisões originais (2026-08-20) se apoiavam numa premissa que a pesquisa do
+dia seguinte derrubou — *"sem App Review nosso, a Meta não serve conta de cliente"*. Além disso,
+descobriu-se que o **canal oficial da Meta já existe em código** (`ec4bbd1`/`44cdb06`).
+
+⚠️ **A distinção importa:** uma decisão tomada sobre premissa falsa não é a mesma coisa que uma
+decisão reconfirmada sabendo que a premissa caiu. Esta é a segunda.
+
+**O que foi posto na mesa e recusado:**
+
+| Alternativa | Por que não foi escolhida |
+|---|---|
+| Reverter para Meta em tudo | ⚠️ Onboarding de dias a semanas **por cliente** — não escala para ~150 lojas sem Embedded Signup |
+| Meta no piloto, Google nos clientes | Manteria dois adaptadores desde a Fase 0, dobrando a superfície de integração |
+| Buscar nosso Tech Provider / App Review | Semanas de trabalho nosso; segue deferido desde 2026-08-09 |
+
+**Decisão**: mantém-se **Google Ads como plataforma** (AMK-015) e o **canal não-oficial** com a LP
+de `wa.me` (AMK-012). O reexame está encerrado.
+
+**Consequência**:
+- **O caminho por cliente continua leve** — vincular a conta ao nosso MCC, em vez de cada um
+  encarar uma verificação de negócio na Meta. Para uma base de lojas pequenas, é o que viabiliza a
+  oferta.
+- ⚠️ **A atribuição segue apoiada num código que o lead pode apagar** (AQ-45). O `ctwa_clid` seria
+  mais robusto e foi recusado junto — então a **taxa de código perdido** deixa de ser uma métrica
+  entre outras e vira **a** métrica de saúde da atribuição.
+- ⚠️ **O código do canal oficial (`meta_oficial`) fica sem uso na operação de aquisição.** Não é
+  desperdício: ele atende quem já tem WABA e continua sendo o caminho quando o Tech Provider entrar.
+- **Nada do que foi construído muda.** A `CapacidadesPlataforma` já declara `cliqueParaConversa`, e
+  o `modo_entrada` (AMK-016) já prevê um terceiro modo. Reverter no futuro é somar uma linha, não
+  reescrever.
+- 🔴 **O caminho crítico externo é o Google**: *developer token* (básico → padrão) e conta **MCC**.
+  Continua não iniciado, e agora é o único item bloqueante da Fase 0.
+
+**Achado registrado, não agido**: o canal oficial é **texto puro** hoje — envio de imagem e áudio
+devolvem `indisponivel`, e o parser de entrada não extrai mídia. Se um dia a decisão for revista, a
+frota dual (ADR-021) contorna: número oficial para o funil de anúncio, não-oficial para a venda com
+foto.

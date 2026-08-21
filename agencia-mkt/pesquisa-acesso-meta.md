@@ -66,7 +66,20 @@ estar desatualizados em qualquer texto sobre o assunto, inclusive neste.
 - **Tudo que já foi construído** (`implementacao.md`) é agnóstico de plataforma por desenho. A
   `CapacidadesPlataforma` já tem `cliqueParaConversa` — Meta entrando, vira `true`.
 
-## Recomendação
+## ✅ Desfecho (2026-08-21)
+
+A pesquisa foi levada ao dono do produto com as alternativas. **AMK-012 e AMK-015 foram
+confirmadas** — seguimos com Google + canal não-oficial. Registrado em **AMK-017**, com o que foi
+recusado e por quê.
+
+⚠️ O motivo decisivo não foi técnico: o padrão "App do cliente" **funciona**, mas cobra uma
+verificação de negócio **por cliente**, e a base-alvo é de lojas pequenas. O caminho leve venceu o
+caminho preciso.
+
+A consequência que fica: **a taxa de código perdido (AQ-45) vira a métrica de saúde da atribuição**,
+porque o `ctwa_clid` — que o lead não conseguiria apagar — foi recusado junto.
+
+## Recomendação (registrada antes da decisão)
 
 **Fazer o teste barato antes de decidir**: criar um App de teste no Business Manager da Gera3,
 gerar um System User token e chamar `GET /act_<id>/campaigns`. Uma tarde de trabalho responde com

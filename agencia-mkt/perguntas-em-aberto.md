@@ -120,7 +120,9 @@ AMK. É reversível e barato; só não deve ficar ambíguo por muito tempo.
    Ver [`pesquisa-acesso-meta.md`](pesquisa-acesso-meta.md). Em resumo: a documentação da Meta diz
    que App Review só é exigido para gerenciar conta **de terceiros**; o App do próprio cliente,
    lendo a conta de anúncio **dele**, roda sem revisão, com **5.000 chamadas/hora** — folgado para
-   sincronizar uma conta por dia. ⚠️ **Isso reabre AMK-012 e AMK-015 para decisão sua.**
+   sincronizar uma conta por dia. ✅ **Reexame encerrado em 2026-08-21: AMK-012/015 CONFIRMADAS**
+   (AMK-017) — o padrão funciona, mas cobra verificação de negócio **por cliente**, e a base-alvo
+   é de lojas pequenas. O caminho leve venceu o caminho preciso.
 1. **Quanto custa a assinatura/módulo?** AMK-013 tirou o % do investimento da mesa e não pôs número
    no lugar. É a próxima decisão comercial.
 2. **`apps/catalogo` completo ou LP mínima?** AQ-44 virou caminho crítico. Construir o catálogo da
