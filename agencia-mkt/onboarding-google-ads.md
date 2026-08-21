@@ -126,9 +126,34 @@ necessárias.
 
 1. **[console.cloud.google.com](https://console.cloud.google.com)** → criar projeto (ex.: `geracrm-ads`).
 2. **APIs e serviços → Biblioteca** → ativar **Google Ads API**.
-3. **Credenciais** → criar **ID do cliente OAuth 2.0**.
-4. Gerar o **refresh token** do usuário que administra a MCC.
-5. Anote o **número do projeto** — ⚠️ ele entra no formulário do passo ④ e ajuda na aprovação.
+3. **Tela de permissão OAuth** → tipo **Externo** → preencher nome do app, e-mail de suporte e
+   e-mail do desenvolvedor.
+4. ⚠️ **PUBLICAR o app** — "Publicar app" / status **Em produção**. Ver o aviso abaixo; é o passo
+   que mais quebra integração de Google Ads.
+5. **Credenciais** → **Criar credenciais → ID do cliente OAuth 2.0** → tipo **App para computador**.
+   Guarde o **Client ID** e o **Client Secret**.
+6. Gerar o **refresh token**:
+   ```bash
+   GOOGLE_OAUTH_CLIENT_ID=... GOOGLE_OAUTH_CLIENT_SECRET=... \
+     node infra/dev/gerar-refresh-token-google.mjs
+   ```
+   O script sobe um servidor local, abre o fluxo, captura o retorno e imprime o token.
+7. Anote o **número do projeto** — ⚠️ ele entra no formulário do passo ④ e ajuda na aprovação.
+
+### ⚠️ A armadilha dos 7 dias
+
+**Tela de consentimento em "Testing" + tipo "External" → o Google REVOGA o refresh token em 7 dias.**
+A integração passa a quebrar toda semana, e o erro (`invalid_grant`) não diz o motivo.
+
+| Situação | Vida do refresh token |
+|---|---|
+| Testing + External | ⚠️ **7 dias** |
+| **Em produção** | indefinida (expira só se ficar 6 meses sem uso, ou for revogado) |
+| Internal | indefinida — ⚠️ **exige Google Workspace**, não existe em Gmail pessoal |
+
+Como a MCC está num Gmail pessoal, **"Internal" não é opção**: tem de publicar. Ao autorizar a si
+mesmo vai aparecer "app não verificado" — *Avançado → Acessar (não seguro)*. É esperado, e não
+impede o uso pela própria conta; a verificação só importa para distribuir a terceiros.
 
 ---
 
