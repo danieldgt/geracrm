@@ -209,6 +209,39 @@ fazer a verificação é otimismo.
 
 ---
 
+## ⚠️ O que é UMA VEZ e o que é POR CLIENTE
+
+| Passo | Frequência |
+|---|---|
+| ① MCC | **uma vez** — a Gera3 tem uma |
+| ② Developer token | **uma vez** — vive na MCC |
+| ③ Cloud + OAuth + refresh token | **uma vez** — a credencial é nossa |
+| ⑥ Vincular a conta do cliente | **por cliente** — convite, e ele aceita |
+
+Tecnicamente, o que muda por cliente é **só o `customerId` na URL**. Os três cabeçalhos
+(`developer-token`, `login-customer-id`, `Authorization`) são sempre os mesmos — por isso o adaptador
+recebe a conta como parâmetro e a credencial no construtor.
+
+⚠️ **É aqui que AMK-015/AMK-017 se pagam.** No caminho da Meta que foi recusado, **cada cliente**
+teria de criar Business Portfolio, passar por verificação de negócio (dias a semanas) e criar o
+próprio App. No Google, o cliente clica em "aceitar".
+
+### Duas ressalvas
+
+⚠️ **A cota é COMPARTILHADA.** O limite diário do developer token vale para **todos os clientes
+somados**, não por cliente. Onboarding barato não é escala grátis — é a razão de medir o consumo de
+uma sincronização antes de prometer volume. Com N clientes, o Basic vira necessário em algum N.
+
+⚠️ **Cliente sem conta de anúncio ainda é decisão em aberto:**
+
+| Saída | Consequência |
+|---|---|
+| **Ele cria e nos convida** | a conta é dele, o cartão é dele — bate com **AMK-002** |
+| **Nós criamos sob nossa MCC** | mais rápido, mas nasce sob nosso gerenciador e transferir posse depois dá trabalho |
+
+Para a drezz não importa (a Gera3 é dona dos dois lados). Para cliente de fora, importa: é dinheiro
+e é contrato.
+
 ## ⑥ Vincular a conta do cliente
 
 1. Na MCC: **Contas → +** → convidar pelo ID da conta de anúncio do cliente.

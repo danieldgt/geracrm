@@ -138,5 +138,9 @@ AMK. É reversível e barato; só não deve ficar ambíguo por muito tempo.
    do equivalente: uma **chave pública por tenant**. É superfície de segurança e não deve ser
    inventada de passagem. Enquanto isso, `POST /v1/aquisicao/sessoes` é **autenticada** — serve
    para testar o fluxo inteiro e para LP com backend próprio.
-5. **Qual o teto de volume do SDR por número?** AMK-014 aceita o risco do não-oficial de forma
+5. **Cliente sem conta de anúncio: ele cria ou nós criamos?** Se ele cria e nos convida, a conta e
+   o cartão são dele — bate com AMK-002. Se nós criamos sob a nossa MCC, é mais rápido, mas a
+   conta nasce sob o nosso gerenciador e ⚠️ **transferir posse depois dá trabalho**. Para a drezz
+   é indiferente (a Gera3 é dona dos dois lados); para cliente de fora é dinheiro e é contrato.
+6. **Qual o teto de volume do SDR por número?** AMK-014 aceita o risco do não-oficial de forma
    medida; falta o número que a rampa de aquecimento (`0037`) deve respeitar com agente ligado.
