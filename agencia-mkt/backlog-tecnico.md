@@ -155,7 +155,7 @@ janela de 24h nascer aberta — sem ele o SDR agent depende de template pago e e
 | **Canal oficial da Meta** | ✅ **código pronto** (`ec4bbd1`/`44cdb06`) — falta o cadastro, que é **do cliente** | — |
 | **Marketing API da Meta** | ❓ ⚠️ **verificar** se o padrão "App do cliente" serve para anúncios — reabre AMK-015 | CTWA · `ctwa_clid` |
 | **Nosso Tech Provider / App Review** | ⬜ não iniciado | Embedded Signup · escalar sem onboarding manual |
-| **Developer token + MCC do Google Ads** | 🔴 **não iniciado — começar já** (AMK-015) | ⚠️ AQ-04, e com ele a Fase 0 inteira para clientes |
+| **Developer token + MCC do Google Ads** | 🔴 **não iniciado** — guia executável em [`onboarding-google-ads.md`](onboarding-google-ads.md) | ⚠️ AQ-04. **Mas ver o `Explorer`**: ele já toca produção e costuma ser automático, então a Fase 0 pode destravar sem esperar aprovação |
 | **`apps/catalogo` ou LP mínima** | ❌ não implementado ("aguardando Onda 2") | ⚠️ AQ-44 — **sem destino não há campanha Google** |
 | **CI como gate** (R-08) | ❌ dívida da Onda 0 | ⚠️ tudo — agente com poder de escrita sem CI verde é risco desnecessário |
 | **Biblioteca de componentes** (R-12) | ❌ dívida da Onda 0 | AQ-06, AQ-20, AQ-33 (telas novas) |

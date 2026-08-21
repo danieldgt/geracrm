@@ -16,8 +16,11 @@ das decisões** que os agentes vão tomar depois.
 - ⚠️ Custo convertido para **centavos inteiros na borda** (micros no Google, float na Meta).
 - Painel de mídia no console + relatório diário automático.
 - **Vigia de anomalia** sobre `metrica_janela`/`alerta` (`0031`) — infra já existe.
-- ⚠️ **Iniciar o credenciamento no Google Ads** — *developer token* (básico → padrão) e conta
-  **MCC**. É o caminho crítico externo desta configuração (AMK-015), e leva dias a semanas.
+- 🔴 **Iniciar o credenciamento no Google Ads** — MCC + *developer token* + OAuth. Guia passo a
+  passo em [`onboarding-google-ads.md`](onboarding-google-ads.md). ⚠️ **O token nasce em `Test`**
+  (só conta de teste), mas o nível `Explorer` — frequentemente automático — já toca **produção**
+  com 2.880 operações/dia, e as restrições dele não atingem a leitura. **A Fase 0 pode começar
+  sem esperar aprovação nenhuma.**
 - ⚠️ **Construir a LP com botão `wa.me` e código de sessão** (AQ-44). Sem CTWA, o anúncio precisa
   de destino — isso promoveu `apps/catalogo` de dívida da Onda 2 a **pré-requisito**.
 

@@ -55,6 +55,7 @@ o GeraCRM já tem meio construído, porque conhece a venda efetivada no ERP.
 | [`backlog-tecnico.md`](backlog-tecnico.md) | Os épicos AQ-xx: o que falta programar, com dependências |
 | [`implementacao.md`](implementacao.md) | **O que já foi construído** e as decisões técnicas por trás |
 | [`pesquisa-acesso-meta.md`](pesquisa-acesso-meta.md) | ⚠️ **A resposta à pergunta nº 0** — e o que ela reabre |
+| [`onboarding-google-ads.md`](onboarding-google-ads.md) | 🔴 **Executável**: MCC, developer token e OAuth — o único item externo bloqueante |
 | [`decisoes.md`](decisoes.md) | ADRs desta operação (AMK-xxx) |
 | [`perguntas-em-aberto.md`](perguntas-em-aberto.md) | O que depende de decisão do dono do produto |
 
