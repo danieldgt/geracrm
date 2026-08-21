@@ -29,9 +29,10 @@
 | Despachante de conversões (backoff, dead-letter, advisory lock) | `apps/api/src/contexts/aquisicao/despachante-conversao.ts` |
 | Enfileirador (venda → conversão, uma por plataforma) | `apps/api/src/contexts/aquisicao/enfileirar-conversao.ts` |
 | Rotas HTTP (contas · painel · ROI · sessão da LP · diagnóstico) | `apps/api/src/contexts/aquisicao/rotas-aquisicao.ts` |
+| **Adaptador Google Ads** (leitura, versão configurável, paginação) | `apps/api/src/contexts/aquisicao/plataformas/google-ads.ts` |
 | ROI da veiculação (custo · leads · atribuição por modelo) | `apps/api/src/contexts/aquisicao/roi.ts` |
 
-**Verificado:** 10 varredores de schema · **456 testes na API** · 94 no `shared` · ⚠️ **os três checks verdes** (`lint`, `typecheck`, `test`).
+**Verificado:** 10 varredores de schema · **473 testes na API** · 94 no `shared` · ⚠️ **os três checks verdes** (`lint`, `typecheck`, `test`).
 
 ⚠️ **A fundação está fechada.** Tudo o que resta na Fase 0/1 depende de um adaptador real — e o adaptador depende do *developer token* do Google ([`onboarding-google-ads.md`](onboarding-google-ads.md)).
 
@@ -56,7 +57,7 @@ pedido do ERP. É a metade cara, e está construída.
 |---|---|---|---|
 | ✅ **AQ-01** | Schema `midia_*`: conta, campanha, conjunto, anúncio, criativo. RLS em todas, chave composta `(tenant_id, id)`, id externo da plataforma com `UNIQUE(tenant_id, plataforma, id_externo)` | — | P |
 | ✅ **AQ-02** | `midia_metrica_dia`: impressão, clique, **custo em centavos**, conversões reivindicadas pela plataforma. ⚠️ Conversão de micros (Google) e float (Meta) **no adaptador** | AQ-01 | P |
-| **AQ-04** | ⚠️ **Adaptador Google — leitura** (agora o primeiro, AMK-015). Exige *developer token* e conta **MCC** — começar o credenciamento já | developer token | M |
+| 🔨 **AQ-04** | ⚠️ **Adaptador Google — leitura** (agora o primeiro, AMK-015). Exige *developer token* e conta **MCC** — começar o credenciamento já | developer token | M |
 | **AQ-03** | Adaptador **Meta — leitura**, ⚠️ **restrito à conta da própria Gera3** (Rede A). Sem App Review não lê conta de cliente (AMK-012) | — | M |
 | **AQ-05** | Worker de sincronização agendado, em **modo dono** com advisory lock, com `registrarOperacao()` (lidos/aceitos/rejeitados) — mesmo padrão do integrador GeraCloud | AQ-02/03 | M |
 | 🔨 **AQ-06** | Painel de mídia: **endpoints prontos** (contas, anúncios por cursor, ROI); falta a tela Angular | AQ-02 | M |

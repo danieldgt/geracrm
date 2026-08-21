@@ -529,3 +529,53 @@ commit de **documentação** (`cf1ee3e`): nunca funcionou.
 Alinhei com os demais. ⚠️ **Isso deixa `pnpm lint` verde sem adicionar linting de verdade** — montar
 eslint no monorepo é decisão separada e maior. O que foi consertado é a inconsistência, não a
 ausência.
+
+---
+
+## 13. O adaptador Google — e a versão que não pode ser fixa
+
+`plataformas/google-ads.ts` implementa a porta contra a Google Ads API. Padrão do
+`CanalMetaOficial`: `fetch` injetável, erro tipificado, Google nunca chamado em teste.
+
+### ⚠️ A versão da API é configurável, e isso não é preferência
+
+O adaptador da Meta fixa `v21.0` no código, e está certo — lá a régua é outra. No Google:
+
+- lançamentos passaram a ser **mensais** em 2026;
+- cada versão vive **~1 ano**;
+- na desativação, **todas as requisições passam a falhar** — não degradam.
+
+A **v21 morreu em 05/08/2026**, duas semanas antes de escrevermos isto (descobri porque a URL de
+referência dela devolveu 404). Uma versão fixa no código é **um apagão com data marcada**. Sai de
+`GOOGLE_ADS_API_VERSION`, com `v25` como padrão a revisar a cada migração.
+
+### ⚠️ Ignorar `nextPageToken` é o erro silencioso desta API
+
+A resposta vem `200 OK` com metade dos dados. O custo do relatório aparece **menor**, e ninguém
+desconfia — porque o número melhorou. A paginação é responsabilidade do adaptador, não opção de quem
+chama, e tem teto de páginas contra laço infinito.
+
+### `segments.date` não é detalhe
+
+Sem ele, o Google agrega o período inteiro numa linha só. Como `midia_metrica_dia` é **por dia**, o
+total viraria um carimbo num dia qualquer — e o gráfico mostraria um pico que não existiu.
+
+### Anúncio removido NÃO é filtrado
+
+⚠️ `status = REMOVED` continua tendo **custo histórico**. Escondê-lo faria o total do período não
+fechar com a fatura — e "some dinheiro do relatório" é o pior tipo de divergência.
+
+### A tradução de erro protege receita
+
+O `403` do Google é ambíguo: pode ser cota **ou** permissão. Classificá-lo como `sem_permissao`
+quando era cota mandaria conversões válidas ao dead-letter, porque o despachante **não consome
+tentativa** em `limite_de_taxa`. Por isso a tradução olha o corpo, não só o status.
+
+### Capacidades honestas
+
+`publicoPersonalizado: false` e `conversaoOffline: false` — não implementados. ⚠️ Declarar `true` o
+que não existe faria o produto **falhar** em vez de degradar: o despachante confia nessa flag para
+descartar com motivo nomeado em vez de tentar oito vezes contra o vazio.
+
+⚠️ `publicoPersonalizado` é a **promessa mais forte da oferta** (público semelhante ao comprador
+real). Está desligado de propósito até confirmarmos a elegibilidade do Customer Match (AMK-015).

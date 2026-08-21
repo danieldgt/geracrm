@@ -199,7 +199,9 @@ inscrição limitada, e não serve para começar.
 - [ ] ⚠️ **Redefinir o token** — ele apareceu numa captura de tela durante o onboarding
 - [ ] ③ Projeto no Cloud + Google Ads API ativada + OAuth + refresh token · número do projeto anotado
 - [ ] **Conferir o nível concedido** — se já veio `Explorer`, ⚠️ **a Fase 0 está destravada**
-- [ ] ⑥ Primeira conta de cliente vinculada (ou a da própria Gera3, para o dogfooding)
+- [x] Conta do dogfooding decidida: **a própria drezz** (Rede A, AMK-011)
+- [ ] ⚠️ **Criar a conta de ANÚNCIO sob a MCC** — gerenciador não veicula, só agrega
+- [ ] ⑥ Primeira conta de cliente vinculada
 - [ ] Medir quantas operações a sincronização diária consome
 - [ ] ④ Solicitar Basic **quando** o volume exigir — com descrição detalhada
 - [ ] ⑤ Verificação de marca no projeto do Cloud, para acelerar
