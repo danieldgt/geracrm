@@ -423,3 +423,58 @@ O caso montava `proxima_tentativa_em` com o default `now()` do banco e comparava
 fixo. ⚠️ Isso faz o teste depender do **relógio de parede**: com a máquina à frente do `AGORA`, a
 fila vem vazia e o teste falha sem explicar por quê. Agora a coluna é explícita e o teste é
 determinístico — a mesma disciplina de injetar o relógio na função.
+
+---
+
+## 11. O enfileirador — e a distinção que ele obriga a fazer
+
+`enfileirar-conversao.ts` transforma venda efetivada no ERP em conversão a devolver. É o elo que
+fecha o loop: a venda existe porque o conector a importou, a origem existe porque o lead entrou por
+um anúncio, e aqui os dois se encontram.
+
+### ⚠️ Aqui o modelo de atribuição do ROI NÃO se aplica
+
+Foi a decisão que mais me fez parar. `roi.ts` escolhe entre primeiro e último toque porque responde
+**ao cliente** com um número nosso. O enfileirador **não escolhe crédito nenhum**: ele entrega o
+fato com o `click_id`, e **a atribuição final é da plataforma** — ela casa o clique, aplica a
+própria janela e decide.
+
+Confundir os dois faria a plataforma receber a **nossa opinião** em vez do dado. Por isso:
+
+> **Uma conversão por plataforma por venda**, cada uma com o `click_id` do último toque *daquela*
+> plataforma antes da venda.
+
+⚠️ O `DISTINCT ON (plataforma)` é o que garante isso. Sem ele, um contato tocado por Google e Meta
+geraria conversão para **um só** — e metade do sinal se perderia em silêncio, com o painel de cada
+plataforma mostrando menos do que deveria.
+
+### `event_id` determinístico
+
+`v-{venda_id}-{plataforma}-compra`. ⚠️ Um id aleatório faria cada reprocessamento parecer um evento
+**novo** para a plataforma — e receita duplicada no painel dela é o erro que ninguém reclama, porque
+o número fica *maior*.
+
+### Idempotente porque a importação repete
+
+`ON CONFLICT DO NOTHING` sobre `midia_conversao_venda_unica` (INV-62). Roda a cada importação do ERP,
+e importação repetida é o caso normal, não a exceção.
+
+### O que fica de fora, e por quê
+
+| Situação | Decisão |
+|---|---|
+| Origem sem `click_id` | Não enfileira — não haveria como a plataforma casar |
+| Toque **posterior** à venda | Não credita: não pode ter causado |
+| Venda cancelada | Não é receita (convenção do repositório) |
+| Venda fora da janela de importação | Não enfileira — nasceria para ser descartada |
+
+⚠️ O último é uma escolha discutível: enfileirar e deixar o despachante descartar documentaria "esta
+receita não pôde voltar". Preferi não criar linha destinada ao lixo — mas **a atribuição do ROI
+continua contando essas vendas**. Devolver sinal e medir receita são coisas separadas, e só uma
+delas tem prazo.
+
+### Uma armadilha de sintaxe que custou uma rodada
+
+⚠️ Escrevi comentários SQL com **crases** (`` `event_id` ``) dentro de um template literal — e a
+crase **fecha a string**. O erro do TypeScript apontava para linhas que pareciam inocentes. Dentro
+de `sql\`...\``, comentário usa aspas.

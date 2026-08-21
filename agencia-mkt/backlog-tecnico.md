@@ -27,9 +27,12 @@
 | Resolução tardia da origem (idempotente, não adivinha) | `apps/api/src/contexts/aquisicao/resolucao-origem.ts` |
 | Schema da devolução de sinal | `infra/migrations/0060_midia_conversao.sql` |
 | Despachante de conversões (backoff, dead-letter, advisory lock) | `apps/api/src/contexts/aquisicao/despachante-conversao.ts` |
+| Enfileirador (venda → conversão, uma por plataforma) | `apps/api/src/contexts/aquisicao/enfileirar-conversao.ts` |
 | ROI da veiculação (custo · leads · atribuição por modelo) | `apps/api/src/contexts/aquisicao/roi.ts` |
 
-**Verificado:** 10 varredores de schema · 431 testes na API · 94 no `shared` · typecheck ok.
+**Verificado:** 10 varredores de schema · 442 testes na API · 94 no `shared` · typecheck ok.
+
+⚠️ **A fundação está fechada.** Tudo o que resta na Fase 0/1 depende de um adaptador real — e o adaptador depende do *developer token* do Google ([`onboarding-google-ads.md`](onboarding-google-ads.md)).
 
 ⚠️ **O que ainda NÃO existe:** nenhum adaptador real (Google ou Meta), nenhum worker de
 sincronização, nenhuma rota, nenhuma tela. O que foi construído é a **fundação agnóstica de
@@ -77,7 +80,7 @@ tinham, e **não tocamos em nada**.
 | **AQ-12** | Ingestão **formulário de LP**: endpoint público com rate limit e anti-spam | AQ-09 | P |
 | **AQ-13** | Reconciliação com contato existente pelo **telefone normalizado** (`0008`, ADR-019). ⚠️ Lead que já é cliente ganha origem nova, não contato novo | AQ-09 | P |
 | **AQ-14** | **CAPI / Enhanced Conversions** com `event_id` compartilhado com o pixel (dedup) e PII **hasheada** | AQ-09 | M |
-| 🔨 **AQ-15** | **Conversor**: schema (`0060`) e **despachante** prontos; falta o enfileirador (criar conversão a partir da venda) e o adaptador real. Devolve `Compra` com **valor real do pedido efetivado**, com cursor no outbox, retry, dead-letter e ⚠️ falha de janela **nomeada** — mesma forma do despachante de `webhook_saida` (`0033`) | AQ-14, pedido | M |
+| 🔨 **AQ-15** | **Conversor**: schema (`0060`), **despachante** e **enfileirador** prontos. ⚠️ Falta só o **adaptador real** — que depende do developer token. Devolve `Compra` com **valor real do pedido efetivado**, com cursor no outbox, retry, dead-letter e ⚠️ falha de janela **nomeada** — mesma forma do despachante de `webhook_saida` (`0033`) | AQ-14, pedido | M |
 | 🔨 **AQ-16** | **ROI da veiculação** com custo: cálculo pronto, falta endpoint + tela. ⚠️ "Exata × estimada" não transfere para mídia — ver `implementacao.md` §7. ⚠️ Nunca somados, janela sempre declarada (régua de `0036`) | AQ-02, AQ-15 | M |
 | **AQ-37** | **Sincronização de públicos** (Google **Customer Match**): sobe lista a partir de compradores reais do ERP e das faixas RFV, PII **hasheada**, re-sync periódico. ⚠️ Customer Match tem **requisitos de elegibilidade** — verificar **antes** de prometer ao cliente (AMK-015) | AQ-14 | M |
 | **AQ-38** | **Públicos de exclusão**: já é cliente, já está em conversa e ⚠️ **opt-out** (`recebe_campanhas = false` deve alcançar a mídia paga, não só a mensagem) | AQ-37 | P |
