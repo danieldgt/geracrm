@@ -77,14 +77,31 @@ ela só é **vinculada** à nossa MCC por convite. Nada aqui transfere posse nem
 
 **Tempo:** 5 minutos. Nasce em nível **Test**.
 
-1. Dentro da MCC: **Ferramentas e configurações → Configuração → Central de API**
-   (*Tools & Settings → Setup → API Center*).
+⚠️ **Vá pela URL direta, não pelo menu:** **[ads.google.com/aw/apicenter](https://ads.google.com/aw/apicenter)**.
+O menu do Google Ads muda de lugar entre versões do painel; a URL não.
+
+1. Abra a URL **com a conta de gerenciador selecionada** no seletor do topo.
 2. Preencha o formulário de contato da API.
-3. O token aparece na hora, com acesso **Test**.
+3. O token aparece — **22 caracteres alfanuméricos** — com o **nível de acesso** e o **status** ao
+   lado (ex.: *Explorer Access / Approved*, ou *Test Account Access / Pending Approval*).
+
+### Como saber se você está mesmo numa MCC
+
+⚠️ Se a página disser *"A Central de API está disponível apenas para contas de gerenciador"*, o
+seletor está numa conta de anúncio comum.
+
+**O sinal visual mais rápido:** conta de gerenciador tem **"Contas"** na barra lateral esquerda.
+Conta de anúncio comum não tem. Se "Contas" está lá, você está no lugar certo.
+
+⚠️ Também não funciona a partir de **conta de teste** (manager ou anunciante de teste).
 
 ⚠️ **Guarde como segredo.** Vai para variável de ambiente no Railway
-(`GOOGLE_ADS_DEVELOPER_TOKEN`), nunca para o código nem para formulário do produto — mesma regra do
-`META_APP_SECRET` (`../docs/onboarding-meta.md`).
+(`GOOGLE_ADS_DEVELOPER_TOKEN`), nunca para o código, nem para formulário do produto, nem para
+mensagem de chat — mesma regra do `META_APP_SECRET` (`../docs/onboarding-meta.md`).
+
+⚠️ **O ID do gerenciador NÃO é segredo** (é identificador de conta, como o CNPJ de uma empresa) —
+mas o **token é**. Confundir os dois nas duas direções custa caro: tratar o token como público vaza
+acesso; tratar o ID como secreto trava conversa à toa.
 
 ---
 
@@ -161,7 +178,7 @@ inscrição limitada, e não serve para começar.
 
 ## Checklist
 
-- [x] ① MCC criada (`danieldgt@gmail.com`, 2026-08-21) · ⚠️ ID a anotar
+- [x] ① MCC criada — conta **drezz**, ID **123-276-0756**, `danieldgt@gmail.com` (2026-08-21)
 - [ ] ① Adicionar e-mail da Gera3 como **Administrador** — risco de continuidade
 - [ ] ② Developer token gerado (nível Test) · guardado como segredo
 - [ ] ③ Projeto no Cloud + Google Ads API ativada + OAuth + refresh token · número do projeto anotado
