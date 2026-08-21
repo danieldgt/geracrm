@@ -64,9 +64,20 @@ export type MotivoFalhaPlataforma =
   /** Resposta que não reconhecemos — a API mudou. Ação: olhar o log. */
   | 'resposta_inesperada'
 
-export type ResultadoLeitura<T> =
+export type ResultadoPlataforma<T> =
   | { readonly ok: true; readonly dados: T }
   | { readonly ok: false; readonly motivo: MotivoFalhaPlataforma; readonly detalhe?: string | undefined }
+
+/**
+ * ⚠️ Falha **permanente** — retentar não adianta, o problema é humano (credencial
+ * revogada, acesso perdido, conta sem meio de pagamento). Quem despacha manda
+ * direto para o dead-letter em vez de queimar oito tentativas contra uma parede.
+ */
+export function ehFalhaPermanente(motivo: MotivoFalhaPlataforma): boolean {
+  return motivo === 'credencial_invalida'
+      || motivo === 'sem_permissao'
+      || motivo === 'conta_indisponivel'
+}
 
 /** Um nó da hierarquia, já traduzido do formato do fornecedor para o nosso. */
 export interface NoVeiculacao {
@@ -112,17 +123,39 @@ export interface PeriodoConsulta {
 }
 
 /**
- * A porta. A Fase 0 implementa só LEITURA — escrita entra na Fase 4, atrás dos
- * guardrails e do dry-run (AMK-008), como métodos adicionais desta mesma porta.
+ * Uma conversão pronta para devolver à plataforma.
+ *
+ * ⚠️ O `valorCentavos` é o que faz a plataforma parar de buscar lead barato e
+ * começar a buscar cliente que compra. Devolver compra sem valor é o bug que
+ * anula o produto inteiro (migration 0060 impede no banco).
+ */
+export interface ConversaoParaEnvio {
+  /** ⚠️ Compartilhado com o pixel para a plataforma DEDUPLICAR. */
+  readonly eventId: string
+  readonly tipoEvento: 'lead' | 'lead_qualificado' | 'compra'
+  readonly valorCentavos: number | null
+  /** `gclid`/`wbraid`/`gbraid` (Google) ou `fbclid` (Meta), vindo da origem. */
+  readonly clickId: string
+  /** Quando o fato aconteceu — a plataforma recusa fora da janela de importação. */
+  readonly ocorridaEm: Date
+}
+
+/**
+ * A porta. A Fase 0 implementa só LEITURA — escrita de campanha entra na Fase 4,
+ * atrás dos guardrails e do dry-run (AMK-008).
+ *
+ * ⚠️ `enviarConversao` é escrita, mas de outra natureza: **não gasta verba nem
+ * altera veiculação**. Ela devolve um fato que já aconteceu, e por isso não passa
+ * pelos guardrails de orçamento — passa pelos de dedup e janela (0060).
  */
 export interface PortaPlataformaMidia {
   readonly plataforma: Plataforma
   readonly capacidades: CapacidadesPlataforma
 
   /** Valida a credencial sem escrever nada. Usado no cadastro da conta. */
-  testarConexao(): Promise<ResultadoLeitura<{ nomeConta: string; moeda: string }>>
+  testarConexao(): Promise<ResultadoPlataforma<{ nomeConta: string; moeda: string }>>
 
-  lerEstrutura(contaExternaId: string): Promise<ResultadoLeitura<EstruturaVeiculacao>>
+  lerEstrutura(contaExternaId: string): Promise<ResultadoPlataforma<EstruturaVeiculacao>>
 
   /**
    * ⚠️ Reler um período JÁ sincronizado é normal e esperado: as plataformas
@@ -132,7 +165,17 @@ export interface PortaPlataformaMidia {
   lerMetricas(
     contaExternaId: string,
     periodo: PeriodoConsulta,
-  ): Promise<ResultadoLeitura<readonly MetricaDiaExterna[]>>
+  ): Promise<ResultadoPlataforma<readonly MetricaDiaExterna[]>>
+
+  /**
+   * Devolve uma conversão. ⚠️ Só é chamada quando `capacidades.conversaoOffline`
+   * é verdadeira — plataforma sem a capacidade faz o despachante **descartar**
+   * (decisão nossa, nomeada), em vez de tentar e falhar oito vezes.
+   */
+  enviarConversao(
+    contaExternaId: string,
+    conversao: ConversaoParaEnvio,
+  ): Promise<ResultadoPlataforma<{ readonly idExterno: string | null }>>
 }
 
 /**
@@ -154,17 +197,20 @@ export class PlataformaNaoImplementada implements PortaPlataformaMidia {
 
   constructor(readonly plataforma: Plataforma) {}
 
-  private naoImplementada<T>(): ResultadoLeitura<T> {
+  private naoImplementada<T>(): ResultadoPlataforma<T> {
     return { ok: false, motivo: 'resposta_inesperada', detalhe: `plataforma ${this.plataforma} não implementada` }
   }
 
-  async testarConexao(): Promise<ResultadoLeitura<{ nomeConta: string; moeda: string }>> {
+  async testarConexao(): Promise<ResultadoPlataforma<{ nomeConta: string; moeda: string }>> {
     return this.naoImplementada()
   }
-  async lerEstrutura(): Promise<ResultadoLeitura<EstruturaVeiculacao>> {
+  async lerEstrutura(): Promise<ResultadoPlataforma<EstruturaVeiculacao>> {
     return this.naoImplementada()
   }
-  async lerMetricas(): Promise<ResultadoLeitura<readonly MetricaDiaExterna[]>> {
+  async lerMetricas(): Promise<ResultadoPlataforma<readonly MetricaDiaExterna[]>> {
+    return this.naoImplementada()
+  }
+  async enviarConversao(): Promise<ResultadoPlataforma<{ idExterno: string | null }>> {
     return this.naoImplementada()
   }
 }

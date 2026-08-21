@@ -372,3 +372,54 @@ como incidente — ou, pior, o incidente como normal.
 ⚠️ `venda` é particionada e a PK é composta com a chave de partição. O precedente da casa é
 `item_venda` (`0014`): carrega `venda_id` + `venda_ocorrida_em` e dispensa a FK. Seguimos o mesmo,
 com CHECK garantindo que as duas colunas andam juntas.
+
+---
+
+## 10. O despachante de conversões — três decisões que protegem receita
+
+`despachante-conversao.ts` segue a forma do despachante de `webhook_saida` (`0033`): varredura com
+advisory lock, backoff e dead-letter. As diferenças são deliberadas.
+
+### ⚠️ `limite_de_taxa` NÃO consome tentativa
+
+A regra mais importante do módulo. Estourar cota **não é defeito da conversão** — é do nosso ritmo.
+Se consumisse tentativa, uma rajada de rate limit mandaria ao dead-letter um lote inteiro de
+conversões **válidas**, e a receita sumiria do painel da plataforma sem ninguém entender por quê.
+
+Reagenda, não pune.
+
+### ⚠️ Falha permanente vai direto ao dead-letter
+
+`credencial_invalida`, `sem_permissao` e `conta_indisponivel` não melhoram com repetição — o
+problema é humano. Gastar oito tentativas contra uma parede só atrasa em horas a descoberta de algo
+que alguém precisa resolver. `ehFalhaPermanente` decide isso na porta, junto do motivo.
+
+### ⚠️ O descarte acontece ANTES de chamar
+
+Origem sem `click_id`, fato fora da janela de importação, plataforma sem a capacidade — tudo isso é
+decidido sem tocar na rede. Não gasta cota, não gasta tentativa, e vira `descartada` com motivo
+nomeado. Tentar o que já nasceu recusado é desperdício que aparece na cota da sincronização.
+
+### O backoff é mais lento que o do webhook, de propósito
+
+Webhook começa em 30s e para em 1h. Aqui começa em **5 min** e para em **6h**, porque o problema é
+outro: **conversão não é notificação**. A plataforma aceita o fato dentro de uma janela de **dias**,
+então correr não traz benefício — e insistir rápido contra API de anúncio gasta a cota de que a
+sincronização precisa.
+
+⚠️ Não reusei o `backoffSegundos` de `integracao/webhook-saida.ts`: importar entre contextos os
+acoplaria, e a curva certa aqui é genuinamente diferente. Duas curvas com o mesmo nome em contextos
+distintos é menos ruim que um contexto dependendo do outro por uma constante.
+
+### O advisory lock não é zelo
+
+⚠️ Conversão entregue duas vezes **infla a receita no painel da plataforma** — e o número fica
+*maior*, então ninguém reclama. Duas instâncias da API despachando em paralelo produziriam
+exatamente isso.
+
+### Uma nota sobre o teste
+
+O caso montava `proxima_tentativa_em` com o default `now()` do banco e comparava com um `AGORA`
+fixo. ⚠️ Isso faz o teste depender do **relógio de parede**: com a máquina à frente do `AGORA`, a
+fila vem vazia e o teste falha sem explicar por quê. Agora a coluna é explícita e o teste é
+determinístico — a mesma disciplina de injetar o relógio na função.
