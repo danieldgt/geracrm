@@ -17,6 +17,20 @@ Existem **quatro** níveis de acesso, e o segundo costuma ser concedido **automa
 | **Basic** | teste e produção | 15.000 | ~5 dias úteis |
 | **Standard** | teste e produção | ilimitado na maioria | ~10 dias úteis, exige Basic antes |
 
+### ⚠️ Ao criar a conta de anúncio, o Google empurra para o fluxo de campanha
+
+Executando de verdade: *Contas → + → **Criar nova conta*** (não "conta de administrador", que criaria
+outra MCC; não "vincular", que é o passo ⑥). O Google então joga direto em **"Criar sua primeira
+campanha"**, com forma de pagamento no fim.
+
+**A conta já existe nesse ponto** — o ID aparece no cabeçalho. Basta fechar no **X**: ela fica na
+lista, sem cadastro concluído. Suficiente para ler; insuficiente para veicular.
+
+⚠️ **E não é preciso conta de anúncio nenhuma para descobrir o nível de acesso:** a própria MCC é uma
+conta de produção na API, e `testarConexao()` consulta exatamente ela. Testar contra a MCC **separa
+as duas perguntas** — "o nível alcança produção?" de "a conta está habilitada?" —, que de outra forma
+se confundiriam num mesmo `CUSTOMER_NOT_ENABLED`.
+
 ### ⚠️ O painel NÃO usa os nomes da documentação
 
 Executando isto de verdade em **2026-08-21**, a Central de API mostrou nível **"Acesso às Análises"**
@@ -225,7 +239,8 @@ inscrição limitada, e não serve para começar.
 - [ ] ③ Projeto no Cloud + Google Ads API ativada + OAuth + refresh token · número do projeto anotado
 - [ ] **Conferir o nível concedido** — se já veio `Explorer`, ⚠️ **a Fase 0 está destravada**
 - [x] Conta do dogfooding decidida: **a própria drezz** (Rede A, AMK-011)
-- [ ] ⚠️ **Criar a conta de ANÚNCIO sob a MCC** — gerenciador não veicula, só agrega
+- [x] Conta de anúncio criada sob a MCC: **997-075-4431** ("Drezz", 2026-08-21)
+      ⚠️ Cadastro não concluído (sem forma de pagamento) — suficiente para ler, não para veicular
 - [ ] ⑥ Primeira conta de cliente vinculada
 - [ ] Medir quantas operações a sincronização diária consome
 - [ ] ④ Solicitar Basic **quando** o volume exigir — com descrição detalhada
