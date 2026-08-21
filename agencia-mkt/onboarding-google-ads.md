@@ -17,6 +17,20 @@ Existem **quatro** níveis de acesso, e o segundo costuma ser concedido **automa
 | **Basic** | teste e produção | 15.000 | ~5 dias úteis |
 | **Standard** | teste e produção | ilimitado na maioria | ~10 dias úteis, exige Basic antes |
 
+### ⚠️ O painel NÃO usa os nomes da documentação
+
+Executando isto de verdade em **2026-08-21**, a Central de API mostrou nível **"Acesso às Análises"**
+— que **não existe** na documentação, nem em inglês nem em português (que lista *conta de teste ·
+exploração · básico · padrão*). O que a doc chama de **"Relatórios"** é um **uso permitido**
+(somente leitura via `GoogleAdsService.Search`), não um nível.
+
+**Não tente mapear o nome lendo documentação — não bate.** O que resolve é **uma chamada real**:
+o token existe, e um `GoogleAdsService.Search` contra uma conta de produção responde em segundos o
+que nenhuma página responde. Isto é o passo ③ + a primeira chamada.
+
+⚠️ A boa notícia é que a Fase 0 é exatamente leitura de estrutura e métrica — a operação que
+qualquer tier de leitura permite. O nome importa menos do que parece.
+
 ⚠️ **`Explorer` já toca conta de produção.** As restrições dele — sem criar conta, sem gestão de
 usuário, sem planejador de palavras-chave, sem *audience insights*, sem faturamento — **não atingem
 nada da Fase 0**, que é leitura de estrutura e métrica.
@@ -180,7 +194,9 @@ inscrição limitada, e não serve para começar.
 
 - [x] ① MCC criada — conta **drezz**, ID **123-276-0756**, `danieldgt@gmail.com` (2026-08-21)
 - [ ] ① Adicionar e-mail da Gera3 como **Administrador** — risco de continuidade
-- [ ] ② Developer token gerado (nível Test) · guardado como segredo
+- [x] ② Developer token gerado (2026-08-21) · nível **"Acesso às Análises"** ⚠️ nome que não
+      consta na documentação — a ser confirmado por chamada real
+- [ ] ⚠️ **Redefinir o token** — ele apareceu numa captura de tela durante o onboarding
 - [ ] ③ Projeto no Cloud + Google Ads API ativada + OAuth + refresh token · número do projeto anotado
 - [ ] **Conferir o nível concedido** — se já veio `Explorer`, ⚠️ **a Fase 0 está destravada**
 - [ ] ⑥ Primeira conta de cliente vinculada (ou a da própria Gera3, para o dogfooding)
