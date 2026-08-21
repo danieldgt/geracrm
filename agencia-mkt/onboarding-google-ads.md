@@ -40,9 +40,33 @@ tem onde gerar o token — é o erro nº 1 de quem tenta.
 
 1. Acesse **[ads.google.com/home/tools/manager-accounts](https://ads.google.com/home/tools/manager-accounts)**
    e crie a conta de gerenciador.
-2. Use um e-mail **da Gera3, no domínio da empresa** — ⚠️ e um que alguém **leia de verdade**: é
-   por ele que o Google avisa sobre o token, e aviso perdido vira token suspenso.
+2. Qualquer conta Google serve — **Gmail pessoal funciona**. ⚠️ **Correção (2026-08-21):** uma
+   versão anterior deste guia dizia "e-mail no domínio da empresa" como se fosse exigência do
+   Google. **Não é** — essa regra é da **Meta**, na verificação de negócio
+   (`../docs/manual-passos-externos.md`), e foi transferida para cá sem evidência.
 3. Anote o **ID do gerenciador** (formato `123-456-7890`).
+
+### ⚠️ O risco real do e-mail pessoal é CONTINUIDADE, não aprovação
+
+A MCC e o developer token ficam presos à conta que os criou. Se ela for perdida, suspensa ou sair
+da empresa, **a MCC vai junto — e com ela a integração de todos os clientes**.
+
+**Mitigação, e é barata:** assim que existir um e-mail da Gera3, adicione-o como **Administrador**
+em *Ferramentas e configurações → Configuração → Acesso e segurança → +*. Um minuto, e o risco
+acaba. Não bloqueia seguir agora.
+
+Os cinco níveis de acesso, para escolher certo na hora:
+
+| Nível | Para quem |
+|---|---|
+| **Administrador** | ⚠️ o segundo dono — pode tudo, inclusive gerenciar usuários |
+| **Padrão** | quem opera campanha no dia a dia |
+| **Somente leitura** | quem só acompanha |
+| **Faturamento** | quem cuida de pagamento |
+| **E-mail apenas** | só recebe notificação |
+
+⚠️ **O e-mail de contato da API (passo ②) é outra coisa** e precisa ser um que alguém **leia de
+verdade**: é por ele que o Google avisa sobre o token, e aviso perdido vira token suspenso.
 
 ⚠️ **A MCC é da Gera3, não do cliente.** A conta de anúncio continua sendo do cliente (AMK-002) —
 ela só é **vinculada** à nossa MCC por convite. Nada aqui transfere posse nem meio de pagamento.
@@ -137,7 +161,8 @@ inscrição limitada, e não serve para começar.
 
 ## Checklist
 
-- [ ] ① MCC criada, com e-mail da empresa que alguém lê · ID anotado
+- [x] ① MCC criada (`danieldgt@gmail.com`, 2026-08-21) · ⚠️ ID a anotar
+- [ ] ① Adicionar e-mail da Gera3 como **Administrador** — risco de continuidade
 - [ ] ② Developer token gerado (nível Test) · guardado como segredo
 - [ ] ③ Projeto no Cloud + Google Ads API ativada + OAuth + refresh token · número do projeto anotado
 - [ ] **Conferir o nível concedido** — se já veio `Explorer`, ⚠️ **a Fase 0 está destravada**
