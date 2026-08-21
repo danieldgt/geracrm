@@ -290,5 +290,12 @@ agrada** — que é o tipo de erro que ninguém reporta.
 
 **Correção:** uma linha (`AND v.cancelada_em IS NULL`) na consulta da estimada.
 
-⚠️ **Não corrigido aqui** — é outro módulo, com testes próprios, e mudar cálculo de receita sem ser
-pedido surpreende quem depende do número. Fica registrado para decisão.
+✅ **Corrigido em 2026-08-21**, em commit separado, com autorização.
+
+O bug foi **provado antes de corrigido**: acrescentei uma venda cancelada de R$ 777,77 dentro da
+janela ao teste existente e rodei — o ROI devolveu **R$ 1.277,77 em vez de R$ 500,00**, inflando a
+receita em 155%. Só então entrou o `AND v.cancelada_em IS NULL`.
+
+⚠️ A **exata** não precisava do filtro: `cancelado` é *estado* do pedido (`0038`), mutuamente
+exclusivo com `efetivado` — o `estado = 'efetivado'` já bastava. Conferir isso evitou uma "correção"
+redundante do outro lado da conta.

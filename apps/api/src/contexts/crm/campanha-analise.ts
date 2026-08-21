@@ -55,6 +55,12 @@ export async function roiCampanha(sql: Sql, campanhaId: string): Promise<Roi | n
 
   // Estimada: venda no ERP por destinatário DENTRO da janela após o disparo.
   // Só faz sentido depois de disparada.
+  // ⚠️ `cancelada_em IS NULL`: venda cancelada não é receita. Sem este filtro o
+  //    número inflava na direção que AGRADA — o tipo de erro que ninguém reporta
+  //    porque melhora o relatório. É a convenção do resto do repositório (BI,
+  //    painel, funil, ficha do contato).
+  // ⚠️ A EXATA não precisa do filtro: 'cancelado' é ESTADO do pedido (0038),
+  //    mutuamente exclusivo com 'efetivado' — o `estado = 'efetivado'` já basta.
   let estimada = { vendas: 0, receitaCentavos: 0 }
   if (c.disparada_em) {
     const [e] = await sql<{ vendas: number; receita: string }[]>`
@@ -62,6 +68,7 @@ export async function roiCampanha(sql: Sql, campanhaId: string): Promise<Roi | n
         FROM campanha_envio ce
         JOIN venda v ON v.tenant_id = ce.tenant_id AND v.contato_id = ce.contato_id
        WHERE ce.tenant_id = tenant_atual() AND ce.campanha_id = ${campanhaId} AND ce.estado = 'enviado'
+         AND v.cancelada_em IS NULL
          AND v.ocorrida_em >= ${c.disparada_em}
          AND v.ocorrida_em < ${c.disparada_em} + make_interval(days => ${c.janela})`
     estimada = { vendas: e?.vendas ?? 0, receitaCentavos: Number(e?.receita ?? 0) }
