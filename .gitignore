@@ -36,3 +36,13 @@ Thumbs.db
 # Capturas do sistema de referência: 89MB, e são telas de produto de terceiro.
 # O conteúdo já está extraído em docs/inventario-funcionalidades-referencia.md
 docs/referencias/imagens de referencia/
+
+# ⚠️ Credencial NUNCA entra no repositório. Estes padrões são rede de segurança,
+#    não o lugar certo — o lugar certo é FORA da árvore do projeto
+#    (~/.config/geracrm/) e, em produção, variável de ambiente no Railway.
+#    Motivo: um `git add -A` distraído publica o segredo no GitHub, e revogar
+#    depois do push é sempre mais caro que guardar fora desde o início.
+client_secret*.json
+*credenciais*/
+*credentials*/
+service-account*.json

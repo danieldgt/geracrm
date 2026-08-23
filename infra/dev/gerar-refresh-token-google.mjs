@@ -16,16 +16,53 @@
  */
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 
-const CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID
-const CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET
+/**
+ * As credenciais podem vir de duas formas. ⚠️ A do ARQUIVO é preferível: o JSON
+ * que o Google Cloud baixa entra direto, sem ninguém copiar e colar segredo — e
+ * o que não passa pela área de transferência não vaza em captura de tela.
+ *
+ *   node ... ~/.config/geracrm/google-ads-oauth.json
+ *   GOOGLE_OAUTH_CREDENCIAIS=~/.config/... node ...
+ *   GOOGLE_OAUTH_CLIENT_ID=... GOOGLE_OAUTH_CLIENT_SECRET=... node ...
+ *
+ * ⚠️ O arquivo mora FORA da árvore do repositório. Dentro dele, um `git add -A`
+ *    distraído publica o segredo — e revogar depois do push é sempre mais caro
+ *    que guardar fora desde o início.
+ */
+function credenciaisDoArquivo(caminho) {
+  let bruto
+  try {
+    bruto = JSON.parse(readFileSync(caminho.replace(/^~/, process.env.HOME ?? '~'), 'utf8'))
+  } catch (e) {
+    console.error(`\n✗ Não consegui ler ${caminho}: ${e.message}\n`)
+    process.exit(1)
+  }
+  // O Google embrulha em `installed` (App para computador) ou `web`.
+  const dentro = bruto.installed ?? bruto.web ?? bruto
+  if (!dentro.client_id || !dentro.client_secret) {
+    console.error('\n✗ O JSON não tem client_id/client_secret. É o arquivo do cliente OAuth?\n')
+    process.exit(1)
+  }
+  return { id: dentro.client_id, secret: dentro.client_secret }
+}
+
+const caminhoCred = process.argv[2] ?? process.env.GOOGLE_OAUTH_CREDENCIAIS
+const doArquivo = caminhoCred ? credenciaisDoArquivo(caminhoCred) : null
+
+const CLIENT_ID = doArquivo?.id ?? process.env.GOOGLE_OAUTH_CLIENT_ID
+const CLIENT_SECRET = doArquivo?.secret ?? process.env.GOOGLE_OAUTH_CLIENT_SECRET
 const PORTA = Number(process.env.PORTA_OAUTH ?? 8765)
 const ESCOPO = 'https://www.googleapis.com/auth/adwords'
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
-  console.error('\n✗ Faltam GOOGLE_OAUTH_CLIENT_ID e GOOGLE_OAUTH_CLIENT_SECRET.\n')
-  console.error('  Pegue os dois em console.cloud.google.com → APIs e serviços → Credenciais')
-  console.error('  → o ID do cliente OAuth 2.0 que você criou.\n')
+  console.error('\n✗ Faltam as credenciais do cliente OAuth.\n')
+  console.error('  Jeito recomendado — passe o JSON que o Cloud baixou:')
+  console.error('    node infra/dev/gerar-refresh-token-google.mjs ~/.config/geracrm/google-ads-oauth.json\n')
+  console.error('  Ou por variável de ambiente:')
+  console.error('    GOOGLE_OAUTH_CLIENT_ID=... GOOGLE_OAUTH_CLIENT_SECRET=... node ...\n')
+  console.error('  O JSON sai de console.cloud.google.com/auth/clients → o cliente → baixar.\n')
   process.exit(1)
 }
 

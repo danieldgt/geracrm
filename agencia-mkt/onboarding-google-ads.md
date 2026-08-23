@@ -213,15 +213,31 @@ preciso baixar o JSON ou redefinir.
 
 ### ③.6 — Gerar o refresh token
 
-Na raiz do repositório:
+Baixe o **JSON do cliente OAuth** (`console.cloud.google.com/auth/clients` → o cliente → baixar) e
+guarde-o **fora do repositório**:
 
 ```bash
-GOOGLE_OAUTH_CLIENT_ID=... GOOGLE_OAUTH_CLIENT_SECRET=... \
-  node infra/dev/gerar-refresh-token-google.mjs
+mkdir -p ~/.config/geracrm
+mv ~/Downloads/client_secret_*.json ~/.config/geracrm/google-ads-oauth.json
+chmod 600 ~/.config/geracrm/google-ads-oauth.json
 ```
 
-O script sobe um servidor local em `localhost:8765`, imprime a URL de autorização, captura o
-retorno e mostra o token.
+⚠️ **Fora do repositório, não dentro.** Um `git add -A` distraído publica o segredo no GitHub, e
+revogar depois do push é sempre mais caro que guardar fora desde o início. O `.gitignore` tem rede
+de segurança (`client_secret*.json`), mas rede de segurança não é o lugar certo.
+
+Então, na raiz do repositório:
+
+```bash
+node infra/dev/gerar-refresh-token-google.mjs ~/.config/geracrm/google-ads-oauth.json
+```
+
+⚠️ **Passando o arquivo, ninguém copia segredo** — e o que não passa pela área de transferência não
+vaza em captura de tela. O script sobe um servidor local em `localhost:8765`, imprime a URL de
+autorização, captura o retorno e mostra o token.
+
+*(Ainda aceita `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` por variável de ambiente,
+para quando o JSON não estiver à mão.)*
 
 ⚠️ Ao autorizar vai aparecer **"app não verificado"** → *Avançado → Acessar (não seguro)*. Esperado:
 verificação só importa para distribuir a terceiros, não para a própria conta.
