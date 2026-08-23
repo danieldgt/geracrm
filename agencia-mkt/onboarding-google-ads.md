@@ -164,8 +164,24 @@ Na primeira vez aparece um assistente ("Começar"). As abas são:
 |---|---|
 | **Identidade visual** (*Branding*) | Nome do app: `GeraCRM` · e-mail de suporte · e-mail do desenvolvedor |
 | **Público-alvo** (*Audience*) | Tipo: **Externo** — ⚠️ "Interno" exige Google Workspace |
-| **Acesso a dados** (*Data Access*) | Adicionar o escopo `https://www.googleapis.com/auth/adwords` |
+| **Acesso a dados** (*Data Access*) | Adicionar o escopo `.../auth/adwords` — ⚠️ ver abaixo, **não é link** |
 | **Clientes** (*Clients*) | Onde nasce o ID do cliente OAuth (③.5) |
+
+### ⚠️ O escopo NÃO é um endereço para abrir
+
+`https://www.googleapis.com/auth/adwords` **parece** URL e **não é**: é um *identificador* de
+permissão. Colado na barra do navegador, ele abre uma página em branco escrita "adwords" — que é o
+Google respondendo a algo que não era para ser visitado.
+
+Ele vai **dentro de um campo do console**:
+
+1. Menu **Acesso a dados** (ou `console.cloud.google.com/auth/scopes`)
+2. **Adicionar ou remover escopos** → abre um painel lateral
+3. Rolar até o fim: **"Adicionar escopos manualmente"**
+4. Colar ali → **Adicionar à tabela** → **Atualizar** → **Salvar**
+
+⚠️ Ele **não aparece na lista filtrada** de cima: escopo sensível costuma exigir entrada manual.
+Procurar na lista e não achar é o comportamento esperado, não defeito.
 
 ### ③.4 — ⚠️ PUBLICAR o app
 
