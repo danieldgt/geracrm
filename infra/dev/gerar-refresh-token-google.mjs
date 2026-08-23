@@ -16,7 +16,7 @@
  */
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 
 /**
  * ⚠️ Guarda de versão ANTES de qualquer coisa. `fetch` global só existe a partir
@@ -155,12 +155,30 @@ const servidor = createServer(async (req, res) => {
     servidor.close(); process.exit(1)
   }
 
-  responder('Pronto! O refresh token está no terminal. Pode fechar esta aba.')
-  console.log('✓ Refresh token obtido.\n')
-  console.log('  Guarde como variável de ambiente — ⚠️ NÃO cole em chat nem commite:\n')
-  console.log(`  GOOGLE_OAUTH_REFRESH_TOKEN=${dados.refresh_token}\n`)
+  responder('Pronto! O token foi gravado no arquivo de credenciais. Pode fechar esta aba.')
+
+  // ⚠️ O token NÃO é impresso. Imprimir praticamente pede para ser copiado — e
+  //    segredo que passa pela área de transferência acaba em captura de tela ou
+  //    em mensagem. Ele vai direto para o arquivo, e o terminal só confirma.
+  if (caminhoCred) {
+    const caminho = caminhoCred.replace(/^~/, process.env.HOME ?? '~')
+    const atual = JSON.parse(readFileSync(caminho, 'utf8'))
+    const chave = atual.installed ? 'installed' : atual.web ? 'web' : null
+    if (chave) atual[chave].refresh_token = dados.refresh_token
+    else atual.refresh_token = dados.refresh_token
+    writeFileSync(caminho, JSON.stringify(atual, null, 2), { mode: 0o600 })
+    console.log(`\n✓ Refresh token gravado em ${caminho}\n`)
+    console.log('  ⚠️ Não foi impresso de propósito: o que não passa pela área de')
+    console.log('     transferência não vaza em captura de tela nem em mensagem.\n')
+  } else {
+    // Sem arquivo de destino, grava num .env ao lado — ainda sem imprimir.
+    const destino = `${process.env.HOME}/.config/geracrm/google-ads.env`
+    writeFileSync(destino, `GOOGLE_OAUTH_REFRESH_TOKEN=${dados.refresh_token}\n`, { mode: 0o600 })
+    console.log(`\n✓ Refresh token gravado em ${destino}\n`)
+  }
+
   console.log('  ⚠️ Se a tela de consentimento estiver em "Testing", este token morre em 7 dias.')
-  console.log('     Confira em console.cloud.google.com → Tela de permissão OAuth → Publicar app.\n')
+  console.log('     Confira em console.cloud.google.com/auth/audience → status.\n')
   servidor.close(); process.exit(0)
 })
 
