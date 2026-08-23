@@ -229,8 +229,18 @@ de segurança (`client_secret*.json`), mas rede de segurança não é o lugar ce
 Então, na raiz do repositório:
 
 ```bash
+export PATH="$HOME/.nvm/versions/node/v20.19.0/bin:$PATH"   # ⚠️ ver abaixo
 node infra/dev/gerar-refresh-token-google.mjs ~/.config/geracrm/google-ads-oauth.json
 ```
+
+⚠️ **O Node do PATH padrão desta máquina é o v14**, e `fetch` global só existe a partir do 18. Sem
+trocar, o script falha com `fetch is not defined`. O script agora **recusa rodar antes de imprimir a
+URL** quando a versão é velha — porque falhar depois da autorização desperdiça o fluxo inteiro e
+devolve um erro que não diz o que fazer.
+
+⚠️ Enquanto isso, o `package.json` do repositório pede **Node >= 22** e a única instalação disponível
+é a **v20** do nvm. A suíte passa, mas é divergência que vai morder no CI se ele usar a versão
+declarada.
 
 ⚠️ **Passando o arquivo, ninguém copia segredo** — e o que não passa pela área de transferência não
 vaza em captura de tela. O script sobe um servidor local em `localhost:8765`, imprime a URL de

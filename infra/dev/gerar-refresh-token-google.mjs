@@ -19,6 +19,25 @@ import { randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
 /**
+ * ⚠️ Guarda de versão ANTES de qualquer coisa. `fetch` global só existe a partir
+ * do Node 18, e sem ela o script quebrava **depois** de o usuário já ter
+ * autorizado no navegador — desperdiçando a autorização e deixando um erro
+ * (`fetch is not defined`) que não diz o que fazer.
+ *
+ * Falhar aqui custa cinco segundos; falhar lá custa refazer o fluxo inteiro.
+ */
+const MAIOR = Number(process.versions.node.split('.')[0])
+if (MAIOR < 18) {
+  console.error(`\n✗ Este script precisa de Node 18+ (rodando ${process.versions.node}).`)
+  console.error('  `fetch` global não existe antes do 18.\n')
+  console.error('  Neste ambiente, o Node do PATH é antigo. Use o do nvm:\n')
+  console.error('    export PATH="$HOME/.nvm/versions/node/v20.19.0/bin:$PATH"')
+  console.error('    node infra/dev/gerar-refresh-token-google.mjs ~/.config/geracrm/google-ads-oauth.json\n')
+  console.error('  (ou `nvm use 20` antes de rodar)\n')
+  process.exit(1)
+}
+
+/**
  * As credenciais podem vir de duas formas. ⚠️ A do ARQUIVO é preferível: o JSON
  * que o Google Cloud baixa entra direto, sem ninguém copiar e colar segredo — e
  * o que não passa pela área de transferência não vaza em captura de tela.
