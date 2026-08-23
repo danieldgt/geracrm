@@ -197,6 +197,23 @@ retorno e mostra o token.
 ⚠️ Ao autorizar vai aparecer **"app não verificado"** → *Avançado → Acessar (não seguro)*. Esperado:
 verificação só importa para distribuir a terceiros, não para a própria conta.
 
+### ⚠️ As três telas que mostram SEGREDO
+
+Executando isto junto com o dono do produto, **dois segredos vazaram em captura de tela** antes de
+alguém perceber. Não foi descuido dele — foi falta de aviso *antes* da tela aparecer. Então fica
+listado:
+
+| Tela | O que ela expõe | Se vazar |
+|---|---|---|
+| **Central de API** (passo ②) | o **developer token** | *Redefinir token* na própria tela |
+| **Cliente OAuth criado** (③.5) | a **chave secreta do cliente** (`GOCSPX-…`) | apagar o cliente e criar outro, ou redefinir a chave |
+| Saída do script (③.6) | o **refresh token** | revogar em `myaccount.google.com/permissions` e gerar de novo |
+
+⚠️ **O momento de vazar é o mais barato para corrigir** — antes de qualquer coisa depender da
+credencial. Depois de configurada no Railway, a troca é coordenada.
+
+⚠️ **O ID do cliente OAuth e o ID da conta NÃO são segredo.** Só a chave, o token e o refresh token.
+
 ### ③.7 — Anotar o número do projeto
 
 Ele entra no formulário do passo ④ e ajuda na aprovação do Basic.
@@ -316,7 +333,10 @@ inscrição limitada, e não serve para começar.
 - [x] ② Developer token gerado (2026-08-21) · nível **"Acesso às Análises"** ⚠️ nome que não
       consta na documentação — a ser confirmado por chamada real
 - [ ] ⚠️ **Redefinir o token** — ele apareceu numa captura de tela durante o onboarding
-- [ ] ③ Projeto no Cloud + Google Ads API ativada + OAuth + refresh token · número do projeto anotado
+- [x] ③.1–③.5 Projeto `geracrm-ads` · Google Ads API ativada · Auth Platform configurada
+      (⚠️ **Em produção** + **Externo**, conferido) · cliente OAuth criado (2026-08-23)
+- [ ] ⚠️ **Trocar a chave secreta do cliente** — apareceu em captura de tela
+- [ ] ③.6 Gerar o refresh token pelo script
 - [ ] **Conferir o nível concedido** — se já veio `Explorer`, ⚠️ **a Fase 0 está destravada**
 - [x] Conta do dogfooding decidida: **a própria drezz** (Rede A, AMK-011)
 - [x] Conta de anúncio criada sob a MCC: **997-075-4431** ("Drezz", 2026-08-21)
