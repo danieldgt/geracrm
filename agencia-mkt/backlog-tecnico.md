@@ -6,7 +6,7 @@
 
 ⚠️ Este é o backlog do **contexto novo**. Ele não altera a forma do núcleo do GeraCRM — só adiciona.
 
-## Estado da implementação (2026-08-20)
+## Estado da implementação (2026-08-23)
 
 | Legenda | Significa |
 |---|---|
@@ -14,7 +14,7 @@
 | 🔨 | parcial — a parte de baixo (schema/domínio) existe, falta rota/tela/worker |
 | (sem marca) | não começado |
 
-**Feito até aqui** — branch `docs/agencia-mkt`, 3 commits:
+**Feito até aqui** — branch `docs/agencia-mkt`:
 
 | Entrega | Onde |
 |---|---|
@@ -39,11 +39,16 @@
 
 **Verificado:** 10 varredores de schema · **510 testes na API** · 94 no `shared` · build do console ok · ⚠️ **os três checks verdes** (`lint`, `typecheck`, `test`).
 
-⚠️ **A fundação está fechada.** Tudo o que resta na Fase 0/1 depende de um adaptador real — e o adaptador depende do *developer token* do Google ([`onboarding-google-ads.md`](onboarding-google-ads.md)).
+### ✅ A Fase 0 está LIGADA de ponta a ponta (2026-08-23)
 
-⚠️ **O que ainda NÃO existe:** nenhum adaptador real (Google ou Meta), nenhum worker de
-sincronização, nenhuma rota, nenhuma tela. O que foi construído é a **fundação agnóstica de
-plataforma** — de propósito, porque AMK-012/015 estão em reexame e nada disso depende do desfecho.
+Adaptador Google, worker agendado, rotas e tela existem e rodam. As credenciais estão no Railway, e
+a **primeira chamada real** confirmou que o nível de acesso alcança conta de produção
+([`onboarding-google-ads.md`](onboarding-google-ads.md)).
+
+⚠️ **O único bloqueio agora é externo e é do dono da conta:** a conta de anúncio `997-075-4431` tem
+o cadastro incompleto (falta forma de pagamento) e responde `CUSTOMER_NOT_ENABLED`. Sem conta
+habilitada não há estrutura nem métrica para ler — e sem dado real não dá para **medir a cota**, que
+é o número que define quantos clientes cabem antes do Basic.
 
 ---
 
@@ -62,7 +67,7 @@ pedido do ERP. É a metade cara, e está construída.
 |---|---|---|---|
 | ✅ **AQ-01** | Schema `midia_*`: conta, campanha, conjunto, anúncio, criativo. RLS em todas, chave composta `(tenant_id, id)`, id externo da plataforma com `UNIQUE(tenant_id, plataforma, id_externo)` | — | P |
 | ✅ **AQ-02** | `midia_metrica_dia`: impressão, clique, **custo em centavos**, conversões reivindicadas pela plataforma. ⚠️ Conversão de micros (Google) e float (Meta) **no adaptador** | AQ-01 | P |
-| 🔨 **AQ-04** | ⚠️ **Adaptador Google — leitura** (agora o primeiro, AMK-015). Exige *developer token* e conta **MCC** — começar o credenciamento já | developer token | M |
+| ✅ **AQ-04** | **Adaptador Google — leitura**, validado por chamada real. Versão configurável (⚠️ o Google desativa versões e as requisições **falham**), paginação obrigatória, causa do erro desenterrada | credencial ✅ | M |
 | **AQ-03** | Adaptador **Meta — leitura**, ⚠️ **restrito à conta da própria Gera3** (Rede A). Sem App Review não lê conta de cliente (AMK-012) | — | M |
 | ✅ **AQ-05** | **Sincronizador agendado** (6h, por conta, ⚠️ **pula a MCC**) + conversões (15 min). A cadência foi decidida pela **cota medida**, não por palpite | AQ-02/04 | M |
 | ✅ **AQ-06** | **Painel de mídia**: endpoints + **tela** (5 estados, custo/lead, paginada por cursor). ⚠️ ROAS fica de fora de propósito — exige modelo e janela declarados | AQ-02 | M |
@@ -88,7 +93,7 @@ tinham, e **não tocamos em nada**.
 | **AQ-13** | Reconciliação com contato existente pelo **telefone normalizado** (`0008`, ADR-019). ⚠️ Lead que já é cliente ganha origem nova, não contato novo | AQ-09 | P |
 | **AQ-14** | **CAPI / Enhanced Conversions** com `event_id` compartilhado com o pixel (dedup) e PII **hasheada** | AQ-09 | M |
 | 🔨 **AQ-15** | **Conversor**: schema (`0060`), **despachante** e **enfileirador** prontos. ⚠️ Falta só o **adaptador real** — que depende do developer token. Devolve `Compra` com **valor real do pedido efetivado**, com cursor no outbox, retry, dead-letter e ⚠️ falha de janela **nomeada** — mesma forma do despachante de `webhook_saida` (`0033`) | AQ-14, pedido | M |
-| 🔨 **AQ-16** | **ROI da veiculação** com custo: cálculo pronto, falta endpoint + tela. ⚠️ "Exata × estimada" não transfere para mídia — ver `implementacao.md` §7. ⚠️ Nunca somados, janela sempre declarada (régua de `0036`) | AQ-02, AQ-15 | M |
+| 🔨 **AQ-16** | **ROI da veiculação** com custo: cálculo **e endpoint** prontos, falta a tela do anúncio. ⚠️ "Exata × estimada" não transfere para mídia — ver `implementacao.md` §7. ⚠️ Nunca somados, janela sempre declarada (régua de `0036`) | AQ-02, AQ-15 | M |
 | **AQ-37** | **Sincronização de públicos** (Google **Customer Match**): sobe lista a partir de compradores reais do ERP e das faixas RFV, PII **hasheada**, re-sync periódico. ⚠️ Customer Match tem **requisitos de elegibilidade** — verificar **antes** de prometer ao cliente (AMK-015) | AQ-14 | M |
 | **AQ-38** | **Públicos de exclusão**: já é cliente, já está em conversa e ⚠️ **opt-out** (`recebe_campanhas = false` deve alcançar a mídia paga, não só a mensagem) | AQ-37 | P |
 | **AQ-39** | **Funil por origem** como instrumento de diagnóstico: impressão → clique → lead → qualificado → pedido → venda, com custo em cada etapa | AQ-16, AQ-18 | M |
