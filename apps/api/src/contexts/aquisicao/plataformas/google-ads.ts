@@ -134,6 +134,17 @@ export class PlataformaGoogleAds implements PortaPlataformaMidia {
   readonly #versao: string
   readonly #timeout: number
 
+  /**
+   * Requisições HTTP feitas desde a construção.
+   *
+   * ⚠️ Existe para **medir o consumo de cota em vez de presumir**. O nível de
+   * acesso do Google limita operações por dia, e a única forma de saber quantas
+   * contas cabem no limite é contar uma sincronização real. Paginação faz o
+   * número crescer sem ninguém perceber — três páginas são três operações.
+   */
+  #chamadas = 0
+  get chamadas(): number { return this.#chamadas }
+
   constructor(
     cred: CredencialGoogleAds,
     opcoes: { buscar?: typeof fetch; versao?: string; timeoutMs?: number } = {},
@@ -169,6 +180,7 @@ export class PlataformaGoogleAds implements PortaPlataformaMidia {
       if (!acesso.ok) return acesso
 
       const sinal = AbortSignal.timeout(this.#timeout)
+      this.#chamadas++
       let resposta: Response
       try {
         resposta = await this.#buscar(url, {

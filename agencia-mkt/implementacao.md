@@ -622,3 +622,42 @@ A fábrica devolve `PlataformaNaoImplementada` (todas as capacidades em `false`)
 exceção. O despachante de conversões então **descarta com `plataforma_sem_capacidade`** — visível —
 em vez de tentar oito vezes contra o vazio. E `faltaParaGoogle()` diz **quais variáveis faltam pelo
 nome**, para quem está configurando não adivinhar.
+
+---
+
+## 15. O sincronizador — e a cota que agora é medida, não presumida
+
+`sincronizador.ts` (AQ-05) traz estrutura e custo da plataforma para o banco.
+
+### Tudo é UPSERT, e isso não é zelo
+
+As plataformas **reescrevem métricas de dias já fechados** enquanto a janela de atribuição assenta
+(até ~28 dias), e a estrutura muda de estado o tempo todo. ⚠️ Ressincronizar é o caso **normal**, não
+a exceção — um `INSERT` puro duplicaria custo a cada passada. Daí a janela de 30 dias relida sempre.
+
+### Pai antes de filho, sempre
+
+Conjunto referencia campanha; anúncio referencia conjunto. ⚠️ Inverter a ordem viola a FK e derruba
+a passada inteira por um detalhe de sequência. E **conjunto órfão é pulado, não inventado**: sem a
+campanha, a hierarquia mentiria e o total por campanha não fecharia.
+
+### Métrica órfã é contada, não engolida
+
+⚠️ Métrica que cita anúncio desconhecido entra em `metricasOrfas`. Se esse número subir, a leitura de
+estrutura está incompleta e **o custo não fecha com a fatura**. Engolir esconderia exatamente isso —
+e "some dinheiro do relatório" é a divergência mais cara de diagnosticar depois.
+
+### A cota agora é medida
+
+Prometi desde o guia de onboarding: *"quanto uma sincronização consome precisa ser medido, não
+presumido, porque consulta de relatório também conta"*. O adaptador expõe um contador de requisições
+e o resumo devolve `chamadas`.
+
+⚠️ **Paginação faz esse número crescer sem ninguém perceber** — três páginas são três operações. Com
+a cota compartilhada entre todos os clientes, é este contador que responde quantas contas cabem no
+limite antes de o Basic virar necessário.
+
+### A resolução roda por último, de propósito
+
+`resolverOrigensPendentes` é chamada **depois** de gravar a estrutura: é exatamente o momento em que
+o lead que chegou primeiro — em segundos, pelo webhook — finalmente tem com o que casar.
