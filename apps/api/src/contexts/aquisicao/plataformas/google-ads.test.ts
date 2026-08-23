@@ -267,3 +267,36 @@ describe('Extração da causa — com três credenciais, "inválida" não basta'
     expect(r.ok || r.detalhe).toContain('algo genérico')
   })
 })
+
+describe('Achados da primeira chamada real (2026-08-23)', () => {
+  /**
+   * ⚠️ A MCC responde `customer` normalmente, mas RECUSA métrica. Foi o que
+   * separou "o nível de acesso alcança produção?" de "a conta tem dado?" — duas
+   * perguntas que um erro genérico teria confundido.
+   */
+  it('métrica pedida a gerenciador diz para pedir por conta', async () => {
+    const g = criar([{
+      status: 400,
+      corpo: { error: { details: [{ errors: [{
+        errorCode: { queryError: 'REQUESTED_METRICS_FOR_MANAGER' },
+        message: 'Metrics cannot be requested for a manager account.',
+      }] }] } },
+    }])
+    const r = await g.lerMetricas('123', { de: '2026-08-01', ate: '2026-08-23' })
+    expect(r.ok).toBe(false)
+    expect(r.ok || r.detalhe).toContain('conta de gerenciador')
+  })
+
+  // ⚠️ Conta criada mas com cadastro incompleto (sem forma de pagamento). O
+  //    motivo é `sem_permissao`, mas a CAUSA é outra — e a dica evita procurar
+  //    permissão onde o que falta é cartão.
+  it('conta não habilitada aponta para o cadastro, não para permissão', async () => {
+    const g = criar([{
+      status: 403,
+      corpo: { error: { details: [{ errors: [{ errorCode: { authorizationError: 'CUSTOMER_NOT_ENABLED' } }] }] } },
+    }])
+    const r = await g.lerEstrutura('123')
+    expect(r.ok).toBe(false)
+    expect(r.ok || r.detalhe).toContain('forma de pagamento')
+  })
+})

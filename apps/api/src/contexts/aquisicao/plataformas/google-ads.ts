@@ -119,6 +119,9 @@ const DICA: Record<string, string> = {
   USER_PERMISSION_DENIED:
     'autenticou, mas sem permissão nesta conta. Confira o vínculo com a MCC e o login-customer-id.',
   CUSTOMER_NOT_FOUND: 'o customerId não existe ou não está vinculado à MCC informada.',
+  REQUESTED_METRICS_FOR_MANAGER:
+    '⚠️ métrica NÃO pode ser pedida a conta de gerenciador — a MCC só agrega. '
+    + 'Peça contra cada conta de anúncio vinculada, uma por vez.',
 }
 
 /** `customers/123/adGroups/456` → `456`. */

@@ -31,6 +31,24 @@ conta de produção na API, e `testarConexao()` consulta exatamente ela. Testar 
 as duas perguntas** — "o nível alcança produção?" de "a conta está habilitada?" —, que de outra forma
 se confundiriam num mesmo `CUSTOMER_NOT_ENABLED`.
 
+### ✅ RESPONDIDO PELA CHAMADA REAL (2026-08-23)
+
+> **"Acesso às Análises" ALCANÇA CONTA DE PRODUÇÃO.** Sem Basic, sem espera.
+
+A consulta `SELECT customer.descriptive_name, customer.currency_code FROM customer` contra a MCC
+`1232760756` respondeu `200 OK` com `"drezz" · BRL`. A Fase 0 está **destravada**.
+
+Dois achados que só a chamada real daria:
+
+| Achado | O que significa |
+|---|---|
+| ⚠️ `REQUESTED_METRICS_FOR_MANAGER` | **Métrica não pode ser pedida à MCC** — ela só agrega. Tem de ser pedida contra **cada conta de anúncio**, uma por vez. Estrutura a MCC devolve; métrica, não. |
+| ⚠️ `CUSTOMER_NOT_ENABLED` na conta de anúncio | A conta existe mas **o cadastro não foi concluído** (falta forma de pagamento). Não é permissão nem nível de acesso. |
+
+⚠️ **Foi por isso que testar contra a MCC primeiro valeu a pena:** separou "o nível alcança
+produção?" de "a conta tem dado?". Fossem testadas juntas, o `CUSTOMER_NOT_ENABLED` teria parecido
+falta de acesso, e a resposta seria "peça o Basic e espere cinco dias" — errada.
+
 ### ⚠️ O painel NÃO usa os nomes da documentação
 
 Executando isto de verdade em **2026-08-21**, a Central de API mostrou nível **"Acesso às Análises"**
@@ -392,7 +410,10 @@ inscrição limitada, e não serve para começar.
       (⚠️ **Em produção** + **Externo**, conferido) · cliente OAuth criado (2026-08-23)
 - [ ] ⚠️ **Trocar a chave secreta do cliente** — apareceu em captura de tela
 - [ ] ③.6 Gerar o refresh token pelo script
-- [ ] **Conferir o nível concedido** — se já veio `Explorer`, ⚠️ **a Fase 0 está destravada**
+- [x] ✅ **Nível conferido POR CHAMADA REAL (2026-08-23): alcança PRODUÇÃO.** Fase 0 destravada
+- [x] ③.6 Refresh token gerado · ⑥ credenciais no Railway (6 variáveis, produção)
+- [ ] ⚠️ **Concluir o cadastro da conta 997-075-4431** (forma de pagamento) — sem isso ela
+      responde `CUSTOMER_NOT_ENABLED` e não há estrutura nem métrica para ler
 - [x] Conta do dogfooding decidida: **a própria drezz** (Rede A, AMK-011)
 - [x] Conta de anúncio criada sob a MCC: **997-075-4431** ("Drezz", 2026-08-21)
       ⚠️ Cadastro não concluído (sem forma de pagamento) — suficiente para ler, não para veicular
