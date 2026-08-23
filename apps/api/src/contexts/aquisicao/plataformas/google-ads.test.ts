@@ -224,3 +224,46 @@ describe('Access token renovado a cada chamada', () => {
     expect(chamouGoogle).toBe(false)
   })
 })
+
+describe('Extração da causa — com três credenciais, "inválida" não basta', () => {
+  const respostaReal = {
+    error: {
+      code: 401,
+      message: 'Request is missing required authentication credential. Expected OAuth 2 access token...',
+      status: 'UNAUTHENTICATED',
+      details: [{
+        '@type': 'type.googleapis.com/google.ads.googleads.v25.errors.GoogleAdsFailure',
+        errors: [{ errorCode: { authenticationError: 'DEVELOPER_TOKEN_INVALID' }, message: 'The developer token is not valid.' }],
+      }],
+    },
+  }
+
+  /**
+   * ⚠️ Caso REAL da primeira chamada: a mensagem de topo dizia "missing required
+   * authentication credential" — genérica — e a causa estava enterrada em
+   * details[].errors[].errorCode, fora do corte de 500 caracteres.
+   */
+  it('desenterra o código e diz QUAL credencial trocar', async () => {
+    const r = await criar([{ status: 401, corpo: respostaReal }]).testarConexao()
+    expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.detalhe).toContain('DEVELOPER_TOKEN_INVALID')
+    expect(r.detalhe).toContain('apicenter')          // onde pegar o novo
+  })
+
+  it('separa "token inválido" de "token sem nível de acesso"', async () => {
+    const semNivel = {
+      error: { details: [{ errors: [{ errorCode: { authorizationError: 'DEVELOPER_TOKEN_NOT_APPROVED' } }] }] },
+    }
+    const r = await criar([{ status: 403, corpo: semNivel }]).testarConexao()
+    expect(r.ok).toBe(false)
+    // ⚠️ A diferença que importa: um pede trocar credencial, o outro pede
+    //    solicitar Basic. Confundir os dois manda a pessoa para o lugar errado.
+    expect(r.ok || r.detalhe).toContain('Basic')
+  })
+
+  it('sem `details`, cai na mensagem de topo em vez de vazio', async () => {
+    const r = await criar([{ status: 400, corpo: { error: { message: 'algo genérico' } } }]).testarConexao()
+    expect(r.ok || r.detalhe).toContain('algo genérico')
+  })
+})

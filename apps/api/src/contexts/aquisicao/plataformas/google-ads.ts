@@ -73,6 +73,54 @@ function traduzirEstado(status: string | undefined): NoVeiculacao['estado'] {
   }
 }
 
+/**
+ * Extrai a CAUSA de dentro do erro do Google.
+ *
+ * ⚠️ O Google embrulha o motivo real em `error.details[].errors[].errorCode.*`, e
+ * a mensagem de topo é sempre a mesma frase genérica. Sem desembrulhar, três
+ * credenciais diferentes (developer token, cliente OAuth, refresh token) produzem
+ * o mesmo `credencial_invalida` — e quem está configurando não sabe qual trocar.
+ *
+ * Descoberto na primeira chamada real: a resposta dizia "Request is missing
+ * required authentication credential", e a causa — `DEVELOPER_TOKEN_INVALID` —
+ * estava enterrada, fora do corte de 500 caracteres.
+ */
+export function extrairCausa(corpo: unknown): string | null {
+  const raiz = (corpo as { error?: { message?: string; details?: unknown[] } })?.error
+  if (!raiz) return null
+
+  const detalhes = Array.isArray(raiz.details) ? raiz.details : []
+  for (const d of detalhes) {
+    const erros = (d as { errors?: { errorCode?: Record<string, string>; message?: string }[] })?.errors
+    for (const e of erros ?? []) {
+      const codigo = Object.values(e.errorCode ?? {})[0]
+      if (codigo) {
+        const dica = DICA[codigo]
+        return dica ? `${codigo} — ${dica}` : `${codigo}${e.message ? `: ${e.message}` : ''}`
+      }
+    }
+  }
+  return raiz.message ?? null
+}
+
+/** O que fazer, para os códigos que aparecem enquanto se configura. */
+const DICA: Record<string, string> = {
+  DEVELOPER_TOKEN_INVALID:
+    'o developer token não vale. Pegue o atual em ads.google.com/aw/apicenter e atualize '
+    + 'GOOGLE_ADS_DEVELOPER_TOKEN. ⚠️ Se você o redefiniu, o valor antigo morreu na hora.',
+  DEVELOPER_TOKEN_NOT_APPROVED:
+    'o token existe mas não alcança esta conta — é o nível de acesso, não a credencial. '
+    + 'Solicite o Basic (passo ④ do onboarding).',
+  DEVELOPER_TOKEN_PROHIBITED:
+    'este developer token está proibido de usar a API. Fale com o suporte do Google Ads.',
+  CUSTOMER_NOT_ENABLED:
+    'a conta de anúncio existe mas não foi habilitada — falta concluir o cadastro (forma de pagamento).',
+  NOT_ADS_USER: 'a conta autenticada não tem acesso a esta conta de anúncio.',
+  USER_PERMISSION_DENIED:
+    'autenticou, mas sem permissão nesta conta. Confira o vínculo com a MCC e o login-customer-id.',
+  CUSTOMER_NOT_FOUND: 'o customerId não existe ou não está vinculado à MCC informada.',
+}
+
 /** `customers/123/adGroups/456` → `456`. */
 const idDoRecurso = (recurso: string | undefined): string | null =>
   recurso ? (recurso.split('/').pop() ?? null) : null
@@ -162,7 +210,7 @@ export class PlataformaGoogleAds implements PortaPlataformaMidia {
    */
   #traduzirErro(status: number, corpo: unknown): { motivo: MotivoFalhaPlataforma; detalhe?: string } {
     const texto = JSON.stringify(corpo ?? {})
-    const detalhe = texto.slice(0, 500)
+    const detalhe = extrairCausa(corpo) ?? texto.slice(0, 500)
 
     if (status === 401) return { motivo: 'credencial_invalida', detalhe }
     if (status === 429 || /RESOURCE_EXHAUSTED|QUOTA_ERROR|RateExceeded/i.test(texto)) {
