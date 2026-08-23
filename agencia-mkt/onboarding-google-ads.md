@@ -138,21 +138,68 @@ acesso; tratar o ID como secreto trava conversa à toa.
 O token diz *qual aplicação*; o OAuth diz *em nome de quem*. São coisas separadas e as duas são
 necessárias.
 
-1. **[console.cloud.google.com](https://console.cloud.google.com)** → criar projeto (ex.: `geracrm-ads`).
-2. **APIs e serviços → Biblioteca** → ativar **Google Ads API**.
-3. **Tela de permissão OAuth** → tipo **Externo** → preencher nome do app, e-mail de suporte e
-   e-mail do desenvolvedor.
-4. ⚠️ **PUBLICAR o app** — "Publicar app" / status **Em produção**. Ver o aviso abaixo; é o passo
-   que mais quebra integração de Google Ads.
-5. **Credenciais** → **Criar credenciais → ID do cliente OAuth 2.0** → tipo **App para computador**.
-   Guarde o **Client ID** e o **Client Secret**.
-6. Gerar o **refresh token**:
-   ```bash
-   GOOGLE_OAUTH_CLIENT_ID=... GOOGLE_OAUTH_CLIENT_SECRET=... \
-     node infra/dev/gerar-refresh-token-google.mjs
-   ```
-   O script sobe um servidor local, abre o fluxo, captura o retorno e imprime o token.
-7. Anote o **número do projeto** — ⚠️ ele entra no formulário do passo ④ e ajuda na aprovação.
+⚠️ **Use as URLs diretas.** O console do Google Cloud foi reorganizado: a antiga *"Tela de permissão
+OAuth"* virou **Google Auth Platform**, com quatro abas. É a causa nº 1 de não se achar a tela.
+
+### ③.1 — Criar o projeto
+
+**[console.cloud.google.com/projectcreate](https://console.cloud.google.com/projectcreate)**
+Nome: `geracrm-ads` → **Criar**.
+
+⚠️ Depois de criar, **confira o seletor de projeto no topo**. Ele nem sempre troca sozinho, e
+configurar tudo no projeto errado é um retrabalho silencioso — nada dá erro, só não funciona.
+
+### ③.2 — Ativar a Google Ads API
+
+**[console.cloud.google.com/apis/library/googleads.googleapis.com](https://console.cloud.google.com/apis/library/googleads.googleapis.com)**
+→ **Ativar**.
+
+### ③.3 — Google Auth Platform (as quatro abas)
+
+**[console.cloud.google.com/auth/overview](https://console.cloud.google.com/auth/overview)**
+
+Na primeira vez aparece um assistente ("Começar"). As abas são:
+
+| Aba | O que preencher |
+|---|---|
+| **Identidade visual** (*Branding*) | Nome do app: `GeraCRM` · e-mail de suporte · e-mail do desenvolvedor |
+| **Público-alvo** (*Audience*) | Tipo: **Externo** — ⚠️ "Interno" exige Google Workspace |
+| **Acesso a dados** (*Data Access*) | Adicionar o escopo `https://www.googleapis.com/auth/adwords` |
+| **Clientes** (*Clients*) | Onde nasce o ID do cliente OAuth (③.5) |
+
+### ③.4 — ⚠️ PUBLICAR o app
+
+**[console.cloud.google.com/auth/audience](https://console.cloud.google.com/auth/audience)** →
+**Publicar app** → status **Em produção**.
+
+**É o passo que mais quebra integração de Google Ads.** Ver a tabela dos 7 dias abaixo.
+
+### ③.5 — Criar o cliente OAuth
+
+**[console.cloud.google.com/auth/clients](https://console.cloud.google.com/auth/clients)** →
+**Criar cliente** → tipo **App para computador** → Criar.
+
+Guarde o **Client ID** e o **Client Secret**. ⚠️ O segredo aparece uma vez com conforto; depois é
+preciso baixar o JSON ou redefinir.
+
+### ③.6 — Gerar o refresh token
+
+Na raiz do repositório:
+
+```bash
+GOOGLE_OAUTH_CLIENT_ID=... GOOGLE_OAUTH_CLIENT_SECRET=... \
+  node infra/dev/gerar-refresh-token-google.mjs
+```
+
+O script sobe um servidor local em `localhost:8765`, imprime a URL de autorização, captura o
+retorno e mostra o token.
+
+⚠️ Ao autorizar vai aparecer **"app não verificado"** → *Avançado → Acessar (não seguro)*. Esperado:
+verificação só importa para distribuir a terceiros, não para a própria conta.
+
+### ③.7 — Anotar o número do projeto
+
+Ele entra no formulário do passo ④ e ajuda na aprovação do Basic.
 
 ### ⚠️ A armadilha dos 7 dias
 
