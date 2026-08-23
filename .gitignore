@@ -46,3 +46,10 @@ client_secret*.json
 *credenciais*/
 *credentials*/
 service-account*.json
+# ⚠️ O bloqueio do GitHub pegou `docs/google-ads-oauth.json` porque os padrões
+#    acima cobriam o nome que eu tinha VISTO, não o que existia. Padrão por nome
+#    é sempre incompleto — por isso vale também o nome do produto.
+*oauth*.json
+*-credentials.json
+*.pem
+*.p12
