@@ -701,3 +701,41 @@ ignoradas, para que o engano seja visível em vez de silencioso.
 
 ⚠️ A venda que o ERP acabou de importar sai **nesta** rodada. Inverter a ordem adicionaria um ciclo
 inteiro de latência sem ganho nenhum.
+
+---
+
+## 17. A tela de mídia — e os dois números que ela recusa mostrar
+
+`midia.pagina.ts` (AQ-06). Segue o padrão do console: standalone, OnPush, signals, os cinco estados,
+cor só de token.
+
+### ⚠️ ROAS não aparece aqui, de propósito
+
+ROAS exige declarar **modelo de atribuição** e **janela** (AMK-009). Um número desses solto numa
+lista viraria exatamente a promessa que o produto não sustenta — o leitor assumiria que é fato.
+
+Ele vive na tela do anúncio, com o rótulo ao lado. A lista mostra **custo por lead**, que é fato ÷
+fato e não depende de modelo nenhum.
+
+### ⚠️ Custo por lead aqui não é o CPL da plataforma
+
+É o **nosso** custo dividido pelos leads que **entraram no CRM** — não os que o Google diz ter
+gerado. A diferença entre os dois números é justamente o que a operação enxerga e o painel do Google
+não: lead que não chegou, chegou duplicado, ou chegou sem identificação.
+
+### Traço, não zero
+
+Anúncio com custo e **zero leads** mostra `—`, não `R$ 0,00`. ⚠️ Zero lead não é custo-por-lead zero
+— é **indefinido**, e exibir zero inverteria a leitura: o pior caso apareceria como o melhor da
+tabela.
+
+### O vazio explica o silêncio
+
+"Nenhum anúncio no período" quase nunca significa "não houve gasto" — significa conta recém-conectada
+ou sincronização que ainda não rodou. ⚠️ A tela diz isso, porque a leitura errada aqui ("a campanha
+não gastou nada") é tranquilizadora e falsa.
+
+### Soma sem concatenar
+
+`custoCentavos` chega como **texto** (é `bigint` no banco, INV-46). O total converte antes de somar —
+`"2" + "3"` seria `"23"`, sem erro e com número errado na tela.

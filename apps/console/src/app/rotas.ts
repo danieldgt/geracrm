@@ -49,6 +49,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/pedido/pedidos.pagina.js').then((m) => m.PedidosPagina),
   catalogo: () =>
     import('./funcionalidades/catalogo/catalogo.pagina.js').then((m) => m.CatalogoPagina),
+  midia: () =>
+    import('./funcionalidades/aquisicao/midia.pagina.js').then((m) => m.MidiaPagina),
   segmentos: () =>
     import('./funcionalidades/crm/segmentos.pagina.js').then((m) => m.SegmentosPagina),
   inicio: () =>
