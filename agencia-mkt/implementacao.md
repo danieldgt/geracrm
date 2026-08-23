@@ -661,3 +661,43 @@ limite antes de o Basic virar necessário.
 
 `resolverOrigensPendentes` é chamada **depois** de gravar a estrutura: é exatamente o momento em que
 o lead que chegou primeiro — em segundos, pelo webhook — finalmente tem com o que casar.
+
+---
+
+## 16. O agendamento — a cota decide a cadência
+
+`worker.ts` liga as peças no `server.ts`, seguindo o padrão da casa: conexão dona com `max:1`
+(advisory lock exige lock e unlock na **mesma** conexão), guarda anti-sobreposição, e limpeza no
+shutdown.
+
+### Duas varreduras, não uma — e o motivo é aritmético
+
+⚠️ A cota do developer token é **compartilhada entre todos os clientes**. Uma sincronização gasta
+~4 requisições por conta:
+
+| Cadência | Requisições/conta/dia | Contas que cabem em 2.880/dia |
+|---|---|---|
+| a cada 30 min | ~192 | ⚠️ **15** |
+| a cada 6 h | ~16 | ~180 |
+
+⚠️ **Sincronizar depressa não traria nada** — métrica do Google fecha **por dia** — e custaria uma
+ordem de grandeza em clientes atendidos. Por isso a sincronização é folgada (6h) e as conversões,
+que não tocam essa cota, correm a cada 15 min.
+
+Foi a primeira vez que um número medido — o contador de `chamadas` — decidiu um parâmetro de
+operação, em vez de alguém escolher um intervalo "que parece razoável".
+
+### A MCC é pulada, não tentada
+
+⚠️ Achado da primeira chamada real: a conta de gerenciador responde `customer` normalmente mas
+**recusa métrica** (`REQUESTED_METRICS_FOR_MANAGER`) — ela só agrega. Cadastrada como `midia_conta`
+por engano, gastaria cota **toda passada** para falhar.
+
+O worker compara o `id_externo` com o `GOOGLE_ADS_LOGIN_CUSTOMER_ID` e **pula antes de chamar**.
+Pular é mais honesto que tentar e registrar erro para sempre — e o resumo conta quantas foram
+ignoradas, para que o engano seja visível em vez de silencioso.
+
+### Enfileirar antes de despachar, na mesma passada
+
+⚠️ A venda que o ERP acabou de importar sai **nesta** rodada. Inverter a ordem adicionaria um ciclo
+inteiro de latência sem ganho nenhum.

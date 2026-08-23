@@ -34,9 +34,10 @@
 | Fábrica por variável de ambiente (degrada sem config) | `.../plataformas/fabrica.ts` |
 | Sincronizador de mídia (UPSERT, órfãs contadas, cota medida) | `apps/api/src/contexts/aquisicao/sincronizador.ts` |
 | Diagnóstico da primeira chamada real | `.../plataformas/diagnostico-google.ts` |
+| Agendamento das duas varreduras (cadência pela cota) | `apps/api/src/contexts/aquisicao/worker.ts` |
 | ROI da veiculação (custo · leads · atribuição por modelo) | `apps/api/src/contexts/aquisicao/roi.ts` |
 
-**Verificado:** 10 varredores de schema · **502 testes na API** · 94 no `shared` · ⚠️ **os três checks verdes** (`lint`, `typecheck`, `test`).
+**Verificado:** 10 varredores de schema · **510 testes na API** · 94 no `shared` · ⚠️ **os três checks verdes** (`lint`, `typecheck`, `test`).
 
 ⚠️ **A fundação está fechada.** Tudo o que resta na Fase 0/1 depende de um adaptador real — e o adaptador depende do *developer token* do Google ([`onboarding-google-ads.md`](onboarding-google-ads.md)).
 
@@ -63,7 +64,7 @@ pedido do ERP. É a metade cara, e está construída.
 | ✅ **AQ-02** | `midia_metrica_dia`: impressão, clique, **custo em centavos**, conversões reivindicadas pela plataforma. ⚠️ Conversão de micros (Google) e float (Meta) **no adaptador** | AQ-01 | P |
 | 🔨 **AQ-04** | ⚠️ **Adaptador Google — leitura** (agora o primeiro, AMK-015). Exige *developer token* e conta **MCC** — começar o credenciamento já | developer token | M |
 | **AQ-03** | Adaptador **Meta — leitura**, ⚠️ **restrito à conta da própria Gera3** (Rede A). Sem App Review não lê conta de cliente (AMK-012) | — | M |
-| 🔨 **AQ-05** | **Sincronizador pronto** (estrutura + métricas em UPSERT, resolve origens, ⚠️ **conta as requisições** para medir cota). Falta só agendar no `server.ts` | AQ-02/04 | M |
+| ✅ **AQ-05** | **Sincronizador agendado** (6h, por conta, ⚠️ **pula a MCC**) + conversões (15 min). A cadência foi decidida pela **cota medida**, não por palpite | AQ-02/04 | M |
 | 🔨 **AQ-06** | Painel de mídia: **endpoints prontos** (contas, anúncios por cursor, ROI); falta a tela Angular | AQ-02 | M |
 | **AQ-07** | **Vigia de anomalia** sobre `metrica_janela`/`alerta` (`0031`): gasto fora de banda, veiculação parada, ⚠️ evento parou de chegar | AQ-02 | P |
 | **AQ-08** | **Resumo diário** por WhatsApp (gasto, leads, CPL, o que mudou) + exceções na hora | AQ-07 | P |
