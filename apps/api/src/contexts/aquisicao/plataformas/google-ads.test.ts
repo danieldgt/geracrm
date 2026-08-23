@@ -14,7 +14,11 @@ function fakeFetch(
   }) as unknown as typeof fetch
 }
 
-const cred = { developerToken: 'dev-secreto', loginCustomerId: '123-276-0756', accessToken: 'tok-oauth' }
+const cred = {
+  developerToken: 'dev-secreto',
+  loginCustomerId: '123-276-0756',
+  obterAccessToken: async () => ({ ok: true as const, dados: 'tok-oauth' }),
+}
 const criar = (respostas: { status: number; corpo: unknown }[], cap?: Parameters<typeof fakeFetch>[1]) =>
   new PlataformaGoogleAds(cred, { buscar: fakeFetch(respostas, cap), versao: 'v25' })
 
@@ -201,5 +205,22 @@ describe('Capacidades honestas', () => {
       clickId: 'gclid', ocorridaEm: new Date('2026-08-20T00:00:00Z'),
     })
     expect(r).toMatchObject({ ok: false, motivo: 'resposta_inesperada' })
+  })
+})
+
+describe('Access token renovado a cada chamada', () => {
+  it('propaga a falha do provedor sem chamar o Google', async () => {
+    let chamouGoogle = false
+    const g = new PlataformaGoogleAds(
+      {
+        developerToken: 'd', loginCustomerId: '1',
+        obterAccessToken: async () => ({ ok: false as const, motivo: 'credencial_invalida' as const }),
+      },
+      { buscar: (async () => { chamouGoogle = true; return {} as Response }) as unknown as typeof fetch },
+    )
+    const r = await g.lerEstrutura('111')
+    expect(r).toMatchObject({ ok: false, motivo: 'credencial_invalida' })
+    // ⚠️ Sem token não há o que tentar — gastar a chamada só queimaria cota.
+    expect(chamouGoogle).toBe(false)
   })
 })

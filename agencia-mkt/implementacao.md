@@ -579,3 +579,46 @@ descartar com motivo nomeado em vez de tentar oito vezes contra o vazio.
 
 ⚠️ `publicoPersonalizado` é a **promessa mais forte da oferta** (público semelhante ao comprador
 real). Está desligado de propósito até confirmarmos a elegibilidade do Customer Match (AMK-015).
+
+---
+
+## 14. Onde a credencial do Google mora — e por que NÃO é por tenant
+
+Correção do dono do produto durante o onboarding: *"precisamos deixar isso viável para rodar fora do
+meu computador... tem que ser variável de ambiente no Railway."* Estava certo, e eu vinha otimizando
+para o notebook dele.
+
+### A assimetria que decide o lugar
+
+| | Credencial de canal (WhatsApp) | Credencial do Google Ads |
+|---|---|---|
+| De quem é | **do tenant** — cada cliente traz a sua | **nossa** — uma MCC atende todos |
+| Onde mora | cifrada em `canal_conectado` | ⚠️ **variável de ambiente** |
+| Quantas | uma por número | **uma só** |
+
+⚠️ Guardar a do Google por tenant criaria **N cópias do mesmo segredo**, com N chances de vazar e
+nenhuma vantagem — o que muda por cliente é só o `customerId` na chamada.
+
+### O defeito que a correção expôs
+
+O adaptador recebia `accessToken` como **string fixa**. Access token do Google dura **~1 hora**, e o
+adaptador vive num worker de dias: funcionaria no primeiro teste e falharia em silêncio na segunda
+hora de produção, com um `401` que pareceria credencial errada.
+
+Agora recebe `obterAccessToken: () => Promise<...>`, e o `ProvedorTokenGoogle` troca o refresh token
+por access token com cache. ⚠️ Renova **com folga de 5 minutos** — renovar só ao expirar deixaria uma
+janela em que o token vence *no meio* da chamada, produzindo um 401 intermitente, que é o pior tipo.
+
+### `invalid_grant` carrega a instrução
+
+⚠️ É o erro mais mal explicado do OAuth do Google: significa que o **refresh token morreu**, e as
+causas práticas pedem todas a mesma ação. O detalhe traduzido diz o que fazer — inclusive a causa que
+se repete **a cada 7 dias** (tela de consentimento em "Testing"). `invalid_grant` sozinho não ajuda
+ninguém às duas da manhã.
+
+### Sem configuração, degrada — não quebra
+
+A fábrica devolve `PlataformaNaoImplementada` (todas as capacidades em `false`), não `null` nem
+exceção. O despachante de conversões então **descarta com `plataforma_sem_capacidade`** — visível —
+em vez de tentar oito vezes contra o vazio. E `faltaParaGoogle()` diz **quais variáveis faltam pelo
+nome**, para quem está configurando não adivinhar.

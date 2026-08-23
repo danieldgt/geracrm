@@ -26,8 +26,12 @@ export interface CredencialGoogleAds {
   readonly developerToken: string
   /** A MCC, **só dígitos** (sem hífen). Ex.: `1232760756`. */
   readonly loginCustomerId: string
-  /** Access token do OAuth (curto). Quem chama renova a partir do refresh token. */
-  readonly accessToken: string
+  /**
+   * ⚠️ Função, não string. Access token dura ~1h e o adaptador vive num worker de
+   * dias — guardar o valor faria a primeira hora funcionar e a segunda falhar com
+   * `401`, que pareceria credencial errada. O `ProvedorTokenGoogle` renova.
+   */
+  readonly obterAccessToken: () => Promise<ResultadoPlataforma<string>>
 }
 
 /**
@@ -110,6 +114,12 @@ export class PlataformaGoogleAds implements PortaPlataformaMidia {
 
     // Teto de páginas: defesa contra laço infinito se a API devolver o mesmo token.
     for (let pagina = 0; pagina < 200; pagina++) {
+      // ⚠️ Renovado a cada página: uma sincronização longa pode atravessar a
+      //    expiração do token, e o provedor devolve o mesmo valor do cache
+      //    enquanto ele serve — o custo é uma comparação de relógio.
+      const acesso = await this.#cred.obterAccessToken()
+      if (!acesso.ok) return acesso
+
       const sinal = AbortSignal.timeout(this.#timeout)
       let resposta: Response
       try {
@@ -117,7 +127,7 @@ export class PlataformaGoogleAds implements PortaPlataformaMidia {
           method: 'POST',
           signal: sinal,
           headers: {
-            authorization: `Bearer ${this.#cred.accessToken}`,
+            authorization: `Bearer ${acesso.dados}`,
             'developer-token': this.#cred.developerToken,
             // ⚠️ Sem `login-customer-id`, o Google recusa acesso a conta de
             //    cliente vinculada: ele diz por QUAL gerenciador estamos entrando.

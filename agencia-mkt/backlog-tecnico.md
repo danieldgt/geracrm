@@ -30,9 +30,11 @@
 | Enfileirador (venda → conversão, uma por plataforma) | `apps/api/src/contexts/aquisicao/enfileirar-conversao.ts` |
 | Rotas HTTP (contas · painel · ROI · sessão da LP · diagnóstico) | `apps/api/src/contexts/aquisicao/rotas-aquisicao.ts` |
 | **Adaptador Google Ads** (leitura, versão configurável, paginação) | `apps/api/src/contexts/aquisicao/plataformas/google-ads.ts` |
+| Provedor de access token (refresh → access, com cache e folga) | `.../plataformas/google-oauth.ts` |
+| Fábrica por variável de ambiente (degrada sem config) | `.../plataformas/fabrica.ts` |
 | ROI da veiculação (custo · leads · atribuição por modelo) | `apps/api/src/contexts/aquisicao/roi.ts` |
 
-**Verificado:** 10 varredores de schema · **473 testes na API** · 94 no `shared` · ⚠️ **os três checks verdes** (`lint`, `typecheck`, `test`).
+**Verificado:** 10 varredores de schema · **490 testes na API** · 94 no `shared` · ⚠️ **os três checks verdes** (`lint`, `typecheck`, `test`).
 
 ⚠️ **A fundação está fechada.** Tudo o que resta na Fase 0/1 depende de um adaptador real — e o adaptador depende do *developer token* do Google ([`onboarding-google-ads.md`](onboarding-google-ads.md)).
 
