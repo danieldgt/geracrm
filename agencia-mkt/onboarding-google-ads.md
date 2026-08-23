@@ -183,6 +183,19 @@ Ele vai **dentro de um campo do console**:
 ⚠️ Ele **não aparece na lista filtrada** de cima: escopo sensível costuma exigir entrada manual.
 Procurar na lista e não achar é o comportamento esperado, não defeito.
 
+### ⚠️ O banner "precisa ser verificado" NÃO bloqueia — não envie para análise
+
+Assim que o escopo `.../auth/adwords` entra, a tela mostra **"Seu aplicativo precisa ser
+verificado"** e marca o escopo como *"Aprovação necessária"*. Assusta, e **não impede nada** no
+nosso caso:
+
+- Verificação existe para **distribuir o app a terceiros**. Aqui você autoriza **a si mesmo**.
+- Sem verificação o app aceita até **100 usuários** — e o nosso número de usuários é **1**.
+- ⚠️ **Enviar para análise abriria um processo de dias, sem ganho nenhum.** Não envie.
+
+O preço de não verificar é a tela **"O Google não verificou este app"** na hora de autorizar →
+*Avançado → Acessar (não seguro)*. É o seu próprio app.
+
 ### ③.4 — ⚠️ PUBLICAR o app
 
 **[console.cloud.google.com/auth/audience](https://console.cloud.google.com/auth/audience)** →
