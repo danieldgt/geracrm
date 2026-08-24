@@ -117,9 +117,18 @@ export function montarTexto(
   return { texto: `${cabecalho}\n${corpoAlertas}\n${corpoNumeros}`, linhas }
 }
 
-/** Monta o resumo de um tenant a partir do banco. Não entrega — só monta. */
-export async function montarResumo(sql: Sql, tenantId: string, agora: Date): Promise<ResumoDiario> {
-  const dia = agora.toISOString().slice(0, 10)
+/**
+ * Monta o resumo de um tenant a partir do banco. Não entrega — só monta.
+ *
+ * ⚠️ `diaLocal` existe porque a data do relatório é a do CLIENTE, não a do
+ * servidor: às 20h de Manaus (UTC-4) o relógio em UTC já virou o dia, e o
+ * resumo sairia carimbado com amanhã. Quem chama pela varredura passa o dia
+ * calculado no fuso do tenant; sem ele, cai no dia UTC (o comportamento antigo).
+ */
+export async function montarResumo(
+  sql: Sql, tenantId: string, agora: Date, diaLocal?: string,
+): Promise<ResumoDiario> {
+  const dia = diaLocal ?? agora.toISOString().slice(0, 10)
 
   const [m] = await sql<{ custo: string; cliques: number; ontem: string }[]>`
     SELECT coalesce(sum(custo_centavos) FILTER (WHERE dia = ${dia}::date), 0)::text     AS custo,

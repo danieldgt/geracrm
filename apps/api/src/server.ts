@@ -9,6 +9,7 @@ import {
   INTERVALO_SINCRONIZACAO_MS, INTERVALO_CONVERSOES_MS,
 } from './contexts/aquisicao/worker.js'
 import { vigiarTodos } from './contexts/aquisicao/vigia.js'
+import { varrerResumoDiario, HORA_RESUMO_LOCAL } from './contexts/aquisicao/entrega-resumo.js'
 import { vigiarConexaoCanais } from './contexts/atendimento/vigia-canal.js'
 
 const porta = Number(process.env.PORT ?? 3000)
@@ -144,6 +145,25 @@ if (process.env.DATABASE_ADMIN_URL) {
       .finally(() => { vigiandoCanal = false })
   }, 5 * 60 * 1000)
   intervalosAquisicao.push(vigiaCanal)
+
+  // Resumo diário da mídia (AQ-08). ⚠️ 15 min NÃO é a frequência do resumo — é a
+  // frequência com que se PERGUNTA se já passou das HORA_RESUMO_LOCAL h no fuso
+  // de cada tenant. A entrega é uma por tenant por dia, travada pela chave
+  // (tenant_id, dia) do `0061`; a passada frequente é o que faz o resumo sair
+  // perto da hora certa mesmo com o processo tendo reiniciado às 19h59.
+  let resumoMidia: ReturnType<typeof setInterval>
+  let resumindo = false
+  resumoMidia = setInterval(() => {
+    if (resumindo) return
+    resumindo = true
+    void varrerResumoDiario(donoAquisicao as never, new Date())
+      .then((r) => {
+        if (r.entregues > 0) app.log.info({ ...r, hora: HORA_RESUMO_LOCAL }, 'resumo diário de mídia entregue')
+      })
+      .catch((e) => app.log.warn({ erro: e }, 'resumo diário de mídia falhou'))
+      .finally(() => { resumindo = false })
+  }, 15 * 60 * 1000)
+  intervalosAquisicao.push(resumoMidia)
 }
 
 // Graceful shutdown: para de aceitar requisição, termina as que estão em voo,
