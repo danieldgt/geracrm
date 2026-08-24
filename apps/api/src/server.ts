@@ -8,6 +8,7 @@ import {
   varrerSincronizacaoMidia, varrerConversoes,
   INTERVALO_SINCRONIZACAO_MS, INTERVALO_CONVERSOES_MS,
 } from './contexts/aquisicao/worker.js'
+import { vigiarTodos } from './contexts/aquisicao/vigia.js'
 
 const porta = Number(process.env.PORT ?? 3000)
 
@@ -66,10 +67,11 @@ if (process.env.DATABASE_ADMIN_URL) {
 //    que não tocam essa cota, correm a cada 15 min.
 // ⚠️ Sem as variáveis do Google configuradas, nada quebra: a fábrica devolve
 //    adaptador com capacidades em `false` e a passada não faz nada de rede.
-let sincronizacaoMidia: ReturnType<typeof setInterval> | undefined
-let conversoesMidia: ReturnType<typeof setInterval> | undefined
 let donoAquisicao: ReturnType<typeof postgres> | undefined
+const intervalosAquisicao: ReturnType<typeof setInterval>[] = []
 if (process.env.DATABASE_ADMIN_URL) {
+  let sincronizacaoMidia: ReturnType<typeof setInterval>
+  let conversoesMidia: ReturnType<typeof setInterval>
   // max:1 pelo mesmo motivo do despachante de webhooks: advisory lock exige
   // lock+unlock na MESMA conexão.
   donoAquisicao = postgres(process.env.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {} })
@@ -102,6 +104,26 @@ if (process.env.DATABASE_ADMIN_URL) {
       .catch((e) => app.log.warn({ erro: e }, 'varredura de conversões falhou'))
       .finally(() => { convertendo = false })
   }, INTERVALO_CONVERSOES_MS)
+  intervalosAquisicao.push(sincronizacaoMidia, conversoesMidia)
+
+
+  // Vigia de anomalia da mídia (AQ-07). ⚠️ De hora em hora, não a cada 6h como a
+  // sincronização: o que ele vigia é gasto disparado e lead que parou de chegar —
+  // e nesses dois, cada hora de atraso é dinheiro. Não gasta cota do Google: lê
+  // só o que já está no nosso banco.
+  let vigiaMidia: ReturnType<typeof setInterval> | undefined
+  let vigiando = false
+  vigiaMidia = setInterval(() => {
+    if (vigiando) return
+    vigiando = true
+    void vigiarTodos(donoAquisicao as never, new Date())
+      .then((r) => {
+        if (r.abertos > 0 || r.resolvidos > 0) app.log.info(r, 'vigia de mídia')
+      })
+      .catch((e) => app.log.warn({ erro: e }, 'vigia de mídia falhou'))
+      .finally(() => { vigiando = false })
+  }, 60 * 60 * 1000)
+  intervalosAquisicao.push(vigiaMidia)
 }
 
 // Graceful shutdown: para de aceitar requisição, termina as que estão em voo,
@@ -110,8 +132,7 @@ for (const sinal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(sinal, async () => {
     app.log.info({ sinal }, 'encerrando')
     if (despachoWebhook) clearInterval(despachoWebhook)
-    if (sincronizacaoMidia) clearInterval(sincronizacaoMidia)
-    if (conversoesMidia) clearInterval(conversoesMidia)
+    for (const i of intervalosAquisicao) clearInterval(i)
     if (donoAquisicao) await donoAquisicao.end()
     if (varreduraAutomacao) clearInterval(varreduraAutomacao)
     await app.close()

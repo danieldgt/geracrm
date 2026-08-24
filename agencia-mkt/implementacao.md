@@ -739,3 +739,50 @@ não gastou nada") é tranquilizadora e falsa.
 
 `custoCentavos` chega como **texto** (é `bigint` no banco, INV-46). O total converte antes de somar —
 `"2" + "3"` seria `"23"`, sem erro e com número errado na tela.
+
+---
+
+## 18. O vigia — cinco regras, e uma delas justifica o resto
+
+`vigia.ts` (AQ-07) reusa a infraestrutura de `0031`: dedup por índice parcial, resolução automática,
+evento no outbox **só quando o alerta nasce**. Nenhuma tabela nova.
+
+### ⚠️ `midia_leads_sumiram` é o motivo de o vigia existir
+
+Há cliques, há gasto, e **nenhum lead entrou**. O painel da plataforma continua **bonito** —
+impressões, cliques, CTR, tudo normal — enquanto o dinheiro sai e nada chega.
+
+Sem esta regra, a descoberta viria pelo cliente perguntando por que não recebeu ninguém. Causas
+típicas: landing page fora do ar, link `wa.me` errado, webhook quebrado — e nenhuma delas aparece
+como erro em lugar nenhum.
+
+### As outras quatro
+
+| Regra | O que pega | Severidade |
+|---|---|---|
+| `midia_gasto_anomalo` | dia acima de 3× a média de 7 dias | crítico |
+| `midia_veiculacao_parada` | gastava todo dia e zerou — cartão, política, suspensão | crítico |
+| `midia_codigo_perdido` | ⚠️ **a métrica de saúde da atribuição** (AMK-017) | aviso |
+| `midia_conversoes_falhando` | dead-letter: a venda aconteceu e o algoritmo não soube | crítico |
+
+⚠️ **Gasto que despenca NÃO é `gasto_anomalo`.** É `veiculacao_parada`, com outra causa e outra
+ação. Juntar os dois faria o operador procurar cartão recusado quando o problema é orçamento
+disparado — e vice-versa.
+
+### Toda regra exige massa mínima
+
+Alertar com 2 cliques é ruído, e ⚠️ **ruído treina o operador a ignorar alerta** — que é pior do que
+não ter alerta nenhum. Mesma disciplina de `avaliarEntrega` (massa 20, limiar 70%).
+
+Daí `veiculacao_parada` exigir histórico **consistente**: conta que gasta dia sim, dia não, não está
+parada — está no ritmo dela.
+
+### A base nunca inclui hoje
+
+⚠️ Senão o próprio pico que se quer detectar entraria na média e a diluiria.
+
+### Cadência: de hora em hora
+
+Mais frequente que a sincronização (6h) e por um motivo diferente: **não gasta cota do Google** — lê
+só o nosso banco. E o que ele vigia é gasto disparado e lead que parou de chegar, onde cada hora de
+atraso é dinheiro.
