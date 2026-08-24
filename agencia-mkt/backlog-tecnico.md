@@ -36,9 +36,11 @@
 | Diagnóstico da primeira chamada real | `.../plataformas/diagnostico-google.ts` |
 | Agendamento das varreduras (cadência pela cota) | `apps/api/src/contexts/aquisicao/worker.ts` |
 | Vigia de anomalia (5 regras puras, reusa `alerta` de `0031`) | `apps/api/src/contexts/aquisicao/vigia.ts` |
+| Resumo diário (geração pura, entrega injetada) | `apps/api/src/contexts/aquisicao/resumo-diario.ts` |
+| Tela de mídia + formulário de conexão de conta | `apps/console/src/app/funcionalidades/aquisicao/midia.pagina.ts` |
 | ROI da veiculação (custo · leads · atribuição por modelo) | `apps/api/src/contexts/aquisicao/roi.ts` |
 
-**Verificado:** 10 varredores de schema · **531 testes na API** · 94 no `shared` · build do console ok · ⚠️ **os três checks verdes** (`lint`, `typecheck`, `test`).
+**Verificado:** 10 varredores de schema · **549 testes na API** · 94 no `shared` · build do console ok · ⚠️ **os três checks verdes** (`lint`, `typecheck`, `test`).
 
 ### ✅ A Fase 0 está LIGADA de ponta a ponta (2026-08-23)
 
@@ -73,7 +75,7 @@ pedido do ERP. É a metade cara, e está construída.
 | ✅ **AQ-05** | **Sincronizador agendado** (6h, por conta, ⚠️ **pula a MCC**) + conversões (15 min). A cadência foi decidida pela **cota medida**, não por palpite | AQ-02/04 | M |
 | ✅ **AQ-06** | **Painel de mídia**: endpoints + **tela** (5 estados, custo/lead, paginada por cursor). ⚠️ ROAS fica de fora de propósito — exige modelo e janela declarados | AQ-02 | M |
 | ✅ **AQ-07** | **Vigia de anomalia** (5 regras puras, dedup e resolução automática de `0031`, de hora em hora). ⚠️ Inclui "cliques e gasto sem NENHUM lead" — o sinal que o painel da plataforma não mostra | AQ-02 | P |
-| **AQ-08** | **Resumo diário** por WhatsApp (gasto, leads, CPL, o que mudou) + exceções na hora | AQ-07 | P |
+| 🔨 **AQ-08** | **Resumo diário**: geração pronta (alertas no topo, ROAS com modelo, "sem dado" ≠ "tudo zero"). ⚠️ **Entrega plugável** — o canal é decisão em aberto | AQ-07 | P |
 | 🔨 **AQ-36** | **`modo_entrada` na campanha** (AMK-016): `inbound_wa` \| `outbound_formulario`, com a consequência aplicada **em código** no roteamento e o preço do modo visível na tela de criação | AQ-01 | M |
 | **AQ-44** | ⚠️ **LP com botão `wa.me` + código de sessão**: gera id por sessão, guarda `gclid`/UTM/página contra ele, injeta no `?text=`. **Caminho crítico** — sem destino não há campanha Google (AMK-015) | AQ-01 | G |
 | 🔨 **AQ-45** | **Parser do código na primeira mensagem**: aceita em qualquer posição, degrada para origem **parcial** se ausente, e mede a ⚠️ **taxa de código perdido** como métrica de saúde | AQ-44 | M |

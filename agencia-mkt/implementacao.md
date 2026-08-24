@@ -786,3 +786,59 @@ parada — está no ritmo dela.
 Mais frequente que a sincronização (6h) e por um motivo diferente: **não gasta cota do Google** — lê
 só o nosso banco. E o que ele vigia é gasto disparado e lead que parou de chegar, onde cada hora de
 atraso é dinheiro.
+
+---
+
+## 19. O resumo diário — geração e entrega separadas
+
+`resumo-diario.ts` (AQ-08). ⚠️ **A separação não é elegância: é uma decisão em aberto que não podia
+travar o resto.**
+
+Mandar relatório interno pelo canal não-oficial mistura tráfego operacional com tráfego de
+atendimento **no mesmo número**, e conta contra o teto de aquecimento da frota (`0037`). Pode ser que
+o certo seja número dedicado, e-mail ou webhook. Enquanto isso não se decide, o resumo é **montado** e
+a entrega é **injetada** — trocá-la depois é substituir uma função, não reescrever o relatório.
+
+### ⚠️ Os alertas vêm ANTES dos números
+
+Um resumo que abre com *"Investido: R$ 340,00"* e enterra *"nenhum lead entrou hoje"* no fim **é lido
+como boa notícia**. O que exige ação vai no topo, ou não é lido.
+
+### "Sem dado" ≠ "tudo zero"
+
+Sem gasto, sem lead e sem alerta, **não há o que relatar**. ⚠️ Mandar um resumo vazio todo dia é o
+caminho mais curto para o cliente parar de ler os que importam. Mas **um alerta sozinho já justifica**
+o envio — parar de veicular é notícia.
+
+### ROAS sempre com o modelo no rótulo
+
+`ROAS (último toque, 14d): 5.0×` — nunca só `5.0×`. É AMK-009 aplicado ao texto: número de
+atribuição solto vira promessa que o produto não sustenta.
+
+### "Sem base" ≠ "0%"
+
+`variacao()` devolve `null` quando não há dia anterior. ⚠️ No primeiro dia, exibir *0%* inventaria uma
+estabilidade que ninguém observou.
+
+### ⚠️ Uma armadilha de teste: espaço não-quebrável
+
+`toLocaleString('pt-BR', {style:'currency'})` separa `R$` do número com **U+00A0**, não espaço comum.
+Comparar com espaço normal falha **por um caractere invisível** — e a saída do teste mostra os dois
+textos idênticos na tela. É o pior tipo de vermelho: o que parece impossível.
+
+---
+
+## 20. O formulário que faltava na tela de mídia
+
+A tela era **só leitura**: mostrava contas e anúncios, mas não havia como **conectar** uma conta —
+o `POST /v1/aquisicao/contas` existia sem consumidor. Na prática, a conta só entrava por chamada
+direta à API.
+
+Agora há formulário, aberto por padrão quando não existe nenhuma conta.
+
+⚠️ **A moeda ganhou aviso explícito na tela**, porque ela **não pode ser alterada depois** — errar
+contamina todo o custo daquela conta e a correção é recriar. É a mesma razão de `midia_conta.moeda`
+existir no schema.
+
+⚠️ E o `409` tem mensagem própria (*"Esta conta já está conectada"*), em vez de cair no genérico. A
+API devolve o motivo nomeado; repetir *"erro ao salvar"* desperdiçaria a informação.

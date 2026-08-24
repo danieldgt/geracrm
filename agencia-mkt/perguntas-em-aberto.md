@@ -142,5 +142,10 @@ AMK. É reversível e barato; só não deve ficar ambíguo por muito tempo.
    o cartão são dele — bate com AMK-002. Se nós criamos sob a nossa MCC, é mais rápido, mas a
    conta nasce sob o nosso gerenciador e ⚠️ **transferir posse depois dá trabalho**. Para a drezz
    é indiferente (a Gera3 é dona dos dois lados); para cliente de fora é dinheiro e é contrato.
-6. **Qual o teto de volume do SDR por número?** AMK-014 aceita o risco do não-oficial de forma
+6. 🔴 **Por qual canal sai o resumo diário?** ⚠️ Mandar relatório interno pelo canal não-oficial
+   mistura tráfego operacional com tráfego de atendimento **no mesmo número**, e conta contra o
+   teto de aquecimento da frota (`0037`). Opções: número dedicado, e-mail, ou webhook de saída
+   (`0033`, que já existe e é assinado). A geração está pronta e a **entrega é injetada** — a
+   decisão não trava nada, mas sem ela o resumo não sai.
+7. **Qual o teto de volume do SDR por número?** AMK-014 aceita o risco do não-oficial de forma
    medida; falta o número que a rampa de aquecimento (`0037`) deve respeitar com agente ligado.

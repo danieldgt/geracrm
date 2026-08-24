@@ -50,6 +50,40 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
       <button class="btn btn--secundario" type="submit">Aplicar</button>
     </form>
 
+    <details class="conectar" [open]="contas().length === 0">
+      <summary>Conectar conta de anúncio</summary>
+      <form class="nova" (submit)="conectar($event)">
+        <label>Plataforma
+          <select [value]="novaPlataforma()" (change)="novaPlataforma.set($any($event.target).value)">
+            <option value="google">Google Ads</option>
+            <option value="meta">Meta</option>
+            <option value="tiktok">TikTok</option>
+          </select>
+        </label>
+        <label>ID da conta
+          <input [value]="novoIdExterno()" (input)="novoIdExterno.set($any($event.target).value)"
+                 placeholder="997-075-4431" aria-label="ID da conta na plataforma" />
+        </label>
+        <label>Nome
+          <input [value]="novoNome()" (input)="novoNome.set($any($event.target).value)"
+                 placeholder="Drezz — aquisição" aria-label="Nome da conta" />
+        </label>
+        <label>Moeda
+          <input [value]="novaMoeda()" (input)="novaMoeda.set($any($event.target).value.toUpperCase())"
+                 maxlength="3" size="4" aria-label="Moeda" />
+        </label>
+        <button class="btn btn--primario" type="submit"
+                [disabled]="conectando() || !novoIdExterno().trim() || !novoNome().trim()">
+          {{ conectando() ? 'Conectando…' : 'Conectar' }}
+        </button>
+      </form>
+      <!-- ⚠️ A moeda não muda depois: some do formulário e vira propriedade da
+           conta. Errar aqui contamina todo o custo — e a correção é recriar. -->
+      <p class="dica">A moeda <strong>não pode ser alterada</strong> depois. Ela precisa bater com a
+        configurada na plataforma — somar custo entre moedas dá número sem significado.</p>
+      @if (erroConectar(); as e) { <p class="erro" role="alert">{{ e }}</p> }
+    </details>
+
     @if (contas().length > 0) {
       <ul class="contas">
         @for (c of contas(); track c.id) {
@@ -124,6 +158,13 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .filtros { display: flex; gap: var(--espacamento-3); align-items: end; margin-bottom: var(--espacamento-4); flex-wrap: wrap; }
     .filtros label { display: flex; flex-direction: column; gap: var(--espacamento-1); font-size: 12px; color: var(--texto-secundario); }
     .filtros input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
+    .conectar { margin-bottom: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); padding: var(--espacamento-3) var(--espacamento-4); }
+    .conectar summary { cursor: pointer; font-size: 13px; color: var(--texto); }
+    .nova { display: flex; gap: var(--espacamento-3); align-items: end; flex-wrap: wrap; margin-top: var(--espacamento-3); }
+    .nova label { display: flex; flex-direction: column; gap: var(--espacamento-1); font-size: 12px; color: var(--texto-secundario); }
+    .nova input, .nova select { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
+    .dica { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
+    .erro { color: var(--erro); font-size: 13px; margin: var(--espacamento-2) 0 0; }
     .contas { list-style: none; display: flex; gap: var(--espacamento-3); flex-wrap: wrap; margin: 0 0 var(--espacamento-4); padding: 0; }
     .conta { display: flex; flex-direction: column; gap: 2px; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .conta .nome { font-size: 13px; color: var(--texto); }
@@ -154,6 +195,13 @@ export class MidiaPagina implements OnInit {
   readonly temMais = signal(false)
   readonly #cursor = signal<string | null>(null)
 
+  readonly novaPlataforma = signal('google')
+  readonly novoIdExterno = signal('')
+  readonly novoNome = signal('')
+  readonly novaMoeda = signal('BRL')
+  readonly conectando = signal(false)
+  readonly erroConectar = signal<string | null>(null)
+
   readonly de = signal(this.#diasAtras(30))
   readonly ate = signal(this.#diasAtras(0))
 
@@ -180,6 +228,32 @@ export class MidiaPagina implements OnInit {
   custoPorLeadTotal(): string {
     const l = this.totalLeads()
     return l > 0 ? this.dinheiro(Number(this.totalCusto()) / l) : '—'
+  }
+
+  async conectar(ev: Event): Promise<void> {
+    ev.preventDefault()
+    this.conectando.set(true)
+    this.erroConectar.set(null)
+    try {
+      await firstValueFrom(this.#http.post('/v1/aquisicao/contas', {
+        plataforma: this.novaPlataforma(),
+        idExterno: this.novoIdExterno().trim(),
+        nome: this.novoNome().trim(),
+        moeda: this.novaMoeda().trim() || 'BRL',
+      }))
+      this.novoIdExterno.set(''); this.novoNome.set('')
+      await this.carregar()
+    } catch (e) {
+      // ⚠️ Conflito é resultado ESPERADO, com mensagem própria — a API devolve
+      //    409 nomeado, e repetir "erro ao salvar" desperdiçaria a informação.
+      const st = e instanceof HttpErrorResponse ? e.status : 0
+      this.erroConectar.set(
+        st === 409 ? 'Esta conta já está conectada.'
+        : st === 422 ? 'Confira a plataforma e o ID da conta.'
+        : 'Não foi possível conectar. Tente de novo.')
+    } finally {
+      this.conectando.set(false)
+    }
   }
 
   async carregar(): Promise<void> {
