@@ -259,11 +259,11 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
                   <input #arquivoImg type="file" accept="image/*" hidden
                          (change)="aoEscolherImagem($event, t.id)" />
                   <button class="ic" type="button" title="Gerar pedido" (click)="gerarPedido(t.id)">📋</button>
-                  <input class="entrada" type="text" placeholder="Digite uma mensagem"
+                  <input class="entrada" type="text" placeholder="Digite uma mensagem" #entrada
                          [ngModel]="servico.rascunho()" (ngModelChange)="servico.rascunho.set($event)"
-                         (keydown.enter)="servico.enviar()" [disabled]="servico.enviando()" />
+                         (keydown.enter)="enviarEVoltarAoCampo(entrada)" [disabled]="servico.enviando()" />
                   @if (servico.rascunho().trim()) {
-                    <button class="enviar" type="button" (click)="servico.enviar()"
+                    <button class="enviar" type="button" (click)="enviarEVoltarAoCampo(entrada)"
                             [disabled]="servico.enviando()"
                             [title]="servico.enviando() ? 'Enviando…' : 'Enviar'">➤</button>
                   } @else {
@@ -733,6 +733,29 @@ export class InboxPagina implements OnDestroy {
   // Seletor de emoji do composer.
   readonly mostrarEmojis = signal(false)
   toggleEmojis(ev: Event): void { ev.stopPropagation(); this.mostrarEmojis.set(!this.mostrarEmojis()) }
+  /**
+   * Envia e DEVOLVE O FOCO ao campo — a conversa continua, e quem atende manda
+   * várias mensagens seguidas.
+   *
+   * ⚠️ O foco não se perde por descuido: o campo fica `[disabled]` durante o
+   * envio, e desabilitar um elemento focado o desfoca. Por isso não adianta
+   * focar antes nem "não fazer nada": tem de focar DEPOIS que ele volta a ser
+   * habilitado.
+   *
+   * ⚠️ E depois do `await` ainda é cedo: o `disabled` só sai do DOM quando o
+   * Angular reprocessa o sinal `enviando()`. `setTimeout(0)` põe o foco atrás
+   * dessa renderização — focar um input desabilitado é um no-op silencioso.
+   */
+  async enviarEVoltarAoCampo(campo: HTMLInputElement): Promise<void> {
+    try {
+      await this.servico.enviar()
+    } finally {
+      // Volta o foco mesmo se o envio falhar: a mensagem continua no rascunho e
+      // a pessoa vai querer tentar de novo ali mesmo.
+      setTimeout(() => campo.focus(), 0)
+    }
+  }
+
   inserirEmoji(e: string): void { this.servico.rascunho.update((v) => v + e) }
   readonly EMOJIS = [
     '😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚',
