@@ -109,6 +109,13 @@ export const MENU: readonly GrupoMenu[] = [
     ],
   },
   {
+    titulo: 'Aquisição',
+    itens: [
+      { rota: 'midia', rotulo: 'Mídia paga', icone: '📣', status: 'pronto', onda: 'O4',
+        descricao: 'Custo e leads por anúncio — quanto cada peça trouxe, e a que preço.' },
+    ],
+  },
+  {
     titulo: 'Integrações',
     itens: [
       { rota: 'integracao', rotulo: 'ERP (Conexões)', icone: '🔌', status: 'pronto', onda: 'O0',

@@ -88,6 +88,11 @@ describe('Onda 3: Campanhas com ROI', () => {
     // FORA da janela (há 40 dias, antes do disparo) — não conta.
     await dono`INSERT INTO venda (tenant_id, id, contato_id, ocorrida_em, valor_centavos)
                VALUES (${T}, ${randomUUID()}, ${CONTATO}, now() - interval '40 days', 99999)`
+    // ⚠️ CANCELADA dentro da janela — não conta. Venda cancelada inflaria a
+    //    receita estimada na direção que agrada, que é o erro que ninguém reporta.
+    //    É a convenção do repositório (BI, painel, funil, ficha do contato).
+    await dono`INSERT INTO venda (tenant_id, id, contato_id, ocorrida_em, valor_centavos, cancelada_em)
+               VALUES (${T}, ${randomUUID()}, ${CONTATO}, now() - interval '1 day', 77777, now())`
 
     const roi = (await chamar(T, 'GET', `/v1/campanhas/${id}/roi`).then((r) => r.json())) as {
       exata: { pedidos: number; receitaCentavos: number }

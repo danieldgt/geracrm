@@ -43,6 +43,7 @@ import { rotasMapa } from './contexts/plataforma/rotas-mapa.js'
 import { rotasConfig } from './contexts/plataforma/rotas-config.js'
 import { rotasEventos } from './contexts/atendimento/eventos/rotas-eventos.js'
 import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
+import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
 import { rotasAuth } from './contexts/identidade/rotas-auth.js'
 
 /**
@@ -105,6 +106,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasConfig)
   await app.register(rotasEventos)
   await app.register(rotasPedido)
+  await app.register(rotasAquisicao)
   await app.register(rotasAuth)
 
   /** Liveness — no database. Answers even with the bank down, on purpose. */
