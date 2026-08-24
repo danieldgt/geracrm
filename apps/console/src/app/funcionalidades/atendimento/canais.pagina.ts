@@ -8,6 +8,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { CanaisServico, type Canal, type ProvedorCanal } from './canais.servico.js'
 import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
+import { abrirAvancado } from './canais.regras.js'
 
 /**
  * Cadastro de celular / canal — Meta (oficial) e não-oficiais (PlugZapi + futuros).
@@ -176,8 +177,36 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
         </label>
 
         @if (provedorAtual(); as p) {
-          <app-formulario-credencial [esquema]="p.esquemaCredencial" [erros]="erros()"
-                                     (mudou)="credencialMudou($event)" />
+          @if (p.oficial) {
+            <!-- ⚠️ No OFICIAL a credencial é MESMO do cliente: o App e a WABA
+                 são dele (docs/onboarding-meta.md). Pedir os campos aqui é o
+                 certo — e é por isso que os dois modelos não podem ter a mesma
+                 tela. -->
+            <app-formulario-credencial [esquema]="p.esquemaCredencial" [erros]="erros()"
+                                       (mudou)="credencialMudou($event)" />
+          } @else {
+            <!-- ⚠️ No NÃO-OFICIAL a instância pertence ao contrato da DREZZ com
+                 o fornecedor. O cliente não tem instância nem token: pedir isso
+                 no fluxo principal trava a ativação, e credencial em formulário
+                 de cliente é credencial que circula por chat, print e e-mail.
+                 O caminho dele é dar um nome e escanear o QR.
+                 Os campos continuam existindo — o provisionamento é manual
+                 hoje (docs/fluxo-conexao-numero.md) — mas como ÁREA DA EQUIPE. -->
+            <p class="nota-equipe">
+              Quem conecta este número é a equipe Drezz: a instância é criada por nós e
+              você só escaneia o QR no celular. Se ninguém da equipe estiver com você
+              agora, peça a ativação pelo suporte — o número aparece aqui em seguida.
+            </p>
+            <details class="avancado" [open]="avancadoAberto()">
+              <summary (click)="alternarAvancado($event)">Opções avançadas — equipe Drezz</summary>
+              <p class="aviso-credencial">
+                Estes dados são da conta da Drezz com o fornecedor, não do cliente.
+                Não peça por WhatsApp, não mande por e-mail e não deixe em print.
+              </p>
+              <app-formulario-credencial [esquema]="p.esquemaCredencial" [erros]="erros()"
+                                         (mudou)="credencialMudou($event)" />
+            </details>
+          }
         }
 
         @if (erroGeral(); as m) { <p class="erro-geral" role="alert">{{ m }}</p> }
@@ -241,6 +270,15 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
     .ajuda { font-size: 12px; color: var(--texto-suave); }
     select, .campo input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .aviso-risco { padding: var(--espacamento-3); border: 1px solid var(--erro); border-radius: var(--raio-controle); background: var(--superficie); color: var(--erro); font-size: 13px; margin: 0 0 var(--espacamento-4); }
+    .nota-equipe { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3); border-left: 3px solid var(--acao);
+      background: var(--superficie); border-radius: var(--raio-controle); color: var(--texto-secundario); font-size: 13px; line-height: 1.5; }
+    .avancado { margin-bottom: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); }
+    .avancado > summary { padding: var(--espacamento-2) var(--espacamento-3); cursor: pointer; font-size: 13px; color: var(--texto-secundario); }
+    .avancado > summary:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+    .avancado[open] > summary { border-bottom: 1px solid var(--borda); }
+    .avancado > :not(summary) { margin-left: var(--espacamento-3); margin-right: var(--espacamento-3); }
+    .avancado > app-formulario-credencial { display: block; margin-bottom: var(--espacamento-3); }
+    .aviso-credencial { margin: var(--espacamento-3) 0; font-size: 12px; color: var(--texto-suave); line-height: 1.5; }
     .erro-geral { color: var(--erro); font-size: 13px; }
   `,
 })
@@ -292,6 +330,24 @@ export class CanaisPagina implements OnInit, OnDestroy {
     return ed ? this.servico.provedores().find((p) => p.codigo === ed.provedor) : undefined
   })
 
+  /** Quem abriu a área da equipe no clique. A regra de exibição é `abrirAvancado`. */
+  readonly avancadoManual = signal(false)
+  readonly avancadoAberto = computed(() =>
+    abrirAvancado(
+      this.erros(),
+      this.provedorAtual()?.esquemaCredencial.campos.map((c) => c.nome) ?? [],
+      this.avancadoManual(),
+    ))
+
+  /**
+   * ⚠️ `preventDefault` porque o `<details>` alterna sozinho no clique: sem
+   * isso o DOM abre e o binding `[open]` fecha de volta no mesmo instante.
+   */
+  alternarAvancado(e: Event): void {
+    e.preventDefault()
+    this.avancadoManual.update((v) => !v)
+  }
+
   ngOnInit(): void {
     void this.servico.carregar().then(() => {
       // Aquecimento por número (só faz sentido no não-oficial).
@@ -316,11 +372,14 @@ export class CanaisPagina implements OnInit, OnDestroy {
     this.editando.set({ provedor: this.servico.provedores()[0]?.codigo ?? '', nome: '' })
   }
   fechar(): void { this.editando.set(null); this.limpar() }
-  private limpar(): void { this.credencial.set({}); this.erros.set({}); this.erroGeral.set(null) }
+  private limpar(): void {
+    this.credencial.set({}); this.erros.set({}); this.erroGeral.set(null)
+    this.avancadoManual.set(false)
+  }
 
   trocarProvedor(e: Event): void {
     // ⚠️ Trocar de provedor limpa a credencial: os campos são outros.
-    this.credencial.set({}); this.erros.set({})
+    this.credencial.set({}); this.erros.set({}); this.avancadoManual.set(false)
     this.editando.update((ed) => (ed ? { ...ed, provedor: (e.target as HTMLSelectElement).value } : ed))
   }
   nomeMudou(e: Event): void {

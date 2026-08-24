@@ -153,6 +153,25 @@ continuam no formulário, mas passam a ser **área do staff**, não do cliente. 
 enquanto**, porque é configurado na criação por API. A varredura de 5 minutos
 segue sendo a única detecção.
 
+## ✅ Feito em 2026-08-24 (tarde) — a área da equipe
+
+A tela de Números separou os dois modelos, que antes dividiam o mesmo formulário:
+
+| Canal | Quem é dono da credencial | O que a tela mostra |
+|---|---|---|
+| **Oficial (Meta)** | ⚠️ o **cliente** — App e WABA são dele (`onboarding-meta.md`) | os campos, no fluxo principal |
+| **Não-oficial (PlugZapi)** | ⚠️ a **Drezz** — é o nosso contrato com o fornecedor | um nome, e o QR. A credencial fica em **"Opções avançadas — equipe Drezz"**, fechada |
+
+⚠️ **É fronteira de UX, não de autorização.** O bloco fecha por padrão e avisa que
+o dado é da Drezz; ele não impede ninguém de abrir. Uma trava de verdade exigiria
+o papel do usuário exposto pela API e checagem no servidor — e hoje `POST
+/v1/canais` aceita credencial de qualquer usuário autenticado do tenant. Fica
+registrado como está, em vez de parecer o que não é.
+
+⚠️ **A área abre sozinha quando o servidor recusa um campo de credencial.** Erro
+apontando para campo escondido é erro invisível: "confira os campos destacados"
+sem campo destacado na tela.
+
 ## O que fica decidido
 
 1. Token de integrador em **variável de ambiente**, nível plataforma.
