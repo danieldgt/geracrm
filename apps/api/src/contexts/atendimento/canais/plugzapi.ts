@@ -309,6 +309,25 @@ export class CanalPlugZapi implements PortaCanal {
    * Status da instância — está conectada? ⚠️ Antes de enviar em massa, dá para
    * checar; o não-oficial cai quando o celular desliga.
    */
+  /**
+   * QR de pareamento. ⚠️ Buscado sob demanda: o código expira em segundos.
+   */
+  async qrCode(): Promise<{ ok: true; imagemDataUrl: string } | { ok: false; motivo: string }> {
+    try {
+      const resp = await this.#buscar(this.#url('qr-code/image'), { headers: this.#cabecalhos() })
+      const corpo = (await resp.json().catch(() => null)) as { value?: string; error?: string } | null
+      if (!resp.ok || !corpo?.value) {
+        // ⚠️ Instância JÁ conectada não devolve QR — e isso não é erro, é a
+        //    resposta certa. Quem chama precisa distinguir para não mostrar
+        //    "falhou" a quem está funcionando.
+        return { ok: false, motivo: corpo?.error ?? 'qr indisponível — a instância já pode estar conectada' }
+      }
+      return { ok: true, imagemDataUrl: corpo.value }
+    } catch {
+      return { ok: false, motivo: 'não foi possível falar com o provedor' }
+    }
+  }
+
   /** Contrato da porta — delega ao `status` do fornecedor. */
   async verificarConexao(): Promise<{ conectado: boolean; detalhe?: string | undefined }> {
     return this.status()

@@ -60,4 +60,7 @@ class CanalNaoImplementado implements PortaCanal {
   async verificarConexao(): Promise<{ conectado: boolean; detalhe?: string | undefined }> {
     return { conectado: false, detalhe: 'adaptador ainda não implementado' }
   }
+  async qrCode(): Promise<{ ok: true; imagemDataUrl: string } | { ok: false; motivo: string }> {
+    return { ok: false, motivo: 'adaptador ainda não implementado' }
+  }
 }

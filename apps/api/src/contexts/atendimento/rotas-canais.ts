@@ -134,6 +134,38 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
    * ⚠️ Como no ERP: 200 mesmo quando o canal está fora, com o resultado no
    * corpo. Não-oficial "desconectado" é o caso comum (celular desligado).
    */
+  /**
+   * QR de reconexão.
+   *
+   * ⚠️ Nasceu do incidente de 24/ago: o número caiu e **não havia como
+   * reconectar pelo produto** — só entrando no painel do fornecedor. Detectar
+   * sem oferecer o conserto é meio caminho.
+   *
+   * ⚠️ Não guarda nada: o QR expira em segundos e muda a cada leitura.
+   */
+  app.get<{ Params: { id: string } }>(
+    '/v1/canais/:id/qrcode',
+    { preHandler: exigirTenant },
+    async (req, reply) => {
+      const canalDb = await req.comTenant(async (tx) => {
+        const [l] = await tx<{ provedor: string | null; credenciais_cifradas: Buffer | null }[]>`
+          SELECT provedor, credenciais_cifradas FROM canal_conectado WHERE id = ${req.params.id}`
+        return l ?? null
+      })
+      if (!canalDb) return falha(reply, 404, 'canal.nao_encontrado', 'Canal não encontrado.')
+      if (!canalDb.credenciais_cifradas || !canalDb.provedor) {
+        return falha(reply, 422, 'canal.credencial_ausente', 'Preencha as credenciais antes de reconectar.')
+      }
+
+      const canal = criarCanal(canalDb.provedor, decifrar(canalDb.credenciais_cifradas))
+      const r = await canal.qrCode()
+      // ⚠️ 409, não 500: "já conectado" e "provedor sem QR" são respostas
+      //    ESPERADAS, com motivo nomeado — falha de negócio é retorno tipificado.
+      if (!r.ok) return reply.code(409).send({ erro: 'qr.indisponivel', mensagem: r.motivo })
+      return reply.send({ imagem: r.imagemDataUrl })
+    },
+  )
+
   app.post<{ Params: { id: string } }>(
     '/v1/canais/:id/testar',
     { preHandler: exigirTenant },
@@ -148,17 +180,18 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
         return falha(reply, 422, 'canal.credencial_ausente', 'Preencha as credenciais antes de testar.')
       }
 
-      let resultado: { conectado: boolean; detalhe?: string }
+      let resultado: { conectado: boolean; detalhe?: string | undefined }
       // ⚠️ Latência do conector (Onda 2): mede a ida ao fornecedor FORA da
       //    transação (é rede) e grava soma+contagem depois, no mesmo commit do
       //    estado. Média = soma/n via latenciaMedia.
       const inicio = Date.now()
       try {
         const canal = criarCanal(canalDb.provedor, decifrar(canalDb.credenciais_cifradas))
-        // Só o PlugZapi (e futuros não-oficiais) têm `status`; o oficial ainda não.
-        resultado = 'status' in canal && typeof (canal as { status?: unknown }).status === 'function'
-          ? await (canal as unknown as { status(): Promise<{ conectado: boolean; detalhe?: string }> }).status()
-          : { conectado: false, detalhe: 'teste indisponível para este provedor' }
+        // ⚠️ `verificarConexao` entrou no CONTRATO da porta (24/ago). O duck
+        //    typing que havia aqui (`'status' in canal`) só existia porque o
+        //    contrato não cobria a pergunta — e checagem por sondagem de método
+        //    é a que silenciosamente para de funcionar quando alguém renomeia.
+        resultado = await canal.verificarConexao()
       } catch (e) {
         resultado = { conectado: false, detalhe: e instanceof Error ? e.message : 'falha ao testar' }
       }

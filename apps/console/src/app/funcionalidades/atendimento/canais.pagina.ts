@@ -1,4 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
+import { HttpClient, HttpErrorResponse } from '@angular/common/http'
+import { firstValueFrom } from 'rxjs'
 import { CanaisServico, type Canal, type ProvedorCanal } from './canais.servico.js'
 import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
 
@@ -90,6 +92,33 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
                     {{ r.conectado ? '✅ Conectado' : '⚠️ ' + (r.detalhe || 'Desconectado') }}
                   </p>
                 }
+
+                <!-- ⚠️ Reconexão por QR: só faz sentido no não-oficial, que é
+                     quem tem sessão para restabelecer. No oficial, "reconectar"
+                     é trocar o token no cadastro. -->
+                @if (!ehOficial(c) && c.estado === 'desconectado') {
+                  <div class="reconectar">
+                    <button class="btn btn--primario" (click)="pedirQr(c.id)" [disabled]="buscandoQr() === c.id">
+                      {{ buscandoQr() === c.id ? 'Gerando…' : '📱 Reconectar por QR' }}
+                    </button>
+                    @if (qr()[c.id]; as q) {
+                      @if (q.imagem) {
+                        <div class="qr">
+                          <img [src]="q.imagem" alt="QR code para parear o WhatsApp" width="240" height="240" />
+                          <p class="passos">
+                            No celular deste número: <strong>WhatsApp → Aparelhos conectados →
+                            Conectar aparelho</strong>, e aponte para o código.
+                          </p>
+                          <!-- ⚠️ O QR expira em segundos e muda a cada leitura;
+                               por isso o botão de gerar outro fica ao lado. -->
+                          <p class="expira">O código expira rápido. Se não ler a tempo, gere outro.</p>
+                        </div>
+                      } @else {
+                        <p class="resultado" role="status">⚠️ {{ q.erro }}</p>
+                      }
+                    }
+                  </div>
+                }
               </li>
             }
           </ul>
@@ -170,6 +199,11 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
     .selo { font-size: 12px; color: var(--texto-secundario); white-space: nowrap; }
     .err { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--erro); }
     .acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
+    .reconectar { margin-top: var(--espacamento-3); }
+    .qr { margin-top: var(--espacamento-3); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
+    .qr img { display: block; margin: 0 auto var(--espacamento-3); border-radius: var(--raio-controle); }
+    .qr .passos { margin: 0; font-size: 13px; color: var(--texto); }
+    .qr .expira { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
     .resultado { margin: var(--espacamento-3) 0 0; font-size: 13px; color: var(--erro); }
     .resultado.ok { color: var(--sucesso); }
     .painel { margin-top: var(--espacamento-6); padding: var(--espacamento-6); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); box-shadow: var(--elevacao-modal); }
@@ -190,6 +224,31 @@ export class CanaisPagina implements OnInit {
   readonly erroGeral = signal<string | null>(null)
   readonly salvando = signal(false)
   readonly resultado = signal<Record<string, { conectado: boolean; detalhe?: string }>>({})
+  readonly #http = inject(HttpClient)
+  readonly qr = signal<Record<string, { imagem?: string; erro?: string }>>({})
+  readonly buscandoQr = signal<string | null>(null)
+
+  /**
+   * Busca o QR sob demanda. ⚠️ Nunca guardado: o código expira em segundos e
+   * muda a cada leitura — servir um QR salvo seria servir um código morto.
+   */
+  async pedirQr(canalId: string): Promise<void> {
+    this.buscandoQr.set(canalId)
+    try {
+      const r = await firstValueFrom(
+        this.#http.get<{ imagem: string }>(`/v1/canais/${canalId}/qrcode`))
+      this.qr.update((a) => ({ ...a, [canalId]: { imagem: r.imagem } }))
+    } catch (e) {
+      // ⚠️ 409 traz motivo NOMEADO do servidor ("já conectada", "provedor sem
+      //    QR") — mostrar "erro ao carregar" desperdiçaria a informação.
+      const msg = e instanceof HttpErrorResponse && e.status === 409
+        ? String(e.error?.mensagem ?? 'QR indisponível')
+        : 'Não foi possível gerar o QR. Tente de novo.'
+      this.qr.update((a) => ({ ...a, [canalId]: { erro: msg } }))
+    } finally {
+      this.buscandoQr.set(null)
+    }
+  }
 
   readonly provedorAtual = computed(() => {
     const ed = this.editando()

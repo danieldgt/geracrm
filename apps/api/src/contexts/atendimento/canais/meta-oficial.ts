@@ -38,6 +38,11 @@ export class CanalMetaOficial implements PortaCanal {
     return { conectado: true, detalhe: 'canal oficial não usa sessão — o token é validado no envio' }
   }
 
+  /** ⚠️ Não há QR no oficial: reconectar ali é trocar o token no cadastro. */
+  async qrCode(): Promise<{ ok: true; imagemDataUrl: string } | { ok: false; motivo: string }> {
+    return { ok: false, motivo: 'o canal oficial não usa QR — atualize o token no cadastro do número' }
+  }
+
   readonly tipo = 'whatsapp_oficial' as const
   readonly capacidades = CAPACIDADES_META_OFICIAL
 

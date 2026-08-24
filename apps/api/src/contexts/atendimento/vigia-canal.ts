@@ -40,17 +40,18 @@ export async function vigiarConexaoCanais(sql: Sql, agora: Date): Promise<Resumo
 
   try {
     const canais = await sql<{
-      tenant_id: string; id: string; provedor: string; telefone: string | null
-      estado: string; credencial: Uint8Array
+      tenant_id: string; id: string; provedor: string | null; nome_amigavel: string | null
+      estado: string; credenciais_cifradas: Buffer | null
     }[]>`
-      SELECT tenant_id, id, provedor, telefone, estado, credencial
+      SELECT tenant_id, id, provedor, nome_amigavel, estado, credenciais_cifradas
         FROM canal_conectado
-       WHERE estado IN ('conectado', 'degradado', 'desconectado')`
+       WHERE estado IN ('conectado', 'degradado', 'desconectado')
+         AND provedor IS NOT NULL AND credenciais_cifradas IS NOT NULL`
 
     let verificados = 0, caiu = 0, voltou = 0
 
     for (const c of canais) {
-      const canal = criarCanal(c.provedor, decifrar(Buffer.from(c.credencial)))
+      const canal = criarCanal(c.provedor!, decifrar(c.credenciais_cifradas!))
       // ⚠️ Só pergunta onde a sessão pode cair. No oficial, "conectado" viria de
       //    uma verificação que não aconteceu — e inventar isso é pior que não ter.
       if (!canal.capacidades.sessaoPodeCair) continue
@@ -63,7 +64,7 @@ export async function vigiarConexaoCanais(sql: Sql, agora: Date): Promise<Resumo
           UPDATE canal_conectado
              SET estado = 'desconectado', ultimo_erro = ${r.detalhe ?? 'sessão caiu'}
            WHERE tenant_id = ${c.tenant_id} AND id = ${c.id}`
-        await abrirAlerta(sql, c.tenant_id, c.telefone, r.detalhe ?? null)
+        await abrirAlerta(sql, c.tenant_id, c.nome_amigavel, r.detalhe ?? null)
         caiu++
       } else if (r.conectado && c.estado === 'desconectado') {
         await sql`
@@ -88,9 +89,9 @@ export async function vigiarConexaoCanais(sql: Sql, agora: Date): Promise<Resumo
  * quem estiver com o console aberto — que é onde a notícia precisa chegar.
  */
 async function abrirAlerta(
-  sql: Sql, tenantId: string, telefone: string | null, detalhe: string | null,
+  sql: Sql, tenantId: string, nome: string | null, detalhe: string | null,
 ): Promise<void> {
-  const numero = telefone ? ` (${telefone})` : ''
+  const numero = nome ? ` (${nome})` : ''
   const mensagem = `WhatsApp desconectado${numero}: o número não envia nem recebe. `
     + `Releia o QR code no painel do provedor para reconectar.`
     + (detalhe ? ` Detalhe: ${detalhe}` : '')

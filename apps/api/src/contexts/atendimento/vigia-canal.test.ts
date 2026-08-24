@@ -71,3 +71,82 @@ describe('verificarConexao do PlugZapi', () => {
     expect((await c.verificarConexao()).conectado).toBe(false)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️ Testes CONTRA O BANCO. Os de cima verificam o contrato do adaptador e
+//    passaram enquanto a consulta do vigia citava DUAS COLUNAS INEXISTENTES
+//    (`credencial` e `telefone`, quando o schema tem `credenciais_cifradas` e
+//    `nome_amigavel`). Typecheck não vê SQL em string, e o `.catch` do agendador
+//    engoliria a falha como warn a cada 5 minutos — vigilância que não vigia.
+//    Teste de contrato não substitui teste de consulta.
+import { beforeAll, afterAll, beforeEach } from 'vitest'
+import postgres from 'postgres'
+import { vigiarConexaoCanais } from './vigia-canal.js'
+import { cifrar } from '../integracao/cofre.js'
+import type { Sql } from '../../db/index.js'
+
+const TV = '00ca1a00-0000-4000-8000-000000000001'
+const PVV = '00ca1a00-1111-4000-8000-000000000001'
+const PLANOV = '00ca1a00-3333-4000-8000-000000000001'
+const MODELOV = '00ca1a00-4444-4000-8000-000000000001'
+const CANAL = '00ca1a00-cccc-4000-8000-000000000001'
+
+const donoV = postgres(process.env.DATABASE_ADMIN_URL!, { max: 1, onnotice: () => {} })
+const sqlV = donoV as unknown as Sql
+const AGORA_V = new Date('2026-08-24T12:00:00Z')
+
+beforeAll(async () => {
+  await donoV`INSERT INTO plano (id, codigo, nome) VALUES (${PLANOV}, 'plano-vigia-canal', 'Pro') ON CONFLICT DO NOTHING`
+  await donoV`INSERT INTO perfil_vertical_modelo (id, codigo, nome) VALUES (${MODELOV}, 'modelo-vigia-canal', 'Varejo') ON CONFLICT DO NOTHING`
+  await donoV.begin(async (tx) => {
+    await tx`SET CONSTRAINTS ALL DEFERRED`
+    await tx`INSERT INTO tenant (id, nome, plano_id, perfil_vertical_id)
+             VALUES (${TV}, 'Loja', ${PLANOV}, ${PVV}) ON CONFLICT DO NOTHING`
+    await tx`INSERT INTO perfil_vertical (tenant_id, id, modelo_id, nome)
+             VALUES (${TV}, ${PVV}, ${MODELOV}, 'Varejo') ON CONFLICT DO NOTHING`
+  })
+})
+
+beforeEach(async () => {
+  await donoV`DELETE FROM alerta          WHERE tenant_id = ${TV}`
+  await donoV`DELETE FROM outbox          WHERE tenant_id = ${TV}`
+  await donoV`DELETE FROM canal_conectado WHERE tenant_id = ${TV}`
+})
+
+afterAll(async () => {
+  await donoV`DELETE FROM alerta          WHERE tenant_id = ${TV}`
+  await donoV`DELETE FROM outbox          WHERE tenant_id = ${TV}`
+  await donoV`DELETE FROM canal_conectado WHERE tenant_id = ${TV}`
+  await donoV.end()
+})
+
+async function canalPlugZapi(estado: string): Promise<void> {
+  await donoV`
+    INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado, provedor, credenciais_cifradas)
+    VALUES (${TV}, ${CANAL}, 'whatsapp_nao_oficial', 'Número da loja', ${estado}, 'plugzapi',
+            ${cifrar({ instancia: 'i', token: 't', clientToken: 'c' })})`
+}
+
+describe('Vigia contra o banco — a consulta existe de verdade', () => {
+  it('a consulta roda sem erro de coluna', async () => {
+    await canalPlugZapi('conectado')
+    // ⚠️ Se qualquer coluna do SELECT não existir, isto lança — que é
+    //    exatamente o que os testes de contrato NÃO pegaram.
+    await expect(vigiarConexaoCanais(sqlV, AGORA_V)).resolves.toBeDefined()
+  })
+
+  it('canal sem provedor ou sem credencial é ignorado, não quebra', async () => {
+    await donoV`INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado)
+                VALUES (${TV}, ${CANAL}, 'whatsapp_nao_oficial', 'Sem credencial', 'conectado')`
+    const r = await vigiarConexaoCanais(sqlV, AGORA_V)
+    expect(r.verificados).toBe(0)
+  })
+
+  it('canal suspenso não é tocado — suspensão é decisão humana', async () => {
+    await canalPlugZapi('suspenso')
+    await vigiarConexaoCanais(sqlV, AGORA_V)
+    const [c] = await donoV<{ estado: string }[]>`
+      SELECT estado FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
+    expect(c!.estado).toBe('suspenso')
+  })
+})

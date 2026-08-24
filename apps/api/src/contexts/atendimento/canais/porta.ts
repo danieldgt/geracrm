@@ -127,6 +127,17 @@ export interface PortaCanal {
    * aconteceu — então o vigia nem pergunta.
    */
   verificarConexao(): Promise<{ conectado: boolean; detalhe?: string | undefined }>
+
+  /**
+   * QR code para (re)parear o número, quando o provedor oferece.
+   *
+   * ⚠️ Só existe onde há SESSÃO para restabelecer. No oficial não há QR: a
+   * credencial é token, e "reconectar" ali significa trocar o token no cadastro.
+   *
+   * ⚠️ O QR **expira em segundos** e muda a cada leitura — por isso é buscado sob
+   * demanda e nunca guardado. Persistir um QR seria servir um código morto.
+   */
+  qrCode(): Promise<{ ok: true; imagemDataUrl: string } | { ok: false; motivo: string }>
 }
 
 export type ResultadoAcaoMensagem =
