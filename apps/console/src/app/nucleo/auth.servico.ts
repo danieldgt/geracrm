@@ -1,4 +1,5 @@
-import { Injectable, computed, signal } from '@angular/core'
+import { Injectable, computed, inject, signal } from '@angular/core'
+import { Router } from '@angular/router'
 
 /**
  * Login via a NOSSA API (`/v1/auth/*`), não direto no Cognito.
@@ -73,6 +74,9 @@ export class AuthServico {
   /** Timer de renovação proativa; null quando não há sessão. */
   private timerRefresh: ReturnType<typeof setTimeout> | null = null
 
+  /** Para levar ao login quando a sessão morre (ver `encerrarSessao`). */
+  private readonly router = inject(Router)
+
   constructor() {
     // Ao abrir o app com sessão salva, agenda a renovação (ou renova já se está
     // perto/passou do vencimento). E renova ao voltar para a aba — setTimeout é
@@ -122,9 +126,26 @@ export class AuthServico {
     if (!refreshToken || !usuario) return
     try {
       const r = await this.postar('/v1/auth/refresh', { refreshToken, usuario })
-      if (r.tipo === 'ok' && r.idToken) this.guardar(r) // mantém o mesmo refresh token
-      else this.sair()
+      if (r.tipo === 'ok' && r.idToken) { this.guardar(r); return } // mantém o mesmo refresh token
+      // ⚠️ O servidor RECUSOU o refresh (token expirado, ~30 dias). Limpar a
+      //    sessão não basta: sem navegar, o usuário FICA NA TELA ATUAL sem token,
+      //    e a guarda de rota só roda em navegação. O resultado é uma tela que
+      //    não recarrega e parece defeito da página — foi assim que isto apareceu
+      //    em produção (24/ago), com um 400 no refresh e 401 em tudo depois.
+      this.encerrarSessao()
     } catch { /* rede: mantém o token atual; o timer/visibilidade tenta de novo */ }
+  }
+
+  /**
+   * Encerra a sessão E leva ao login.
+   *
+   * ⚠️ `sair()` sozinho só limpa o armazenamento — quem descobre que a sessão
+   * morreu precisa mandar o usuário para algum lugar, senão ele fica preso numa
+   * tela morta sem nenhuma mensagem.
+   */
+  encerrarSessao(): void {
+    this.sair()
+    void this.router.navigateByUrl('/login')
   }
 
   /** Agenda a renovação para MARGEM antes do vencimento (ou já, se perto/passou). */

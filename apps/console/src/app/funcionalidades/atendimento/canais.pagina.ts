@@ -90,16 +90,28 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
                 @if (resultado()[c.id]; as r) {
                   <p class="resultado" [class.ok]="r.conectado" role="status">
                     {{ r.conectado ? '✅ Conectado' : '⚠️ ' + (r.detalhe || 'Desconectado') }}
+                    <!-- ⚠️ "Conectado" sem carimbo de hora é afirmação sem prazo
+                         de validade: no incidente de 24/ago a tela dizia
+                         "Conectado" com o número fora do ar havia horas. -->
+                    <span class="quando">· verificado {{ verificadoEm()[c.id] }}</span>
                   </p>
                 }
 
-                <!-- ⚠️ Reconexão por QR: só faz sentido no não-oficial, que é
-                     quem tem sessão para restabelecer. No oficial, "reconectar"
-                     é trocar o token no cadastro. -->
-                @if (!ehOficial(c) && c.estado === 'desconectado') {
+                <!-- Reconexão por QR: só no não-oficial, que é quem tem sessão
+                     para restabelecer. No oficial, reconectar é trocar o token.
+                     SEMPRE disponível, não só quando o sistema já sabe que caiu:
+                     antes o botão dependia do estado ser desconectado, e isso era
+                     circular — quem está com o WhatsApp fora do ar ficava
+                     esperando o produto descobrir para poder consertar. Ação de
+                     recuperação não depende do diagnóstico. -->
+                @if (!ehOficial(c)) {
                   <div class="reconectar">
-                    <button class="btn btn--primario" (click)="pedirQr(c.id)" [disabled]="buscandoQr() === c.id">
-                      {{ buscandoQr() === c.id ? 'Gerando…' : '📱 Reconectar por QR' }}
+                    <button class="btn"
+                            [class.btn--primario]="c.estado === 'desconectado'"
+                            [class.btn--secundario]="c.estado !== 'desconectado'"
+                            (click)="pedirQr(c.id)" [disabled]="buscandoQr() === c.id">
+                      {{ buscandoQr() === c.id ? 'Gerando…'
+                         : c.estado === 'desconectado' ? '📱 Reconectar por QR' : '📱 Conectar outro aparelho' }}
                     </button>
                     @if (qr()[c.id]; as q) {
                       @if (q.imagem) {
@@ -200,6 +212,7 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
     .err { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--erro); }
     .acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
     .reconectar { margin-top: var(--espacamento-3); }
+    .quando { color: var(--texto-suave); font-size: 12px; }
     .qr { margin-top: var(--espacamento-3); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .qr img { display: block; margin: 0 auto var(--espacamento-3); border-radius: var(--raio-controle); }
     .qr .passos { margin: 0; font-size: 13px; color: var(--texto); }
@@ -225,6 +238,8 @@ export class CanaisPagina implements OnInit {
   readonly salvando = signal(false)
   readonly resultado = signal<Record<string, { conectado: boolean; detalhe?: string }>>({})
   readonly #http = inject(HttpClient)
+  /** Hora da última verificação, por canal — o carimbo ao lado do estado. */
+  readonly verificadoEm = signal<Record<string, string>>({})
   readonly qr = signal<Record<string, { imagem?: string; erro?: string }>>({})
   readonly buscandoQr = signal<string | null>(null)
 
@@ -238,6 +253,10 @@ export class CanaisPagina implements OnInit {
       const r = await firstValueFrom(
         this.#http.get<{ imagem: string }>(`/v1/canais/${canalId}/qrcode`))
       this.qr.update((a) => ({ ...a, [canalId]: { imagem: r.imagem } }))
+      // ⚠️ Detecta a conexão sozinho enquanto o QR está aberto. Pedir ao usuário
+      //    que clique em "testar" depois de escanear é obrigá-lo a confirmar algo
+      //    que o sistema pode descobrir — e a leitura do QR não avisa ninguém.
+      this.#acompanharPareamento(canalId)
     } catch (e) {
       // ⚠️ 409 traz motivo NOMEADO do servidor ("já conectada", "provedor sem
       //    QR") — mostrar "erro ao carregar" desperdiçaria a informação.
@@ -310,8 +329,33 @@ export class CanaisPagina implements OnInit {
     }
   }
 
+  /**
+   * Enquanto o QR está na tela, pergunta ao servidor se já pareou.
+   *
+   * ⚠️ Para sozinho: 20 tentativas de 3s cobrem a vida útil do QR com folga, e um
+   * laço sem fim continuaria batendo no fornecedor com a aba esquecida aberta.
+   */
+  #acompanharPareamento(canalId: string): void {
+    let tentativas = 0
+    const timer = setInterval(() => {
+      if (++tentativas > 20 || !this.qr()[canalId]?.imagem) { clearInterval(timer); return }
+      void this.servico.testar(canalId).then((r) => {
+        this.resultado.update((a) => ({ ...a, [canalId]: r }))
+        if (r.conectado) {
+          clearInterval(timer)
+          this.qr.update((a) => ({ ...a, [canalId]: {} }))   // some com o QR
+          void this.servico.carregar()                       // recarrega o estado
+        }
+      })
+    }, 3000)
+  }
+
   async testar(c: Canal): Promise<void> {
     const r = await this.servico.testar(c.id)
     this.resultado.update((a) => ({ ...a, [c.id]: r }))
+    // ⚠️ O carimbo é do momento da RESPOSTA, não do clique: o que interessa é
+    //    quando o fornecedor confirmou, não quando alguém pediu.
+    const agora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    this.verificadoEm.update((a) => ({ ...a, [c.id]: `às ${agora}` }))
   }
 }
