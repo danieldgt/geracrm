@@ -3,7 +3,7 @@ import { normalizarTelefone } from '@geracrm/shared'
 import type { MensagemEntrante } from './canais/porta.js'
 import { confirmarPedidoPorResposta } from '../pedido/confirmacao-pedido.js'
 import { consumirCodigoOrigem } from '../aquisicao/consumo-codigo.js'
-import type { Sql } from '../../db/index.js'
+import { emSavepoint, type Sql } from '../../db/index.js'
 import { notificarMensagemEntrante } from './notificacao.js'
 
 /**
@@ -181,24 +181,23 @@ export async function ingerirMensagemEntrante(
   // 6.5 ⚠️ Cliente respondeu SIM ao resumo? Confirma o pedido pendente da conversa
   //     (vinculado ao cliente), no MESMO commit. Conservador: só resposta curta e
   //     claramente afirmativa. Falha aqui não derruba a ingestão da mensagem.
-  if (msg.texto) {
-    try { await confirmarPedidoPorResposta(tx, conversaId, msg.texto, msg.recebidaEm) } catch { /* não bloqueia a mensagem */ }
-  }
-
-  // 6.6 ⚠️ Veio da landing page? A primeira mensagem carrega o código de origem
-  //     (AQ-45) e é ele que liga esta conversa ao anúncio que a pagou. Mesmo
-  //     commit da mensagem: origem sem conversa seria lead fantasma no relatório.
   //
-  //     ⚠️ SAVEPOINT, não só try/catch: no Postgres, um comando que falha aborta
-  //     a transação INTEIRA — o `catch` engoliria o erro e o commit falharia
-  //     depois, perdendo a mensagem por causa de um dado de marketing. Com o
-  //     savepoint, o rollback é só deste trecho.
+  //     ⚠️ E os dois passos acessórios abaixo correm em SAVEPOINT, não só em
+  //     try/catch: no Postgres um comando que falha aborta a transação INTEIRA,
+  //     então o `catch` engoliria o erro e o COMMIT falharia depois — perdendo a
+  //     MENSAGEM DO CLIENTE por causa de um passo secundário. Com o savepoint, o
+  //     rollback é só do trecho.
   if (msg.texto) {
-    const comSavepoint = tx as unknown as {
-      savepoint: <T>(fn: (sp: Sql) => Promise<T>) => Promise<T>
-    }
+    const texto = msg.texto
     try {
-      await comSavepoint.savepoint((sp) => consumirCodigoOrigem(sp, contatoId, msg.texto!))
+      await emSavepoint(tx, (sp) => confirmarPedidoPorResposta(sp, conversaId, texto, msg.recebidaEm))
+    } catch { /* não bloqueia a mensagem */ }
+
+    // 6.6 ⚠️ Veio da landing page? A primeira mensagem carrega o código de origem
+    //     (AQ-45) e é ele que liga esta conversa ao anúncio que a pagou. Mesmo
+    //     commit da mensagem: origem sem conversa seria lead fantasma no relatório.
+    try {
+      await emSavepoint(tx, (sp) => consumirCodigoOrigem(sp, contatoId, texto))
     } catch { /* atribuição é acessório; a mensagem não pode se perder por ela */ }
   }
 
