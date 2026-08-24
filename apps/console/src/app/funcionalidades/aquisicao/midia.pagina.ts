@@ -20,6 +20,16 @@ interface Anuncio {
   readonly impressoes: number
   readonly leads: number
 }
+interface Lp {
+  readonly id: string
+  readonly nome: string
+  readonly url: string
+  readonly ativo: boolean
+  readonly sessoes: number
+  readonly consumidas: number
+  /** ⚠️ `null` = ninguém clicou ainda. Diferente de 0% (todo clique preservou o código). */
+  readonly taxaPerdida: number | null
+}
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
@@ -91,6 +101,55 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
             <span class="nome">{{ c.nome }}</span>
             <span class="dado">{{ c.plataforma }} · {{ c.idExterno }} · {{ c.moeda }}</span>
             @if (!c.ativo) { <span class="badge">inativa</span> }
+          </li>
+        }
+      </ul>
+    }
+
+    <!-- ⚠️ Landing pages (AQ-44). Sem destino não há campanha no Google: o
+         anúncio precisa de uma URL, e é ela que carrega o clique até a conversa. -->
+    <details class="conectar" [open]="lps().length === 0">
+      <summary>Landing pages do anúncio</summary>
+      <form class="nova" (submit)="criarLp($event)">
+        <label>Nome interno
+          <input [value]="lpNome()" (input)="lpNome.set($any($event.target).value)"
+                 placeholder="Uniformes — PE" aria-label="Nome interno da landing page" />
+        </label>
+        <label>Título da página
+          <input [value]="lpTitulo()" (input)="lpTitulo.set($any($event.target).value)"
+                 placeholder="Uniformes para a sua equipe" aria-label="Título da página" />
+        </label>
+        <label>WhatsApp de destino
+          <input [value]="lpTelefone()" (input)="lpTelefone.set($any($event.target).value)"
+                 placeholder="55 81 99999-8888" aria-label="WhatsApp de destino" />
+        </label>
+        <button class="btn btn--primario" type="submit"
+                [disabled]="criandoLp() || !lpNome().trim() || !lpTitulo().trim()">
+          {{ criandoLp() ? 'Criando…' : 'Criar landing page' }}
+        </button>
+      </form>
+      <p class="dica">O link abaixo é o que vai no anúncio. Ele guarda o clique (gclid/UTM) e
+        abre o WhatsApp com um código — é esse código que liga a venda ao anúncio que a pagou.</p>
+      @if (erroLp(); as e) { <p class="erro" role="alert">{{ e }}</p> }
+    </details>
+
+    @if (lps().length > 0) {
+      <ul class="contas">
+        @for (l of lps(); track l.id) {
+          <li class="conta lp">
+            <span class="nome">{{ l.nome }}</span>
+            <span class="dado url">{{ urlCompleta(l.url) }}</span>
+            <button class="btn btn--secundario btn--pequeno" (click)="copiar(l.url)">
+              {{ copiado() === l.url ? 'Copiado' : 'Copiar link' }}
+            </button>
+            <!-- ⚠️ "—" quando ninguém clicou: 0% de código perdido sem sessão
+                 nenhuma seria uma saúde que ninguém observou. -->
+            <span class="dado">
+              {{ l.sessoes }} cliques ·
+              @if (l.taxaPerdida === null) { código perdido: — }
+              @else { <span [class.ruim]="l.taxaPerdida > 0.5">código perdido: {{ pct(l.taxaPerdida) }}</span> }
+            </span>
+            @if (!l.ativo) { <span class="badge">desligada</span> }
           </li>
         }
       </ul>
@@ -184,6 +243,11 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .forte { color: var(--texto); font-weight: 600; }
     tfoot td { border-bottom: none; border-top: 1px solid var(--borda-forte); color: var(--texto-secundario); }
     .mais { margin-top: var(--espacamento-3); }
+    .conta.lp { flex-wrap: wrap; }
+    /* ⚠️ min-width:0 + quebra: URL é uma palavra só e estoura a linha inteira,
+       empurrando o botão de copiar para fora da caixa. */
+    .conta.lp .url { min-width: 0; word-break: break-all; font-family: var(--tipografia-familia-dados, monospace); }
+    .conta.lp .ruim { color: var(--erro); }
   `,
 })
 export class MidiaPagina implements OnInit {
@@ -204,6 +268,14 @@ export class MidiaPagina implements OnInit {
 
   readonly de = signal(this.#diasAtras(30))
   readonly ate = signal(this.#diasAtras(0))
+
+  readonly lps = signal<readonly Lp[]>([])
+  readonly lpNome = signal('')
+  readonly lpTitulo = signal('')
+  readonly lpTelefone = signal('')
+  readonly criandoLp = signal(false)
+  readonly erroLp = signal<string | null>(null)
+  readonly copiado = signal<string | null>(null)
 
   readonly totalCusto = computed(() =>
     // ⚠️ String → Number aqui, e não somando strings: `custoCentavos` vem como
@@ -256,6 +328,62 @@ export class MidiaPagina implements OnInit {
     }
   }
 
+  /**
+   * ⚠️ A URL que vai no anúncio é ABSOLUTA e sai da origem atual: a API devolve o
+   * caminho, e o link é servido na mesma origem do console (proxy do nginx). Um
+   * caminho relativo colado no Google Ads não é um destino.
+   */
+  urlCompleta(caminho: string): string {
+    return `${location.origin}${caminho}`
+  }
+
+  pct(taxa: number): string { return `${Math.round(taxa * 100)}%` }
+
+  async copiar(caminho: string): Promise<void> {
+    const url = this.urlCompleta(caminho)
+    try {
+      await navigator.clipboard.writeText(url)
+      this.copiado.set(caminho)
+      setTimeout(() => this.copiado.set(null), 2000)
+    } catch {
+      // Clipboard bloqueado (http, permissão): a URL está na tela e dá para
+      // selecionar à mão — não vale travar a tela por causa disso.
+      this.erroLp.set('Não consegui copiar. Selecione o link na tela.')
+    }
+  }
+
+  async criarLp(ev: Event): Promise<void> {
+    ev.preventDefault()
+    this.criandoLp.set(true)
+    this.erroLp.set(null)
+    try {
+      await firstValueFrom(this.#http.post('/v1/aquisicao/lps', {
+        nome: this.lpNome().trim(),
+        titulo: this.lpTitulo().trim(),
+        telefone: this.lpTelefone().trim(),
+      }))
+      this.lpNome.set(''); this.lpTitulo.set(''); this.lpTelefone.set('')
+      await this.#carregarLps()
+    } catch (e) {
+      const st = e instanceof HttpErrorResponse ? e.status : 0
+      const campo = e instanceof HttpErrorResponse ? String(e.error?.campo ?? '') : ''
+      this.erroLp.set(
+        st === 422 && campo === 'telefone' ? 'Informe o WhatsApp com DDD e DDI (ex.: 55 81 99999-8888).'
+        : st === 422 ? 'Confira o nome e o título da página.'
+        : 'Não foi possível criar a landing page. Tente de novo.')
+    } finally {
+      this.criandoLp.set(false)
+    }
+  }
+
+  /** ⚠️ PARCIAL: se as LPs falharem, a tela de mídia continua de pé. */
+  async #carregarLps(): Promise<void> {
+    try {
+      const r = await firstValueFrom(this.#http.get<{ itens: Lp[] }>('/v1/aquisicao/lps'))
+      this.lps.set(r.itens)
+    } catch { this.lps.set([]) }
+  }
+
   async carregar(): Promise<void> {
     this.estado.set('carregando')
     this.#cursor.set(null)
@@ -263,6 +391,7 @@ export class MidiaPagina implements OnInit {
       const c = await firstValueFrom(
         this.#http.get<{ contas: Conta[] }>('/v1/aquisicao/contas'))
       this.contas.set(c.contas)
+      await this.#carregarLps()
       const r = await this.#buscarPagina(null)
       this.itens.set(r.itens)
       this.temMais.set(r.temMais)

@@ -185,6 +185,86 @@ export async function rotasAquisicao(app: FastifyInstance): Promise<void> {
     })
   })
 
+  // ─────────────────────────────────────────────────────────────────────
+  // Landing pages (AQ-44) — o destino do anúncio
+  // ─────────────────────────────────────────────────────────────────────
+  app.get('/v1/aquisicao/lps', { preHandler: exigirTenant }, async (req, reply) => {
+    const lps = await req.comTenant((tx) => tx<{
+      id: string; chave: string; nome: string; telefone_destino: string
+      titulo: string; ativo: boolean; sessoes: number; consumidas: number
+    }[]>`
+      SELECT l.id, l.chave, l.nome, l.telefone_destino, l.titulo, l.ativo,
+             count(s.id)::int                                         AS sessoes,
+             count(s.consumida_em)::int                               AS consumidas
+        FROM midia_lp l
+        LEFT JOIN midia_sessao_lp s ON s.tenant_id = l.tenant_id AND s.lp_id = l.id
+       WHERE l.tenant_id = tenant_atual()
+       GROUP BY l.id, l.chave, l.nome, l.telefone_destino, l.titulo, l.ativo, l.criado_em
+       ORDER BY l.criado_em DESC LIMIT ${PAGINA}`)
+
+    return reply.send({
+      itens: lps.map((l) => ({
+        id: l.id, chave: l.chave, nome: l.nome, telefone: l.telefone_destino,
+        titulo: l.titulo, ativo: l.ativo,
+        url: `/publico/lp/${l.chave}`,
+        sessoes: l.sessoes, consumidas: l.consumidas,
+        // ⚠️ A taxa de código PERDIDO (AQ-45) — a saúde da atribuição. Sem
+        //    sessão nenhuma é `null`, não 0%: "ninguém clicou ainda" e "todo
+        //    mundo apagou o código" pedem reações opostas.
+        taxaPerdida: l.sessoes > 0
+          ? Math.round(((l.sessoes - l.consumidas) / l.sessoes) * 100) / 100
+          : null,
+      })),
+    })
+  })
+
+  app.post<{
+    Body: {
+      nome?: string; telefone?: string; titulo?: string; subtitulo?: string
+      textoBase?: string; chamadaBotao?: string; avisoConsentimento?: string
+    }
+  }>('/v1/aquisicao/lps', { preHandler: exigirTenant }, async (req, reply) => {
+    const b = req.body ?? {}
+    const telefone = (b.telefone ?? '').replace(/\D/g, '')
+    const nome = b.nome?.trim()
+    const titulo = b.titulo?.trim()
+    if (!nome) return reply.code(422).send({ erro: 'nome.obrigatorio', campo: 'nome' })
+    if (!titulo) return reply.code(422).send({ erro: 'titulo.obrigatorio', campo: 'titulo' })
+    if (telefone.length < 10 || telefone.length > 15) {
+      return reply.code(422).send({ erro: 'telefone.invalido', campo: 'telefone' })
+    }
+
+    // ⚠️ A chave é PÚBLICA (viaja na URL do anúncio) e única no MUNDO — é ela que
+    //    resolve o tenant. 12 bytes de entropia: não é segredo, mas também não
+    //    pode ser adivinhável a ponto de alguém encher a base de outro cliente.
+    const chave = randomBytes(12).toString('hex')
+    const [lp] = await req.comTenant((tx) => tx<{ id: string }[]>`
+      INSERT INTO midia_lp
+        (tenant_id, id, chave, nome, telefone_destino, texto_base, titulo, subtitulo,
+         chamada_botao, aviso_consentimento)
+      VALUES (tenant_atual(), ${randomUUID()}, ${chave}, ${nome}, ${telefone},
+              ${corta(b.textoBase) ?? 'Olá! Vi o anúncio'}, ${titulo},
+              ${corta(b.subtitulo, 300)}, ${corta(b.chamadaBotao, 60) ?? 'Chamar no WhatsApp'},
+              ${corta(b.avisoConsentimento, 1000)})
+      RETURNING id`)
+
+    return reply.code(201).send({ id: lp!.id, chave, url: `/publico/lp/${chave}` })
+  })
+
+  app.patch<{ Params: { id: string }; Body: { ativo?: boolean } }>(
+    '/v1/aquisicao/lps/:id', { preHandler: exigirTenant }, async (req, reply) => {
+      const ativo = req.body?.ativo
+      if (typeof ativo !== 'boolean') {
+        return reply.code(422).send({ erro: 'ativo.obrigatorio' })
+      }
+      const [lp] = await req.comTenant((tx) => tx<{ id: string }[]>`
+        UPDATE midia_lp SET ativo = ${ativo}
+         WHERE tenant_id = tenant_atual() AND id = ${req.params.id}
+        RETURNING id`)
+      if (!lp) return reply.code(404).send({ erro: 'lp.nao_encontrada' })
+      return reply.send({ ok: true })
+    })
+
   /**
    * Diagnóstico do extrator — ⚠️ existe para PODER TESTAR à mão sem mandar
    * mensagem de verdade. Não escreve nada.

@@ -75,10 +75,10 @@ pedido do ERP. É a metade cara, e está construída.
 | ✅ **AQ-05** | **Sincronizador agendado** (6h, por conta, ⚠️ **pula a MCC**) + conversões (15 min). A cadência foi decidida pela **cota medida**, não por palpite | AQ-02/04 | M |
 | ✅ **AQ-06** | **Painel de mídia**: endpoints + **tela** (5 estados, custo/lead, paginada por cursor). ⚠️ ROAS fica de fora de propósito — exige modelo e janela declarados | AQ-02 | M |
 | ✅ **AQ-07** | **Vigia de anomalia** (5 regras puras, dedup e resolução automática de `0031`, de hora em hora). ⚠️ Inclui "cliques e gasto sem NENHUM lead" — o sinal que o painel da plataforma não mostra | AQ-02 | P |
-| 🔨 **AQ-08** | **Resumo diário**: geração pronta (alertas no topo, ROAS com modelo, "sem dado" ≠ "tudo zero"). ⚠️ **Entrega plugável** — o canal é decisão em aberto | AQ-07 | P |
+| ✅ **AQ-08** | **Resumo diário**: geração + **entrega LIGADA** por webhook de saída (`0033`). Uma por tenant por dia, travada pela chave `(tenant_id, dia)` do `0061`, na **hora local** do cliente. ⚠️ Dia sem dado não vira recibo — o lead que entra às 21h ainda faz o resumo sair | AQ-07 | P |
 | 🔨 **AQ-36** | **`modo_entrada` na campanha** (AMK-016): `inbound_wa` \| `outbound_formulario`, com a consequência aplicada **em código** no roteamento e o preço do modo visível na tela de criação | AQ-01 | M |
-| **AQ-44** | ⚠️ **LP com botão `wa.me` + código de sessão**: gera id por sessão, guarda `gclid`/UTM/página contra ele, injeta no `?text=`. **Caminho crítico** — sem destino não há campanha Google (AMK-015) | AQ-01 | G |
-| 🔨 **AQ-45** | **Parser do código na primeira mensagem**: aceita em qualquer posição, degrada para origem **parcial** se ausente, e mede a ⚠️ **taxa de código perdido** como métrica de saúde | AQ-44 | M |
+| ✅ **AQ-44** | **LP no ar**: `GET /publico/lp/:chave` serve a página e `POST .../sessao` grava o clique. ⚠️ O que estava travado não era a página — era o TENANT: a rota é pública e o tenant é **resolvido pela chave** (`lp_por_chave`, `0062`), como o webhook resolve pelo `phone_number_id` (`0057`). Sessão nasce no CLIQUE, não no carregamento | AQ-01 | G |
+| ✅ **AQ-45** | **Consumo LIGADO na ingestão**: a mensagem entrante consome o código e vira `midia_lead_origem` no MESMO commit (savepoint — atribuição não derruba mensagem). Estados nomeados (`sem_codigo`/`sessao_desconhecida`/`ja_consumida`/`registrada`) e ⚠️ **taxa de código perdido** por LP na tela | AQ-44 | M |
 
 **Critério de saída:** lemos as contas dos clientes todo dia, produzimos relatório que eles não
 tinham, e **não tocamos em nada**.
@@ -175,7 +175,7 @@ janela de 24h nascer aberta — sem ele o SDR agent depende de template pago e e
 | **Marketing API da Meta** | ❓ ⚠️ **verificar** se o padrão "App do cliente" serve para anúncios — reabre AMK-015 | CTWA · `ctwa_clid` |
 | **Nosso Tech Provider / App Review** | ⬜ não iniciado | Embedded Signup · escalar sem onboarding manual |
 | **Developer token + MCC do Google Ads** | 🔴 **não iniciado** — guia executável em [`onboarding-google-ads.md`](onboarding-google-ads.md) | ⚠️ AQ-04. **Mas ver o `Explorer`**: ele já toca produção e costuma ser automático, então a Fase 0 pode destravar sem esperar aprovação |
-| **`apps/catalogo` ou LP mínima** | ❌ não implementado ("aguardando Onda 2") | ⚠️ AQ-44 — **sem destino não há campanha Google** |
+| **`apps/catalogo` ou LP mínima** | ✅ **LP mínima servida pela API** (`pagina-lp.ts`), na mesma origem do console pelo proxy do nginx. Quando o catálogo SSR existir, vira rota lá — o contrato `/publico/lp/:chave` não muda | — |
 | **CI como gate** (R-08) | ❌ dívida da Onda 0 | ⚠️ tudo — agente com poder de escrita sem CI verde é risco desnecessário |
 | **Biblioteca de componentes** (R-12) | ❌ dívida da Onda 0 | AQ-06, AQ-20, AQ-33 (telas novas) |
 
