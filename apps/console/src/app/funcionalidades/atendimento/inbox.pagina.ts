@@ -1,6 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, OnDestroy, computed, signal, viewChild, effect, untracked, ElementRef } from '@angular/core'
 import { FormsModule } from '@angular/forms'
 import { RouterLink } from '@angular/router'
+import { HttpClient } from '@angular/common/http'
+import { firstValueFrom } from 'rxjs'
 import { formatarProtocolo, parsearProtocolo } from '@geracrm/shared'
 import { InboxServico, type ItemConversa, type Mensagem, type Thread } from '../../nucleo/inbox.servico.js'
 import { EventosServico } from '../../nucleo/eventos.servico.js'
@@ -24,9 +26,26 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
         <header class="barra">
           <span class="titulo">Conversas</span>
           @if (rotuloConexao()) {
-            <span class="conexao" [attr.data-estado]="eventos.estado()">{{ rotuloConexao() }}</span>
+            <!-- Esta bolinha é a conexão da TELA com o servidor (SSE), não o
+                 estado do WhatsApp. O title existe porque, num inbox de WhatsApp,
+                 um ponto verde é lido como "o número está online" — e não é. -->
+            <span class="conexao" [attr.data-estado]="eventos.estado()"
+                  title="Atualizações em tempo real desta tela. Não indica o estado do WhatsApp.">
+              {{ rotuloConexao() }}
+            </span>
           }
         </header>
+
+        <!-- ⚠️ O que o atendente precisa saber é se DÁ PARA ENVIAR. Sem isto ele
+             digita, envia, vê a mensagem na tela e só descobre depois que nada
+             saiu — porque o número está fora do ar. -->
+        @for (c of canaisCaidos(); track c.id) {
+          <div class="canal-caido" role="alert">
+            <strong>⚠️ {{ c.nome || 'Número' }} desconectado</strong>
+            <span>Mensagens não são enviadas nem recebidas por este número.</span>
+            <a routerLink="/numeros">Reconectar por QR →</a>
+          </div>
+        }
 
         <div class="busca-wrap">
           <span class="lupa">🔍</span>
@@ -296,6 +315,9 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
     .lista { display: flex; flex-direction: column; background: var(--wa-sidebar); border-right: 1px solid var(--wa-line); min-height: 0; }
     .barra { height: 56px; display: flex; align-items: center; gap: 10px; padding: 0 16px; background: var(--wa-panel); }
     .titulo { font-size: 16px; font-weight: 600; }
+    .canal-caido { display: flex; flex-direction: column; gap: 2px; margin: var(--espacamento-2); padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--erro); border-radius: var(--raio-controle); background: var(--erro-suave, transparent); font-size: 12px; color: var(--texto); }
+    .canal-caido span { color: var(--texto-secundario); }
+    .canal-caido a { color: var(--marca); text-decoration: none; font-weight: 600; }
     .conexao { margin-left: auto; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
     .conexao::before { content: '●'; margin-right: 4px; }
     .conexao[data-estado='conectado'] { color: #14e39c; }
@@ -465,6 +487,12 @@ export class InboxPagina implements OnDestroy {
   private prepondo = false // carregando antigas: NÃO rolar para o fim.
 
   constructor() {
+    // ⚠️ Verifica os canais ao abrir e de minuto em minuto: o número pode cair
+    //    COM A TELA ABERTA, e quem está atendendo precisa saber antes de digitar
+    //    uma resposta que não vai sair.
+    void this.#verificarCanais()
+    this.#timerCanais = setInterval(() => void this.#verificarCanais(), 60_000)
+
     // Abrir conversa → rola até o fim. Nova mensagem (enviada/recebida) → rola
     // se o usuário já estava perto do fim. Prepender antigas não mexe no fim.
     effect(() => {
@@ -523,6 +551,7 @@ export class InboxPagina implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    clearInterval(this.#timerCanais)
     // ⚠️ Apresentacional: o carregamento da lista, o ouvinte SSE e o ?abrir= agora
     //    vivem no ChatRailComponente (sempre montado). Ao recolher o rail este
     //    componente some, então sair da conversa (presença) é o certo aqui.
@@ -534,6 +563,28 @@ export class InboxPagina implements OnDestroy {
     if (nomes.length === 1) return `${nomes[0]} está nesta conversa`
     if (nomes.length === 2) return `${nomes[0]} e ${nomes[1]} estão nesta conversa`
     return `${nomes[0]} e mais ${nomes.length - 1} estão nesta conversa`
+  }
+
+  /**
+   * Canais fora do ar. ⚠️ Lido do servidor, não do SSE: são coisas diferentes —
+   * a tela pode estar recebendo atualizações perfeitamente enquanto o número
+   * está desconectado, que foi exatamente o caso do incidente de 24/ago.
+   */
+  readonly #http = inject(HttpClient)
+  readonly #timerCanais: ReturnType<typeof setInterval>
+  readonly canaisCaidos = signal<readonly { id: string; nome: string | null }[]>([])
+
+  async #verificarCanais(): Promise<void> {
+    try {
+      const r = await firstValueFrom(this.#http.get<{
+        canais: { id: string; nomeAmigavel: string | null; estado: string }[]
+      }>('/v1/canais'))
+      this.canaisCaidos.set(
+        (r.canais ?? [])
+          .filter((c) => c.estado === 'desconectado' || c.estado === 'suspenso')
+          .map((c) => ({ id: c.id, nome: c.nomeAmigavel })),
+      )
+    } catch { /* ⚠️ Falha ao consultar NÃO inventa alarme: some o aviso e tenta depois. */ }
   }
 
   rotuloConexao(): string {

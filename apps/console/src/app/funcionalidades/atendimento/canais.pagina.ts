@@ -1,4 +1,9 @@
-import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit, OnDestroy } from '@angular/core'
+
+/** ⚠️ O QR do fornecedor expira em segundos; 20s renova ANTES de morrer. */
+const SEGUNDOS_QR = 20
+/** Teto (~3 min). Aba esquecida não bate no fornecedor a noite toda. */
+const MAX_RENOVACOES = 9
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { CanaisServico, type Canal, type ProvedorCanal } from './canais.servico.js'
@@ -123,7 +128,14 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
                           </p>
                           <!-- ⚠️ O QR expira em segundos e muda a cada leitura;
                                por isso o botão de gerar outro fica ao lado. -->
-                          <p class="expira">O código expira rápido. Se não ler a tempo, gere outro.</p>
+                          <p class="expira">
+                            @if (restante()[c.id]; as seg) {
+                              <span class="relogio" [class.urgente]="seg <= 5">{{ seg }}s</span>
+                              <span> — o código se renova sozinho</span>
+                            } @else {
+                              <span>Aponte a câmera do celular para o código</span>
+                            }
+                          </p>
                         </div>
                       } @else {
                         <p class="resultado" role="status">⚠️ {{ q.erro }}</p>
@@ -217,6 +229,9 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
     .qr img { display: block; margin: 0 auto var(--espacamento-3); border-radius: var(--raio-controle); }
     .qr .passos { margin: 0; font-size: 13px; color: var(--texto); }
     .qr .expira { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
+    /* tabular-nums: sem isso o contador "pula" a cada dígito e a tela treme. */
+    .qr .relogio { font-family: var(--tipografia-familia-dados, monospace); font-variant-numeric: tabular-nums; color: var(--texto-secundario); }
+    .qr .relogio.urgente { color: var(--erro); }
     .resultado { margin: var(--espacamento-3) 0 0; font-size: 13px; color: var(--erro); }
     .resultado.ok { color: var(--sucesso); }
     .painel { margin-top: var(--espacamento-6); padding: var(--espacamento-6); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); box-shadow: var(--elevacao-modal); }
@@ -229,7 +244,7 @@ import { FormularioCredencialComponente } from '../integracao/formulario-credenc
     .erro-geral { color: var(--erro); font-size: 13px; }
   `,
 })
-export class CanaisPagina implements OnInit {
+export class CanaisPagina implements OnInit, OnDestroy {
   readonly servico = inject(CanaisServico)
   readonly editando = signal<{ provedor: string; nome: string } | null>(null)
   readonly credencial = signal<Record<string, string>>({})
@@ -240,6 +255,9 @@ export class CanaisPagina implements OnInit {
   readonly #http = inject(HttpClient)
   /** Hora da última verificação, por canal — o carimbo ao lado do estado. */
   readonly verificadoEm = signal<Record<string, string>>({})
+  /** Segundos até o QR atual expirar, por canal. */
+  readonly restante = signal<Record<string, number>>({})
+  readonly #timers = new Map<string, ReturnType<typeof setInterval>>()
   readonly qr = signal<Record<string, { imagem?: string; erro?: string }>>({})
   readonly buscandoQr = signal<string | null>(null)
 
@@ -256,7 +274,7 @@ export class CanaisPagina implements OnInit {
       // ⚠️ Detecta a conexão sozinho enquanto o QR está aberto. Pedir ao usuário
       //    que clique em "testar" depois de escanear é obrigá-lo a confirmar algo
       //    que o sistema pode descobrir — e a leitura do QR não avisa ninguém.
-      this.#acompanharPareamento(canalId)
+      this.#abrirSessaoPareamento(canalId)
     } catch (e) {
       // ⚠️ 409 traz motivo NOMEADO do servidor ("já conectada", "provedor sem
       //    QR") — mostrar "erro ao carregar" desperdiçaria a informação.
@@ -330,24 +348,93 @@ export class CanaisPagina implements OnInit {
   }
 
   /**
-   * Enquanto o QR está na tela, pergunta ao servidor se já pareou.
+   * A SESSÃO DE PAREAMENTO — um relógio só para as três coisas que acontecem
+   * enquanto o QR está na tela: contar o tempo, renovar o código e perceber que
+   * pareou.
    *
-   * ⚠️ Para sozinho: 20 tentativas de 3s cobrem a vida útil do QR com folga, e um
-   * laço sem fim continuaria batendo no fornecedor com a aba esquecida aberta.
+   * ⚠️ **O QR expira em segundos.** Sem renovar sozinho, o usuário escaneia um
+   * código morto e não entende por que não funcionou — o erro fica com cara de
+   * problema no celular dele.
+   *
+   * ⚠️ E não renova para sempre: uma aba esquecida bateria no fornecedor a noite
+   * inteira. Ao estourar o teto a tela DIZ que parou, em vez de simplesmente
+   * deixar de funcionar em silêncio.
    */
-  #acompanharPareamento(canalId: string): void {
-    let tentativas = 0
+  #abrirSessaoPareamento(canalId: string): void {
+    this.#encerrarSessao(canalId)
+    let segundos = 0
+    let renovacoes = 0
+
     const timer = setInterval(() => {
-      if (++tentativas > 20 || !this.qr()[canalId]?.imagem) { clearInterval(timer); return }
-      void this.servico.testar(canalId).then((r) => {
-        this.resultado.update((a) => ({ ...a, [canalId]: r }))
-        if (r.conectado) {
-          clearInterval(timer)
-          this.qr.update((a) => ({ ...a, [canalId]: {} }))   // some com o QR
-          void this.servico.carregar()                       // recarrega o estado
+      segundos++
+
+      // QR fechado (pareou, trocou de tela): o relógio morre junto.
+      if (!this.qr()[canalId]?.imagem) { this.#encerrarSessao(canalId); return }
+
+      this.restante.update((a) => ({
+        ...a, [canalId]: SEGUNDOS_QR - (segundos % SEGUNDOS_QR),
+      }))
+
+      // A cada 3s: já pareou? A leitura do QR não avisa ninguém.
+      if (segundos % 3 === 0) {
+        void this.servico.testar(canalId).then((r) => {
+          this.resultado.update((a) => ({ ...a, [canalId]: r }))
+          this.#carimbar(canalId)
+          if (r.conectado) {
+            this.#encerrarSessao(canalId)
+            this.qr.update((a) => ({ ...a, [canalId]: {} }))
+            void this.servico.carregar()
+          }
+        })
+      }
+
+      // Expirou: busca outro, até o teto.
+      if (segundos % SEGUNDOS_QR === 0) {
+        if (++renovacoes > MAX_RENOVACOES) {
+          this.#encerrarSessao(canalId)
+          this.qr.update((a) => ({
+            ...a, [canalId]: { erro: 'A sessão de pareamento expirou. Gere um novo QR.' },
+          }))
+          return
         }
-      })
-    }, 3000)
+        void this.#buscarQr(canalId)
+      }
+    }, 1000)
+
+    this.#timers.set(canalId, timer)
+  }
+
+  /** Busca uma imagem nova de QR e reinicia o contador. */
+  async #buscarQr(canalId: string): Promise<boolean> {
+    try {
+      const r = await firstValueFrom(
+        this.#http.get<{ imagem: string }>(`/v1/canais/${canalId}/qrcode`))
+      this.qr.update((a) => ({ ...a, [canalId]: { imagem: r.imagem } }))
+      this.restante.update((a) => ({ ...a, [canalId]: SEGUNDOS_QR }))
+      return true
+    } catch (e) {
+      const msg = e instanceof HttpErrorResponse && e.status === 409
+        ? String(e.error?.mensagem ?? 'QR indisponível')
+        : 'Não foi possível gerar o QR. Tente de novo.'
+      this.qr.update((a) => ({ ...a, [canalId]: { erro: msg } }))
+      return false
+    }
+  }
+
+  #encerrarSessao(canalId: string): void {
+    const t = this.#timers.get(canalId)
+    if (t) { clearInterval(t); this.#timers.delete(canalId) }
+  }
+
+  /** ⚠️ Sair da tela mata todos os relógios — nenhum sobrevive à navegação. */
+  ngOnDestroy(): void {
+    for (const t of this.#timers.values()) clearInterval(t)
+    this.#timers.clear()
+  }
+
+  #carimbar(canalId: string): void {
+    const agora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+    this.verificadoEm.update((a) => ({ ...a, [canalId]: `às ${agora}` }))
   }
 
   async testar(c: Canal): Promise<void> {
@@ -355,7 +442,6 @@ export class CanaisPagina implements OnInit {
     this.resultado.update((a) => ({ ...a, [c.id]: r }))
     // ⚠️ O carimbo é do momento da RESPOSTA, não do clique: o que interessa é
     //    quando o fornecedor confirmou, não quando alguém pediu.
-    const agora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-    this.verificadoEm.update((a) => ({ ...a, [c.id]: `às ${agora}` }))
+    this.#carimbar(c.id)
   }
 }
