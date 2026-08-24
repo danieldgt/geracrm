@@ -26,6 +26,18 @@ export interface CapacidadesCanal {
   readonly riscoBanimento: boolean
   /** Envia texto livre a qualquer momento (não-oficial, sem janela). */
   readonly textoLivreSempre: boolean
+  /**
+   * ⚠️ A SESSÃO pode cair sozinha, sem ninguém mexer em nada.
+   *
+   * O não-oficial automatiza um WhatsApp Web: celular sem internet, desligado ou
+   * desconectado pelo próprio WhatsApp derrubam o número — e ele para de enviar
+   * **e** de receber, sem erro em lugar nenhum. O oficial não tem esse modo de
+   * falha: é token, não sessão.
+   *
+   * É por isso que existe como capacidade própria e não como sinônimo de
+   * `riscoBanimento`: são riscos diferentes, e só este pede vigilância periódica.
+   */
+  readonly sessaoPodeCair: boolean
 }
 
 /**
@@ -106,6 +118,15 @@ export interface PortaCanal {
 
   /** Edita o texto de uma mensagem NOSSA no WhatsApp (janela do fornecedor). */
   editarMensagem(paraE164: string, idExterno: string, texto: string): Promise<ResultadoAcaoMensagem>
+
+  /**
+   * A sessão/credencial ainda está viva?
+   *
+   * ⚠️ Só faz sentido perguntar onde `capacidades.sessaoPodeCair` é verdadeira.
+   * Nos demais, responder "conectado" seria inventar uma verificação que não
+   * aconteceu — então o vigia nem pergunta.
+   */
+  verificarConexao(): Promise<{ conectado: boolean; detalhe?: string | undefined }>
 }
 
 export type ResultadoAcaoMensagem =

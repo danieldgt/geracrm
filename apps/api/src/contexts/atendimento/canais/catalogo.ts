@@ -29,18 +29,22 @@ export interface ProvedorCanal {
 
 const CAP_OFICIAL: CapacidadesCanal = {
   janela24h: true, aceitaTemplate: true, riscoBanimento: false, textoLivreSempre: false,
+  // ⚠️ Token, não sessão: não cai sozinho. O vigia de conexão nem pergunta.
+  sessaoPodeCair: false,
 }
 
 // Instagram Direct (Graph API): janela de 24h SEM template e SEM reabertura, e SEM
 // disparo em massa (campanha bloqueia IG). Declarado aqui; o produto degrada por isto.
 const CAP_INSTAGRAM: CapacidadesCanal = {
   janela24h: true, aceitaTemplate: false, riscoBanimento: false, textoLivreSempre: false,
+  sessaoPodeCair: false,
 }
 
 // TikTok Business Messaging: janela de sessão, sem template e sem disparo em massa.
 // Conservador por ora — a integração real ajusta quando entrar.
 const CAP_TIKTOK: CapacidadesCanal = {
   janela24h: true, aceitaTemplate: false, riscoBanimento: false, textoLivreSempre: false,
+  sessaoPodeCair: false,
 }
 
 export const CANAIS: readonly ProvedorCanal[] = [

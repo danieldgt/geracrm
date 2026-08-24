@@ -39,6 +39,7 @@ export function criarCanal(provedor: string, cred: Credencial): PortaCanal {
 class CanalNaoImplementado implements PortaCanal {
   readonly capacidades = {
     janela24h: false, aceitaTemplate: false, riscoBanimento: false, textoLivreSempre: false,
+    sessaoPodeCair: false,
   }
   constructor(readonly tipo: TipoCanal) {}
   async enviarTexto(): Promise<ResultadoEnvio> {
@@ -55,5 +56,8 @@ class CanalNaoImplementado implements PortaCanal {
   }
   async editarMensagem(): Promise<ResultadoAcaoMensagem> {
     return { ok: false, motivo: 'indisponivel', detalhe: 'adaptador ainda não implementado' }
+  }
+  async verificarConexao(): Promise<{ conectado: boolean; detalhe?: string | undefined }> {
+    return { conectado: false, detalhe: 'adaptador ainda não implementado' }
   }
 }

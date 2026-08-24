@@ -111,7 +111,8 @@ const BASE = 'https://api.plugzapi.com.br'
 export const CAPACIDADES_PLUGZAPI: CapacidadesCanal = {
   janela24h: false,        // ⚠️ sem janela — é WhatsApp Web, não Cloud API
   aceitaTemplate: false,
-  riscoBanimento: true,    // ⚠️ o alerta que a tela mostra
+  riscoBanimento: true,
+  sessaoPodeCair: true,    // ⚠️ o alerta que a tela mostra
   textoLivreSempre: true,
 }
 
@@ -308,6 +309,11 @@ export class CanalPlugZapi implements PortaCanal {
    * Status da instância — está conectada? ⚠️ Antes de enviar em massa, dá para
    * checar; o não-oficial cai quando o celular desliga.
    */
+  /** Contrato da porta — delega ao `status` do fornecedor. */
+  async verificarConexao(): Promise<{ conectado: boolean; detalhe?: string | undefined }> {
+    return this.status()
+  }
+
   async status(): Promise<{ conectado: boolean; detalhe?: string }> {
     try {
       const resp = await this.#buscar(this.#url('status'), { headers: this.#cabecalhos() })

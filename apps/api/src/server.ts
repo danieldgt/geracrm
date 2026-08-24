@@ -9,6 +9,7 @@ import {
   INTERVALO_SINCRONIZACAO_MS, INTERVALO_CONVERSOES_MS,
 } from './contexts/aquisicao/worker.js'
 import { vigiarTodos } from './contexts/aquisicao/vigia.js'
+import { vigiarConexaoCanais } from './contexts/atendimento/vigia-canal.js'
 
 const porta = Number(process.env.PORT ?? 3000)
 
@@ -124,6 +125,25 @@ if (process.env.DATABASE_ADMIN_URL) {
       .finally(() => { vigiando = false })
   }, 60 * 60 * 1000)
   intervalosAquisicao.push(vigiaMidia)
+
+  // ⚠️ VIGIA DE CONEXÃO DO CANAL — nasceu de um incidente real (24/ago): o número
+  //    não-oficial caiu e o produto NÃO AVISOU. O painel seguia "conectado",
+  //    porque o estado só era atualizado quando alguém tentava enviar.
+  //    5 min: número fora do ar é o produto parado, e cada minuto é conversa
+  //    perdida. Custa uma chamada HTTP por canal não-oficial.
+  let vigiaCanal: ReturnType<typeof setInterval>
+  let vigiandoCanal = false
+  vigiaCanal = setInterval(() => {
+    if (vigiandoCanal) return
+    vigiandoCanal = true
+    void vigiarConexaoCanais(donoAquisicao as never, new Date())
+      .then((r) => {
+        if (r.caiu > 0 || r.voltou > 0) app.log.warn(r, 'conexão de canal mudou')
+      })
+      .catch((e) => app.log.warn({ erro: e }, 'vigia de conexão de canal falhou'))
+      .finally(() => { vigiandoCanal = false })
+  }, 5 * 60 * 1000)
+  intervalosAquisicao.push(vigiaCanal)
 }
 
 // Graceful shutdown: para de aceitar requisição, termina as que estão em voo,

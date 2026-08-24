@@ -23,10 +23,21 @@ export const CAPACIDADES_META_OFICIAL: CapacidadesCanal = {
   janela24h: true,
   aceitaTemplate: true,
   riscoBanimento: false,
+  sessaoPodeCair: false,
   textoLivreSempre: false,
 }
 
 export class CanalMetaOficial implements PortaCanal {
+  /**
+   * ⚠️ O oficial não tem sessão que caia — é token. Se o token morrer, o ENVIO
+   * falha com motivo tipificado, que é onde isso deve aparecer. Responder aqui
+   * exigiria uma chamada à Graph API só para dizer "provavelmente sim", e o vigia
+   * nem pergunta (`sessaoPodeCair: false`).
+   */
+  async verificarConexao(): Promise<{ conectado: boolean; detalhe?: string | undefined }> {
+    return { conectado: true, detalhe: 'canal oficial não usa sessão — o token é validado no envio' }
+  }
+
   readonly tipo = 'whatsapp_oficial' as const
   readonly capacidades = CAPACIDADES_META_OFICIAL
 
