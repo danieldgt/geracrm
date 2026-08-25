@@ -1,5 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
+import { RouterLink } from '@angular/router'
 import { firstValueFrom } from 'rxjs'
 
 interface Conta {
@@ -48,6 +49,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 @Component({
   selector: 'app-midia',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterLink],
   template: `
     <header class="cabecalho">
       <h1>Mídia paga</h1>
@@ -183,7 +185,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
             <tbody>
               @for (a of itens(); track a.id) {
                 <tr>
-                  <td>{{ a.nome }} @if (a.estado !== 'ativa') { <span class="badge">{{ a.estado }}</span> }</td>
+                  <!-- ⚠️ O nome vira link para o ROI (AQ-16): é onde o "gastei X"
+                       da lista encontra o "faturei Y". -->
+                  <td><a class="link-anuncio" [routerLink]="['/midia/anuncio', a.id]">{{ a.nome }}</a>
+                    @if (a.estado !== 'ativa') { <span class="badge">{{ a.estado }}</span> }</td>
                   <td class="suave">{{ a.campanha }}</td>
                   <td class="num">{{ a.impressoes }}</td>
                   <td class="num">{{ a.cliques }}</td>
@@ -243,6 +248,8 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .forte { color: var(--texto); font-weight: 600; }
     tfoot td { border-bottom: none; border-top: 1px solid var(--borda-forte); color: var(--texto-secundario); }
     .mais { margin-top: var(--espacamento-3); }
+    .link-anuncio { color: var(--acao); text-decoration: none; }
+    .link-anuncio:hover { text-decoration: underline; }
     .conta.lp { flex-wrap: wrap; }
     /* ⚠️ min-width:0 + quebra: URL é uma palavra só e estoura a linha inteira,
        empurrando o botão de copiar para fora da caixa. */

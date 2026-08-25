@@ -128,6 +128,13 @@ export const ROTAS: Routes = [
         loadComponent: () =>
           import('./funcionalidades/crm/ficha.pagina.js').then((m) => m.FichaContatoPagina),
       },
+      // ROI de um anúncio (AQ-16): detalhe, não vai no menu — chega pela lista
+      // de Mídia paga.
+      {
+        path: 'midia/anuncio/:id',
+        loadComponent: () =>
+          import('./funcionalidades/aquisicao/anuncio-roi.pagina.js').then((m) => m.AnuncioRoiPagina),
+      },
       ...rotasFilhas,
       // Rota desconhecida volta para a base — não deixa tela órfã.
       { path: '**', redirectTo: 'contatos' },

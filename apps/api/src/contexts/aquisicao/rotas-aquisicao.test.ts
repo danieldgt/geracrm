@@ -162,6 +162,18 @@ describe('ROI — o modelo é obrigatório', () => {
     expect((await chamar(T, 'GET', `${base}?de=ontem&ate=hoje&modelo=ultimo_toque`)).statusCode).toBe(422)
     expect((await chamar(T, 'GET', `${base}?de=2026-08-01&ate=2026-08-10&janelaDias=900&modelo=ultimo_toque`)).statusCode).toBe(422)
   })
+
+  /**
+   * ⚠️ Anúncio que não existe (ou é de outro tenant) responde 404 — nunca um ROI
+   * de zeros. "Gastou R$ 0,00 e vendeu R$ 0,00" é uma AFIRMAÇÃO, e sobre um
+   * anúncio inexistente ela é falsa; quem abriu um link velho merece saber.
+   */
+  it('anúncio inexistente é 404, não um ROI de zeros', async () => {
+    const r = await chamar(T, 'GET',
+      `/v1/aquisicao/anuncios/${CONTATO}/roi?de=2026-08-01&ate=2026-08-10&modelo=ultimo_toque`)
+    expect(r.statusCode).toBe(404)
+    expect(r.json().erro).toBe('anuncio.nao_encontrado')
+  })
 })
 
 describe('Painel de anúncios', () => {

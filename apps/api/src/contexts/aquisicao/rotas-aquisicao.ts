@@ -139,10 +139,23 @@ export async function rotasAquisicao(app: FastifyInstance): Promise<void> {
       return reply.code(422).send({ erro: 'modelo.obrigatorio', aceitos: ['primeiro_toque', 'ultimo_toque'] })
     }
 
+    // ⚠️ Anúncio inexistente (ou de outro tenant) tem de ser 404, não um ROI de
+    //    zeros: "gastou R$ 0,00 e vendeu R$ 0,00" é uma AFIRMAÇÃO sobre um
+    //    anúncio que não existe, e quem abre um link velho merece saber disso.
+    const [anuncio] = await req.comTenant((tx) => tx<{
+      id: string; nome: string; estado: string; campanha: string
+    }[]>`
+      SELECT a.id, a.nome, a.estado, c.nome AS campanha
+        FROM midia_anuncio  a
+        JOIN midia_conjunto cj ON cj.tenant_id = a.tenant_id  AND cj.id = a.conjunto_id
+        JOIN midia_campanha c  ON c.tenant_id  = cj.tenant_id AND c.id  = cj.campanha_id
+       WHERE a.tenant_id = tenant_atual() AND a.id = ${req.params.id}`)
+    if (!anuncio) return reply.code(404).send({ erro: 'anuncio.nao_encontrado' })
+
     const roi = await req.comTenant((tx) => roiDaVeiculacao(tx, {
       anuncioId: req.params.id, de: de!, ate: ate!, janelaDias, modelo: modelo as ModeloAtribuicao,
     }))
-    return reply.send(roi)
+    return reply.send({ anuncio, ...roi })
   })
 
   // ─────────────────────────────────────────────────────────────────────
