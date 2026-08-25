@@ -1,7 +1,7 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "preDeployCommand": ["sh -c 'if [ -f /app/apps/api/pre-deploy.sh ]; then sh /app/apps/api/pre-deploy.sh; else echo pre-deploy-nao-aplicavel-a-este-servico; fi'"],
+    "preDeployCommand": ["sh -c 'if [ \"${SERVICE_ROLE:-api}\" = \"api\" ] && [ -f /app/apps/api/pre-deploy.sh ]; then sh /app/apps/api/pre-deploy.sh; else echo \"pre-deploy nao se aplica a este servico (SERVICE_ROLE=${SERVICE_ROLE:-api})\"; fi'"],
     "healthcheckPath": "/saude",
     "healthcheckTimeout": 300
   }
