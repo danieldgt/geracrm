@@ -109,6 +109,7 @@ Objetivo: transformar o protótipo em base sustentável.
 ### Onda 3 — Reter / Competir
 **Onda 3 (2026-08-10): principais entregues.**
 - **Campanhas com ROI** ✅: campanha + audiência por segmento RFV + disparo idempotente; ROI com atribuição **exata × estimada SEPARADAS** (skill funil-de-vendas), janela declarada. Tela com criação/disparo/painel de ROI. (migration 0036; 4 testes)
+  - ⚠️ **Despachante** ✅ (2026-08-25): até aqui o disparo só ENFILEIRAVA e ninguém drenava — a tela dizia "disparando" e nenhuma mensagem saía. Agora um worker drena `campanha_envio` pelo GATEWAY ÚNICO (opt-out, canal, janela, pausa) e respeita o TETO DE AQUECIMENTO: estourado o teto do dia a campanha para e continua amanhã, sem ser marcada como concluída. Recusa nossa vira `bloqueado`, falha de transporte vira `falhou` — colapsar as duas faria uma retentativa mandar para quem pediu para não receber. (11 testes)
 - **Aquecimento de frota** ✅: teto diário por número que sobe em rampa (ADR-021, protege o não-oficial); status na tela de Números. (migration 0037; 4 testes)
 - **Funil de recompra com RFV** ✅ (base já existia): `classificarRfv` + `metricas_contato` + telas de Clientes e Fila do Dia (urgência/RFV).
 - **Governança de reputação** ✅ (coberta): saúde da frota (entrega 24h + alertas I-10 + risco de banimento + aquecimento) na tela de Números. Tier/qualidade Meta entram com o canal oficial.

@@ -11,6 +11,7 @@ import {
 import { vigiarTodos } from './contexts/aquisicao/vigia.js'
 import { varrerResumoDiario, HORA_RESUMO_LOCAL } from './contexts/aquisicao/entrega-resumo.js'
 import { despacharPush, configVapid, envioReal } from './contexts/plataforma/push.js'
+import { despacharCampanhas } from './contexts/crm/despachante-campanha.js'
 import { vigiarConexaoCanais } from './contexts/atendimento/vigia-canal.js'
 
 const porta = Number(process.env.PORT ?? 3000)
@@ -165,6 +166,25 @@ if (process.env.DATABASE_ADMIN_URL) {
       .finally(() => { resumindo = false })
   }, 15 * 60 * 1000)
   intervalosAquisicao.push(resumoMidia)
+
+  // ⚠️ DESPACHANTE DE CAMPANHA. Sem ele, "disparar" só enfileirava: a tela dizia
+  //    "disparando", os destinatários apareciam no painel e NENHUMA mensagem
+  //    saía. 30s é ritmo de disparo, não de conversa — e o teto de aquecimento
+  //    (0037) é quem realmente limita o volume do dia.
+  let despachandoCampanha = false
+  const campanhaIntervalo = setInterval(() => {
+    if (despachandoCampanha) return
+    despachandoCampanha = true
+    void despacharCampanhas(donoAquisicao as never, new Date())
+      .then((r) => {
+        if (r.enviados > 0 || r.falhas > 0 || r.campanhasConcluidas > 0) {
+          app.log.info(r, 'despacho de campanha')
+        }
+      })
+      .catch((e) => app.log.warn({ erro: e }, 'despacho de campanha falhou'))
+      .finally(() => { despachandoCampanha = false })
+  }, 30_000)
+  intervalosAquisicao.push(campanhaIntervalo)
 
   // Push nativo (PLT-07) — a notificação que chega com o navegador fechado.
   // ⚠️ 20s: é a mesma ordem de grandeza do despachante de webhooks. Push de
