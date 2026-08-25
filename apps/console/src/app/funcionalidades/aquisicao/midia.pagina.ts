@@ -10,6 +10,8 @@ interface Conta {
   readonly nome: string
   readonly moeda: string
   readonly ativo: boolean
+  /** ⚠️ Sem ela, a venda NÃO volta para a plataforma (AQ-15). */
+  readonly conversaoActionId: string | null
 }
 interface Anuncio {
   readonly id: string
@@ -112,6 +114,26 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
             <span class="nome">{{ c.nome }}</span>
             <span class="dado">{{ c.plataforma }} · {{ c.idExterno }} · {{ c.moeda }}</span>
             @if (!c.ativo) { <span class="badge">inativa</span> }
+            <!-- ⚠️ O loop de dados só fecha com a ação de conversão. Sem ela o
+                 produto LÊ o gasto e nunca devolve a venda — e isso precisa ser
+                 visível, não descoberto no relatório três meses depois. -->
+            @if (c.conversaoActionId) {
+              <span class="dado ok-conv">↩ devolve conversão · ação {{ c.conversaoActionId }}
+                <button class="btn btn--fantasma btn--pequeno" (click)="editarAcao(c)">alterar</button>
+              </span>
+            } @else if (editandoAcao() === c.id) {
+              <span class="dado">
+                <input class="acao" [value]="acaoTexto()" (input)="acaoTexto.set($any($event.target).value)"
+                       placeholder="987654321" aria-label="Id da ação de conversão" />
+                <button class="btn btn--primario btn--pequeno" (click)="salvarAcao(c)">Salvar</button>
+                <button class="btn btn--fantasma btn--pequeno" (click)="editandoAcao.set(null)">Cancelar</button>
+              </span>
+            } @else {
+              <span class="dado sem-conv">
+                ⚠️ sem ação de conversão — a venda não volta para a plataforma
+                <button class="btn btn--secundario btn--pequeno" (click)="editarAcao(c)">Configurar</button>
+              </span>
+            }
           </li>
         }
       </ul>
@@ -305,6 +327,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .mais { margin-top: var(--espacamento-3); }
     .tag { font-size: 11px; padding: 1px 6px; border-radius: var(--raio-controle);
       border: 1px solid var(--borda); color: var(--texto-secundario); background: var(--superficie); white-space: nowrap; }
+    .conta .ok-conv { color: var(--sucesso); }
+    .conta .sem-conv { color: var(--atencao); }
+    .conta .acao { padding: var(--espacamento-1) var(--espacamento-2); border: 1px solid var(--borda-controle);
+      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; width: 140px; }
     .link-anuncio { color: var(--acao); text-decoration: none; }
     .link-anuncio:hover { text-decoration: underline; }
     .conta.lp { flex-wrap: wrap; }
@@ -341,6 +367,8 @@ export class MidiaPagina implements OnInit {
   readonly lpTelefone = signal('')
   readonly criandoLp = signal(false)
   readonly erroCampanha = signal<string | null>(null)
+  readonly editandoAcao = signal<string | null>(null)
+  readonly acaoTexto = signal('')
   readonly erroLp = signal<string | null>(null)
   readonly copiado = signal<string | null>(null)
 
@@ -405,6 +433,23 @@ export class MidiaPagina implements OnInit {
   }
 
   pct(taxa: number): string { return `${Math.round(taxa * 100)}%` }
+
+  editarAcao(c: Conta): void {
+    this.editandoAcao.set(c.id)
+    this.acaoTexto.set(c.conversaoActionId ?? '')
+  }
+
+  async salvarAcao(c: Conta): Promise<void> {
+    try {
+      await firstValueFrom(this.#http.patch(`/v1/aquisicao/contas/${c.id}`, {
+        conversaoActionId: this.acaoTexto().trim() || null,
+      }))
+      this.editandoAcao.set(null)
+      await this.carregar()
+    } catch {
+      this.erroConectar.set('Não foi possível salvar a ação de conversão.')
+    }
+  }
 
   async copiar(caminho: string): Promise<void> {
     const url = this.urlCompleta(caminho)

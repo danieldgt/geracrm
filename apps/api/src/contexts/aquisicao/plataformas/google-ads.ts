@@ -46,9 +46,10 @@ export const CAPACIDADES_GOOGLE_ADS: CapacidadesPlataforma = {
   // ⚠️ Customer Match tem requisitos de elegibilidade da conta (AMK-015) e ainda
   //    não foi implementado. Não prometer o que é a promessa mais forte da oferta.
   publicoPersonalizado: false,
-  // ⚠️ Offline Conversion Import: próxima etapa. Enquanto false, o despachante
-  //    descarta com `plataforma_sem_capacidade` — visível, não silencioso.
-  conversaoOffline: false,
+  // Offline Conversion Import (AQ-15). ⚠️ A capacidade é da PLATAFORMA; a
+  // prontidão é da CONTA (precisa de `conversao_action_id` cadastrado). Quem
+  // descarta por falta de cadastro é o despachante, com motivo nomeado.
+  conversaoOffline: true,
   // Click-to-WhatsApp é formato Meta. É a razão da LP com wa.me existir (AMK-012).
   cliqueParaConversa: false,
   escritaEstado: false,
@@ -330,17 +331,124 @@ export class PlataformaGoogleAds implements PortaPlataformaMidia {
     }
   }
 
+  /**
+   * OFFLINE CONVERSION IMPORT (AQ-15) — devolver a venda ao Google.
+   *
+   * É a chamada que muda o que a plataforma otimiza: sem ela, o Google procura
+   * lead barato; com ela, procura quem COMPRA, porque recebe o valor real do
+   * pedido efetivado no ERP.
+   *
+   * ⚠️ **A armadilha desta API é o HTTP 200 QUE NÃO GRAVOU.** Com
+   * `partialFailure: true` — que é obrigatório para uma linha ruim não derrubar
+   * o lote — o Google responde `200 OK` e coloca o erro em `partialFailureError`
+   * NO CORPO. Quem confere só o status conclui que enviou, e a receita
+   * simplesmente não aparece no painel do cliente semanas depois, sem nenhum
+   * erro em lugar nenhum. Por isso o corpo é lido antes de dizer "ok".
+   */
   async enviarConversao(
-    _contaExternaId: string, _conversao: ConversaoParaEnvio,
+    contaExternaId: string, conversao: ConversaoParaEnvio,
   ): Promise<ResultadoPlataforma<{ idExterno: string | null }>> {
-    // ⚠️ Coerente com `capacidades.conversaoOffline === false`: o despachante nem
-    //    chega aqui — ele descarta antes, com motivo nomeado. Este retorno existe
-    //    para que a incoerência, se alguém mexer na capacidade sem implementar,
-    //    apareça como motivo tipificado em vez de `undefined` viajando.
-    return {
-      ok: false,
-      motivo: 'resposta_inesperada',
-      detalhe: 'Offline Conversion Import ainda não implementado no adaptador Google',
+    const conta = contaExternaId.replace(/\D/g, '')
+    if (!conta) return { ok: false, motivo: 'sem_permissao', detalhe: 'conta externa vazia' }
+    if (!conversao.acaoDeConversaoId) {
+      // Defesa em profundidade: o despachante já descarta antes de chegar aqui.
+      return { ok: false, motivo: 'sem_permissao', detalhe: 'conta sem ação de conversão cadastrada' }
     }
+
+    const acesso = await this.#cred.obterAccessToken()
+    if (!acesso.ok) return acesso
+
+    const url = `${BASE}/${this.#versao}/customers/${conta}:uploadClickConversions`
+    this.#chamadas++
+
+    let resposta: Response
+    try {
+      resposta = await this.#buscar(url, {
+        method: 'POST',
+        signal: AbortSignal.timeout(this.#timeout),
+        headers: {
+          authorization: `Bearer ${acesso.dados}`,
+          'developer-token': this.#cred.developerToken,
+          'login-customer-id': this.#cred.loginCustomerId.replace(/\D/g, ''),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          conversions: [montarConversaoGoogle(conta, conversao)],
+          // ⚠️ Sem `partialFailure`, UMA linha inválida faz o lote inteiro
+          //    falhar. Com ele, o erro vem no corpo — e é por isso que o corpo
+          //    é lido logo abaixo.
+          partialFailure: true,
+        }),
+      })
+    } catch (e) {
+      return { ok: false, motivo: 'indisponivel', detalhe: String(e) }
+    }
+
+    const corpo = (await resposta.json().catch(() => null)) as {
+      results?: { gclid?: string; conversionAction?: string }[]
+      partialFailureError?: { message?: string }
+      error?: unknown
+    } | null
+
+    if (!resposta.ok) return { ok: false, ...this.#traduzirErro(resposta.status, corpo) }
+
+    // ⚠️ 200 COM erro parcial: a conversão NÃO entrou. Tratar como sucesso aqui
+    //    é o defeito que só aparece semanas depois, como receita que sumiu.
+    if (corpo?.partialFailureError) {
+      const detalhe = corpo.partialFailureError.message ?? JSON.stringify(corpo.partialFailureError).slice(0, 500)
+      return { ok: false, ...this.#traduzirErro(400, corpo), detalhe }
+    }
+
+    // ⚠️ `results` vazio com 200 e sem erro parcial também não é sucesso: é
+    //    resposta que não confirma nada, e chamar de "enviada" seria inventar.
+    const primeiro = corpo?.results?.[0]
+    if (!primeiro) {
+      return { ok: false, motivo: 'resposta_inesperada', detalhe: 'upload sem results e sem partialFailureError' }
+    }
+    return { ok: true, dados: { idExterno: primeiro.conversionAction ?? null } }
   }
+}
+
+/**
+ * Monta a linha de conversão no formato do Google.
+ *
+ * ⚠️ **`gclid`, `wbraid` e `gbraid` são CAMPOS DIFERENTES**, e o valor é opaco:
+ * não dá para descobrir o tipo olhando o texto. Mandar um `wbraid` no campo
+ * `gclid` é recusado — dentro de um 200, via `partialFailureError`.
+ *
+ * ⚠️ Origem anterior ao `0068` não tem o tipo. Assumimos `gclid`, que é o caso
+ * dominante, porque não enviar é perder a atribuição com certeza — mas a
+ * suposição fica escrita aqui, e não escondida num `??`.
+ */
+export function montarConversaoGoogle(
+  conta: string, c: ConversaoParaEnvio,
+): Record<string, unknown> {
+  const tipo = c.clickIdTipo ?? 'gclid'
+  const identificador =
+    tipo === 'wbraid' ? { wbraid: c.clickId }
+    : tipo === 'gbraid' ? { gbraid: c.clickId }
+    : { gclid: c.clickId }
+
+  return {
+    ...identificador,
+    conversionAction: `customers/${conta}/conversionActions/${c.acaoDeConversaoId}`,
+    conversionDateTime: dataHoraGoogle(c.ocorridaEm),
+    // ⚠️ Centavos → unidade monetária na BORDA (regra do porta.ts). Sem valor,
+    //    a plataforma volta a otimizar por volume — o bug que anula o produto.
+    ...(c.valorCentavos === null ? {} : { conversionValue: c.valorCentavos / 100, currencyCode: 'BRL' }),
+    // ⚠️ `orderId` é o que o Google usa para DEDUPLICAR contra o pixel. É o
+    //    mesmo `event_id` do `0060` — sem ele o mesmo pedido conta duas vezes e
+    //    o ROAS aparece dobrado, que é o erro que ninguém reclama.
+    orderId: c.eventId,
+  }
+}
+
+/**
+ * ⚠️ O Google exige `yyyy-MM-dd HH:mm:ss+|-HH:mm` — com espaço (não `T`), sem
+ * milissegundos e COM deslocamento. Um ISO 8601 normal é recusado, e a recusa
+ * chega dentro de um 200. Emitimos em UTC (`+00:00`): o Google converte para o
+ * fuso da conta, então não precisamos saber qual é.
+ */
+export function dataHoraGoogle(d: Date): string {
+  return `${d.toISOString().slice(0, 19).replace('T', ' ')}+00:00`
 }

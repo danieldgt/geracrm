@@ -136,6 +136,19 @@ export interface ConversaoParaEnvio {
   readonly valorCentavos: number | null
   /** `gclid`/`wbraid`/`gbraid` (Google) ou `fbclid` (Meta), vindo da origem. */
   readonly clickId: string
+  /**
+   * ⚠️ QUAL parâmetro trouxe o clique. Não é metadado: `gclid`, `wbraid` e
+   * `gbraid` vão em CAMPOS DIFERENTES da API de upload, e o valor é opaco — não
+   * dá para deduzir o tipo olhando o texto. `null` = origem antiga, anterior ao
+   * `0068`; quem envia decide o que fazer com isso (o Google assume `gclid`,
+   * que é o caso dominante, e diz que assumiu).
+   */
+  readonly clickIdTipo: 'gclid' | 'wbraid' | 'gbraid' | 'fbclid' | null
+  /**
+   * ⚠️ A `conversionAction` da CONTA (cadastro do cliente na plataforma). O
+   * despachante só chega aqui com ela preenchida — sem ela, descarta antes.
+   */
+  readonly acaoDeConversaoId: string | null
   /** Quando o fato aconteceu — a plataforma recusa fora da janela de importação. */
   readonly ocorridaEm: Date
 }

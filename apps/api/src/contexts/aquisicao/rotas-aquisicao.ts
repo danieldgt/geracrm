@@ -24,14 +24,49 @@ export async function rotasAquisicao(app: FastifyInstance): Promise<void> {
   // Contas de anúncio
   // ─────────────────────────────────────────────────────────────────────
   app.get('/v1/aquisicao/contas', { preHandler: exigirTenant }, async (req, reply) => {
-    const contas = await req.comTenant((tx) => tx<{
-      id: string; plataforma: string; id_externo: string; nome: string; moeda: string; ativo: boolean
+    const linhas = await req.comTenant((tx) => tx<{
+      id: string; plataforma: string; id_externo: string; nome: string; moeda: string
+      ativo: boolean; conversao_action_id: string | null
     }[]>`
-      SELECT id, plataforma, id_externo, nome, moeda, ativo
+      SELECT id, plataforma, id_externo, nome, moeda, ativo, conversao_action_id
         FROM midia_conta WHERE tenant_id = tenant_atual()
        ORDER BY criado_em DESC LIMIT ${PAGINA}`)
-    return reply.send({ contas })
+    return reply.send({
+      contas: linhas.map((c) => ({
+        id: c.id, plataforma: c.plataforma, idExterno: c.id_externo, nome: c.nome,
+        moeda: c.moeda, ativo: c.ativo,
+        // ⚠️ Sem ela, a devolução de conversão é descartada com motivo nomeado —
+        //    e a tela precisa mostrar isso, senão o cliente acha que está ligado.
+        conversaoActionId: c.conversao_action_id,
+      })),
+    })
   })
+
+  /**
+   * ⚠️ A ação de conversão é CADASTRO do dono da conta na plataforma (uma
+   * `conversionAction` de importação offline criada no Google Ads). Fica num
+   * PATCH próprio porque costuma ser preenchida depois — a conta é conectada
+   * primeiro, e a ação é criada quando o cliente decide devolver conversão.
+   */
+  app.patch<{ Params: { id: string }; Body: { conversaoActionId?: string | null } }>(
+    '/v1/aquisicao/contas/:id', { preHandler: exigirTenant }, async (req, reply) => {
+      const bruto = req.body?.conversaoActionId
+      // Só dígitos: o id da ação é numérico, e aceitar o resource name inteiro
+      // ("customers/123/conversionActions/456") geraria URL malformada no envio.
+      const valor = typeof bruto === 'string' && bruto.trim() ? bruto.replace(/\D/g, '') : null
+      if (bruto && !valor) {
+        return reply.code(422).send({
+          erro: 'acao.invalida',
+          mensagem: 'Informe só o número da ação de conversão (ex.: 987654321).',
+        })
+      }
+      const [c] = await req.comTenant((tx) => tx<{ id: string }[]>`
+        UPDATE midia_conta SET conversao_action_id = ${valor}
+         WHERE tenant_id = tenant_atual() AND id = ${req.params.id}
+        RETURNING id`)
+      if (!c) return reply.code(404).send({ erro: 'conta.nao_encontrada' })
+      return reply.send({ ok: true })
+    })
 
   app.post<{ Body: { plataforma?: string; idExterno?: string; nome?: string; moeda?: string } }>(
     '/v1/aquisicao/contas', { preHandler: exigirTenant }, async (req, reply) => {

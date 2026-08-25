@@ -56,8 +56,11 @@ beforeAll(async () => {
              VALUES (${T}, ${PV}, ${MODELO}, 'Varejo') ON CONFLICT DO NOTHING`
   })
   await dono`INSERT INTO contato (tenant_id, id, nome) VALUES (${T}, ${CONTATO}, 'Lead') ON CONFLICT DO NOTHING`
-  await dono`INSERT INTO midia_conta (tenant_id, id, plataforma, id_externo, nome)
-             VALUES (${T}, ${CONTA}, 'google', 'conta-desp', 'Conta') ON CONFLICT DO NOTHING`
+  // ⚠️ `conversao_action_id` preenchido: é o cadastro que o dono da conta faz na
+  //    plataforma. Sem ele o despachante DESCARTA (regra própria, testada
+  //    abaixo) — e a conta de teste representa uma conta configurada.
+  await dono`INSERT INTO midia_conta (tenant_id, id, plataforma, id_externo, nome, conversao_action_id)
+             VALUES (${T}, ${CONTA}, 'google', 'conta-desp', 'Conta', '987654') ON CONFLICT DO NOTHING`
 })
 
 beforeEach(async () => {
@@ -138,6 +141,24 @@ describe('Descarte — decidido ANTES de chamar a plataforma', () => {
 
   it('plataforma sem a capacidade descarta em vez de tentar', () => {
     expect(avaliarDescarte({ clickId: 'g', ocorridaEm: AGORA }, false, AGORA)).toBe('plataforma_sem_capacidade')
+  })
+
+  /**
+   * ⚠️ Falta de CADASTRO do cliente na plataforma, não defeito nosso: oito
+   * tentativas não preenchem um campo em branco. Descartar com motivo nomeado é
+   * o que faz alguém ir configurar a ação de conversão.
+   */
+  it('conta sem ação de conversão descarta, em vez de tentar e falhar', () => {
+    expect(avaliarDescarte(
+      { clickId: 'g', ocorridaEm: AGORA, acaoDeConversaoId: null }, true, AGORA,
+    )).toBe('conta_sem_acao_de_conversao')
+  })
+
+  it('mas plataforma que não exige ação passa direto', () => {
+    // `undefined` (não se aplica) ≠ `null` (aplica-se e está em branco).
+    expect(avaliarDescarte(
+      { clickId: 'g', ocorridaEm: AGORA, acaoDeConversaoId: undefined }, true, AGORA,
+    )).toBeNull()
   })
 })
 

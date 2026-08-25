@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { PlataformaGoogleAds } from './google-ads.js'
+import {
+  PlataformaGoogleAds, CAPACIDADES_GOOGLE_ADS, montarConversaoGoogle, dataHoraGoogle,
+} from './google-ads.js'
 
 /** Adaptador Google Ads — fetch mockado, o Google NUNCA é chamado. */
 function fakeFetch(
@@ -188,23 +190,119 @@ describe('Capacidades honestas', () => {
     expect(g.capacidades).toMatchObject({
       leituraEstrutura: true,
       leituraMetrica: true,
+      // Offline Conversion Import implementado em AQ-15 (2026-08-25).
+      conversaoOffline: true,
       // ⚠️ Ainda não implementados — declarar true faria o produto FALHAR em vez
       //    de degradar, e o despachante tentaria contra o vazio.
       publicoPersonalizado: false,
-      conversaoOffline: false,
       cliqueParaConversa: false,   // CTWA é Meta
       escritaEstado: false,
       escritaOrcamento: false,
     })
   })
 
-  it('e enviarConversao é coerente com a capacidade desligada', async () => {
+  it('e conversão offline agora é capacidade DECLARADA (AQ-15)', () => {
+    // ⚠️ A capacidade é da PLATAFORMA. A prontidão é da CONTA (precisa da
+    //    `conversionAction` cadastrada) — e quem descarta por falta dela é o
+    //    despachante, com motivo nomeado.
+    expect(CAPACIDADES_GOOGLE_ADS.conversaoOffline).toBe(true)
+  })
+})
+
+describe('⚠️ Upload de conversão (AQ-15)', () => {
+  const base = {
+    eventId: 'pedido-99', tipoEvento: 'compra' as const, valorCentavos: 12_345,
+    clickId: 'Cj0KCQ-exemplo', acaoDeConversaoId: '987654',
+    ocorridaEm: new Date('2026-08-20T15:04:05.678Z'),
+  }
+
+  it('manda o clique no campo do TIPO certo', () => {
+    expect(montarConversaoGoogle('111', { ...base, clickIdTipo: 'gclid' })).toMatchObject({ gclid: base.clickId })
+    expect(montarConversaoGoogle('111', { ...base, clickIdTipo: 'wbraid' })).toMatchObject({ wbraid: base.clickId })
+    expect(montarConversaoGoogle('111', { ...base, clickIdTipo: 'gbraid' })).toMatchObject({ gbraid: base.clickId })
+  })
+
+  /** Origem anterior ao 0068 não tem o tipo — assumir gclid é melhor que não enviar. */
+  it('sem tipo, assume gclid', () => {
+    expect(montarConversaoGoogle('111', { ...base, clickIdTipo: null })).toMatchObject({ gclid: base.clickId })
+  })
+
+  it('converte centavos para unidade monetária na borda, com moeda', () => {
+    expect(montarConversaoGoogle('111', { ...base, clickIdTipo: 'gclid' }))
+      .toMatchObject({ conversionValue: 123.45, currencyCode: 'BRL' })
+  })
+
+  /** ⚠️ Sem valor a plataforma volta a otimizar por volume — mas mandar 0 seria
+   *  pior: diria que a venda não valeu nada. Ausente é ausente. */
+  it('sem valor, não inventa zero', () => {
+    const linha = montarConversaoGoogle('111', { ...base, clickIdTipo: 'gclid', valorCentavos: null })
+    expect(linha['conversionValue']).toBeUndefined()
+    expect(linha['currencyCode']).toBeUndefined()
+  })
+
+  it('leva o event_id como orderId — é o que deduplica contra o pixel', () => {
+    expect(montarConversaoGoogle('111', { ...base, clickIdTipo: 'gclid' }))
+      .toMatchObject({ orderId: 'pedido-99' })
+  })
+
+  /**
+   * ⚠️ O Google exige `yyyy-MM-dd HH:mm:ss±HH:mm`: espaço em vez de `T`, sem
+   * milissegundos e COM deslocamento. ISO 8601 normal é recusado — dentro de
+   * um HTTP 200.
+   */
+  it('formata a data no formato do Google, não em ISO', () => {
+    expect(dataHoraGoogle(base.ocorridaEm)).toBe('2026-08-20 15:04:05+00:00')
+  })
+
+  it('aponta para a ação de conversão da conta', () => {
+    expect(montarConversaoGoogle('4444', { ...base, clickIdTipo: 'gclid' }))
+      .toMatchObject({ conversionAction: 'customers/4444/conversionActions/987654' })
+  })
+})
+
+describe('⚠️ O 200 que NÃO gravou', () => {
+  const conversao = {
+    eventId: 'pedido-99', tipoEvento: 'compra' as const, valorCentavos: 12_345,
+    clickId: 'Cj0KCQ-exemplo', clickIdTipo: 'gclid' as const, acaoDeConversaoId: '987654',
+    ocorridaEm: new Date('2026-08-20T15:04:05Z'),
+  }
+
+  it('200 com results é sucesso', async () => {
+    const g = criar([{ status: 200, corpo: { results: [{ conversionAction: 'customers/111/conversionActions/987654' }] } }])
+    const r = await g.enviarConversao('111', conversao)
+    expect(r.ok).toBe(true)
+  })
+
+  /**
+   * A armadilha da API: com `partialFailure`, o Google responde 200 e põe o erro
+   * NO CORPO. Quem confere só o status conclui que enviou — e a receita não
+   * aparece no painel do cliente semanas depois, sem erro em lugar nenhum.
+   */
+  it('200 com partialFailureError NÃO é sucesso', async () => {
+    const g = criar([{
+      status: 200,
+      corpo: { partialFailureError: { message: 'ConversionUploadError.INVALID_CONVERSION_ACTION' } },
+    }])
+    const r = await g.enviarConversao('111', conversao)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.detalhe).toContain('INVALID_CONVERSION_ACTION')
+  })
+
+  /** 200 sem results e sem erro não confirma nada — chamar de enviada é inventar. */
+  it('200 vazio não é sucesso', async () => {
     const g = criar([{ status: 200, corpo: {} }])
-    const r = await g.enviarConversao('111', {
-      eventId: 'e1', tipoEvento: 'compra', valorCentavos: 5000,
-      clickId: 'gclid', ocorridaEm: new Date('2026-08-20T00:00:00Z'),
-    })
+    const r = await g.enviarConversao('111', conversao)
     expect(r).toMatchObject({ ok: false, motivo: 'resposta_inesperada' })
+  })
+
+  it('sem ação de conversão, recusa antes de chamar o Google', async () => {
+    let chamou = false
+    const g = criar([{ status: 200, corpo: {} }], () => { chamou = true })
+    const r = await g.enviarConversao('111', { ...conversao, acaoDeConversaoId: null })
+    expect(r.ok).toBe(false)
+    // ⚠️ Defesa em profundidade: o despachante já descarta antes, mas o
+    //    adaptador não pode gastar uma chamada para ouvir "não".
+    expect(chamou).toBe(false)
   })
 })
 

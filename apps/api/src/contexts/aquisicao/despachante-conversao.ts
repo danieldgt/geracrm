@@ -50,6 +50,12 @@ export type MotivoDescarte =
   | 'fora_da_janela_de_importacao'
   /** O adaptador da plataforma não devolve conversão. */
   | 'plataforma_sem_capacidade'
+  /**
+   * ⚠️ A conta não tem `conversionAction` cadastrada. É falta de CADASTRO do
+   * cliente na plataforma, não defeito nosso — e é por isso que descarta em vez
+   * de retentar: oito tentativas não preenchem um campo em branco.
+   */
+  | 'conta_sem_acao_de_conversao'
 
 export interface ResultadoDespacho {
   readonly enviadas: number
@@ -68,17 +74,23 @@ interface LinhaPendente {
   tentativas: number
   ocorrida_em: Date
   click_id: string | null
+  click_id_tipo: 'gclid' | 'wbraid' | 'gbraid' | 'fbclid' | null
   conta_externa_id: string | null
+  conversao_action_id: string | null
 }
 
 /** Decide, sem tocar na rede, se a conversão sequer deve ser tentada. */
 export function avaliarDescarte(
-  linha: { clickId: string | null; ocorridaEm: Date },
+  linha: { clickId: string | null; ocorridaEm: Date; acaoDeConversaoId?: string | null | undefined },
   temCapacidade: boolean,
   agora: Date,
 ): MotivoDescarte | null {
   if (!temCapacidade) return 'plataforma_sem_capacidade'
   if (!linha.clickId) return 'sem_identificador'
+  // ⚠️ Sem a ação de conversão cadastrada na conta, o envio é recusa garantida.
+  //    Descartar com motivo NOMEADO é melhor que gastar oito tentativas e um
+  //    dead-letter para descobrir um campo em branco no cadastro.
+  if (linha.acaoDeConversaoId === null) return 'conta_sem_acao_de_conversao'
   const idadeDias = (agora.getTime() - linha.ocorridaEm.getTime()) / 86_400_000
   if (idadeDias > DIAS_JANELA_IMPORTACAO) return 'fora_da_janela_de_importacao'
   return null
@@ -124,8 +136,8 @@ export async function despacharDoTenant(
     SELECT c.id, c.tenant_id, c.plataforma, c.tipo_evento, c.valor_centavos::text AS valor_centavos,
            c.event_id, c.tentativas,
            coalesce(c.venda_ocorrida_em, c.criado_em) AS ocorrida_em,
-           o.click_id,
-           ct.id_externo AS conta_externa_id
+           o.click_id, o.click_id_tipo,
+           ct.id_externo AS conta_externa_id, ct.conversao_action_id
       FROM midia_conversao c
       JOIN midia_lead_origem o ON o.tenant_id = c.tenant_id AND o.id = c.origem_id
       LEFT JOIN midia_conta ct ON ct.tenant_id = o.tenant_id AND ct.id = o.conta_id
@@ -142,7 +154,16 @@ export async function despacharDoTenant(
     const temCapacidade = adaptador?.capacidades.conversaoOffline === true
 
     const descarte = avaliarDescarte(
-      { clickId: linha.click_id, ocorridaEm: linha.ocorrida_em }, temCapacidade, agora,
+      {
+        clickId: linha.click_id,
+        ocorridaEm: linha.ocorrida_em,
+        // ⚠️ `undefined` (plataforma que não exige ação) ≠ `null` (Google sem
+        //    cadastro). Só o segundo descarta.
+        acaoDeConversaoId: adaptador?.capacidades.conversaoOffline
+          ? linha.conversao_action_id
+          : undefined,
+      },
+      temCapacidade, agora,
     )
     if (descarte !== null) {
       await sql`
@@ -159,6 +180,8 @@ export async function despacharDoTenant(
       // ⚠️ bigint volta como STRING do driver (INV-46) — cast explícito aqui.
       valorCentavos: linha.valor_centavos === null ? null : Number(linha.valor_centavos),
       clickId: linha.click_id!,
+      clickIdTipo: linha.click_id_tipo,
+      acaoDeConversaoId: linha.conversao_action_id,
       ocorridaEm: linha.ocorrida_em,
     }
 

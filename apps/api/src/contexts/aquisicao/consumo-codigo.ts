@@ -32,6 +32,7 @@ interface Sessao {
   lp_id: string | null
   plataforma: string | null
   click_id: string | null
+  click_id_tipo: string | null
   utm_source: string | null
   utm_medium: string | null
   utm_campaign: string | null
@@ -57,8 +58,8 @@ export async function consumirCodigoOrigem(
     UPDATE midia_sessao_lp
        SET consumida_em = now()
      WHERE tenant_id = tenant_atual() AND codigo = ${codigo} AND consumida_em IS NULL
-    RETURNING id, lp_id, plataforma, click_id, utm_source, utm_medium, utm_campaign,
-              campanha_externa_id, anuncio_externo_id, consentimento_texto, criado_em`
+    RETURNING id, lp_id, plataforma, click_id, click_id_tipo, utm_source, utm_medium,
+              utm_campaign, campanha_externa_id, anuncio_externo_id, consentimento_texto, criado_em`
 
   if (!sessao) {
     // ⚠️ Distinguir os dois casos importa: "já consumida" é o lead repetindo a
@@ -80,11 +81,12 @@ export async function consumirCodigoOrigem(
   await tx`
     INSERT INTO midia_lead_origem
       (tenant_id, id, contato_id, sessao_id, plataforma, campanha_externa_id,
-       anuncio_externo_id, click_id, utm_source, utm_medium, utm_campaign,
+       anuncio_externo_id, click_id, click_id_tipo, utm_source, utm_medium, utm_campaign,
        modo_entrada, primeira, consentimento_texto, consentimento_em)
     SELECT tenant_atual(), ${randomUUID()}, ${contatoId}, ${sessao.id},
            ${sessao.plataforma}, ${sessao.campanha_externa_id}, ${sessao.anuncio_externo_id},
-           ${sessao.click_id}, ${sessao.utm_source}, ${sessao.utm_medium}, ${sessao.utm_campaign},
+           ${sessao.click_id}, ${sessao.click_id_tipo}, ${sessao.utm_source},
+           ${sessao.utm_medium}, ${sessao.utm_campaign},
            'inbound_wa',
            NOT EXISTS (SELECT 1 FROM midia_lead_origem o
                         WHERE o.tenant_id = tenant_atual() AND o.contato_id = ${contatoId}),

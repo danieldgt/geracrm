@@ -89,6 +89,15 @@ const corta = (v: unknown, n = 200): string | null =>
  * banco, e repassar `utm_source` cru faria o INSERT falhar por conta do lead ter
  * clicado num link com parâmetro esquisito.
  */
+/**
+ * ⚠️ Lista fechada, pelo mesmo motivo de `plataformaDoClique`: a coluna tem CHECK
+ * e repassar texto do cliente faria o INSERT falhar por causa de um parâmetro
+ * esquisito na URL — derrubando a sessão de um lead real.
+ */
+export function tipoDeClique(v: unknown): string | null {
+  return v === 'gclid' || v === 'wbraid' || v === 'gbraid' || v === 'fbclid' ? v : null
+}
+
 export function plataformaDoClique(tipo: unknown, utmSource: unknown): string | null {
   if (tipo === 'gclid' || tipo === 'wbraid' || tipo === 'gbraid') return 'google'
   if (tipo === 'fbclid') return 'meta'
@@ -156,12 +165,13 @@ export async function rotasLpPublica(app: FastifyInstance): Promise<void> {
 
       await comTenantServico(achado.tenantId, (tx) => tx`
         INSERT INTO midia_sessao_lp
-          (tenant_id, id, lp_id, codigo, plataforma, click_id, utm_source, utm_medium,
+          (tenant_id, id, lp_id, codigo, plataforma, click_id, click_id_tipo, utm_source, utm_medium,
            utm_campaign, utm_content, utm_term, campanha_externa_id, anuncio_externo_id,
            pagina, referrer, consentimento_texto)
         VALUES (tenant_atual(), ${randomUUID()}, ${lp.id}, ${codigo},
                 ${plataformaDoClique(b['clickIdTipo'], b['utmSource'])},
-                ${corta(b['clickId'], 300)}, ${corta(b['utmSource'])}, ${corta(b['utmMedium'])},
+                ${corta(b['clickId'], 300)}, ${tipoDeClique(b['clickIdTipo'])},
+                ${corta(b['utmSource'])}, ${corta(b['utmMedium'])},
                 ${corta(b['utmCampaign'])}, ${corta(b['utmContent'])}, ${corta(b['utmTerm'])},
                 ${corta(b['campanhaExternaId'])}, ${corta(b['anuncioExternoId'])},
                 ${corta(b['pagina'], 500)}, ${corta(b['referrer'], 500)},
@@ -230,12 +240,13 @@ export async function rotasLpPublica(app: FastifyInstance): Promise<void> {
         //    métrica que mede o outro modo.
         await tx`
           INSERT INTO midia_sessao_lp
-            (tenant_id, id, lp_id, codigo, plataforma, click_id, utm_source, utm_medium,
+            (tenant_id, id, lp_id, codigo, plataforma, click_id, click_id_tipo, utm_source, utm_medium,
              utm_campaign, utm_content, utm_term, campanha_externa_id, anuncio_externo_id,
              pagina, referrer, consentimento_texto, consumida_em)
           VALUES (tenant_atual(), ${sessaoId}, ${lp.id}, ${codigoDeBytes(randomBytes(16))},
                   ${plataformaDoClique(origem['clickIdTipo'], origem['utmSource'])},
-                  ${corta(origem['clickId'], 300)}, ${corta(origem['utmSource'])},
+                  ${corta(origem['clickId'], 300)}, ${tipoDeClique(origem['clickIdTipo'])},
+                  ${corta(origem['utmSource'])},
                   ${corta(origem['utmMedium'])}, ${corta(origem['utmCampaign'])},
                   ${corta(origem['utmContent'])}, ${corta(origem['utmTerm'])},
                   ${corta(origem['campanhaExternaId'])}, ${corta(origem['anuncioExternoId'])},
@@ -247,10 +258,10 @@ export async function rotasLpPublica(app: FastifyInstance): Promise<void> {
         await tx`
           INSERT INTO midia_lead_origem
             (tenant_id, id, contato_id, sessao_id, plataforma, campanha_externa_id,
-             anuncio_externo_id, click_id, utm_source, utm_medium, utm_campaign,
+             anuncio_externo_id, click_id, click_id_tipo, utm_source, utm_medium, utm_campaign,
              modo_entrada, primeira, consentimento_texto, consentimento_em)
           SELECT tenant_atual(), ${randomUUID()}, ${contatoId}, ${sessaoId},
-                 s.plataforma, s.campanha_externa_id, s.anuncio_externo_id, s.click_id,
+                 s.plataforma, s.campanha_externa_id, s.anuncio_externo_id, s.click_id, s.click_id_tipo,
                  s.utm_source, s.utm_medium, s.utm_campaign,
                  'outbound_formulario',
                  NOT EXISTS (SELECT 1 FROM midia_lead_origem o
