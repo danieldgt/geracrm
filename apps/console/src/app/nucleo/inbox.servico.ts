@@ -21,6 +21,11 @@ export interface ItemConversa {
   readonly naoLida: boolean
   /** Tipo de canal — a lista pinta o símbolo da marca por conversa (multicanal). */
   readonly canalTipo: TipoCanal
+  /**
+   * ⚠️ Quem CUIDA deste cliente (carteira). `null` = ninguém — e é diferente de
+   * "não sei": a consulta olhou e não achou dono ativo.
+   */
+  readonly donoCarteira: string | null
   readonly janela: Janela
 }
 

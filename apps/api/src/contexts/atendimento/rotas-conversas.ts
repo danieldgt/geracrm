@@ -127,11 +127,16 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
       ultima_mensagem_em: Date | null; ultima_entrante_em: Date | null
       ultima_direcao: string | null; arquivada: boolean
       ult_tipo: string | null; ult_conteudo: unknown; ult_direcao: string | null
-      nao_lida: boolean; canal_tipo: string
+      nao_lida: boolean; canal_tipo: string; dono_carteira: string | null
     }[]>`
       SELECT cv.id, cv.contato_id, ct.nome, cv.conduzida_por,
              cv.ultima_mensagem_em, cv.ultima_entrante_em, cv.ultima_direcao, cv.arquivada,
              cc.tipo AS canal_tipo,
+             -- ⚠️ Quem CUIDA deste cliente. A régua de roteamento (regra 4 de
+             --    roteamento-lead.ts) diz que relação existente não é triada
+             --    por robô — e pelo mesmo motivo não deveria ficar numa fila
+             --    genérica sem que a pessoa da relação saiba que ele escreveu.
+             dono.nome AS dono_carteira,
              um.tipo AS ult_tipo, um.conteudo AS ult_conteudo, um.direcao AS ult_direcao,
              -- ⚠️ Não-lida é DERIVADA (versao − lida_ate_versao) e POR USUÁRIO,
              --    nunca um contador na conversa. Só entrante conta como não-lida.
@@ -139,6 +144,13 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
         FROM conversa cv
         JOIN contato ct ON ct.id = cv.contato_id
         JOIN canal_conectado cc ON cc.tenant_id = cv.tenant_id AND cc.id = cv.canal_id
+        LEFT JOIN LATERAL (
+          SELECT u.nome
+            FROM carteira_atribuicao ca
+            JOIN usuario u ON u.tenant_id = ca.tenant_id AND u.id = ca.usuario_id
+           WHERE ca.tenant_id = cv.tenant_id AND ca.contato_id = cv.contato_id AND ca.ate IS NULL
+           LIMIT 1
+        ) dono ON true
         LEFT JOIN conversa_leitura cl
           ON cl.tenant_id = cv.tenant_id AND cl.conversa_id = cv.id
          AND cl.usuario_id = (SELECT id FROM usuario WHERE tenant_id = tenant_atual() AND cognito_sub = ${sub})
@@ -188,6 +200,9 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
       naoLida: l.nao_lida,
       // Tipo de canal — a lista pinta o símbolo da marca por conversa (multicanal).
       canalTipo: l.canal_tipo,
+      // ⚠️ `null` quando ninguém cuida — e é diferente de "não sei": a consulta
+      //    olhou a carteira e não achou dono ativo.
+      donoCarteira: l.dono_carteira,
       // ⚠️ Janela derivada do timestamp da última entrante — não uma flag.
       janela: calcularJanela(l.ultima_entrante_em, agora),
     }))

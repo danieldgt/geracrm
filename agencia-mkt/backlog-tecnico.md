@@ -120,7 +120,7 @@ tinham, e **não tocamos em nada**.
 | **AQ-20** | **Painel de auditoria do agente**: atendidos, qualificados, descartados, **tempo até qualificação**, canal, origem | AQ-18/19 | M |
 | **AQ-21** | **Nurture**: gatilho e ação novos no motor agendado existente (`0046`) | AQ-18 | P |
 | **AQ-22** | ⚠️ **Ação "enviar mensagem"** na automação — mudança da política atual (`../docs/automacoes.md` §2), atrás do gateway e dos guardrails | AQ-19 | M |
-| 🔨 **AQ-40** | **Motor de roteamento** (`roteamento-do-lead.md` §4): 8 regras avaliadas em ordem, ⚠️ em código, com **default humano** | AQ-17, AQ-09 | M |
+| 🔨 **AQ-40** | **Motor de roteamento**: regra pura pronta e testada. ⚠️ **NÃO pode ser ligado antes do AQ-19**: a regra 1 é o kill switch, e sem agente `politicaAgente` é sempre `desligado` — ligar hoje registraria `agente_desligado` para 100% dos leads, um valor constante disfarçado de decisão. Entregue a fatia que se sustenta sozinha: o **dono da carteira aparece no Inbox** (regra 4 — relação existente não é triada por robô, nem deveria esperar numa fila genérica) | AQ-17, AQ-09, **AQ-19** | M |
 | **AQ-41** | **Agente como participante da fila**: `usuario` não-humano que assume pelo **mesmo INV-51**. ⚠️ Sem caminho paralelo — agente desligado simplesmente não assume | AQ-19 | P |
 | **AQ-42** | **Handoff com contexto**: transcrição, o que foi qualificado, **motivo**, origem de mídia e o que falta perguntar → etapa "Aguardando nós" (`0056`) | AQ-41 | M |
 | **AQ-43** | ⚠️ **Resposta humana × automática** no painel: o agente preenche `primeira_resposta_em`, **nunca** `primeira_resposta_humana_em` (contra-métrica MC-05, `0012`) | AQ-41 | P |

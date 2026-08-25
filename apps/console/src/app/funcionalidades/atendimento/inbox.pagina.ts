@@ -106,6 +106,15 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
                         <span class="ponto-janela" [attr.data-estado]="c.janela.estado"
                               [title]="'Janela ' + rotuloJanela(c.janela.estado)"></span>
                       </span>
+                      <!-- ⚠️ Quem CUIDA deste cliente. A régua de roteamento diz
+                           que relação existente não é triada por robô; pelo mesmo
+                           motivo ela não deveria ficar numa fila genérica sem que
+                           a pessoa da relação saiba que ele escreveu. -->
+                      @if (c.donoCarteira) {
+                        <span class="carteira" [title]="'Cliente da carteira de ' + c.donoCarteira">
+                          👤 {{ c.donoCarteira }}
+                        </span>
+                      }
                     </span>
                   </button>
                 }
@@ -348,6 +357,8 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
     .hora { flex: none; font-size: 11px; color: var(--wa-sec); }
     .previa { flex: 1; min-width: 0; font-size: 13px; color: var(--wa-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .previa.forte { color: var(--wa-text); font-weight: 600; }
+    .carteira { font-size: 11px; color: var(--texto-suave); overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap; }
     .nao-lida { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--wa-green); }
     .ponto-janela { flex: none; width: 8px; height: 8px; border-radius: 50%; }
     .ponto-janela[data-estado='aberta'] { background: var(--wa-green); }
