@@ -39,14 +39,22 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
     </header>
 
     <form class="nova" (submit)="salvar($event)">
-      <select [value]="alvoUsuario()" (change)="alvoUsuario.set($any($event.target).value)" aria-label="De quem é a meta">
-        <option value="">Equipe (todos)</option>
-        @for (m of equipe(); track m.id) { <option [value]="m.id">{{ m.nome }}</option> }
-      </select>
-      <div class="campo-valor">
-        <span class="prefixo">R$</span>
-        <input inputmode="numeric" [value]="valor()" (input)="valor.set($any($event.target).value)" placeholder="0,00" aria-label="Alvo em reais" />
-      </div>
+      <label class="campo rotulado">
+        <span>De quem é a meta</span>
+        <select [value]="alvoUsuario()" (change)="alvoUsuario.set($any($event.target).value)">
+          <option value="">Equipe (todos)</option>
+          @for (m of equipe(); track m.id) { <option [value]="m.id">{{ m.nome }}</option> }
+        </select>
+      </label>
+      <label class="campo rotulado alvo">
+        <span>Alvo do mês</span>
+        <!-- ⚠️ O "R$" é UNIDADE, não rótulo: quem lê só ele não sabe se o campo é
+             alvo, realizado ou saldo. -->
+        <span class="campo-valor">
+          <span class="prefixo">R$</span>
+          <input inputmode="numeric" [value]="valor()" (input)="valor.set($any($event.target).value)" placeholder="0,00" />
+        </span>
+      </label>
       <button class="btn btn--primario" type="submit" [disabled]="salvando() || !valorNumerico()">
         {{ salvando() ? 'Salvando…' : 'Definir meta' }}
       </button>
@@ -96,6 +104,9 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
     .mes { min-width: 92px; text-align: center; color: var(--texto); }
     .nova { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: center; margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .nova select { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
+    .nova .campo.rotulado { flex-direction: column; gap: 4px; }
+    .nova .campo.rotulado > span:first-child { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
+    .nova .alvo { flex: 1; min-width: 160px; }
     .campo-valor { display: flex; align-items: center; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); padding-left: var(--espacamento-3); flex: 1; min-width: 160px; }
     .prefixo { color: var(--texto-suave); font-size: 14px; }
     .campo-valor input { flex: 1; padding: var(--espacamento-2) var(--espacamento-3); border: 0; background: transparent; color: var(--texto); font: inherit; }

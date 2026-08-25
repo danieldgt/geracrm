@@ -29,8 +29,11 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     </header>
 
     <form class="add" (submit)="adicionar($event)">
-      <input [value]="url()" (input)="url.set($any($event.target).value)"
-             placeholder="https://seu-sistema.com/webhook" inputmode="url" aria-label="URL do webhook" />
+      <label class="campo rotulado">
+        <span>URL do webhook</span>
+        <input [value]="url()" (input)="url.set($any($event.target).value)"
+               placeholder="https://seu-sistema.com/webhook" inputmode="url" />
+      </label>
       <button class="btn btn--primario" type="submit" [disabled]="salvando() || !url().trim()">
         {{ salvando() ? 'Criando…' : 'Adicionar' }}
       </button>
@@ -81,8 +84,12 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .cabecalho { margin-bottom: var(--espacamento-5); }
     h1 { margin: 0; font-size: 20px; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .add { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-2); }
-    .add input { flex: 1; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
+    /* ⚠️ align-items:end alinha o BOTÃO com o campo, não com o rótulo — sem
+       isso o botão sobe para a altura do texto do label. */
+    .add { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-2); align-items: end; }
+    .add .campo { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+    .add .campo > span { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
+    .add input { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .erro { color: var(--erro); font-size: 13px; margin: 0 0 var(--espacamento-3); }
     .segredo { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3) var(--espacamento-4); border: 1px solid var(--ativo); border-radius: var(--raio-painel); background: var(--superficie-elevada); font-size: 13px; color: var(--texto-secundario); }
     .segredo .valor { display: block; margin-top: var(--espacamento-2); padding: var(--espacamento-2); background: var(--fundo); border-radius: var(--raio-controle); font-family: var(--tipografia-familia-dados, monospace); font-size: 12px; color: var(--texto); word-break: break-all; }

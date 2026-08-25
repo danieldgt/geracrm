@@ -112,6 +112,30 @@ Exemplares já no padrão: `crm/bloqueios.pagina.ts`, `integracao/webhooks.pagin
 Estados como ramos EXPLÍCITOS (`@switch`), nunca derivados de `lista.length === 0` — vazio-por-falha
 e vazio-por-não-ter pedem telas opostas.
 
+## Rótulo × placeholder (regra, não gosto)
+
+| Campo | O que usar |
+|---|---|
+| **Cria ou edita registro** (nome, URL, telefone, valor, mensagem) | ⚠️ **`<label>` VISÍVEL.** Placeholder some quando a pessoa digita, e no celular ela perde a referência de onde está |
+| **Busca** com ícone/contexto óbvio | Placeholder + `aria-label`. Um rótulo "Buscar" acima é ruído |
+| **Filtro `<select>`** cuja 1ª option já nomeia ("Categoria…") | A option É o rótulo |
+| **Campo em frase** ("Ativo até `[ ]` dias") | O texto ao redor É o rótulo — um label separado quebra a frase |
+| **Botão-ícone** | `aria-label`, sempre |
+
+⚠️ **Nunca `aria-label` num campo que JÁ tem `<label>` visível.** O `aria-label`
+SUBSTITUI o texto visível para leitor de tela: quem enxerga lê um nome e quem
+ouve, outro — e comando de voz ("clique em Nome da conta") deixa de funcionar
+(WCAG 2.5.3). Se o rótulo visível está certo, o `aria-label` sobra.
+
+Na barra de "adicionar" (campo + botão numa linha), o container leva
+`align-items: end` — sem isso o botão sobe para a altura do texto do rótulo.
+
+⚠️ **A armadilha das crases.** `template:` e `styles:` são template literals: uma
+crase dentro de comentário HTML (`<!-- … -->`) ou CSS **fecha o literal**, e o
+erro que aparece é `NG1002: Incorrect number of arguments to @Component
+decorator` — que não menciona crase nem a linha certa. Já mordeu três vezes; o
+teste `compartilhado/ui/crase-em-template.spec.ts` agora aponta o arquivo.
+
 ## Responsividade & SEM quebra de layout (regra dura)
 
 ⚠️ Elemento sobreposto ou empurrado por quebra é **defeito**, não detalhe. Regras:

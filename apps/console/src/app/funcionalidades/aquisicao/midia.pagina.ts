@@ -83,15 +83,15 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         </label>
         <label>ID da conta
           <input [value]="novoIdExterno()" (input)="novoIdExterno.set($any($event.target).value)"
-                 placeholder="997-075-4431" aria-label="ID da conta na plataforma" />
+                 placeholder="997-075-4431" />
         </label>
         <label>Nome
           <input [value]="novoNome()" (input)="novoNome.set($any($event.target).value)"
-                 placeholder="Drezz — aquisição" aria-label="Nome da conta" />
+                 placeholder="Drezz — aquisição" />
         </label>
         <label>Moeda
           <input [value]="novaMoeda()" (input)="novaMoeda.set($any($event.target).value.toUpperCase())"
-                 maxlength="3" size="4" aria-label="Moeda" />
+                 maxlength="3" size="4" />
         </label>
         <button class="btn btn--primario" type="submit"
                 [disabled]="conectando() || !novoIdExterno().trim() || !novoNome().trim()">
@@ -157,16 +157,16 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         </label>
         <label>Nome interno
           <input [value]="lpNome()" (input)="lpNome.set($any($event.target).value)"
-                 placeholder="Uniformes — PE" aria-label="Nome interno da landing page" />
+                 placeholder="Uniformes — PE" />
         </label>
         <label>Título da página
           <input [value]="lpTitulo()" (input)="lpTitulo.set($any($event.target).value)"
-                 placeholder="Uniformes para a sua equipe" aria-label="Título da página" />
+                 placeholder="Uniformes para a sua equipe" />
         </label>
         @if (lpModo() === 'inbound_wa') {
           <label>WhatsApp de destino
             <input [value]="lpTelefone()" (input)="lpTelefone.set($any($event.target).value)"
-                   placeholder="55 81 99999-8888" aria-label="WhatsApp de destino" />
+                   placeholder="55 81 99999-8888" />
           </label>
         }
         <button class="btn btn--primario" type="submit"

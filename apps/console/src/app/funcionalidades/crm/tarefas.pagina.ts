@@ -42,8 +42,14 @@ const ABAS = [
 
     @if (mostrarNova()) {
       <form class="nova" (submit)="criar($event)">
-        <input class="titulo" [value]="titulo()" (input)="titulo.set($any($event.target).value)" placeholder="O que fazer? (ex.: ligar para o cliente)" />
-        <input type="datetime-local" [value]="vence()" (input)="vence.set($any($event.target).value)" aria-label="Vencimento" />
+        <label class="campo rotulado titulo">
+          <span>O que fazer</span>
+          <input [value]="titulo()" (input)="titulo.set($any($event.target).value)" placeholder="Ex.: ligar para o cliente" />
+        </label>
+        <label class="campo rotulado">
+          <span>Vence em</span>
+          <input type="datetime-local" [value]="vence()" (input)="vence.set($any($event.target).value)" />
+        </label>
         <button class="btn btn--primario" type="submit" [disabled]="salvando() || !titulo().trim() || !vence()">
           {{ salvando() ? 'Criando…' : 'Criar' }}
         </button>
@@ -94,7 +100,10 @@ const ABAS = [
     .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-4); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .nova { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: center; margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
+    .nova .campo.rotulado { display: flex; flex-direction: column; gap: 4px; }
+    .nova .campo.rotulado > span { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
+    .nova .campo.rotulado input { width: 100%; }
+    .nova { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: end; margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .nova input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .nova .titulo { flex: 1; min-width: 200px; }
     .erro { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }

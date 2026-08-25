@@ -27,8 +27,11 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     </header>
 
     <form class="add" (submit)="adicionar($event)">
-      <input [value]="telefone()" (input)="telefone.set($any($event.target).value)"
-             placeholder="Telefone (ex.: 81 99999-0000)" inputmode="tel" aria-label="Telefone a bloquear" />
+      <label class="campo rotulado">
+        <span>Telefone a bloquear</span>
+        <input [value]="telefone()" (input)="telefone.set($any($event.target).value)"
+               placeholder="81 99999-0000" inputmode="tel" />
+      </label>
       <button class="btn btn--primario" type="submit" [disabled]="salvando() || !telefone().trim()">
         {{ salvando() ? 'Bloqueando…' : 'Bloquear' }}
       </button>
@@ -76,8 +79,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .cabecalho { margin-bottom: var(--espacamento-5); }
     h1 { margin: 0; font-size: 20px; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .add { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-2); }
-    .add input { flex: 1; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
+    .add { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-2); align-items: end; }
+    .add .campo { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+    .add .campo > span { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
+    .add input { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
       border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .erro-add { color: var(--erro); font-size: 13px; margin: 0 0 var(--espacamento-3); }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; margin-top: var(--espacamento-4); }

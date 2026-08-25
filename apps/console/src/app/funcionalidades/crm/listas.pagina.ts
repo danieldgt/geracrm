@@ -29,7 +29,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         <div class="grade">
           <section class="col">
             <form class="nova" (submit)="criar($event)">
-              <input [value]="novoNome()" (input)="novoNome.set($any($event.target).value)" placeholder="Nova lista (ex.: Feira 2026)" aria-label="Nome da lista" />
+              <label class="campo rotulado">
+                <span>Nome da lista</span>
+                <input [value]="novoNome()" (input)="novoNome.set($any($event.target).value)" placeholder="Ex.: Feira 2026" />
+              </label>
               <button class="btn btn--primario" type="submit" [disabled]="criando() || !novoNome().trim()">+</button>
               @if (erroNova()) { <p class="erro">{{ erroNova() }}</p> }
             </form>
@@ -92,8 +95,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .col { min-width: 0; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
     .esq { height: 44px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
-    .nova { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-3); flex-wrap: wrap; }
-    .nova input { flex: 1; min-width: 140px; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
+    .nova { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-3); flex-wrap: wrap; align-items: end; }
+    .nova .campo { flex: 1; min-width: 140px; display: flex; flex-direction: column; gap: 4px; }
+    .nova .campo > span { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
+    .nova input { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .erro { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
     .listas { list-style: none; margin: 0; padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
     .lista { display: flex; align-items: center; gap: var(--espacamento-2); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); cursor: pointer; }
