@@ -10,6 +10,7 @@ import {
 } from './contexts/aquisicao/worker.js'
 import { vigiarTodos } from './contexts/aquisicao/vigia.js'
 import { varrerResumoDiario, HORA_RESUMO_LOCAL } from './contexts/aquisicao/entrega-resumo.js'
+import { despacharPush, configVapid, envioReal } from './contexts/plataforma/push.js'
 import { vigiarConexaoCanais } from './contexts/atendimento/vigia-canal.js'
 
 const porta = Number(process.env.PORT ?? 3000)
@@ -164,6 +165,31 @@ if (process.env.DATABASE_ADMIN_URL) {
       .finally(() => { resumindo = false })
   }, 15 * 60 * 1000)
   intervalosAquisicao.push(resumoMidia)
+
+  // Push nativo (PLT-07) — a notificação que chega com o navegador fechado.
+  // ⚠️ 20s: é a mesma ordem de grandeza do despachante de webhooks. Push de
+  //    atendimento tem que chegar em segundos; de minutos, o cliente já
+  //    desistiu de esperar.
+  // ⚠️ Sem chaves VAPID no ambiente, nem agenda: o produto segue com o sino, que
+  //    é onde a notificação de fato está garantida.
+  const vapid = configVapid()
+  if (vapid) {
+    const enviar = envioReal(vapid)
+    let empurrando = false
+    const pushIntervalo = setInterval(() => {
+      if (empurrando) return
+      empurrando = true
+      void despacharPush(donoAquisicao as never, enviar)
+        .then((r) => {
+          if (r.enviados > 0 || r.removidos > 0) app.log.info(r, 'push nativo')
+        })
+        .catch((e) => app.log.warn({ erro: e }, 'despacho de push falhou'))
+        .finally(() => { empurrando = false })
+    }, 20_000)
+    intervalosAquisicao.push(pushIntervalo)
+  } else {
+    app.log.info('push nativo desligado (sem VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY)')
+  }
 }
 
 // Graceful shutdown: para de aceitar requisição, termina as que estão em voo,

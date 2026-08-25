@@ -45,6 +45,7 @@ import { rotasEventos } from './contexts/atendimento/eventos/rotas-eventos.js'
 import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
 import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
 import { rotasLpPublica } from './contexts/aquisicao/rotas-lp-publica.js'
+import { rotasPush } from './contexts/plataforma/rotas-push.js'
 import { rotasAuth } from './contexts/identidade/rotas-auth.js'
 
 /**
@@ -112,6 +113,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   //    RESOLVIDO pela chave da URL (0062), como o webhook resolve pelo
   //    phone_number_id (0057) — nunca recebido em parâmetro (ADR-001).
   await app.register(rotasLpPublica)
+  await app.register(rotasPush)
   await app.register(rotasAuth)
 
   /** Liveness — no database. Answers even with the bank down, on purpose. */

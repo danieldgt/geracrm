@@ -3,6 +3,7 @@ import { DatePipe } from '@angular/common'
 import { NotificacoesServico, type Notificacao } from './notificacoes.servico.js'
 import { EventosServico } from './eventos.servico.js'
 import { InboxServico } from './inbox.servico.js'
+import { PushServico } from './push.servico.js'
 
 /**
  * Sino de notificações (PLT-07). Fica no shell, sempre montado.
@@ -34,6 +35,34 @@ import { InboxServico } from './inbox.servico.js'
               <button class="limpar" (click)="servico.marcarTodasLidas()">Marcar todas como lidas</button>
             }
           </header>
+
+          <!-- ⚠️ O convite ao push mora AQUI, e a permissão é pedida no CLIQUE:
+               navegador penaliza quem pede notificação no carregamento, e quem
+               nega uma vez não é perguntado de novo. Queimar o pedido no
+               primeiro segundo é perder o recurso naquele aparelho. -->
+          @switch (push.estado()) {
+            @case ('disponivel') {
+              <div class="push-convite">
+                <span>Avisar mesmo com o console fechado?</span>
+                <button class="btn btn--primario btn--pequeno" (click)="ativarPush()"
+                        [disabled]="mexendoPush()">Ativar avisos</button>
+              </div>
+            }
+            @case ('ativo') {
+              <div class="push-convite ativo">
+                <span>✅ Avisos ligados neste aparelho</span>
+                <button class="btn btn--fantasma btn--pequeno" (click)="desativarPush()"
+                        [disabled]="mexendoPush()">Desligar</button>
+              </div>
+            }
+            @case ('negado') {
+              <!-- ⚠️ Não dá para pedir de novo por código: quem desbloqueia é a
+                   pessoa, nas configurações do navegador. Dizer isso é mais útil
+                   do que um botão que não faz nada. -->
+              <p class="push-convite negado">Os avisos estão bloqueados para este site.
+                Para receber com o console fechado, libere as notificações nas configurações do navegador.</p>
+            }
+          }
 
           @if (servico.carregando()) {
             <p class="vazio">Carregando…</p>
@@ -67,6 +96,11 @@ import { InboxServico } from './inbox.servico.js'
     .painel { position: absolute; top: 30px; right: 0; width: 300px; z-index: 41;
       background: var(--superficie-elevada); border: 1px solid var(--borda); border-radius: var(--raio-painel);
       box-shadow: var(--elevacao-modal); overflow: hidden; }
+    .push-convite { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-2);
+      padding: var(--espacamento-2) var(--espacamento-3); border-bottom: 1px solid var(--borda);
+      background: var(--acao-suave); font-size: 12px; color: var(--texto-secundario); }
+    .push-convite.ativo { background: var(--sucesso-suave); }
+    .push-convite.negado { display: block; background: var(--superficie); line-height: 1.5; }
     .painel-topo { display: flex; align-items: center; justify-content: space-between;
       padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); }
     .painel-topo strong { font-size: 13px; color: var(--texto); }
@@ -87,9 +121,11 @@ import { InboxServico } from './inbox.servico.js'
 })
 export class SinoNotificacoesComponente implements OnInit, OnDestroy {
   readonly servico = inject(NotificacoesServico)
+  readonly push = inject(PushServico)
   private readonly eventos = inject(EventosServico)
   private readonly inbox = inject(InboxServico)
   readonly aberto = signal(false)
+  readonly mexendoPush = signal(false)
   private cancelar?: () => void
 
   ngOnInit(): void {
@@ -108,7 +144,24 @@ export class SinoNotificacoesComponente implements OnInit, OnDestroy {
   alternar(): void {
     const novo = !this.aberto()
     this.aberto.set(novo)
-    if (novo) void this.servico.carregarLista()
+    if (novo) {
+      void this.servico.carregarLista()
+      // ⚠️ Verifica só ao ABRIR o sino — e verificar não pede permissão. O
+      //    pedido em si só acontece no clique do botão.
+      void this.push.verificar()
+    }
+  }
+
+  async ativarPush(): Promise<void> {
+    this.mexendoPush.set(true)
+    try { await this.push.ativar() } catch { /* estado já diz o que houve */ }
+    finally { this.mexendoPush.set(false) }
+  }
+
+  async desativarPush(): Promise<void> {
+    this.mexendoPush.set(true)
+    try { await this.push.desativar() } catch { /* idem */ }
+    finally { this.mexendoPush.set(false) }
   }
 
   fechar(): void { this.aberto.set(false) }
