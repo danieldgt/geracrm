@@ -17,6 +17,7 @@ import { enviarPeloGateway, type ContextoEnvio } from './canais/gateway.js'
 interface Preparo {
   mensagemId: string; destino: string; provedor: string | null; cred: Uint8Array | null
   tipoCanal: string; estadoCanal: string; ultimaEntranteEm: Date | null; destinoBloqueado: boolean
+  disparoPausado: boolean
 }
 
 function comCabecalho(nome: string | null, texto: string): string {
@@ -41,11 +42,13 @@ export async function enviarTextoNaConversa(
     const [ctx] = await tx<Preparo[]>`
       SELECT cc.provedor, cc.credenciais_cifradas AS cred, cc.tipo AS "tipoCanal", cc.estado AS "estadoCanal",
              ct.e164 AS destino, c.ultima_entrante_em AS "ultimaEntranteEm",
+             coalesce(cfg.disparo_pausado, false) AS "disparoPausado",
              EXISTS (SELECT 1 FROM lista_bloqueio lb
                       WHERE lb.tenant_id = c.tenant_id AND lb.chave_bloqueio = ct.chave_bloqueio) AS "destinoBloqueado"
         FROM conversa c
         JOIN contato_telefone ct ON ct.tenant_id = c.tenant_id AND ct.contato_id = c.contato_id AND ct.principal
         JOIN canal_conectado cc  ON cc.tenant_id = c.tenant_id AND cc.id = c.canal_id
+        LEFT JOIN canal_configuracao cfg ON cfg.tenant_id = cc.tenant_id AND cfg.canal_id = cc.id
        WHERE c.tenant_id = tenant_atual() AND c.id = ${conversaId}`
     if (!ctx) return null
     const mensagemId = randomUUID()
@@ -69,6 +72,10 @@ export async function enviarTextoNaConversa(
     tipoCanal: preparo.tipoCanal, estadoCanal: preparo.estadoCanal, provedor: preparo.provedor,
     temCredencial: !!preparo.cred, destinoBloqueado: preparo.destinoBloqueado,
     ehTemplate: false, ultimaEntranteEm: preparo.ultimaEntranteEm,
+    // ⚠️ Este módulo é o caminho PROGRAMÁTICO (resumo de pedido, automação,
+    //    campanha quando existir) — por isso `ehDisparo`. Resposta digitada por
+    //    uma pessoa entra por `rotas-mensagens`, que marca false.
+    ehDisparo: true, disparoPausado: preparo.disparoPausado,
   }
   const r = await enviarPeloGateway(ctxEnvio, agora, async () => {
     const canal = criarCanal(preparo.provedor!, decifrar(Buffer.from(preparo.cred!)))

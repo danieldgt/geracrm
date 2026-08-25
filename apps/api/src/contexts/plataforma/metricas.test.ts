@@ -60,6 +60,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   for (const t of [T, OUTRO]) {
+    await dono`DELETE FROM canal_configuracao WHERE tenant_id = ${t}`
+    await dono`DELETE FROM canal_conectado WHERE tenant_id = ${t}`
     await dono`DELETE FROM alerta WHERE tenant_id = ${t}`
     await dono`DELETE FROM metrica_janela WHERE tenant_id = ${t}`
     await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${t}`
@@ -117,5 +119,75 @@ describe('agregação + alerta ponta a ponta', () => {
     await comoTenant(T, (tx) => registrarMetrica(tx, 'envio_ok', 7, AGORA))
     const doOutro = await comoTenant(OUTRO, (tx) => tx`SELECT * FROM metrica_janela WHERE metrica = 'envio_ok'`)
     expect(doOutro.length).toBe(0)
+  })
+})
+
+describe('⚠️ Pausa automática de disparo quando a entrega desaba (CAN-06)', () => {
+  const CANAL = 'a10a0000-7777-4000-8000-000000000001'
+
+  const pausa = () => dono<{ disparo_pausado: boolean; pausado_motivo: string | null }[]>`
+    SELECT disparo_pausado, pausado_motivo FROM canal_configuracao
+     WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
+
+  async function prepararCanal(): Promise<void> {
+    await dono`DELETE FROM canal_configuracao WHERE tenant_id = ${T}`
+    await dono`DELETE FROM canal_conectado    WHERE tenant_id = ${T}`
+    await dono`DELETE FROM metrica_janela     WHERE tenant_id = ${T}`
+    await dono`DELETE FROM alerta             WHERE tenant_id = ${T}`
+    await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, provedor, nome_amigavel, estado)
+               VALUES (${T}, ${CANAL}, 'whatsapp_nao_oficial', 'plugzapi', 'Vendas', 'conectado')`
+  }
+
+  it('o alerta novo pausa o disparo, com o número no motivo', async () => {
+    await prepararCanal()
+    await comoTenant(T, async (tx) => {
+      await registrarMetrica(tx, 'envio_ok', 5, AGORA)
+      await registrarMetrica(tx, 'envio_falha', 20, AGORA)
+      await avaliarEAlertarEntrega(tx, AGORA)
+    })
+
+    const [p] = await pausa()
+    expect(p?.disparo_pausado).toBe(true)
+    // ⚠️ Pausa sem motivo vira mistério na semana seguinte — e o CHECK do banco
+    //    (canal_pausa_coerente) recusaria mesmo que a gente esquecesse.
+    expect(p!.pausado_motivo).toContain('%')
+    expect(p!.pausado_motivo).toContain('pausa automática')
+  })
+
+  /**
+   * ⚠️ SEM RETOMADA AUTOMÁTICA, de propósito. Com o disparo parado quase não
+   * nascem amostras novas de entrega — uma retomada "quando melhorar" ficaria
+   * esperando o sinal que ela mesma impede de existir. Quem retoma é gente.
+   */
+  it('quando a entrega volta, o alerta resolve mas o disparo CONTINUA pausado', async () => {
+    await prepararCanal()
+    await comoTenant(T, async (tx) => {
+      await registrarMetrica(tx, 'envio_falha', 20, AGORA)
+      await avaliarEAlertarEntrega(tx, AGORA)
+    })
+    await comoTenant(T, async (tx) => {
+      await registrarMetrica(tx, 'envio_ok', 200, AGORA)
+      await avaliarEAlertarEntrega(tx, AGORA)
+    })
+
+    expect(await alertasAbertos(T)).toBe(0)
+    const [p] = await pausa()
+    expect(p?.disparo_pausado).toBe(true)
+  })
+
+  /** Motivo de gente vale mais que o nosso: não sobrescreve pausa que já existia. */
+  it('não sobrescreve o motivo de uma pausa manual anterior', async () => {
+    await prepararCanal()
+    await dono`INSERT INTO canal_configuracao
+      (tenant_id, canal_id, disparo_pausado, pausado_motivo, pausado_em)
+      VALUES (${T}, ${CANAL}, true, 'Pausado pelo gestor durante a feira', now())`
+
+    await comoTenant(T, async (tx) => {
+      await registrarMetrica(tx, 'envio_falha', 20, AGORA)
+      await avaliarEAlertarEntrega(tx, AGORA)
+    })
+
+    const [p] = await pausa()
+    expect(p!.pausado_motivo).toBe('Pausado pelo gestor durante a feira')
   })
 })

@@ -7,9 +7,12 @@ import type { ResultadoEnvio } from './porta.js'
  * ⚠️ NENHUM envio de conteúdo sai sem passar por aqui. O gateway revalida no
  * SERVIDOR — não na tela — os guardrails, nesta ordem:
  *   1. opt-out / bloqueio (sobrevive a tudo: é o direito do destinatário);
- *   2. estado do canal (suspenso/desconectado não envia; degradado ainda envia);
- *   3. credencial presente;
- *   4. janela de 24h — SÓ no canal oficial (Meta) e só fora de template. O
+ *   2. disparo pausado — ⚠️ só para envio PROGRAMÁTICO. Resposta de gente numa
+ *      conversa aberta continua saindo: a pausa protege o número do tráfego em
+ *      massa, e travar a resposta a quem escreveu seria parar o atendimento;
+ *   3. estado do canal (suspenso/desconectado não envia; degradado ainda envia);
+ *   4. credencial presente;
+ *   5. janela de 24h — SÓ no canal oficial (Meta) e só fora de template. O
  *      não-oficial declara texto livre a qualquer hora (ADR-021), então não
  *      cai neste ramo.
  *
@@ -21,6 +24,8 @@ import type { ResultadoEnvio } from './porta.js'
 
 /** Recusa DECIDIDA POR NÓS, antes do fornecedor. Distinta de falha de transporte. */
 export type MotivoRecusa =
+  /** Disparo pausado neste canal (manual ou automático por queda de entrega). */
+  | 'disparo_pausado'
   /** Destino em opt-out / lista de bloqueio. */
   | 'bloqueado'
   /** Canal suspenso ou desconectado — não dá para enviar agora. */
@@ -32,6 +37,16 @@ export type MotivoRecusa =
 
 /** Tudo que o gateway precisa para decidir — nada de rede aqui. */
 export interface ContextoEnvio {
+  /**
+   * ⚠️ Envio PROGRAMÁTICO (campanha, automação, resumo de pedido) × resposta de
+   * uma pessoa numa conversa aberta. A distinção existe porque a pausa protege o
+   * número contra tráfego em massa — travar a resposta a quem acabou de escrever
+   * seria parar o atendimento para proteger a reputação de um número que só está
+   * em risco por causa do tráfego em massa.
+   */
+  readonly ehDisparo?: boolean
+  /** `canal_configuracao.disparo_pausado` — pausa manual ou automática. */
+  readonly disparoPausado?: boolean
   readonly tipoCanal: string
   readonly estadoCanal: string
   readonly provedor: string | null
@@ -57,6 +72,10 @@ export function avaliarEnvio(
   agora: Date,
 ): { libera: true } | { libera: false; motivo: MotivoRecusa } {
   if (ctx.destinoBloqueado) return { libera: false, motivo: 'bloqueado' }
+  // ⚠️ Logo depois do opt-out, e ANTES das checagens técnicas: a pausa é uma
+  //    decisão NOSSA de proteção, e quem for ver o motivo precisa ler "disparo
+  //    pausado", não "canal indisponível".
+  if (ctx.ehDisparo && ctx.disparoPausado) return { libera: false, motivo: 'disparo_pausado' }
   if (ctx.estadoCanal === 'suspenso' || ctx.estadoCanal === 'desconectado') {
     return { libera: false, motivo: 'canal_indisponivel' }
   }

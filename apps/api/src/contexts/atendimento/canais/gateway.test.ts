@@ -94,3 +94,50 @@ describe('enviarPeloGateway: só despacha se liberado', () => {
     expect(r).toEqual({ ok: false, classe: 'transporte', motivo: 'canal_desconectado', detalhe: 'instância caiu' })
   })
 })
+
+describe('⚠️ Pausa de disparo (CAN-06)', () => {
+  const base = {
+    tipoCanal: 'whatsapp_nao_oficial', estadoCanal: 'conectado', provedor: 'plugzapi',
+    temCredencial: true, destinoBloqueado: false, ehTemplate: false,
+    ultimaEntranteEm: new Date('2026-08-25T10:00:00Z'),
+  }
+  const AGORA = new Date('2026-08-25T11:00:00Z')
+
+  it('com o disparo pausado, envio PROGRAMÁTICO é recusado com motivo próprio', () => {
+    const d = avaliarEnvio({ ...base, ehDisparo: true, disparoPausado: true }, AGORA)
+    expect(d).toEqual({ libera: false, motivo: 'disparo_pausado' })
+  })
+
+  /**
+   * ⚠️ O ponto inteiro da pausa: ela protege o número do tráfego EM MASSA.
+   * Travar a resposta de uma pessoa a quem acabou de escrever seria parar o
+   * atendimento por causa do problema oposto — e a conversa iniciada pelo
+   * cliente é o tráfego mais seguro que existe.
+   */
+  it('mas a resposta de uma pessoa continua saindo', () => {
+    const d = avaliarEnvio({ ...base, ehDisparo: false, disparoPausado: true }, AGORA)
+    expect(d).toEqual({ libera: true })
+  })
+
+  it('sem pausa, o disparo passa', () => {
+    expect(avaliarEnvio({ ...base, ehDisparo: true, disparoPausado: false }, AGORA))
+      .toEqual({ libera: true })
+  })
+
+  /** Opt-out vence tudo — inclusive a ordem em que a pausa foi colocada. */
+  it('opt-out ainda vem antes da pausa', () => {
+    const d = avaliarEnvio(
+      { ...base, destinoBloqueado: true, ehDisparo: true, disparoPausado: true }, AGORA)
+    expect(d).toEqual({ libera: false, motivo: 'bloqueado' })
+  })
+
+  /**
+   * ⚠️ E a pausa vem ANTES das checagens técnicas: quem for ver por que o
+   * disparo parou precisa ler "disparo pausado", não "canal indisponível".
+   */
+  it('pausa é reportada antes de canal indisponível', () => {
+    const d = avaliarEnvio(
+      { ...base, estadoCanal: 'desconectado', ehDisparo: true, disparoPausado: true }, AGORA)
+    expect(d).toEqual({ libera: false, motivo: 'disparo_pausado' })
+  })
+})

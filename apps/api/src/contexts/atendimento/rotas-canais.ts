@@ -41,14 +41,25 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
       const linhas = await tx<{
         id: string; tipo: string; provedor: string | null; nome_amigavel: string; estado: string
         credenciais_cifradas: Buffer | null; ultimo_erro: string | null
+        disparo_pausado: boolean; pausado_motivo: string | null
       }[]>`
-        SELECT id, tipo, provedor, nome_amigavel, estado, credenciais_cifradas, ultimo_erro
-          FROM canal_conectado ORDER BY criado_em
+        SELECT c.id, c.tipo, c.provedor, c.nome_amigavel, c.estado, c.credenciais_cifradas,
+               c.ultimo_erro,
+               coalesce(cfg.disparo_pausado, false) AS disparo_pausado,
+               cfg.pausado_motivo
+          FROM canal_conectado c
+          LEFT JOIN canal_configuracao cfg
+                 ON cfg.tenant_id = c.tenant_id AND cfg.canal_id = c.id
+         ORDER BY c.criado_em
       `
       return {
         itens: linhas.map((l) => ({
           id: l.id, tipo: l.tipo, provedor: l.provedor, nomeAmigavel: l.nome_amigavel,
           estado: l.estado, ultimoErro: l.ultimo_erro,
+          // ⚠️ A pausa aparece AQUI, na tela da frota, e não só na de config: uma
+          //    pausa automática que ninguém vê repete o incidente que a originou
+          //    — o produto sabendo de algo que o operador não sabe.
+          disparoPausado: l.disparo_pausado, pausadoMotivo: l.pausado_motivo,
           // ⚠️ ADR-021: o não-oficial automatiza um WhatsApp Web e carrega risco
           //    de BANIMENTO — a interface deixa isso VISÍVEL, por caminho.
           riscoBanimento: l.tipo === 'whatsapp_nao_oficial',

@@ -7,6 +7,7 @@ const MAX_RENOVACOES = 9
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { CanaisServico, type Canal, type ProvedorCanal } from './canais.servico.js'
+import { RouterLink } from '@angular/router'
 import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
 import { abrirAvancado } from './canais.regras.js'
 
@@ -20,7 +21,7 @@ import { abrirAvancado } from './canais.regras.js'
 @Component({
   selector: 'app-canais',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormularioCredencialComponente],
+  imports: [FormularioCredencialComponente, RouterLink],
   template: `
     <header class="cabecalho">
       <div>
@@ -80,6 +81,17 @@ import { abrirAvancado } from './canais.regras.js'
                 </div>
                 @if (c.estado === 'desconectado' && c.ultimoErro) {
                   <p class="err">{{ c.ultimoErro }}</p>
+                }
+                <!-- ⚠️ Pausa VISÍVEL na tela da frota. Uma pausa automática que
+                     ninguém enxerga repete o incidente que a originou: o produto
+                     sabendo de algo que o operador não sabe. E o texto diz o que
+                     CONTINUA funcionando — senão lê-se "o número parou". -->
+                @if (c.disparoPausado) {
+                  <p class="pausado">
+                    ⏸️ <strong>Disparo pausado</strong>{{ c.pausadoMotivo ? ' — ' + c.pausadoMotivo : '' }}
+                    <span class="pausado-ok">Respostas em conversas abertas continuam saindo normalmente.</span>
+                    <a class="pausado-link" routerLink="/canal-config">Retomar em Configuração do canal</a>
+                  </p>
                 }
                 <div class="acoes">
                   <button class="btn btn--secundario" (click)="testar(c)" [disabled]="servico.testando().has(c.id)">
@@ -251,6 +263,13 @@ import { abrirAvancado } from './canais.regras.js'
     .tag.risco { color: var(--erro); border-color: var(--erro); }
     .selo { font-size: 12px; color: var(--texto-secundario); white-space: nowrap; }
     .err { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--erro); }
+    .pausado { margin: var(--espacamento-2) 0 0; padding: var(--espacamento-2) var(--espacamento-3);
+      border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--texto);
+      font-size: 12px; line-height: 1.5; }
+    .pausado-ok, .pausado-link { display: block; }
+    .pausado-ok { color: var(--texto-secundario); }
+    .pausado-link { color: var(--acao); text-decoration: none; margin-top: 2px; }
+    .pausado-link:hover { text-decoration: underline; }
     .acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
     .reconectar { margin-top: var(--espacamento-3); }
     .quando { color: var(--texto-suave); font-size: 12px; }

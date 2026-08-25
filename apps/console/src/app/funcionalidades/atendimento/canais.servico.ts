@@ -21,6 +21,9 @@ export interface Canal {
   readonly nomeAmigavel: string
   readonly estado: string
   readonly ultimoErro: string | null
+  /** Pausa de DISPARO (manual ou automática por queda de entrega). */
+  readonly disparoPausado?: boolean
+  readonly pausadoMotivo?: string | null
   readonly credencial: { configurada: boolean; camposPreenchidos: readonly string[] }
 }
 

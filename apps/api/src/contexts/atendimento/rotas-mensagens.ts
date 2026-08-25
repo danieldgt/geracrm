@@ -171,6 +171,11 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
         destinoBloqueado: preparo.destinoBloqueado,
         ehTemplate: false, // templates entram na Onda 0 (HSM); por ora, texto livre.
         ultimaEntranteEm: preparo.ultimaEntranteEm,
+        // ⚠️ EXPLÍCITO, não omitido: aqui é uma pessoa respondendo numa conversa
+        //    aberta. A pausa de disparo NÃO alcança este caminho — ela protege o
+        //    número do tráfego em massa, e travar a resposta a quem acabou de
+        //    escrever seria parar o atendimento por causa do problema oposto.
+        ehDisparo: false,
       }
       const r = await enviarPeloGateway(ctxEnvio, new Date(), async () => {
         const canal = criarCanal(preparo.provedor!, decifrar(Buffer.from(preparo.cred!)))

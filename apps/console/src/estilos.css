@@ -120,6 +120,30 @@ select:focus-visible, textarea:focus-visible {
 .campo small, .campo__dica { font-size: 11px; color: var(--texto-suave); }
 .form-acoes { display: flex; justify-content: flex-end; gap: var(--espacamento-2); }
 
+/* ─── Assentamento dos painéis ────────────────────────────────────────────────
+ * ⚠️ Regra GLOBAL de propósito: `.bloco` e `.painel` são definidos DENTRO de ~40
+ * componentes, cada um com sua borda e seu raio. Repetir a sombra em 40 arquivos
+ * garantiria divergência no primeiro ajuste; aqui é uma linha para todos.
+ *
+ * ⚠️ E funciona porque os componentes não declaram `box-shadow` nesses seletores
+ * — quem declara (o painel modal) tem especificidade maior por causa do atributo
+ * de encapsulamento do Angular e continua vencendo. Sombra de modal é
+ * sobreposição real; esta aqui é só assentamento.
+ *
+ * ⚠️ No tema escuro a sombra some (fundo escuro engole sombra escura): lá quem
+ * separa o painel do palco é a borda, que já existe. Forçar sombra clara no
+ * escuro produziria um halo cinzento — o defeito clássico de "dark mode com
+ * sombra de light mode". */
+.bloco, .painel, .cartao { box-shadow: var(--elevacao-card); }
+:root[data-tema='escuro'] .bloco,
+:root[data-tema='escuro'] .painel,
+:root[data-tema='escuro'] .cartao { box-shadow: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-tema='claro']) .bloco,
+  :root:not([data-tema='claro']) .painel,
+  :root:not([data-tema='claro']) .cartao { box-shadow: none; }
+}
+
 /* Utilitário anti-overflow: filho de flex/grid que precisa encolher (texto que
  * trunca em vez de empurrar o vizinho). Remédio nº 1 de "quebrou o layout". */
 .encolhe { min-width: 0; }

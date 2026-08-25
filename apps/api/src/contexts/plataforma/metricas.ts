@@ -74,11 +74,53 @@ export async function avaliarEAlertarEntrega(sql: Sql, agora: Date, horas = 3): 
       await sql`
         INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
         VALUES (tenant_atual(), 'alerta.novo', 'tenant', tenant_atual(), '{}'::jsonb)`
+      await pausarDisparoPorEntrega(sql, `Entrega em ${pct}% nas últimas ${horas}h — pausa automática.`)
     }
   } else {
     // Entrega saudável de novo: resolve o alerta aberto, se houver.
+    // ⚠️ E NÃO retoma o disparo sozinho. Ver `pausarDisparoPorEntrega`.
     await sql`
       UPDATE alerta SET resolvido_em = now()
        WHERE tenant_id = tenant_atual() AND tipo = 'entrega_baixa' AND resolvido_em IS NULL`
   }
+}
+
+/**
+ * PAUSA AUTOMÁTICA DE DISPARO quando a entrega desaba (CAN-06, EP-03).
+ *
+ * Entrega em queda no canal não-oficial é o sinal de número sendo limitado ou
+ * bloqueado (ADR-021). Continuar disparando em massa é acelerar o banimento —
+ * então o produto para o tráfego programático sozinho e avisa.
+ *
+ * ⚠️ **Não para o atendimento.** A pausa vale só para envio programático
+ * (`ehDisparo` no gateway): a pessoa que responde quem acabou de escrever
+ * continua respondendo. Travar isso seria parar a operação por causa do
+ * problema oposto ao que a pausa protege.
+ *
+ * ⚠️ **E NÃO existe retomada automática, de propósito.** Com o disparo parado,
+ * quase não nascem novas amostras de entrega — o sistema fica sem como observar
+ * a recuperação. Uma retomada "quando melhorar" ficaria esperando um sinal que
+ * ela mesma impede de existir. Quem retoma é uma pessoa, na tela do canal, com o
+ * motivo registrado ali.
+ *
+ * ⚠️ O alerta de entrega é do TENANT, não do canal (`metrica_janela` não tem
+ * dimensão de canal). Por isso a pausa alcança todos os canais: com a frota
+ * inteira sob suspeita, parar só um seria escolher no escuro. Quando a métrica
+ * ganhar dimensão de canal, a pausa fica cirúrgica.
+ */
+export async function pausarDisparoPorEntrega(sql: Sql, motivo: string): Promise<number> {
+  const pausados = await sql<{ canal_id: string }[]>`
+    INSERT INTO canal_configuracao (tenant_id, canal_id, disparo_pausado, pausado_motivo, pausado_em)
+    SELECT tenant_atual(), cc.id, true, ${motivo}, now()
+      FROM canal_conectado cc
+     WHERE cc.tenant_id = tenant_atual()
+    ON CONFLICT (tenant_id, canal_id) DO UPDATE
+      SET disparo_pausado = true,
+          pausado_motivo  = EXCLUDED.pausado_motivo,
+          pausado_em      = now()
+      -- ⚠️ Não sobrescreve pausa que JÁ existia: se alguém pausou à mão por
+      --    outro motivo, o motivo dela vale mais que o nosso.
+      WHERE NOT canal_configuracao.disparo_pausado
+    RETURNING canal_id`
+  return pausados.length
 }
