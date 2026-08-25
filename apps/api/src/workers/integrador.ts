@@ -52,7 +52,26 @@ async function ciclo(): Promise<void> {
   console.log('[integrador] === ciclo concluído ===')
 }
 
+/**
+ * ⚠️ GUARDA ANTI-SOBREPOSIÇÃO. A primeira carga é HISTÓRICA (base inteira, sem
+ * teto de páginas) e pode passar das 6 horas do intervalo. Sem esta guarda, o
+ * `setInterval` dispararia um segundo ciclo por cima do primeiro: dois processos
+ * pedindo as mesmas páginas ao ERP e disputando os mesmos upserts.
+ *
+ * Pular um ciclo é o comportamento certo — o próximo vem em 6h, e a ingestão é
+ * idempotente.
+ */
+let rodando = false
+async function cicloGuardado(): Promise<void> {
+  if (rodando) {
+    console.log('[integrador] ciclo anterior ainda rodando — pulando este')
+    return
+  }
+  rodando = true
+  try { await ciclo() } finally { rodando = false }
+}
+
 // Um ciclo agora e, depois, no intervalo. O setInterval mantém o processo vivo.
-await ciclo()
-setInterval(() => void ciclo(), INTERVALO_MS)
+await cicloGuardado()
+setInterval(() => void cicloGuardado(), INTERVALO_MS)
 console.log(`[integrador] agendado: próximo ciclo em ${INTERVALO_HORAS}h`)

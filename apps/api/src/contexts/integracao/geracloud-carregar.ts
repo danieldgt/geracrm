@@ -29,18 +29,17 @@ import { ingerirClientes } from './ingestao-clientes.js'
 import { ingerirProdutos } from './ingestao-produtos.js'
 import { ingerirVendas } from './ingestao-vendas.js'
 import { registrarOperacao } from './operacao.js'
+import { decidirCarga, podeMarcarConcluida } from './carga-modo.js'
 
 const base = (process.env.GERACLOUD_BASE_URL ?? '').replace(/\/+$/, '')
 const usuario = process.env.GERACLOUD_USUARIO ?? ''
 const senha = process.env.GERACLOUD_SENHA ?? ''
-const desde = new Date(process.env.DESDE ?? '2024-01-01')
-// ⚠️ Limite de páginas por padrão: a PRIMEIRA carga é uma amostra para conferir
-//    o parsing com volume real, não a base inteira. Tire o teto (MAX_PAGINAS=0)
-//    só depois que a amostra reconciliar.
-const maxPaginasNum = Number(process.env.MAX_PAGINAS ?? 3) || 0
-// ⚠️ Objeto montado condicionalmente: com exactOptionalPropertyTypes, passar
-//    `maxPaginas: undefined` é diferente de omitir. Omitir = base inteira.
-const opcoesPagina: { maxPaginas?: number } = maxPaginasNum > 0 ? { maxPaginas: maxPaginasNum } : {}
+const desdeHistorico = new Date(process.env.DESDE ?? '2024-01-01')
+// ⚠️ Teto de páginas: 0 (padrão) = base inteira. Serve para a AMOSTRA de
+//    conferência do parsing; deixar teto em produção trunca a carga histórica.
+const maxPaginasNum = Number(process.env.MAX_PAGINAS ?? 0) || 0
+const diasIncremental = Number(process.env.DIAS_INCREMENTAL ?? 7) || 7
+const forcarHistorico = process.env.FORCAR_HISTORICO === '1'
 
 if (!base || !usuario || !senha) {
   console.error('Faltam GERACLOUD_BASE_URL, GERACLOUD_USUARIO e GERACLOUD_SENHA no ambiente.')
@@ -109,8 +108,30 @@ async function carregar() {
   })
 
   await garantirTenant()
-  console.log(`📦 Tenant de dogfooding pronto. Carga desde ${desde.toISOString().slice(0, 10)}` +
-    `${maxPaginasNum ? `, até ${maxPaginasNum} página(s) por recurso (amostra)` : ', base inteira'}\n`)
+
+  // ⚠️ HISTÓRICO só na primeira vez (ou forçado). Sem isto, tirar o teto de
+  //    páginas faria cada ciclo de 6h varrer a base INTEIRA do ERP do cliente —
+  //    quatro varreduras completas por dia no sistema de onde ele fatura.
+  const [recibo] = await dono<{ concluida_em: Date }[]>`
+    SELECT concluida_em FROM carga_historica
+     WHERE tenant_id = ${TENANT} AND conexao_id = ${CONEXAO}`
+  const decisao = decidirCarga({
+    temRecibo: !!recibo,
+    desdeHistorico,
+    diasIncremental,
+    maxPaginasEnv: maxPaginasNum,
+    forcarHistorico,
+    agora: new Date(),
+  })
+  // ⚠️ Objeto montado condicionalmente: com exactOptionalPropertyTypes, passar
+  //    `maxPaginas: undefined` é diferente de omitir. Omitir = base inteira.
+  const opcoesPagina: { maxPaginas?: number } =
+    decisao.maxPaginas ? { maxPaginas: decisao.maxPaginas } : {}
+  const desde = decisao.desde
+
+  console.log(`📦 Tenant de dogfooding pronto. Modo ${decisao.modo.toUpperCase()} ` +
+    `(${decisao.motivo}), desde ${desde.toISOString().slice(0, 10)}` +
+    `${decisao.maxPaginas ? `, até ${decisao.maxPaginas} página(s) por recurso (AMOSTRA)` : ', sem teto de páginas'}\n`)
 
   // ⚠️ Ordem importa: clientes e produtos ANTES de vendas. A venda referencia o
   //    contato e o SKU por identidade externa — sem eles, toda venda entra como
@@ -164,6 +185,25 @@ async function carregar() {
   for (const m of metricas) {
     console.log(`  ${m.qtd} compras · R$ ${(Number(m.total) / 100).toFixed(2)}` +
       `${m.confiavel ? '' : ' (RFV estimado — histórico anterior à carga)'}`)
+  }
+
+  // ⚠️ O recibo só nasce em carga histórica SEM TETO. Carga truncada que se
+  //    declarasse concluída faria o produto operar incremental sobre um
+  //    histórico pela metade — e o RFV mentiria em silêncio, sem erro nenhum.
+  if (podeMarcarConcluida(decisao)) {
+    await dono`
+      INSERT INTO carga_historica
+        (tenant_id, conexao_id, desde, vendas, valor_centavos, clientes, produtos)
+      VALUES (${TENANT}, ${CONEXAO}, ${desde.toISOString().slice(0, 10)}::date,
+              ${rv.importadas}, ${rv.valorTotalCentavos}, ${rc.lidos}, ${rp.lidos})
+      ON CONFLICT (tenant_id, conexao_id) DO UPDATE
+        SET desde = EXCLUDED.desde, concluida_em = now(), vendas = EXCLUDED.vendas,
+            valor_centavos = EXCLUDED.valor_centavos, clientes = EXCLUDED.clientes,
+            produtos = EXCLUDED.produtos`
+    console.log('🧾 Recibo de carga histórica gravado — os próximos ciclos são incrementais.')
+  } else if (decisao.modo === 'historico') {
+    console.log(`⚠️ Carga histórica rodou COM TETO de ${decisao.maxPaginas} página(s): ` +
+      'é amostra, não histórico. Recibo NÃO gravado — rode com MAX_PAGINAS=0.')
   }
 
   console.log('\n✅ Carga concluída.')
