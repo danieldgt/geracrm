@@ -93,6 +93,28 @@ async function garantirTenant() {
              ON CONFLICT DO NOTHING`
 }
 
+/**
+ * Roda uma fase da carga imprimindo um BATIMENTO enquanto ela dura.
+ *
+ * ⚠️ A ingestão não loga por página: numa carga histórica de horas, o log mostra
+ * "▶ Clientes…" e depois silêncio. De fora, "rodando" e "travado" ficam com a
+ * mesma cara, e alguém acaba reiniciando um processo saudável no meio do
+ * trabalho. Um sinal de vida a cada 30s custa nada e responde a pergunta.
+ */
+async function comBatimento<T>(rotulo: string, fn: () => Promise<T>): Promise<T> {
+  const inicio = Date.now()
+  const batida = setInterval(() => {
+    const min = ((Date.now() - inicio) / 60000).toFixed(1)
+    console.log(`  … ${rotulo}: ${min} min e ainda rodando`)
+  }, 30_000)
+  try {
+    return await fn()
+  } finally {
+    clearInterval(batida)
+    console.log(`  ✓ ${rotulo} em ${((Date.now() - inicio) / 60000).toFixed(1)} min`)
+  }
+}
+
 async function carregar() {
   console.log(`\n🔐 Autenticando em ${base}…`)
   const obterToken = provedorDeToken()
@@ -137,22 +159,22 @@ async function carregar() {
   //    contato e o SKU por identidade externa — sem eles, toda venda entra como
   //    "sem contato" e o RFV fica vazio.
   console.log('▶ Clientes…')
-  const rc = await dono.begin((tx) =>
-    ingerirClientes(tx as never, TENANT, CONEXAO, conector, opcoesPagina))
+  const rc = await comBatimento('clientes', () => dono.begin((tx) =>
+    ingerirClientes(tx as never, TENANT, CONEXAO, conector, opcoesPagina)))
   console.log(`  ${JSON.stringify(rc)}\n`)
   await registrarOperacao(dono as never, { tenantId: TENANT, conexaoId: CONEXAO, fluxo: 'customers',
     total: rc.lidos, aceitos: rc.lidos - rc.rejeitados, rejeitados: rc.rejeitados, rejeicoes: rc.rejeicoes })
 
   console.log('▶ Produtos…')
-  const rp = await dono.begin((tx) =>
-    ingerirProdutos(tx as never, TENANT, CONEXAO, conector, opcoesPagina))
+  const rp = await comBatimento('produtos', () => dono.begin((tx) =>
+    ingerirProdutos(tx as never, TENANT, CONEXAO, conector, opcoesPagina)))
   console.log(`  ${JSON.stringify(rp)}\n`)
   await registrarOperacao(dono as never, { tenantId: TENANT, conexaoId: CONEXAO, fluxo: 'products',
     total: rp.lidos, aceitos: rp.lidos - rp.rejeitados, rejeitados: rp.rejeitados, rejeicoes: rp.rejeicoes })
 
   console.log('▶ Vendas…')
-  const rv = await dono.begin((tx) =>
-    ingerirVendas(tx as never, TENANT, CONEXAO, conector, desde, opcoesPagina))
+  const rv = await comBatimento('vendas', () => dono.begin((tx) =>
+    ingerirVendas(tx as never, TENANT, CONEXAO, conector, desde, opcoesPagina)))
   console.log(`  importadas=${rv.importadas} canceladas=${rv.canceladas} ` +
     `semContato=${rv.semContato} rejeitadas=${rv.rejeitadas} ` +
     `total válido=R$ ${(rv.valorTotalCentavos / 100).toFixed(2)}`)

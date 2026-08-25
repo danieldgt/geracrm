@@ -1,5 +1,4 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import { rodarScript } from './rodar-script.js'
 
 /**
  * Worker do INTEGRADOR GeraCloud.
@@ -13,8 +12,6 @@ import { promisify } from 'node:util'
  * ⚠️ Um script que falha NÃO derruba o worker nem o próximo ciclo — o erro é
  * logado e a agenda continua. Integração degrada, não quebra.
  */
-const exec = promisify(execFile)
-
 const INTERVALO_HORAS = Number(process.env.INTERVALO_HORAS ?? 6) || 6
 const INTERVALO_MS = INTERVALO_HORAS * 3_600_000
 const DIR = '/app/apps/api'
@@ -25,30 +22,30 @@ const SCRIPTS = [
   'dist/contexts/integracao/geracloud-precos.js',
 ]
 
-async function rodarScript(rel: string): Promise<void> {
+/**
+ * ⚠️ A saída do script sai AO VIVO (ver `rodar-script.ts`). A carga histórica
+ * leva horas: com o log preso até o fim, "rodando" e "travado" ficam com a mesma
+ * cara — e é justamente durante a carga longa que alguém precisa saber em qual
+ * etapa ela está.
+ */
+async function rodar(rel: string): Promise<void> {
+  const inicio = Date.now()
   console.log(`[integrador] iniciando ${rel}`)
-  try {
-    const { stdout, stderr } = await exec('node', [rel], {
-      cwd: DIR,
-      env: process.env,
-      maxBuffer: 64 * 1024 * 1024,
-    })
-    if (stdout) process.stdout.write(stdout)
-    if (stderr) process.stderr.write(stderr)
-    console.log(`[integrador] concluído ${rel}`)
-  } catch (erro) {
-    // execFile rejeita em exit != 0 — captura stdout/stderr do processo filho.
-    const e = erro as { message?: string; stdout?: string; stderr?: string }
-    if (e.stdout) process.stdout.write(e.stdout)
-    if (e.stderr) process.stderr.write(e.stderr)
-    console.error(`[integrador] ✗ FALHOU ${rel}: ${e.message ?? String(erro)}`)
+  const r = await rodarScript('node', [rel], { cwd: DIR, env: process.env })
+  const minutos = ((Date.now() - inicio) / 60000).toFixed(1)
+  if (r.ok) {
+    console.log(`[integrador] concluído ${rel} em ${minutos} min`)
+  } else {
+    console.error(
+      `[integrador] ✗ FALHOU ${rel} depois de ${minutos} min `
+      + `(código ${r.codigo ?? '—'}${r.sinal ? `, sinal ${r.sinal}` : ''})`)
   }
 }
 
 async function ciclo(): Promise<void> {
   const inicio = new Date().toISOString()
   console.log(`[integrador] === ciclo ${inicio} (a cada ${INTERVALO_HORAS}h) ===`)
-  for (const s of SCRIPTS) await rodarScript(s)
+  for (const s of SCRIPTS) await rodar(s)
   console.log('[integrador] === ciclo concluído ===')
 }
 
