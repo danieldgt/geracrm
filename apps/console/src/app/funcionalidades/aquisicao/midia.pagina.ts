@@ -42,6 +42,22 @@ interface Lp {
   /** ⚠️ `null` = ninguém clicou ainda. Diferente de 0% (todo clique preservou o código). */
   readonly taxaPerdida: number | null
 }
+interface EtapaFunil {
+  readonly etapa: string
+  readonly rotulo: string
+  readonly quantidade: number
+  readonly custoUnitarioCentavos: number | null
+  readonly taxaDaAnterior: number | null
+  /** ⚠️ `true` = medido; `false` = depende do modelo de atribuição declarado. */
+  readonly fato: boolean
+}
+interface Funil {
+  readonly custoCentavos: number
+  readonly modelo: string
+  readonly janelaDias: number
+  readonly etapas: readonly EtapaFunil[]
+  readonly maiorPerda: { readonly de: string; readonly para: string; readonly taxa: number } | null
+}
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
@@ -72,6 +88,37 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
       <label>Até <input type="date" [value]="ate()" (change)="ate.set($any($event.target).value)" /></label>
       <button class="btn btn--secundario" type="submit">Aplicar</button>
     </form>
+
+    <!-- ⚠️ O funil vem ANTES da lista de anúncios de propósito: a lista diz
+         quanto cada peça custou; o funil diz em qual ETAPA o dinheiro está
+         parando — que é a pergunta que decide o que fazer amanhã. -->
+    @if (funil(); as f) {
+      <section class="painel funil">
+        <h2 class="titulo-funil">Onde o dinheiro está parando
+          <span class="etiqueta modelo">{{ f.modelo === 'primeiro_toque' ? 'Primeiro toque' : 'Último toque' }} · {{ f.janelaDias }}d</span>
+        </h2>
+        <div class="degraus">
+          @for (e of f.etapas; track e.etapa) {
+            <div class="degrau" [class.modelado]="!e.fato">
+              <span class="rot">{{ e.rotulo }}</span>
+              <span class="qtd">{{ e.quantidade }}</span>
+              <span class="sub">
+                @if (e.taxaDaAnterior !== null) { {{ pct(e.taxaDaAnterior) }} do anterior · }
+                <!-- ⚠️ Traço, não R$ 0,00: etapa sem ninguém tem custo indefinido,
+                     e zero faria a pior etapa parecer a mais barata. -->
+                {{ e.custoUnitarioCentavos === null ? '—' : dinheiro(e.custoUnitarioCentavos) }}
+              </span>
+            </div>
+          }
+        </div>
+        @if (f.maiorPerda; as p) {
+          <p class="perda">⚠️ A maior perda está entre <strong>{{ p.de }}</strong> e
+            <strong>{{ p.para }}</strong> ({{ pct(p.taxa) }} passam).</p>
+        }
+        <p class="nota-funil">Os três primeiros degraus são <strong>medidos</strong>. Dali para baixo,
+          o vínculo com a mídia é <strong>modelo de atribuição</strong> — por isso o rótulo anda colado.</p>
+      </section>
+    }
 
     <details class="conectar" [open]="contas().length === 0">
       <summary>Conectar conta de anúncio</summary>
@@ -327,6 +374,24 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .mais { margin-top: var(--espacamento-3); }
     .tag { font-size: 11px; padding: 1px 6px; border-radius: var(--raio-controle);
       border: 1px solid var(--borda); color: var(--texto-secundario); background: var(--superficie); white-space: nowrap; }
+    .funil { padding: var(--espacamento-4); margin-bottom: var(--espacamento-4); border: 1px solid var(--borda);
+      border-radius: var(--raio-painel); background: var(--superficie-elevada); }
+    .titulo-funil { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap;
+      margin: 0 0 var(--espacamento-4); font-size: 15px; color: var(--texto); }
+    .etiqueta { font-size: 11px; font-weight: 400; padding: 1px 8px; border-radius: var(--raio-completo);
+      border: 1px solid var(--atencao); color: var(--atencao); }
+    /* auto-fit: de 320px a wide sem media query e sem degrau espremido. */
+    .degraus { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--espacamento-3); }
+    .degrau { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: var(--espacamento-2);
+      border-left: 3px solid var(--sucesso); background: var(--superficie); border-radius: var(--raio-controle); }
+    /* Modelado × medido: a diferença é visual, não uma nota de rodapé. */
+    .degrau.modelado { border-left-color: var(--atencao); border-left-style: dashed; }
+    .degrau .rot { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--texto-suave); }
+    .degrau .qtd { font-size: 20px; color: var(--texto); font-variant-numeric: tabular-nums; }
+    .degrau .sub { font-size: 11px; color: var(--texto-secundario); }
+    .perda { margin: var(--espacamento-4) 0 0; padding: var(--espacamento-2) var(--espacamento-3);
+      border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--texto); font-size: 13px; }
+    .nota-funil { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); line-height: 1.5; }
     .conta .ok-conv { color: var(--sucesso); }
     .conta .sem-conv { color: var(--atencao); }
     .conta .acao { padding: var(--espacamento-1) var(--espacamento-2); border: 1px solid var(--borda-controle);
@@ -359,6 +424,7 @@ export class MidiaPagina implements OnInit {
   readonly de = signal(this.#diasAtras(30))
   readonly ate = signal(this.#diasAtras(0))
 
+  readonly funil = signal<Funil | null>(null)
   readonly lps = signal<readonly Lp[]>([])
   readonly campanhas = signal<readonly Campanha[]>([])
   readonly lpModo = signal<'inbound_wa' | 'outbound_formulario'>('inbound_wa')
@@ -515,6 +581,16 @@ export class MidiaPagina implements OnInit {
     } catch { this.lps.set([]) }
   }
 
+  /** ⚠️ PARCIAL: o funil é leitura de apoio — se falhar, a lista continua. */
+  async #carregarFunil(): Promise<void> {
+    const q = new URLSearchParams({
+      de: this.de(), ate: this.ate(), modelo: 'ultimo_toque', janelaDias: '14',
+    })
+    try {
+      this.funil.set(await firstValueFrom(this.#http.get<Funil>(`/v1/aquisicao/funil?${q.toString()}`)))
+    } catch { this.funil.set(null) }
+  }
+
   /** ⚠️ PARCIAL pelo mesmo motivo: campanha é contexto, não o dado principal. */
   async #carregarCampanhas(): Promise<void> {
     try {
@@ -532,6 +608,7 @@ export class MidiaPagina implements OnInit {
       this.contas.set(c.contas)
       await this.#carregarLps()
       await this.#carregarCampanhas()
+      await this.#carregarFunil()
       const r = await this.#buscarPagina(null)
       this.itens.set(r.itens)
       this.temMais.set(r.temMais)

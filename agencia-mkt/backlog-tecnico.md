@@ -99,7 +99,7 @@ tinham, e **não tocamos em nada**.
 | ✅ **AQ-16** | **ROI da veiculação** com custo: cálculo, endpoint **e tela**, com fato e modelo em blocos separados e a DISTÂNCIA entre o ROAS atribuído e o sem ambiguidade lida em português. ⚠️ "Exata × estimada" não transfere para mídia — ver `implementacao.md` §7. ⚠️ Nunca somados, janela sempre declarada (régua de `0036`) | AQ-02, AQ-15 | M |
 | **AQ-37** | **Sincronização de públicos** (Google **Customer Match**): sobe lista a partir de compradores reais do ERP e das faixas RFV, PII **hasheada**, re-sync periódico. ⚠️ Customer Match tem **requisitos de elegibilidade** — verificar **antes** de prometer ao cliente (AMK-015) | AQ-14 | M |
 | **AQ-38** | **Públicos de exclusão**: já é cliente, já está em conversa e ⚠️ **opt-out** (`recebe_campanhas = false` deve alcançar a mídia paga, não só a mensagem) | AQ-37 | P |
-| **AQ-39** | **Funil por origem** como instrumento de diagnóstico: impressão → clique → lead → qualificado → pedido → venda, com custo em cada etapa | AQ-16, AQ-18 | M |
+| ✅ **AQ-39** | **Funil por origem**: impressão → clique → lead → qualificado → pedido → venda, com custo por etapa e a **maior perda RELATIVA** calculada (não absoluta — senão apontaria sempre para o topo do funil). ⚠️ Os três primeiros degraus são FATO; os três últimos dependem do modelo declarado, e a tela mostra a diferença | AQ-16, AQ-18 | M |
 
 ⚠️ A Fase 1 devolve **dois sinais** à plataforma: as **conversões** (o que funcionou) e os
 **públicos** (para quem procurar). Mesma disciplina de hash e de janela nos dois.

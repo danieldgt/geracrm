@@ -3,6 +3,7 @@ import { codigoDeBytes, montarTextoWaMe, extrairCodigoOrigem, PLATAFORMAS } from
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { roiDaVeiculacao, type ModeloAtribuicao } from './roi.js'
+import { funilPorOrigem } from './funil.js'
 
 /**
  * Rotas da camada de aquisição (agencia-mkt).
@@ -225,6 +226,30 @@ export async function rotasAquisicao(app: FastifyInstance): Promise<void> {
       link: `https://wa.me/${telefone}?text=${encodeURIComponent(texto)}`,
     })
   })
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Funil por origem (AQ-39) — em qual etapa o dinheiro está parando
+  // ─────────────────────────────────────────────────────────────────────
+  app.get<{ Querystring: { de?: string; ate?: string; janelaDias?: string; modelo?: string } }>(
+    '/v1/aquisicao/funil', { preHandler: exigirTenant }, async (req, reply) => {
+      const { de, ate, modelo } = req.query
+      if (!ehData(de) || !ehData(ate)) return reply.code(422).send({ erro: 'periodo.invalido' })
+
+      const janelaDias = Number(req.query.janelaDias ?? 14)
+      if (!Number.isInteger(janelaDias) || janelaDias < 1 || janelaDias > 90) {
+        return reply.code(422).send({ erro: 'janela.invalida' })
+      }
+      // ⚠️ Mesma regra do ROI: metade do funil depende do MODELO, e número de
+      //    atribuição sem o modelo ao lado é promessa que o produto não sustenta.
+      if (modelo !== 'primeiro_toque' && modelo !== 'ultimo_toque') {
+        return reply.code(422).send({ erro: 'modelo.obrigatorio', aceitos: ['primeiro_toque', 'ultimo_toque'] })
+      }
+
+      const funil = await req.comTenant((tx) => funilPorOrigem(tx, {
+        de: de!, ate: ate!, janelaDias, modelo: modelo as ModeloAtribuicao,
+      }))
+      return reply.send(funil)
+    })
 
   // ─────────────────────────────────────────────────────────────────────
   // Campanhas e o MODO DE ENTRADA (AQ-36 / AMK-016)
