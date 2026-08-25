@@ -1,3 +1,4 @@
+import { createServer } from 'node:http'
 import { rodarScript } from './rodar-script.js'
 
 /**
@@ -11,6 +12,15 @@ import { rodarScript } from './rodar-script.js'
  *
  * ⚠️ Um script que falha NÃO derruba o worker nem o próximo ciclo — o erro é
  * logado e a agenda continua. Integração degrada, não quebra.
+ *
+ * ⚠️ **E ele responde `/saude`**, apesar de não ser um servidor. O `railway.json`
+ * da raiz é COMPARTILHADO pelos três serviços e declara `healthcheckPath`; um
+ * worker que não responde reprova no healthcheck e o deploy FALHA — foi
+ * exatamente o que aconteceu na primeira subida depois que o healthcheck entrou.
+ *
+ * A alternativa seria uma exceção por serviço no painel. Responder liveness é
+ * melhor: além de destravar o deploy, dá ao worker o mesmo auto-restart que a API
+ * tem — worker pendurado é indistinguível de worker ocioso, e ninguém percebe.
  */
 const INTERVALO_HORAS = Number(process.env.INTERVALO_HORAS ?? 6) || 6
 const INTERVALO_MS = INTERVALO_HORAS * 3_600_000
@@ -67,6 +77,21 @@ async function cicloGuardado(): Promise<void> {
   rodando = true
   try { await ciclo() } finally { rodando = false }
 }
+
+/**
+ * Liveness. ⚠️ Não toca no banco nem espera o ciclo: a pergunta é "este processo
+ * ainda responde?". Amarrar a saúde ao ciclo faria o healthcheck reprovar
+ * durante uma carga longa — e o Railway reiniciaria o worker no meio do trabalho.
+ */
+const porta = Number(process.env.PORT ?? 8080)
+createServer((req, res) => {
+  if (req.url === '/saude') {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, papel: 'integrador', ciclo: rodando ? 'rodando' : 'ocioso' }))
+    return
+  }
+  res.writeHead(404).end()
+}).listen(porta, () => console.log(`[integrador] liveness em :${porta}/saude`))
 
 // Um ciclo agora e, depois, no intervalo. O setInterval mantém o processo vivo.
 await cicloGuardado()

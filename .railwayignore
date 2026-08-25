@@ -13,3 +13,9 @@ dist
 coverage
 **/coverage
 scratchpad
+
+# ⚠️ 89 MB de capturas de tela que o build NUNCA lê — e que faziam o `railway up`
+#    subir 115 MB e falhar com 500 no upload. Material de referência do
+#    levantamento, não código.
+docs/referencias
+**/imagens de referencia
