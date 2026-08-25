@@ -213,16 +213,42 @@ async function carregar() {
   //    declarasse concluída faria o produto operar incremental sobre um
   //    histórico pela metade — e o RFV mentiria em silêncio, sem erro nenhum.
   if (podeMarcarConcluida(decisao)) {
+    /**
+     * ⚠️ O recibo grava o ESTADO DA BASE, não o delta desta execução.
+     *
+     * A primeira versão gravava `rv.importadas` — e ela é o número de linhas
+     * INSERIDAS agora. Como a ingestão é upsert, rodar a carga duas vezes faz a
+     * segunda reportar `importadas=0`: o recibo dizia "a carga histórica trouxe
+     * zero vendas, R$ 0,00" com 739 vendas e R$ 81 mil na base.
+     *
+     * Numa coluna cujo propósito é ser a REFERÊNCIA DA CONCILIAÇÃO, isso é o
+     * pior tipo de defeito — número plausível, falso, e que ninguém confere
+     * porque parece que veio do sistema.
+     */
+    const [estado] = await dono<{ vendas: number; valor: string; clientes: number; produtos: number }[]>`
+      SELECT
+        (SELECT count(*)::int FROM venda v
+          WHERE v.tenant_id = ${TENANT} AND v.cancelada_em IS NULL
+            AND v.ocorrida_em >= ${desde.toISOString().slice(0, 10)}::date)          AS vendas,
+        (SELECT coalesce(sum(v.valor_centavos), 0)::text FROM venda v
+          WHERE v.tenant_id = ${TENANT} AND v.cancelada_em IS NULL
+            AND v.ocorrida_em >= ${desde.toISOString().slice(0, 10)}::date)          AS valor,
+        (SELECT count(*)::int FROM contato  WHERE tenant_id = ${TENANT})             AS clientes,
+        (SELECT count(*)::int FROM sku      WHERE tenant_id = ${TENANT})             AS produtos`
+
     await dono`
       INSERT INTO carga_historica
         (tenant_id, conexao_id, desde, vendas, valor_centavos, clientes, produtos)
       VALUES (${TENANT}, ${CONEXAO}, ${desde.toISOString().slice(0, 10)}::date,
-              ${rv.importadas}, ${rv.valorTotalCentavos}, ${rc.lidos}, ${rp.lidos})
+              ${estado?.vendas ?? 0}, ${estado?.valor ?? '0'},
+              ${estado?.clientes ?? 0}, ${estado?.produtos ?? 0})
       ON CONFLICT (tenant_id, conexao_id) DO UPDATE
         SET desde = EXCLUDED.desde, concluida_em = now(), vendas = EXCLUDED.vendas,
             valor_centavos = EXCLUDED.valor_centavos, clientes = EXCLUDED.clientes,
             produtos = EXCLUDED.produtos`
-    console.log('🧾 Recibo de carga histórica gravado — os próximos ciclos são incrementais.')
+    console.log(`🧾 Recibo gravado — base com ${estado?.vendas ?? 0} vendas `
+      + `(R$ ${(Number(estado?.valor ?? 0) / 100).toFixed(2)}) desde `
+      + `${desde.toISOString().slice(0, 10)}. Próximos ciclos são incrementais.`)
   } else if (decisao.modo === 'historico') {
     console.log(`⚠️ Carga histórica rodou COM TETO de ${decisao.maxPaginas} página(s): ` +
       'é amostra, não histórico. Recibo NÃO gravado — rode com MAX_PAGINAS=0.')
