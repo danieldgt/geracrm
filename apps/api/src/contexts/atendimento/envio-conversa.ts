@@ -37,12 +37,30 @@ export type ResultadoEnvioTexto =
   | { ok: true; conversaId: string; mensagemId: string }
   | { ok: false; classe: ClasseFalha; motivo: string; conversaId?: string; mensagemId?: string }
 
+/**
+ * ⚠️ `ehDisparo` decide se a PAUSA de disparo alcança este envio. O padrão é
+ * `true` porque este módulo é o caminho programático (resumo de pedido,
+ * automação, campanha). A exceção é a resposta de ausência: ela responde quem
+ * acabou de escrever, 1:1, dentro da janela — bloquear isso seria calar o
+ * produto pelo problema oposto ao que a pausa protege.
+ *
+ * `marcador` grava `automatica: '<marcador>'` no conteúdo. Serve para o próprio
+ * sistema reconhecer o que ELE mandou (a ausência conta as próprias respostas
+ * para não repetir), sem depender de comparar texto — que muda quando alguém
+ * edita a configuração.
+ */
+export interface OpcoesEnvio {
+  readonly ehDisparo?: boolean
+  readonly marcador?: string
+}
+
 export async function enviarTextoNaConversa(
   tenantId: string,
   conversaId: string,
   texto: string,
   remetenteNome: string | null,
   agora: Date = new Date(),
+  opcoes: OpcoesEnvio = {},
 ): Promise<ResultadoEnvioTexto> {
   // Fase 1: persiste 'pendente' + evento, no mesmo commit, com o contexto que o
   // gateway revalida.
@@ -63,7 +81,8 @@ export async function enviarTextoNaConversa(
     await tx`
       INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem)
       VALUES (tenant_atual(), ${mensagemId}, ${conversaId}, 'saliente', 'texto',
-              ${JSON.stringify({ texto })}::text::jsonb, 'pendente', 0)`
+              ${JSON.stringify({ texto, ...(opcoes.marcador ? { automatica: opcoes.marcador } : {}) })}::text::jsonb,
+              'pendente', 0)`
     const [conv] = await tx<{ versao: string }[]>`
       UPDATE conversa SET ultima_mensagem_em = now(), ultima_direcao = 'saliente', versao = versao + 1
        WHERE tenant_id = tenant_atual() AND id = ${conversaId} RETURNING versao`
@@ -81,9 +100,10 @@ export async function enviarTextoNaConversa(
     temCredencial: !!preparo.cred, destinoBloqueado: preparo.destinoBloqueado,
     ehTemplate: false, ultimaEntranteEm: preparo.ultimaEntranteEm,
     // ⚠️ Este módulo é o caminho PROGRAMÁTICO (resumo de pedido, automação,
-    //    campanha quando existir) — por isso `ehDisparo`. Resposta digitada por
-    //    uma pessoa entra por `rotas-mensagens`, que marca false.
-    ehDisparo: true, disparoPausado: preparo.disparoPausado,
+    //    campanha) — por isso `ehDisparo` padrão true. Resposta digitada por uma
+    //    pessoa entra por `rotas-mensagens`, que marca false; a resposta de
+    //    ausência também, porque responde quem acabou de escrever.
+    ehDisparo: opcoes.ehDisparo ?? true, disparoPausado: preparo.disparoPausado,
   }
   const r = await enviarPeloGateway(ctxEnvio, agora, async () => {
     const canal = criarCanal(preparo.provedor!, decifrar(Buffer.from(preparo.cred!)))

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { sql, comTenantServico } from '../../db/index.js'
 import { parseWebhookPlugZapi } from './canais/plugzapi.js'
 import { ingerirMensagemEntrante, registrarStatusMensagem } from './ingestao-mensagem.js'
+import { responderAusencia } from './ausencia.js'
 import { midiaHabilitada } from './midia/armazenamento.js'
 import { copiarMidiaEntrante } from './midia/copiar-entrante.js'
 
@@ -71,6 +72,21 @@ export async function rotasWebhook(app: FastifyInstance): Promise<void> {
         // ⚠️ O NOTIFY é disparado pela TRIGGER do outbox no COMMIT (migration
         //    0026) — transacional por construção. Reentrega (duplicada) não
         //    grava outbox, então não republica.
+
+        // ⚠️ Resposta de AUSÊNCIA, pós-commit e best-effort. Fora do expediente,
+        //    quem escreve merece saber que ninguém está — e quando alguém volta.
+        //    Nunca derruba o 200: falhar aqui faria o PlugZapi reenviar a
+        //    mensagem do cliente em loop por causa de uma cortesia.
+        if (!r.duplicada) {
+          try {
+            const ausencia = await responderAusencia(canal.tenant_id, r.conversaId, canalId)
+            if (ausencia === 'enviada') {
+              req.log.info({ canalId, conversaId: r.conversaId }, 'resposta de ausência enviada')
+            }
+          } catch (erro) {
+            req.log.warn({ erro, canalId }, 'falha ao responder ausência (mensagem do cliente já está salva)')
+          }
+        }
 
         // E5-14: copia a mídia da URL do provedor para o nosso bucket, PÓS-COMMIT
         // e best-effort — nunca falha o 200 (senão o PlugZapi reenviaria em loop).

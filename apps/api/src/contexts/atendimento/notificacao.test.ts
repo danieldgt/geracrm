@@ -20,6 +20,7 @@ const CONTATO = 'b07f0000-6666-4000-8000-000000000001'
 const CONVERSA = 'b07f0000-7777-4000-8000-000000000001'
 const ATEND = 'b07f0000-9999-4000-8000-000000000001'
 const U1 = 'b07f0000-8888-4000-8000-000000000001'
+const U2 = 'b07f0000-8888-4000-8000-000000000002'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
 
@@ -61,6 +62,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await dono`DELETE FROM carteira_atribuicao WHERE tenant_id = ${T}`
   await dono`DELETE FROM notificacao WHERE tenant_id = ${T}`
   await dono`DELETE FROM outbox WHERE tenant_id = ${T}`
   await dono`DELETE FROM atendimento WHERE tenant_id = ${T}`
@@ -77,11 +79,49 @@ afterAll(async () => {
 })
 
 describe('PLT-07: notificação de mensagem entrante', () => {
-  it('conversa na fila (sem atendimento) não notifica ninguém', async () => {
+  /**
+   * ⚠️ ESTA REGRA MUDOU EM 2026-08-25, e o teste antigo (que exigia SILÊNCIO na
+   * fila) tinha de falhar. A regra anterior — "conversa na fila ainda não é
+   * problema de ninguém em particular; o Inbox já mostra o não-lido" — funciona
+   * com alguém olhando a tela, e falha exatamente no caso que a camada de
+   * aquisição existe para resolver: a resposta a um DISPARO nasce sem dono, e
+   * caía numa fila que não avisava ninguém.
+   */
+  it('conversa na fila notifica a FILA — silêncio aqui é lead perdido', async () => {
     await dono`DELETE FROM notificacao WHERE tenant_id = ${T}`
     await dono`DELETE FROM atendimento WHERE tenant_id = ${T}`
+    await dono`DELETE FROM carteira_atribuicao WHERE tenant_id = ${T}`
+
     await notificar()
-    expect(await contarNaoLidas()).toBe(0)
+
+    const [n] = await dono<{ usuario_id: string; tipo: string; titulo: string }[]>`
+      SELECT usuario_id, tipo, titulo FROM notificacao WHERE tenant_id = ${T}`
+    // Sem dono de carteira e sem `usuario_canal`: cai no time inteiro (Ana).
+    expect(n).toMatchObject({ usuario_id: U1, tipo: 'fila.nova', titulo: 'Cliente Zé' })
+  })
+
+  /**
+   * ⚠️ Precedência: quem tem a RELAÇÃO é avisado, e só ele. Avisar o time inteiro
+   * sobre o cliente de alguém é ruído para todos e responsabilidade de ninguém.
+   */
+  it('com dono de carteira, avisa só ele', async () => {
+    await dono`DELETE FROM notificacao WHERE tenant_id = ${T}`
+    await dono`DELETE FROM atendimento WHERE tenant_id = ${T}`
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
+               VALUES (${T}, ${U2}, 'sub-plt07-b', 'Bruno', 'bruno@t.local')
+               ON CONFLICT (cognito_sub) DO NOTHING`
+    await dono`DELETE FROM carteira_atribuicao WHERE tenant_id = ${T}`
+    // ⚠️ A coluna é `de`, não `desde` — e `ate IS NULL` é o que marca a posse VIGENTE.
+    await dono`INSERT INTO carteira_atribuicao (tenant_id, id, contato_id, usuario_id, de)
+               VALUES (${T}, gen_random_uuid(), ${CONTATO}, ${U2}, now())`
+
+    await notificar()
+
+    const alvos = await dono<{ usuario_id: string }[]>`
+      SELECT usuario_id FROM notificacao WHERE tenant_id = ${T}`
+    expect(alvos).toHaveLength(1)
+    expect(alvos[0]!.usuario_id).toBe(U2)
+    await dono`DELETE FROM carteira_atribuicao WHERE tenant_id = ${T}`
   })
 
   it('conversa assumida notifica o atendente com o nome do contato no título', async () => {
