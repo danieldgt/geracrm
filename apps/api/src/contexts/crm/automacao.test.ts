@@ -64,6 +64,7 @@ beforeEach(async () => {
   await dono`DELETE FROM automacao WHERE tenant_id IN (${T}, ${OUTRO})`
   await dono`DELETE FROM tarefa WHERE tenant_id IN (${T}, ${OUTRO})`
   await dono`DELETE FROM lista_membro WHERE tenant_id IN (${T}, ${OUTRO})`
+  await dono`UPDATE contato SET recebe_automacoes = true WHERE tenant_id = ${T}`
 })
 
 afterAll(async () => {
@@ -135,5 +136,80 @@ describe('Motor de automações', () => {
     // Rodar para OUTRO não faz nada (a regra e os contatos são de T).
     const n = await executarNoTenant(sql, OUTRO, AGORA)
     expect(n).toBe(0)
+  })
+})
+
+/**
+ * ⚠️ A AÇÃO MAIS PERIGOSA DO PRODUTO (0065): a única que fala com o cliente.
+ * Estes testes existem para provar que ela NÃO tem caminho próprio de envio e
+ * que nenhum dos opt-outs é contornável por ela.
+ */
+describe('Ação enviar_mensagem', () => {
+  const tarefas = () => dono<{ titulo: string; descricao: string }[]>`
+    SELECT titulo, descricao FROM tarefa WHERE tenant_id = ${T}`
+
+  it('sem conversa aberta, NÃO inventa uma — vira tarefa com o motivo escrito', async () => {
+    // ⚠️ Abrir conversa para falar primeiro é mensagem fria: no oficial exige
+    //    template, no não-oficial é o caminho curto para o banimento (ADR-021).
+    await novaAutomacao('lead_frio', { dias: 30 }, 'enviar_mensagem',
+      { texto: 'Oi {nome}, ainda posso ajudar?' })
+
+    const n = await executarNoTenant(sql, T, AGORA)
+    expect(n).toBe(1)
+
+    const [t] = await tarefas()
+    expect(t!.titulo).toContain('Falar com o cliente')
+    expect(t!.descricao).toContain('não tem conversa aberta')
+    // A mensagem que sairia fica na tarefa — o humano faz o que o robô não pôde.
+    expect(t!.descricao).toContain('Oi Lead frio, ainda posso ajudar?')
+  })
+
+  /**
+   * ⚠️ `recebe_automacoes` é opt-out DIFERENTE da lista de bloqueio: "pode me
+   * mandar campanha, mas não robô". E o filtro é ANTES do dedup — quem não
+   * recebe hoje continua elegível se mudar de ideia amanhã.
+   */
+  it('respeita recebe_automacoes, e sem queimar a regra para o contato', async () => {
+    await dono`UPDATE contato SET recebe_automacoes = false WHERE tenant_id = ${T} AND id = ${C_LEAD}`
+    const id = await novaAutomacao('lead_frio', { dias: 30 }, 'enviar_mensagem', { texto: 'Oi' })
+
+    expect(await executarNoTenant(sql, T, AGORA)).toBe(0)
+    const [dedup] = await dono<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM automacao_execucao WHERE tenant_id = ${T} AND automacao_id = ${id}`
+    expect(dedup!.n).toBe(0)
+
+    // Mudou de ideia: a mesma regra volta a alcançá-lo.
+    await dono`UPDATE contato SET recebe_automacoes = true WHERE tenant_id = ${T} AND id = ${C_LEAD}`
+    expect(await executarNoTenant(sql, T, AGORA)).toBe(1)
+  })
+
+  it('a mesma ação NÃO alcança quem só tem tarefa: outras ações ignoram o opt-out de robô', async () => {
+    // ⚠️ Criar tarefa para um contato que não quer mensagem de robô é correto —
+    //    quem vai falar com ele é uma pessoa.
+    await dono`UPDATE contato SET recebe_automacoes = false WHERE tenant_id = ${T} AND id = ${C_LEAD}`
+    await novaAutomacao('lead_frio', { dias: 30 }, 'criar_tarefa', { titulo: 'Ligar' })
+
+    expect(await executarNoTenant(sql, T, AGORA)).toBe(1)
+  })
+
+  it('automação sem texto não faz nada — e não deixa tarefa órfã', async () => {
+    await novaAutomacao('lead_frio', { dias: 30 }, 'enviar_mensagem', {})
+    await executarNoTenant(sql, T, AGORA)
+    expect(await tarefas()).toHaveLength(0)
+  })
+
+  /**
+   * ⚠️ O marcador some LIMPO: sem o espaço órfão nem a vírgula pendurada que
+   * denunciam o modelo. O cliente não precisa saber que havia um campo ali.
+   */
+  it('{nome} some limpo quando o contato não tem nome útil', async () => {
+    await dono`UPDATE contato SET nome = '' WHERE tenant_id = ${T} AND id = ${C_LEAD}`
+    await novaAutomacao('lead_frio', { dias: 30 }, 'enviar_mensagem', { texto: 'Oi {nome}, tudo bem?' })
+
+    await executarNoTenant(sql, T, AGORA)
+
+    const [t] = await tarefas()
+    expect(t!.descricao).toContain('Oi, tudo bem?')
+    await dono`UPDATE contato SET nome = 'Lead frio' WHERE tenant_id = ${T} AND id = ${C_LEAD}`
   })
 })

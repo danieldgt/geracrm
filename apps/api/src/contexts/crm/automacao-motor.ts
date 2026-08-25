@@ -1,6 +1,7 @@
 import { classificarRfv } from '@geracrm/shared'
 import postgres from 'postgres'
 import type { Sql } from '../../db/index.js'
+import { enviarTextoNaConversa } from '../atendimento/envio-conversa.js'
 import { capturarSegmentos } from './segmento-historico.js'
 
 /**
@@ -11,6 +12,13 @@ import { capturarSegmentos } from './segmento-historico.js'
  * `metricas_contato` filtra por tenant_atual() e é para o papel da API.
  *
  * Cada regra age no mesmo contato UMA vez (dedup em automacao_execucao).
+ *
+ * ⚠️ **`enviar_mensagem` mudou a política** (docs/automacoes.md §2): até a 0065 o
+ * motor só organizava trabalho humano. O que mudou não foi o risco — foi a
+ * existência dos guardrails. O envio sai pelo GATEWAY ÚNICO, nunca por um
+ * caminho próprio, e ainda respeita `contato.recebe_automacoes`, que é um
+ * opt-out DIFERENTE da lista de bloqueio: é o cliente dizendo "pode me mandar
+ * campanha, mas não robô".
  */
 
 const CAP_POR_REGRA = 200 // teto por regra por passada — não explode em rajada
@@ -114,7 +122,35 @@ async function candidatos(sql: Sql, tid: string, a: Automacao): Promise<string[]
 }
 
 /** Executa a ação da regra para um contato. Reusa Tarefas/Sequências/Listas. */
-async function aplicarAcao(sql: Sql, tid: string, a: Automacao, contatoId: string): Promise<void> {
+/**
+ * Envio decidido dentro da transação e executado DEPOIS dela.
+ *
+ * ⚠️ Duas razões, e as duas são duras: (1) mandar mensagem é rede, e segurar uma
+ * transação aberta durante uma chamada HTTP é como se esgota o pool; (2) se o
+ * processo cair entre o commit e o envio, a mensagem não sai — melhor do que a
+ * ordem inversa, em que ela sairia DUAS vezes. Entre perder e duplicar, o
+ * produto perde.
+ */
+interface EnvioPendente { readonly contatoId: string; readonly texto: string }
+
+/**
+ * `{nome}` é o único marcador — e some quando o contato não tem nome.
+ *
+ * ⚠️ Some LIMPO: sem o espaço órfão nem a vírgula pendurada que denunciam o
+ * modelo ("Oi , tudo bem?"). O cliente não precisa saber que havia um campo ali.
+ */
+export function aplicarMarcadores(modelo: string, nome: string | null): string {
+  return modelo
+    .replace(/\{nome\}/g, (nome ?? '').trim())
+    .replace(/\s+([,.!?;:])/g, '$1')   // espaço órfão antes de pontuação
+    .replace(/([,;:])\s*([,.!?;:])/g, '$2') // pontuação dupla que sobrou
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+async function aplicarAcao(
+  sql: Sql, tid: string, a: Automacao, contatoId: string,
+): Promise<EnvioPendente | null> {
   const p = a.acao_param
 
   if (a.acao === 'criar_tarefa') {
@@ -129,7 +165,7 @@ async function aplicarAcao(sql: Sql, tid: string, a: Automacao, contatoId: strin
                 : sql`NULL`},
               ${titulo}, ${'Criada pela automação: ' + a.nome},
               date_trunc('day', now()) + (${offset} || ' days')::interval + interval '9 hours', NULL)`
-    return
+    return null
   }
 
   if (a.acao === 'aplicar_sequencia') {
@@ -145,7 +181,7 @@ async function aplicarAcao(sql: Sql, tid: string, a: Automacao, contatoId: strin
                 ${passo.titulo}, ${passo.descricao},
                 date_trunc('day', now()) + (${passo.offset_dias} || ' days')::interval + interval '9 hours', NULL)`
     }
-    return
+    return null
   }
 
   if (a.acao === 'adicionar_lista') {
@@ -154,8 +190,58 @@ async function aplicarAcao(sql: Sql, tid: string, a: Automacao, contatoId: strin
       INSERT INTO lista_membro (tenant_id, lista_id, contato_id)
       VALUES (${tid}, ${listaId}, ${contatoId})
       ON CONFLICT (tenant_id, lista_id, contato_id) DO NOTHING`
-    return
+    return null
   }
+
+  if (a.acao === 'enviar_mensagem') {
+    const modelo = String(p['texto'] ?? '').trim()
+    if (!modelo) return null
+    const [c] = await sql<{ nome: string }[]>`
+      SELECT nome FROM contato WHERE tenant_id = ${tid} AND id = ${contatoId}`
+    // ⚠️ O texto é resolvido AQUI, dentro da transação, e viaja pronto: se a
+    //    automação for editada entre a decisão e o envio, sai o que foi decidido.
+    return { contatoId, texto: aplicarMarcadores(modelo, c?.nome ?? null) }
+  }
+
+  return null
+}
+
+/**
+ * Manda a mensagem da automação — pelo GATEWAY, como todo mundo.
+ *
+ * ⚠️ **Sem conversa aberta, NÃO inventa uma.** Abrir conversa para falar primeiro
+ * é mensagem fria: no oficial exige template aprovado, no não-oficial é o
+ * caminho mais curto para o banimento (ADR-021). Nesse caso — e em qualquer
+ * recusa do gateway — a automação DEGRADA PARA TAREFA: o humano faz o que o robô
+ * não pôde, e o motivo fica escrito na tarefa. Silêncio seria pior: a regra
+ * pareceria ter funcionado.
+ */
+async function enviarDaAutomacao(
+  sql: Sql, tid: string, a: Automacao, envio: EnvioPendente,
+): Promise<'enviada' | 'virou_tarefa'> {
+  const [conv] = await sql<{ id: string }[]>`
+    SELECT id FROM conversa
+     WHERE tenant_id = ${tid} AND contato_id = ${envio.contatoId}
+     ORDER BY ultima_mensagem_em DESC NULLS LAST LIMIT 1`
+
+  let motivo = 'o cliente não tem conversa aberta'
+  if (conv) {
+    // ⚠️ Sem cabeçalho de atendente: a mensagem é da EMPRESA, não de uma pessoa.
+    //    Assinar com o nome de alguém que não escreveu seria mentir na assinatura.
+    const r = await enviarTextoNaConversa(tid, conv.id, envio.texto, null)
+    if (r.ok) return 'enviada'
+    motivo = `o envio foi recusado (${r.motivo})`
+  }
+
+  await sql`
+    INSERT INTO tarefa (tenant_id, id, contato_id, responsavel_id, titulo, descricao, vence_em, criado_por)
+    VALUES (${tid}, gen_random_uuid(), ${envio.contatoId},
+            (SELECT usuario_id FROM carteira_atribuicao
+              WHERE tenant_id = ${tid} AND contato_id = ${envio.contatoId} AND ate IS NULL LIMIT 1),
+            ${`Falar com o cliente (${a.nome})`},
+            ${`A automação "${a.nome}" não pôde enviar porque ${motivo}.\n\nMensagem que sairia:\n${envio.texto}`},
+            date_trunc('day', now()) + interval '9 hours', NULL)`
+  return 'virou_tarefa'
 }
 
 /** Roda TODAS as automações ativas de UM tenant. Devolve quantas ações executou. */
@@ -166,11 +252,26 @@ export async function executarNoTenant(sql: Sql, tid: string, agora: Date): Prom
       FROM automacao WHERE tenant_id = ${tid} AND ativa`
   let total = 0
   for (const a of regras) {
-    const ids = await candidatos(sql, tid, a)
+    let ids = await candidatos(sql, tid, a)
+
+    // ⚠️ `recebe_automacoes` é um opt-out DIFERENTE da lista de bloqueio: é o
+    //    cliente dizendo "pode me mandar campanha, mas não robô". Filtrado aqui,
+    //    ANTES do dedup — quem não recebe hoje continua elegível se mudar de
+    //    ideia amanhã; filtrar depois queimaria a regra para ele para sempre.
+    if (a.acao === 'enviar_mensagem' && ids.length > 0) {
+      const podem = await sql<{ id: string }[]>`
+        SELECT id FROM contato
+         WHERE tenant_id = ${tid} AND id = ANY(${ids}::uuid[]) AND recebe_automacoes`
+      const permitidos = new Set(podem.map((c) => c.id))
+      ids = ids.filter((id) => permitidos.has(id))
+    }
+
+    const pendentes: EnvioPendente[] = []
     for (const contatoId of ids) {
       // Ação + dedup na MESMA transação: ou faz e registra, ou nenhum dos dois.
       await sql.begin(async (tx) => {
-        await aplicarAcao(tx as unknown as Sql, tid, a, contatoId)
+        const envio = await aplicarAcao(tx as unknown as Sql, tid, a, contatoId)
+        if (envio) pendentes.push(envio)
         // ⚠️ UPSERT do carimbo: gatilhos de uma vez (rfv/dias/lead/nps) nunca
         //    reincidem (o candidato usa NOT EXISTS de QUALQUER linha), então o
         //    UPDATE é inócuo para eles; a régua recorrente (reposicao_ritmo)
@@ -181,6 +282,10 @@ export async function executarNoTenant(sql: Sql, tid: string, agora: Date): Prom
       })
       total += 1
     }
+
+    // ⚠️ Envio FORA da transação: é rede, e o commit já garantiu o dedup.
+    for (const envio of pendentes) await enviarDaAutomacao(sql, tid, a, envio)
+
     if (ids.length > 0) {
       await sql`UPDATE automacao SET ultima_execucao_em = now() WHERE tenant_id = ${tid} AND id = ${a.id}`
     }

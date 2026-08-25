@@ -20,7 +20,9 @@ const SEGMENTOS: Ref[] = [
   { id: 'semi-perdido', nome: 'Semi Perdido' }, { id: 'hibernando', nome: 'Hibernando' }, { id: 'perdido', nome: 'Perdido' },
 ]
 const GAT_ROTULO: Record<string, string> = { rfv_segmento: 'Cruzou segmento RFV', dias_sem_comprar: 'Dias sem comprar', lead_frio: 'Lead frio', nps_detrator: 'NPS detrator', reposicao_ritmo: 'Régua de recompra (ritmo do cliente)' }
-const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', aplicar_sequencia: 'Aplicar sequência', adicionar_lista: 'Adicionar à lista' }
+const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', aplicar_sequencia: 'Aplicar sequência', adicionar_lista: 'Adicionar à lista', enviar_mensagem: 'Enviar mensagem ao cliente' }
+/** Mesmo teto do servidor — mensagem longa no WhatsApp não é lida. */
+const MAX_TEXTO = 900
 
 /**
  * Automações — regras gatilho→ação (varredura agendada, ações internas; ver
@@ -93,6 +95,22 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
                 <label class="campo">Lista<select [value]="listaId()" (change)="listaId.set($any($event.target).value)">
                   <option value="">Escolha…</option>@for (l of listas(); track l.id) { <option [value]="l.id">{{ l.nome }}</option> }</select></label>
               }
+              @case ('enviar_mensagem') {
+                <label class="campo">Mensagem
+                  <textarea class="pt" rows="3" [value]="texto()" (input)="texto.set($any($event.target).value)"
+                            [attr.maxlength]="MAX_TEXTO"
+                            placeholder="Oi {{ '{' }}nome{{ '}' }}, faz um tempo que não conversamos…"></textarea>
+                </label>
+                <!-- ⚠️ A ÚNICA ação que fala com o cliente. O aviso não é enfeite:
+                     é o que separa "organizar o trabalho" de "falar pelo humano". -->
+                <p class="aviso-envio">
+                  Vai pelo <strong>mesmo gateway</strong> das outras mensagens: respeita opt-out,
+                  janela de 24h e pausa de disparo. Quem marcou <strong>“não receber automações”</strong>
+                  fica de fora. <br />
+                  Sem conversa aberta, <strong>vira tarefa</strong> em vez de abrir conversa —
+                  mensagem fria exige template no oficial e arrisca o número no não-oficial.
+                </p>
+              }
             }
           </div>
         </div>
@@ -162,6 +180,9 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
     .reg.off { opacity: .6; }
     .switch { position: relative; display: inline-flex; flex: none; cursor: pointer; }
     .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+    .aviso-envio { margin: var(--espacamento-2) 0 0; padding: var(--espacamento-2) var(--espacamento-3);
+      border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--texto-secundario);
+      font-size: 12px; line-height: 1.5; }
     .track { width: 34px; height: 20px; border-radius: var(--raio-completo); background: var(--borda-forte); position: relative; transition: background var(--movimento-estado-duracao); }
     .track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: var(--raio-completo); background: var(--superficie-elevada); transition: transform var(--movimento-estado-duracao); }
     .switch input:checked + .track { background: var(--acao); }
@@ -179,7 +200,7 @@ const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', apli
 export class AutomacoesPagina implements OnInit {
   private readonly http = inject(HttpClient)
   readonly gatilhos = ['rfv_segmento', 'dias_sem_comprar', 'lead_frio', 'nps_detrator', 'reposicao_ritmo']
-  readonly acoes = ['criar_tarefa', 'aplicar_sequencia', 'adicionar_lista']
+  readonly acoes = ['criar_tarefa', 'aplicar_sequencia', 'adicionar_lista', 'enviar_mensagem']
   readonly segmentos = SEGMENTOS
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Automacao[]>([])
@@ -190,6 +211,8 @@ export class AutomacoesPagina implements OnInit {
   readonly segmento = signal('em-risco'); readonly dias = signal(60); readonly notaMax = signal(6)
   readonly fator = signal(0.8) // régua de recompra: × o ritmo do cliente
   readonly titulo = signal(''); readonly paraDono = signal(true); readonly sequenciaId = signal(''); readonly listaId = signal('')
+  readonly texto = signal('')
+  readonly MAX_TEXTO = MAX_TEXTO
   readonly salvando = signal(false); readonly erroForm = signal<string | null>(null)
 
   ngOnInit(): void { void this.carregar(); void this.carregarRefs() }
@@ -207,6 +230,7 @@ export class AutomacoesPagina implements OnInit {
     const faz =
       a.acao === 'criar_tarefa' ? `criar tarefa “${ap['titulo'] ?? a.nome}”`
       : a.acao === 'aplicar_sequencia' ? `aplicar uma sequência`
+      : a.acao === 'enviar_mensagem' ? `enviar mensagem ao cliente`
       : `adicionar a uma lista`
     return `Quando ${quando} → ${faz}`
   }
@@ -246,6 +270,7 @@ export class AutomacoesPagina implements OnInit {
       case 'criar_tarefa': return { titulo: this.titulo().trim() || this.nome().trim(), offsetDias: 0, paraDono: this.paraDono() }
       case 'aplicar_sequencia': return { sequenciaId: this.sequenciaId() }
       case 'adicionar_lista': return { listaId: this.listaId() }
+      case 'enviar_mensagem': return { texto: this.texto().trim() }
       default: return {}
     }
   }
@@ -254,6 +279,7 @@ export class AutomacoesPagina implements OnInit {
     ev.preventDefault()
     if (this.salvando() || !this.nome().trim()) return
     if (this.acao() === 'aplicar_sequencia' && !this.sequenciaId()) { this.erroForm.set('Escolha a sequência.'); return }
+    if (this.acao() === 'enviar_mensagem' && !this.texto().trim()) { this.erroForm.set('Escreva a mensagem que vai ser enviada.'); return }
     if (this.acao() === 'adicionar_lista' && !this.listaId()) { this.erroForm.set('Escolha a lista.'); return }
     this.salvando.set(true); this.erroForm.set(null)
     try {
@@ -261,7 +287,7 @@ export class AutomacoesPagina implements OnInit {
         nome: this.nome().trim(), gatilho: this.gatilho(), gatilhoParam: this.montarGatilhoParam(),
         acao: this.acao(), acaoParam: this.montarAcaoParam(),
       }))
-      this.nome.set(''); this.titulo.set(''); this.mostrarNova.set(false)
+      this.nome.set(''); this.titulo.set(''); this.texto.set(''); this.mostrarNova.set(false)
       await this.carregar()
     } catch (e) {
       this.erroForm.set(e instanceof HttpErrorResponse && e.status === 422 ? 'Confira a sequência/lista escolhida.' : 'Não foi possível criar.')

@@ -5,7 +5,9 @@ import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { executarAutomacoesDoTenant } from './automacao-motor.js'
 
 const GATILHOS = new Set(['rfv_segmento', 'dias_sem_comprar', 'lead_frio', 'nps_detrator', 'reposicao_ritmo'])
-const ACOES = new Set(['criar_tarefa', 'aplicar_sequencia', 'adicionar_lista'])
+const ACOES = new Set(['criar_tarefa', 'aplicar_sequencia', 'adicionar_lista', 'enviar_mensagem'])
+/** Teto do texto da automação. Mensagem longa demais no WhatsApp não é lida. */
+const MAX_TEXTO = 900
 
 /**
  * Automações (CRUD + "rodar agora"). Motor = varredura agendada, ações internas
@@ -52,6 +54,14 @@ export async function rotasAutomacao(app: FastifyInstance): Promise<void> {
             const [ok] = await tx`SELECT 1 FROM lista WHERE tenant_id = tenant_atual() AND id = ${lid ?? null}`
             if (!ok) throw new ErroRef('lista')
           }
+          // ⚠️ A única ação que FALA com o cliente: texto obrigatório e com teto.
+          //    Automação sem texto criaria uma regra que "roda" e não faz nada —
+          //    e o operador procuraria o defeito no gatilho.
+          if (b.acao === 'enviar_mensagem') {
+            const texto = (b.acaoParam as { texto?: string })?.texto?.trim() ?? ''
+            if (!texto) throw new ErroRef('mensagem')
+            if (texto.length > MAX_TEXTO) throw new ErroRef('mensagem')
+          }
           const eu = await garantirUsuarioId(tx, req)
           await tx`INSERT INTO automacao (tenant_id, id, nome, gatilho, gatilho_param, acao, acao_param, criado_por)
                    VALUES (tenant_atual(), ${id}, ${nome}, ${b.gatilho!}, ${JSON.stringify(b.gatilhoParam ?? {})}::text::jsonb,
@@ -59,7 +69,16 @@ export async function rotasAutomacao(app: FastifyInstance): Promise<void> {
         })
         return reply.code(201).send({ id })
       } catch (e) {
-        if (e instanceof ErroRef) return reply.code(422).send({ erro: `automacao.${e.tipo}_invalida`, mensagem: `A ${e.tipo} escolhida não existe.` })
+        if (e instanceof ErroRef) {
+          // ⚠️ "A mensagem escolhida não existe" não diria nada a quem esqueceu
+          //    de escrever o texto. Falha de negócio nomeia o que fazer.
+          return reply.code(422).send({
+            erro: `automacao.${e.tipo}_invalida`,
+            mensagem: e.tipo === 'mensagem'
+              ? `Escreva a mensagem que vai ser enviada (até ${MAX_TEXTO} caracteres).`
+              : `A ${e.tipo} escolhida não existe.`,
+          })
+        }
         throw e
       }
     },
@@ -96,5 +115,5 @@ export async function rotasAutomacao(app: FastifyInstance): Promise<void> {
 }
 
 class ErroRef extends Error {
-  constructor(readonly tipo: 'sequencia' | 'lista') { super(tipo) }
+  constructor(readonly tipo: 'sequencia' | 'lista' | 'mensagem') { super(tipo) }
 }

@@ -37,19 +37,38 @@ filtra por `tenant_atual()` e é para o papel da API).
 Guardado por `pg_try_advisory_lock('automacao_varredura')` — várias instâncias
 não varrem em dobro.
 
-### 2. Ações: só INTERNAS (nada dispara ao cliente sozinho)
+### 2. Ações
 
 | Ação | O que faz | Reusa |
 |---|---|---|
 | `criar_tarefa` | Cria uma tarefa para o dono da carteira (ou sem dono) | `tarefa` (0039) |
 | `aplicar_sequencia` | Materializa as tarefas dos passos da sequência (D+N) | `sequencia` (0044) |
 | `adicionar_lista` | Põe o contato numa lista/público | `lista` (0041) |
+| ⚠️ `enviar_mensagem` | **Fala com o cliente** — pelo gateway único | `envio-conversa` (E5-13), `0065` |
 
-**Por quê:** o vendedor é quem fala com o cliente. Automação que **envia
-WhatsApp sozinha** carrega risco real (opt-out, janela de 24h, banimento no
-canal não-oficial) e fica para uma segunda etapa, atrás dos guardrails do
-gateway. No primeiro corte, automação **organiza o trabalho humano**, não fala
-pelo humano.
+**A política mudou em 2026-08-25.** Até a `0065`, automação só organizava
+trabalho HUMANO: o vendedor era quem falava com o cliente. Enviar sozinho carrega
+risco real (opt-out, janela de 24h, banimento no não-oficial), e a ação ficou
+para "uma segunda etapa, atrás dos guardrails do gateway".
+
+⚠️ **O que mudou não foi o risco — foi a existência dos guardrails.** Hoje o
+gateway único revalida opt-out, estado do canal, credencial, janela de 24h e a
+pausa de disparo (CAN-06). A automação **não tem caminho próprio de envio**: ela
+usa o mesmo `enviarTextoNaConversa` que o resto do produto.
+
+E ela ainda respeita mais três coisas:
+
+| Guardrail | Por quê |
+|---|---|
+| ⚠️ `contato.recebe_automacoes` | Opt-out **diferente** da lista de bloqueio: é o cliente dizendo "pode me mandar campanha, mas não robô". Filtrado **antes do dedup** — quem não recebe hoje continua elegível se mudar de ideia amanhã |
+| ⚠️ **Sem conversa aberta, não inventa uma** | Abrir conversa para falar primeiro é mensagem fria: no oficial exige template aprovado, no não-oficial é o caminho mais curto para o banimento (ADR-021). Degrada para **tarefa**, com o motivo e o texto que sairia |
+| ⚠️ Envio **fora** da transação | Rede não segura transação aberta. E se o processo cair entre o commit e o envio, a mensagem **não sai** — melhor do que a ordem inversa, em que ela sairia duas vezes |
+
+O texto aceita `{nome}`, e o marcador **some limpo** quando o contato não tem
+nome: sem o espaço órfão nem a vírgula pendurada que denunciam o modelo.
+
+⚠️ A mensagem sai **sem cabeçalho de atendente**: ela é da empresa, não de uma
+pessoa. Assinar com o nome de alguém que não escreveu seria mentir na assinatura.
 
 ### 3. Gatilhos do primeiro corte
 
