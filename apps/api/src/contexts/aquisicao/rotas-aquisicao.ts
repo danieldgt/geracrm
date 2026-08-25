@@ -7,21 +7,14 @@ import { roiDaVeiculacao, type ModeloAtribuicao } from './roi.js'
 /**
  * Rotas da camada de aquisição (agencia-mkt).
  *
- * ⚠️ **Tudo aqui é autenticado, inclusive a criação de sessão da LP.**
+ * ⚠️ **Tudo aqui é autenticado.** A superfície PÚBLICA — a landing page que roda
+ * no navegador do lead — vive em `rotas-lp-publica.ts`, separada de propósito:
+ * lá o tenant é RESOLVIDO por uma chave pública (`lp_por_chave`, 0062), como o
+ * webhook resolve pelo `phone_number_id` (0057). Misturar as duas superfícies no
+ * mesmo arquivo é como se perde de vista qual rota exige token.
  *
- * A tentação era expor `/publico/lp/sessao` recebendo o `tenantId` no corpo — a
- * landing page não tem sessão, afinal. Mas isso viola o ADR-001 de frente: tenant
- * NUNCA vem de parâmetro. Os webhooks, que também recebem chamada externa, não
- * confiam no que chega — eles **resolvem** o tenant a partir de um identificador
- * (`phone_number_id` → `canal_conectado` → tenant, migration 0057).
- *
- * A LP precisa do mesmo: uma **chave pública por tenant**, resolvível, como o
- * webhook faz. Isso é superfície de segurança e é decisão de produto, não algo
- * para inventar de passagem — está registrado em `perguntas-em-aberto.md`.
- *
- * Enquanto isso, a sessão é criada **com token**: serve para testar o fluxo
- * inteiro e para uma LP com backend próprio. Só a LP servida direto ao navegador
- * do lead fica esperando a decisão.
+ * `POST /v1/aquisicao/sessoes` continua existindo para LP com backend próprio e
+ * para testar o fluxo inteiro com token.
  */
 
 const PAGINA = 50
@@ -199,25 +192,74 @@ export async function rotasAquisicao(app: FastifyInstance): Promise<void> {
   })
 
   // ─────────────────────────────────────────────────────────────────────
+  // Campanhas e o MODO DE ENTRADA (AQ-36 / AMK-016)
+  // ─────────────────────────────────────────────────────────────────────
+  // ⚠️ A campanha vem da plataforma; o MODO é declaração NOSSA. A plataforma não
+  //    sabe (nem tem como saber) se o destino do anúncio é um WhatsApp que o lead
+  //    aciona ou um formulário que nos autoriza a ligar — e a diferença decide se
+  //    a janela de 24h nasce aberta e se o agente pode atender (AMK-014).
+  app.get('/v1/aquisicao/campanhas', { preHandler: exigirTenant }, async (req, reply) => {
+    const linhas = await req.comTenant((tx) => tx<{
+      id: string; nome: string; estado: string; modo_entrada: string
+      plataforma: string; leads: number
+    }[]>`
+      SELECT c.id, c.nome, c.estado, c.modo_entrada, ct.plataforma,
+             coalesce(l.n, 0)::int AS leads
+        FROM midia_campanha c
+        JOIN midia_conta ct ON ct.tenant_id = c.tenant_id AND ct.id = c.conta_id
+        LEFT JOIN LATERAL (
+          SELECT count(*) AS n FROM midia_lead_origem o
+           WHERE o.tenant_id = c.tenant_id AND o.campanha_id = c.id
+        ) l ON true
+       WHERE c.tenant_id = tenant_atual()
+       ORDER BY c.criado_em DESC LIMIT ${PAGINA}`)
+    return reply.send({
+      itens: linhas.map((c) => ({
+        id: c.id, nome: c.nome, estado: c.estado, plataforma: c.plataforma,
+        modoEntrada: c.modo_entrada, leads: c.leads,
+      })),
+    })
+  })
+
+  app.patch<{ Params: { id: string }; Body: { modoEntrada?: string } }>(
+    '/v1/aquisicao/campanhas/:id', { preHandler: exigirTenant }, async (req, reply) => {
+      const modo = req.body?.modoEntrada
+      if (modo !== 'inbound_wa' && modo !== 'outbound_formulario') {
+        return reply.code(422).send({
+          erro: 'modo.invalido', aceitos: ['inbound_wa', 'outbound_formulario'],
+        })
+      }
+      const [c] = await req.comTenant((tx) => tx<{ id: string }[]>`
+        UPDATE midia_campanha SET modo_entrada = ${modo}
+         WHERE tenant_id = tenant_atual() AND id = ${req.params.id}
+        RETURNING id`)
+      if (!c) return reply.code(404).send({ erro: 'campanha.nao_encontrada' })
+      // ⚠️ Muda daqui para a frente, não retroage: `midia_lead_origem.modo_entrada`
+      //    é copiado NA ENTRADA do lead justamente para que o histórico continue
+      //    dizendo o que valia quando aquele lead chegou (0059).
+      return reply.send({ ok: true, valeAPartirDeAgora: true })
+    })
+
+  // ─────────────────────────────────────────────────────────────────────
   // Landing pages (AQ-44) — o destino do anúncio
   // ─────────────────────────────────────────────────────────────────────
   app.get('/v1/aquisicao/lps', { preHandler: exigirTenant }, async (req, reply) => {
     const lps = await req.comTenant((tx) => tx<{
-      id: string; chave: string; nome: string; telefone_destino: string
+      id: string; chave: string; modo: string; nome: string; telefone_destino: string | null
       titulo: string; ativo: boolean; sessoes: number; consumidas: number
     }[]>`
-      SELECT l.id, l.chave, l.nome, l.telefone_destino, l.titulo, l.ativo,
+      SELECT l.id, l.chave, l.modo, l.nome, l.telefone_destino, l.titulo, l.ativo,
              count(s.id)::int                                         AS sessoes,
              count(s.consumida_em)::int                               AS consumidas
         FROM midia_lp l
         LEFT JOIN midia_sessao_lp s ON s.tenant_id = l.tenant_id AND s.lp_id = l.id
        WHERE l.tenant_id = tenant_atual()
-       GROUP BY l.id, l.chave, l.nome, l.telefone_destino, l.titulo, l.ativo, l.criado_em
+       GROUP BY l.id, l.chave, l.modo, l.nome, l.telefone_destino, l.titulo, l.ativo, l.criado_em
        ORDER BY l.criado_em DESC LIMIT ${PAGINA}`)
 
     return reply.send({
       itens: lps.map((l) => ({
-        id: l.id, chave: l.chave, nome: l.nome, telefone: l.telefone_destino,
+        id: l.id, chave: l.chave, modo: l.modo, nome: l.nome, telefone: l.telefone_destino,
         titulo: l.titulo, ativo: l.ativo,
         url: `/publico/lp/${l.chave}`,
         sessoes: l.sessoes, consumidas: l.consumidas,
@@ -234,16 +276,27 @@ export async function rotasAquisicao(app: FastifyInstance): Promise<void> {
   app.post<{
     Body: {
       nome?: string; telefone?: string; titulo?: string; subtitulo?: string
-      textoBase?: string; chamadaBotao?: string; avisoConsentimento?: string
+      textoBase?: string; chamadaBotao?: string; avisoConsentimento?: string; modo?: string
     }
   }>('/v1/aquisicao/lps', { preHandler: exigirTenant }, async (req, reply) => {
     const b = req.body ?? {}
     const telefone = (b.telefone ?? '').replace(/\D/g, '')
     const nome = b.nome?.trim()
     const titulo = b.titulo?.trim()
+    const modo = b.modo ?? 'inbound_wa'
     if (!nome) return reply.code(422).send({ erro: 'nome.obrigatorio', campo: 'nome' })
     if (!titulo) return reply.code(422).send({ erro: 'titulo.obrigatorio', campo: 'titulo' })
-    if (telefone.length < 10 || telefone.length > 15) {
+    if (modo !== 'inbound_wa' && modo !== 'outbound_formulario') {
+      return reply.code(422).send({ erro: 'modo.invalido', campo: 'modo' })
+    }
+    // ⚠️ Telefone só é obrigatório no modo WhatsApp — LP `inbound_wa` sem destino
+    //    é um botão que não leva a lugar nenhum. No formulário ninguém vai ao
+    //    wa.me, e exigir um número aqui produziria cadastro de mentira.
+    const exigeTelefone = modo === 'inbound_wa'
+    if (exigeTelefone && (telefone.length < 10 || telefone.length > 15)) {
+      return reply.code(422).send({ erro: 'telefone.invalido', campo: 'telefone' })
+    }
+    if (!exigeTelefone && telefone && (telefone.length < 10 || telefone.length > 15)) {
       return reply.code(422).send({ erro: 'telefone.invalido', campo: 'telefone' })
     }
 
@@ -253,15 +306,17 @@ export async function rotasAquisicao(app: FastifyInstance): Promise<void> {
     const chave = randomBytes(12).toString('hex')
     const [lp] = await req.comTenant((tx) => tx<{ id: string }[]>`
       INSERT INTO midia_lp
-        (tenant_id, id, chave, nome, telefone_destino, texto_base, titulo, subtitulo,
+        (tenant_id, id, chave, modo, nome, telefone_destino, texto_base, titulo, subtitulo,
          chamada_botao, aviso_consentimento)
-      VALUES (tenant_atual(), ${randomUUID()}, ${chave}, ${nome}, ${telefone},
+      VALUES (tenant_atual(), ${randomUUID()}, ${chave}, ${modo}, ${nome}, ${telefone || null},
               ${corta(b.textoBase) ?? 'Olá! Vi o anúncio'}, ${titulo},
-              ${corta(b.subtitulo, 300)}, ${corta(b.chamadaBotao, 60) ?? 'Chamar no WhatsApp'},
+              ${corta(b.subtitulo, 300)},
+              ${corta(b.chamadaBotao, 60)
+                ?? (modo === 'inbound_wa' ? 'Chamar no WhatsApp' : 'Quero falar com um vendedor')},
               ${corta(b.avisoConsentimento, 1000)})
       RETURNING id`)
 
-    return reply.code(201).send({ id: lp!.id, chave, url: `/publico/lp/${chave}` })
+    return reply.code(201).send({ id: lp!.id, chave, modo, url: `/publico/lp/${chave}` })
   })
 
   app.patch<{ Params: { id: string }; Body: { ativo?: boolean } }>(

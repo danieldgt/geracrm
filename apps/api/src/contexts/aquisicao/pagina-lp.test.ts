@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { renderizarLp, escaparHtml, paraScript, linkDireto, type DadosLp } from './pagina-lp.js'
+import { renderizarLp, escaparHtml, paraScript, linkDireto, CAMPO_ARMADILHA, type DadosLp } from './pagina-lp.js'
 import { extrairCodigoOrigem } from '@geracrm/shared'
 
 const base: DadosLp = {
   chave: 'abc123def456',
+  modo: 'inbound_wa',
   titulo: 'Uniformes para a sua equipe',
   subtitulo: 'Orçamento no WhatsApp em minutos',
   chamadaBotao: 'Falar com um vendedor',
@@ -100,5 +101,45 @@ describe('Link direto', () => {
 describe('Escape', () => {
   it('cobre os cinco caracteres que quebram markup', () => {
     expect(escaparHtml(`<>&"'`)).toBe('&lt;&gt;&amp;&quot;&#39;')
+  })
+})
+
+describe('Página no modo formulário (AQ-12)', () => {
+  const form: DadosLp = { ...base, modo: 'outbound_formulario', telefoneDestino: null }
+
+  it('mostra os campos e NÃO manda ninguém para o wa.me', () => {
+    const html = renderizarLp(form)
+    expect(html).toContain('name="nome"')
+    expect(html).toContain('name="telefone"')
+    expect(html).not.toContain('https://wa.me/')
+  })
+
+  /**
+   * ⚠️ Rótulo VISÍVEL, não placeholder: placeholder some quando a pessoa começa
+   * a digitar, e quem preenche no celular perde a referência do campo.
+   */
+  it('cada campo tem rótulo visível', () => {
+    const html = renderizarLp(form)
+    expect(html).toContain('<label>Seu nome')
+    expect(html).toContain('<label>WhatsApp com DDD')
+  })
+
+  /** ⚠️ Sai da tela, não do DOM — bot preenche tudo o que encontra. */
+  it('tem campo-armadilha fora da tela', () => {
+    const html = renderizarLp(form)
+    expect(html).toContain('class="armadilha"')
+    expect(html).toContain(`name="${CAMPO_ARMADILHA}"`)
+  })
+
+  it('envia para /lead, não para /sessao', () => {
+    const html = renderizarLp(form)
+    expect(html).toContain("'/lead'")
+    expect(html).not.toContain("'/sessao'")
+  })
+
+  it('troca de tela no sucesso, em vez de alert', () => {
+    const html = renderizarLp(form)
+    expect(html).toContain('id="obrigado"')
+    expect(html).not.toContain('alert(')
   })
 })

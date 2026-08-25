@@ -1,8 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { codigoDeBytes, montarTextoWaMe } from '@geracrm/shared'
+import { codigoDeBytes, montarTextoWaMe, normalizarTelefone } from '@geracrm/shared'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { sql, comTenantServico } from '../../db/index.js'
-import { renderizarLp, escaparHtml, type DadosLp } from './pagina-lp.js'
+import { sql, comTenantServico, type Sql } from '../../db/index.js'
+import { renderizarLp, escaparHtml, CAMPO_ARMADILHA, type DadosLp, type ModoLp } from './pagina-lp.js'
 import { criarLimiteTaxa } from './limite-taxa.js'
 
 /**
@@ -45,9 +45,9 @@ function ipDoCliente(req: FastifyRequest): string {
 }
 
 interface LinhaLp {
-  id: string; chave: string; titulo: string; subtitulo: string | null
+  id: string; chave: string; modo: ModoLp; titulo: string; subtitulo: string | null
   chamada_botao: string; aviso_consentimento: string | null
-  telefone_destino: string; texto_base: string
+  telefone_destino: string | null; texto_base: string
 }
 
 /** Resolve a chave pública → tenant + conteúdo da página (este já sob RLS). */
@@ -58,7 +58,7 @@ async function acharLp(chave: string): Promise<{ tenantId: string; lp: LinhaLp }
   if (!rota || !rota.ativo) return null
 
   const [lp] = await comTenantServico(rota.tenant_id, (tx) => tx<LinhaLp[]>`
-    SELECT id, chave, titulo, subtitulo, chamada_botao, aviso_consentimento,
+    SELECT id, chave, modo, titulo, subtitulo, chamada_botao, aviso_consentimento,
            telefone_destino, texto_base
       FROM midia_lp WHERE tenant_id = tenant_atual() AND id = ${rota.lp_id}`)
   return lp ? { tenantId: rota.tenant_id, lp } : null
@@ -66,6 +66,7 @@ async function acharLp(chave: string): Promise<{ tenantId: string; lp: LinhaLp }
 
 const dadosDaPagina = (lp: LinhaLp): DadosLp => ({
   chave: lp.chave,
+  modo: lp.modo,
   titulo: lp.titulo,
   subtitulo: lp.subtitulo,
   chamadaBotao: lp.chamada_botao,
@@ -143,6 +144,11 @@ export async function rotasLpPublica(app: FastifyInstance): Promise<void> {
 
       const b = req.body ?? {}
       const { lp } = achado
+      // ⚠️ LP de formulário não tem destino no WhatsApp: devolver um link para
+      //    `wa.me/` sem número mandaria o lead para uma tela de erro do WhatsApp.
+      if (lp.modo !== 'inbound_wa' || !lp.telefone_destino) {
+        return reply.code(409).send({ erro: 'lp.sem_destino_whatsapp' })
+      }
       // 16 bytes para 6 caracteres: sobra de propósito. Colisão dentro do tenant
       // custaria uma atribuição errada, e o índice único recusaria a segunda.
       const codigo = codigoDeBytes(randomBytes(16))
@@ -172,4 +178,129 @@ export async function rotasLpPublica(app: FastifyInstance): Promise<void> {
         link: `https://wa.me/${lp.telefone_destino}?text=${encodeURIComponent(texto)}`,
       })
     })
+
+  /**
+   * O LEAD DO FORMULÁRIO (AQ-12) — o outro modo de entrada.
+   *
+   * ⚠️ Aqui NÓS começamos a conversa, e isso tem consequência: a janela de 24h
+   * não nasce aberta, falar exige template pago, e o roteamento manda para
+   * pessoa, não para o agente (`campanha_outbound`, AMK-014/016). Por isso o
+   * `modo_entrada` gravado na origem é o do formulário — não um detalhe de
+   * relatório, e sim o que decide como o lead vai ser atendido.
+   *
+   * ⚠️ **Reconcilia pelo telefone normalizado** (ADR-019): quem já é cliente
+   * ganha um TOQUE novo, não um contato duplicado. Duplicar aqui seria fabricar
+   * dois históricos para a mesma pessoa no dia em que ela clica num anúncio.
+   */
+  app.post<{ Params: { chave: string }; Body: Record<string, unknown> }>(
+    '/publico/lp/:chave/lead', async (req, reply) => {
+      const achado = await acharLp(req.params.chave)
+      if (!achado || achado.lp.modo !== 'outbound_formulario') {
+        return reply.code(404).send({ erro: 'lp.nao_encontrada' })
+      }
+
+      const agora = Date.now()
+      const ip = ipDoCliente(req)
+      if (!limitePorIp.permitir(`${req.params.chave}:${ip}`, agora)
+        || !limitePorLp.permitir(req.params.chave, agora)) {
+        return reply.code(429).send({ erro: 'limite.excedido' })
+      }
+
+      const b = req.body ?? {}
+      // ⚠️ Armadilha preenchida = bot. Responde 200 e NÃO grava: dizer "recusado"
+      //    ensinaria o autor do bot exatamente qual campo deixar em branco.
+      if (corta(b[CAMPO_ARMADILHA])) return reply.send({ ok: true })
+
+      const nome = corta(b['nome'], 120)
+      if (!nome) return reply.code(422).send({ erro: 'nome.obrigatorio' })
+
+      const tel = normalizarTelefone(String(b['telefone'] ?? ''))
+      // ⚠️ Telefone é a identidade do lead aqui — sem ele não há como responder,
+      //    e um registro sem retorno é ruído no funil, não lead.
+      if (!tel) return reply.code(422).send({ erro: 'telefone.invalido' })
+
+      const origem = (typeof b['origem'] === 'object' && b['origem'] !== null
+        ? b['origem'] : {}) as Record<string, unknown>
+      const { lp } = achado
+
+      await comTenantServico(achado.tenantId, async (tx) => {
+        const sessaoId = randomUUID()
+        // ⚠️ A sessão nasce JÁ consumida: no formulário não há código viajando
+        //    numa mensagem para se perder. Contar como perdida distorceria a
+        //    métrica que mede o outro modo.
+        await tx`
+          INSERT INTO midia_sessao_lp
+            (tenant_id, id, lp_id, codigo, plataforma, click_id, utm_source, utm_medium,
+             utm_campaign, utm_content, utm_term, campanha_externa_id, anuncio_externo_id,
+             pagina, referrer, consentimento_texto, consumida_em)
+          VALUES (tenant_atual(), ${sessaoId}, ${lp.id}, ${codigoDeBytes(randomBytes(16))},
+                  ${plataformaDoClique(origem['clickIdTipo'], origem['utmSource'])},
+                  ${corta(origem['clickId'], 300)}, ${corta(origem['utmSource'])},
+                  ${corta(origem['utmMedium'])}, ${corta(origem['utmCampaign'])},
+                  ${corta(origem['utmContent'])}, ${corta(origem['utmTerm'])},
+                  ${corta(origem['campanhaExternaId'])}, ${corta(origem['anuncioExternoId'])},
+                  ${corta(origem['pagina'], 500)}, ${corta(origem['referrer'], 500)},
+                  ${lp.aviso_consentimento}, now())`
+
+        const contatoId = await resolverContato(tx, tel, nome)
+
+        await tx`
+          INSERT INTO midia_lead_origem
+            (tenant_id, id, contato_id, sessao_id, plataforma, campanha_externa_id,
+             anuncio_externo_id, click_id, utm_source, utm_medium, utm_campaign,
+             modo_entrada, primeira, consentimento_texto, consentimento_em)
+          SELECT tenant_atual(), ${randomUUID()}, ${contatoId}, ${sessaoId},
+                 s.plataforma, s.campanha_externa_id, s.anuncio_externo_id, s.click_id,
+                 s.utm_source, s.utm_medium, s.utm_campaign,
+                 'outbound_formulario',
+                 NOT EXISTS (SELECT 1 FROM midia_lead_origem o
+                              WHERE o.tenant_id = tenant_atual() AND o.contato_id = ${contatoId}),
+                 s.consentimento_texto,
+                 CASE WHEN s.consentimento_texto IS NULL THEN NULL ELSE s.criado_em END
+            FROM midia_sessao_lp s
+           WHERE s.tenant_id = tenant_atual() AND s.id = ${sessaoId}`
+
+        // O que a pessoa DIGITOU, cru — diferente do contato que resultou dele.
+        await tx`
+          INSERT INTO midia_lp_submissao
+            (tenant_id, id, lp_id, sessao_id, contato_id, nome, telefone, email, mensagem)
+          VALUES (tenant_atual(), ${randomUUID()}, ${lp.id}, ${sessaoId}, ${contatoId},
+                  ${nome}, ${tel.e164}, ${corta(b['email'], 180)}, ${corta(b['mensagem'], 1000)})`
+      })
+
+      // ⚠️ Resposta igual para lead novo e para quem já era cliente. Dizer "já
+      //    conhecemos você" transformaria o formulário público num verificador
+      //    de "este telefone está na base de vocês?".
+      return reply.send({ ok: true })
+    })
+}
+
+/**
+ * Acha o contato pelo telefone ou cria um (AQ-13, ADR-019).
+ *
+ * ⚠️ Só reconcilia com telefone PRINCIPAL — número secundário pode ser outra
+ * pessoa na mesma linha, e casar por ele juntaria dois clientes num só. É a
+ * mesma regra da ingestão de mensagem.
+ */
+async function resolverContato(
+  tx: Sql, tel: { e164: string; chaveBloqueio: string }, nome: string,
+): Promise<string> {
+  const [achado] = await tx<{ contato_id: string }[]>`
+    SELECT contato_id FROM contato_telefone
+     WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal
+     LIMIT 1`
+  // ⚠️ Contato existente NÃO tem o nome sobrescrito pelo que veio do formulário:
+  //    o cadastro do ERP vale mais que um campo digitado às pressas no celular.
+  if (achado) return achado.contato_id
+
+  const contatoId = randomUUID()
+  await tx`
+    INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo)
+    VALUES (tenant_atual(), ${contatoId}, ${nome}, 'lp_formulario', true)`
+  await tx`
+    INSERT INTO contato_telefone
+      (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
+    VALUES (tenant_atual(), ${contatoId}, 1, ${tel.e164}, ${tel.chaveBloqueio}, true, true, 'lp')
+    ON CONFLICT DO NOTHING`
+  return contatoId
 }

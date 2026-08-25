@@ -21,9 +21,18 @@ interface Anuncio {
   readonly impressoes: number
   readonly leads: number
 }
+interface Campanha {
+  readonly id: string
+  readonly nome: string
+  readonly estado: string
+  readonly plataforma: string
+  readonly modoEntrada: 'inbound_wa' | 'outbound_formulario'
+  readonly leads: number
+}
 interface Lp {
   readonly id: string
   readonly nome: string
+  readonly modo: 'inbound_wa' | 'outbound_formulario'
   readonly url: string
   readonly ativo: boolean
   readonly sessoes: number
@@ -108,11 +117,44 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
       </ul>
     }
 
+    <!-- ⚠️ Modo de entrada por campanha (AQ-36/AMK-016). A plataforma não sabe
+         se o destino é um WhatsApp que o lead aciona ou um formulário que nos
+         autoriza a ligar — essa é declaração NOSSA, e ela decide o atendimento. -->
+    @if (campanhas().length > 0) {
+      <details class="conectar">
+        <summary>Modo de entrada das campanhas ({{ campanhas().length }})</summary>
+        <ul class="contas">
+          @for (c of campanhas(); track c.id) {
+            <li class="conta">
+              <span class="nome">{{ c.nome }}</span>
+              <span class="dado">{{ c.plataforma }} · {{ c.leads }} leads</span>
+              <select [value]="c.modoEntrada" (change)="mudarModo(c, $any($event.target).value)"
+                      [attr.aria-label]="'Modo de entrada de ' + c.nome">
+                <option value="inbound_wa">Lead escreve (WhatsApp)</option>
+                <option value="outbound_formulario">Nós ligamos (formulário)</option>
+              </select>
+            </li>
+          }
+        </ul>
+        <p class="dica">Vale <strong>daqui para a frente</strong>: o modo é copiado para cada lead
+          na entrada, então o histórico continua dizendo o que valia quando ele chegou.</p>
+        @if (erroCampanha(); as e) { <p class="erro" role="alert">{{ e }}</p> }
+      </details>
+    }
+
     <!-- ⚠️ Landing pages (AQ-44). Sem destino não há campanha no Google: o
          anúncio precisa de uma URL, e é ela que carrega o clique até a conversa. -->
     <details class="conectar" [open]="lps().length === 0">
       <summary>Landing pages do anúncio</summary>
       <form class="nova" (submit)="criarLp($event)">
+        <!-- ⚠️ O modo NÃO é estética: ele decide quem começa a conversa, e com
+             isso se a janela de 24h nasce aberta e se o agente pode atender. -->
+        <label>Modo
+          <select [value]="lpModo()" (change)="lpModo.set($any($event.target).value)">
+            <option value="inbound_wa">Botão de WhatsApp (o lead escreve)</option>
+            <option value="outbound_formulario">Formulário (nós ligamos)</option>
+          </select>
+        </label>
         <label>Nome interno
           <input [value]="lpNome()" (input)="lpNome.set($any($event.target).value)"
                  placeholder="Uniformes — PE" aria-label="Nome interno da landing page" />
@@ -121,17 +163,29 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
           <input [value]="lpTitulo()" (input)="lpTitulo.set($any($event.target).value)"
                  placeholder="Uniformes para a sua equipe" aria-label="Título da página" />
         </label>
-        <label>WhatsApp de destino
-          <input [value]="lpTelefone()" (input)="lpTelefone.set($any($event.target).value)"
-                 placeholder="55 81 99999-8888" aria-label="WhatsApp de destino" />
-        </label>
+        @if (lpModo() === 'inbound_wa') {
+          <label>WhatsApp de destino
+            <input [value]="lpTelefone()" (input)="lpTelefone.set($any($event.target).value)"
+                   placeholder="55 81 99999-8888" aria-label="WhatsApp de destino" />
+          </label>
+        }
         <button class="btn btn--primario" type="submit"
                 [disabled]="criandoLp() || !lpNome().trim() || !lpTitulo().trim()">
           {{ criandoLp() ? 'Criando…' : 'Criar landing page' }}
         </button>
       </form>
-      <p class="dica">O link abaixo é o que vai no anúncio. Ele guarda o clique (gclid/UTM) e
-        abre o WhatsApp com um código — é esse código que liga a venda ao anúncio que a pagou.</p>
+      <!-- ⚠️ A consequência do modo dita em português, na hora da escolha — não
+           num manual que ninguém abre. -->
+      @if (lpModo() === 'inbound_wa') {
+        <p class="dica">O link abaixo é o que vai no anúncio. Ele guarda o clique (gclid/UTM) e
+          abre o WhatsApp com um código — é esse código que liga a venda ao anúncio que a pagou.
+          Como <strong>o lead escreve primeiro</strong>, a janela de 24h nasce aberta e dá para
+          responder sem template.</p>
+      } @else {
+        <p class="dica">A pessoa deixa nome e WhatsApp, e <strong>nós iniciamos a conversa</strong>.
+          Isso tem preço: fora da janela de 24h só um <strong>template aprovado</strong> abre o
+          contato, e quem fala é uma pessoa — o agente não assume conversa que nós começamos.</p>
+      }
       @if (erroLp(); as e) { <p class="erro" role="alert">{{ e }}</p> }
     </details>
 
@@ -140,6 +194,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         @for (l of lps(); track l.id) {
           <li class="conta lp">
             <span class="nome">{{ l.nome }}</span>
+            <span class="tag">{{ l.modo === 'inbound_wa' ? 'WhatsApp' : 'Formulário' }}</span>
             <span class="dado url">{{ urlCompleta(l.url) }}</span>
             <button class="btn btn--secundario btn--pequeno" (click)="copiar(l.url)">
               {{ copiado() === l.url ? 'Copiado' : 'Copiar link' }}
@@ -248,6 +303,8 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .forte { color: var(--texto); font-weight: 600; }
     tfoot td { border-bottom: none; border-top: 1px solid var(--borda-forte); color: var(--texto-secundario); }
     .mais { margin-top: var(--espacamento-3); }
+    .tag { font-size: 11px; padding: 1px 6px; border-radius: var(--raio-controle);
+      border: 1px solid var(--borda); color: var(--texto-secundario); background: var(--superficie); white-space: nowrap; }
     .link-anuncio { color: var(--acao); text-decoration: none; }
     .link-anuncio:hover { text-decoration: underline; }
     .conta.lp { flex-wrap: wrap; }
@@ -277,10 +334,13 @@ export class MidiaPagina implements OnInit {
   readonly ate = signal(this.#diasAtras(0))
 
   readonly lps = signal<readonly Lp[]>([])
+  readonly campanhas = signal<readonly Campanha[]>([])
+  readonly lpModo = signal<'inbound_wa' | 'outbound_formulario'>('inbound_wa')
   readonly lpNome = signal('')
   readonly lpTitulo = signal('')
   readonly lpTelefone = signal('')
   readonly criandoLp = signal(false)
+  readonly erroCampanha = signal<string | null>(null)
   readonly erroLp = signal<string | null>(null)
   readonly copiado = signal<string | null>(null)
 
@@ -368,6 +428,7 @@ export class MidiaPagina implements OnInit {
         nome: this.lpNome().trim(),
         titulo: this.lpTitulo().trim(),
         telefone: this.lpTelefone().trim(),
+        modo: this.lpModo(),
       }))
       this.lpNome.set(''); this.lpTitulo.set(''); this.lpTelefone.set('')
       await this.#carregarLps()
@@ -383,12 +444,38 @@ export class MidiaPagina implements OnInit {
     }
   }
 
+  /**
+   * ⚠️ Troca otimista: a linha muda na hora e volta atrás se o servidor recusar.
+   * Um `<select>` que só se move depois do ida-e-volta parece quebrado — e este
+   * aqui costuma ser mexido em sequência, campanha após campanha.
+   */
+  async mudarModo(c: Campanha, modo: 'inbound_wa' | 'outbound_formulario'): Promise<void> {
+    if (modo === c.modoEntrada) return
+    const anterior = this.campanhas()
+    this.campanhas.update((l) => l.map((x) => (x.id === c.id ? { ...x, modoEntrada: modo } : x)))
+    this.erroCampanha.set(null)
+    try {
+      await firstValueFrom(this.#http.patch(`/v1/aquisicao/campanhas/${c.id}`, { modoEntrada: modo }))
+    } catch {
+      this.campanhas.set(anterior)
+      this.erroCampanha.set('Não foi possível mudar o modo desta campanha. Tente de novo.')
+    }
+  }
+
   /** ⚠️ PARCIAL: se as LPs falharem, a tela de mídia continua de pé. */
   async #carregarLps(): Promise<void> {
     try {
       const r = await firstValueFrom(this.#http.get<{ itens: Lp[] }>('/v1/aquisicao/lps'))
       this.lps.set(r.itens)
     } catch { this.lps.set([]) }
+  }
+
+  /** ⚠️ PARCIAL pelo mesmo motivo: campanha é contexto, não o dado principal. */
+  async #carregarCampanhas(): Promise<void> {
+    try {
+      const r = await firstValueFrom(this.#http.get<{ itens: Campanha[] }>('/v1/aquisicao/campanhas'))
+      this.campanhas.set(r.itens)
+    } catch { this.campanhas.set([]) }
   }
 
   async carregar(): Promise<void> {
@@ -399,6 +486,7 @@ export class MidiaPagina implements OnInit {
         this.#http.get<{ contas: Conta[] }>('/v1/aquisicao/contas'))
       this.contas.set(c.contas)
       await this.#carregarLps()
+      await this.#carregarCampanhas()
       const r = await this.#buscarPagina(null)
       this.itens.set(r.itens)
       this.temMais.set(r.temMais)

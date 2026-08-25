@@ -44,6 +44,17 @@ async function criarLp(tenant: string, nome = 'Campanha de uniformes'): Promise<
   return r.json()
 }
 
+/** LP no modo formulário — sem destino no WhatsApp, de propósito. */
+async function criarLpFormulario(tenant: string): Promise<{ chave: string; id: string }> {
+  const r = await comTenant(tenant, 'POST', '/v1/aquisicao/lps', {
+    nome: 'Formulário — uniformes', modo: 'outbound_formulario',
+    titulo: 'Peça seu orçamento',
+    avisoConsentimento: 'Ao enviar, você autoriza nosso contato pelo WhatsApp.',
+  })
+  expect(r.statusCode).toBe(201)
+  return r.json()
+}
+
 beforeAll(async () => {
   await dono`INSERT INTO plano (id, codigo, nome) VALUES (${PLANO}, 'plano-teste-lp', 'Pro') ON CONFLICT DO NOTHING`
   await dono`INSERT INTO perfil_vertical_modelo (id, codigo, nome) VALUES (${MODELO}, 'modelo-teste-lp', 'Varejo') ON CONFLICT DO NOTHING`
@@ -61,9 +72,11 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   for (const t of [T, T2]) {
+    await dono`DELETE FROM midia_lp_submissao WHERE tenant_id = ${t}`
     await dono`DELETE FROM midia_lead_origem WHERE tenant_id = ${t}`
     await dono`DELETE FROM midia_sessao_lp   WHERE tenant_id = ${t}`
     await dono`DELETE FROM midia_lp          WHERE tenant_id = ${t}`
+    await dono`DELETE FROM contato_telefone  WHERE tenant_id = ${t}`
     await dono`DELETE FROM contato           WHERE tenant_id = ${t}`
   }
   await dono`INSERT INTO contato (tenant_id, id, nome) VALUES (${T}, ${CONTATO}, 'Lead')`
@@ -73,9 +86,11 @@ beforeEach(async () => {
 afterAll(async () => {
   await app.close()
   for (const t of [T, T2]) {
+    await dono`DELETE FROM midia_lp_submissao WHERE tenant_id = ${t}`
     await dono`DELETE FROM midia_lead_origem WHERE tenant_id = ${t}`
     await dono`DELETE FROM midia_sessao_lp   WHERE tenant_id = ${t}`
     await dono`DELETE FROM midia_lp          WHERE tenant_id = ${t}`
+    await dono`DELETE FROM contato_telefone  WHERE tenant_id = ${t}`
     await dono`DELETE FROM contato           WHERE tenant_id = ${t}`
   }
   await dono.end()
@@ -335,5 +350,135 @@ describe('Painel de LPs', () => {
     })
     expect(telRuim.statusCode).toBe(422)
     expect(telRuim.json().campo).toBe('telefone')
+  })
+})
+
+describe('⚠️ Lead pelo FORMULÁRIO (AQ-12)', () => {
+  const enviar = (chave: string, corpo: Record<string, unknown>) =>
+    publico('POST', `/publico/lp/${chave}/lead`, corpo)
+
+  it('cria contato, origem e a submissão crua — tudo no mesmo commit', async () => {
+    const { chave, id } = await criarLpFormulario(T)
+
+    const r = await enviar(chave, {
+      nome: 'Joana Ferreira', telefone: '(81) 98888-7777',
+      email: 'joana@exemplo.com', mensagem: 'Preciso de 30 camisas',
+      origem: { clickId: 'Cj0-abc', clickIdTipo: 'gclid', utmSource: 'google' },
+    })
+
+    expect(r.statusCode).toBe(200)
+    const [o] = await dono<{ modo_entrada: string; plataforma: string; primeira: boolean
+      consentimento_texto: string | null }[]>`
+      SELECT modo_entrada, plataforma, primeira, consentimento_texto
+        FROM midia_lead_origem WHERE tenant_id = ${T}`
+    // ⚠️ `outbound_formulario` não é rótulo de relatório: é o que faz o
+    //    roteamento mandar para pessoa em vez de agente (AMK-014/016).
+    expect(o).toMatchObject({ modo_entrada: 'outbound_formulario', plataforma: 'google', primeira: true })
+    expect(o!.consentimento_texto).toContain('autoriza')
+
+    const [sub] = await dono<{ nome: string; telefone: string; email: string; lp_id: string }[]>`
+      SELECT nome, telefone, email, lp_id FROM midia_lp_submissao WHERE tenant_id = ${T}`
+    // ⚠️ E164 com o "+" e com o 9º dígito — é o número usado para ENVIAR.
+    expect(sub).toMatchObject({ nome: 'Joana Ferreira', telefone: '+5581988887777', lp_id: id })
+  })
+
+  /**
+   * ⚠️ AQ-13: quem já é cliente ganha um TOQUE novo, não um contato duplicado.
+   * Duplicar aqui fabricaria dois históricos para a mesma pessoa no dia em que
+   * ela clica num anúncio.
+   */
+  it('telefone que já existe reconcilia com o contato, sem duplicar', async () => {
+    // ⚠️ `chave_bloqueio` é 55 + DDD + os ÚLTIMOS 8 dígitos (INV-50) — sem o 9º.
+    //    É o que faz o mesmo assinante casar venha ele com 9 dígitos ou com 8.
+    await dono`INSERT INTO contato_telefone
+      (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
+      VALUES (${T}, ${CONTATO}, 1, '+5581988887777', '558188887777', true, true, 'erp')`
+
+    const { chave } = await criarLpFormulario(T)
+    await enviar(chave, { nome: 'Joana pelo formulário', telefone: '81988887777' })
+
+    const [c] = await dono<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM contato WHERE tenant_id = ${T}`
+    expect(c!.n).toBe(2) // os dois do beforeEach — nenhum criado
+
+    const [o] = await dono<{ contato_id: string }[]>`
+      SELECT contato_id FROM midia_lead_origem WHERE tenant_id = ${T}`
+    expect(o!.contato_id).toBe(CONTATO)
+
+    // ⚠️ E o nome do cadastro NÃO é sobrescrito pelo digitado às pressas.
+    const [nome] = await dono<{ nome: string }[]>`
+      SELECT nome FROM contato WHERE tenant_id = ${T} AND id = ${CONTATO}`
+    expect(nome!.nome).toBe('Lead')
+  })
+
+  /** Sessão do formulário nasce consumida: não há código para se perder. */
+  it('a sessão do formulário não conta como código perdido', async () => {
+    const { chave } = await criarLpFormulario(T)
+    await enviar(chave, { nome: 'Joana', telefone: '81988887777' })
+
+    const lista = await comTenant(T, 'GET', '/v1/aquisicao/lps').then((r) => r.json())
+    expect(lista.itens[0]).toMatchObject({ modo: 'outbound_formulario', sessoes: 1, consumidas: 1, taxaPerdida: 0 })
+  })
+
+  it('telefone inválido é recusado por campo, com o motivo nomeado', async () => {
+    const { chave } = await criarLpFormulario(T)
+    const r = await enviar(chave, { nome: 'Joana', telefone: '123' })
+    expect(r.statusCode).toBe(422)
+    expect(r.json().erro).toBe('telefone.invalido')
+  })
+
+  /**
+   * ⚠️ Armadilha preenchida responde 200 e não grava. Dizer "recusado" ensinaria
+   * ao autor do bot exatamente qual campo deixar em branco na próxima.
+   */
+  it('bot que preenche a armadilha recebe 200 e não deixa rastro', async () => {
+    const { chave } = await criarLpFormulario(T)
+    const r = await enviar(chave, { nome: 'Bot', telefone: '81988887777', apelido: 'spam' })
+
+    expect(r.statusCode).toBe(200)
+    const [c] = await dono<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM midia_lp_submissao WHERE tenant_id = ${T}`
+    expect(c!.n).toBe(0)
+  })
+
+  it('LP de WhatsApp não aceita formulário, e vice-versa', async () => {
+    const wa = await criarLp(T)
+    const form = await criarLpFormulario(T)
+
+    expect((await enviar(wa.chave, { nome: 'X', telefone: '81988887777' })).statusCode).toBe(404)
+    // ⚠️ 409 nomeado: LP de formulário não tem destino no WhatsApp, e devolver
+    //    um wa.me sem número mandaria o lead para uma tela de erro.
+    const sessao = await publico('POST', `/publico/lp/${form.chave}/sessao`, {})
+    expect(sessao.statusCode).toBe(409)
+    expect(sessao.json().erro).toBe('lp.sem_destino_whatsapp')
+  })
+
+  it('LP de formulário dispensa telefone no cadastro', async () => {
+    const r = await comTenant(T, 'POST', '/v1/aquisicao/lps', {
+      nome: 'Sem telefone', modo: 'outbound_formulario', titulo: 'Orçamento',
+    })
+    expect(r.statusCode).toBe(201)
+  })
+
+  it('LP de WhatsApp continua exigindo o número de destino', async () => {
+    const r = await comTenant(T, 'POST', '/v1/aquisicao/lps', {
+      nome: 'Sem telefone', modo: 'inbound_wa', titulo: 'Fale conosco',
+    })
+    expect(r.statusCode).toBe(422)
+    expect(r.json().campo).toBe('telefone')
+  })
+})
+
+describe('Modo de entrada da campanha (AQ-36)', () => {
+  it('recusa modo fora da lista', async () => {
+    const r = await comTenant(T, 'PATCH',
+      '/v1/aquisicao/campanhas/10b00000-dead-4000-8000-000000000001', { modoEntrada: 'telepatia' })
+    expect(r.statusCode).toBe(422)
+  })
+
+  it('campanha inexistente é 404', async () => {
+    const r = await comTenant(T, 'PATCH',
+      '/v1/aquisicao/campanhas/10b00000-dead-4000-8000-000000000001', { modoEntrada: 'outbound_formulario' })
+    expect(r.statusCode).toBe(404)
   })
 })
