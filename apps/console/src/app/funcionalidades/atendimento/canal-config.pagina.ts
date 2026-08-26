@@ -4,7 +4,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 
 interface Canal { readonly id: string; readonly nomeAmigavel: string; readonly tipo: string; readonly estado: string; readonly riscoBanimento: boolean }
-interface Faixa { de: string; ate: string }
+import { HorarioAtendimentoComponente, somenteDiasAbertos, type Faixa } from '../../compartilhado/ui/index.js'
 interface Config {
   readonly canal: string
   readonly horarioAtendimento: Record<string, Faixa | null>
@@ -15,7 +15,6 @@ interface Config {
   readonly pausadoEm: string | null
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
-const DIAS = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['sex', 'Sex'], ['sab', 'Sáb'], ['dom', 'Dom']] as const
 
 /**
  * Config do Canal — horário de atendimento, mensagem de ausência, assinatura e a
@@ -25,7 +24,7 @@ const DIAS = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['
 @Component({
   selector: 'app-canal-config',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe],
+  imports: [DatePipe, HorarioAtendimentoComponente],
   template: `
     <header class="cabecalho">
       <h1 class="txt-titulo">Configuração do Canal</h1>
@@ -75,19 +74,7 @@ const DIAS = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['
                     <textarea rows="2" [value]="ausencia()" (input)="ausencia.set($any($event.target).value)" placeholder="Enviada fora do horário de atendimento."></textarea>
                   </label>
 
-                  <fieldset class="horario">
-                    <legend class="txt-rotulo">Horário de atendimento</legend>
-                    @for (d of dias; track d[0]) {
-                      <div class="dia">
-                        <label class="chk"><input type="checkbox" [checked]="aberto(d[0])" (change)="alternarDia(d[0], $any($event.target).checked)" /> {{ d[1] }}</label>
-                        @if (aberto(d[0])) {
-                          <input class="hora" type="time" [value]="hora(d[0], 'de')" (input)="setHora(d[0], 'de', $any($event.target).value)" aria-label="Abre" />
-                          <span class="ate">às</span>
-                          <input class="hora" type="time" [value]="hora(d[0], 'ate')" (input)="setHora(d[0], 'ate', $any($event.target).value)" aria-label="Fecha" />
-                        } @else { <span class="fechado">fechado</span> }
-                      </div>
-                    }
-                  </fieldset>
+<ui-horario-atendimento [(horario)]="horario" />
 
                   <div class="acoes">
                     <button class="btn btn--primario" type="submit" [disabled]="salvando()">{{ salvando() ? 'Salvando…' : 'Salvar configuração' }}</button>
@@ -127,13 +114,6 @@ const DIAS = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['
     .form { display: grid; gap: var(--espacamento-4); }
     .campo { display: flex; flex-direction: column; gap: var(--espacamento-2); color: var(--texto); font-size: 13px; }
     .campo input, .campo textarea { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; resize: vertical; }
-    .horario { border: 1px solid var(--borda); border-radius: var(--raio-painel); padding: var(--espacamento-3) var(--espacamento-4); margin: 0; display: grid; gap: var(--espacamento-2); }
-    .horario legend { padding: 0 var(--espacamento-1); }
-    .dia { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; }
-    .chk { display: inline-flex; align-items: center; gap: var(--espacamento-2); min-width: 84px; color: var(--texto); font-size: 13px; }
-    .hora { padding: var(--espacamento-1) var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .ate { color: var(--texto-suave); font-size: 12px; }
-    .fechado { color: var(--texto-suave); font-size: 13px; }
     .acoes { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; }
     .pausar:hover { color: var(--erro); border-color: var(--erro); }
     .ok { color: var(--sucesso); font-size: 13px; }
@@ -141,7 +121,6 @@ const DIAS = [['seg', 'Seg'], ['ter', 'Ter'], ['qua', 'Qua'], ['qui', 'Qui'], ['
 })
 export class CanalConfigPagina implements OnInit {
   private readonly http = inject(HttpClient)
-  readonly dias = DIAS
   readonly estado = signal<Estado>('carregando')
   readonly canais = signal<readonly Canal[]>([])
   readonly sel = signal<Canal | null>(null)
@@ -151,8 +130,6 @@ export class CanalConfigPagina implements OnInit {
   readonly salvando = signal(false); readonly salvandoPausa = signal(false); readonly msg = signal<string | null>(null)
 
   ngOnInit(): void { void this.carregar() }
-  aberto(dia: string): boolean { return !!this.horario()[dia] }
-  hora(dia: string, campo: 'de' | 'ate'): string { return this.horario()[dia]?.[campo] ?? '' }
 
   async carregar(): Promise<void> {
     this.estado.set('carregando')
@@ -178,25 +155,12 @@ export class CanalConfigPagina implements OnInit {
     } catch { /* mantém */ }
   }
 
-  alternarDia(dia: string, aberto: boolean): void {
-    const h = { ...this.horario() }
-    h[dia] = aberto ? { de: '08:00', ate: '18:00' } : null
-    this.horario.set(h)
-  }
-  setHora(dia: string, campo: 'de' | 'ate', valor: string): void {
-    const h = { ...this.horario() }
-    const atual = h[dia] ?? { de: '08:00', ate: '18:00' }
-    h[dia] = { ...atual, [campo]: valor }
-    this.horario.set(h)
-  }
 
   async salvar(ev: Event): Promise<void> {
     ev.preventDefault()
     const s = this.sel(); if (!s || this.salvando()) return
     this.salvando.set(true); this.msg.set(null)
-    // Só os dias abertos vão no payload.
-    const horario: Record<string, Faixa> = {}
-    for (const [dia, faixa] of Object.entries(this.horario())) if (faixa) horario[dia] = faixa
+    const horario = somenteDiasAbertos(this.horario())
     try {
       await firstValueFrom(this.http.put(`/v1/canais/${s.id}/config`, {
         horarioAtendimento: horario, mensagemAusencia: this.ausencia(), assinatura: this.assinatura(),

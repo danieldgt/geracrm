@@ -1,8 +1,14 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
+import { RouterLink } from '@angular/router'
 import { firstValueFrom } from 'rxjs'
+import {
+  HorarioAtendimentoComponente, somenteDiasAbertos, type HorarioAtendimento,
+} from '../../compartilhado/ui/index.js'
 
 interface Empresa { readonly nome: string; readonly fuso: string; readonly plano: string }
+interface CanalResumo { readonly id: string; readonly nomeAmigavel: string }
+interface ConfigCanal { readonly horarioAtendimento: HorarioAtendimento; readonly mensagemAusencia: string | null }
 interface Membro { readonly id: string; readonly nome: string; readonly email: string | null; readonly ativo: boolean; readonly papeis: { papel: string; filial: string }[] }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 const FUSOS = ['America/Sao_Paulo', 'America/Recife', 'America/Manaus', 'America/Cuiaba', 'America/Belem', 'America/Fortaleza', 'America/Rio_Branco']
@@ -16,10 +22,11 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
 @Component({
   selector: 'app-config',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterLink, HorarioAtendimentoComponente],
   template: `
     <header class="cabecalho">
       <h1 class="txt-titulo">Configurações Gerais</h1>
-      <p class="sub">Dados da empresa e a equipe com seus papéis.</p>
+      <p class="sub">Dados da empresa, horário de atendimento e a equipe com seus papéis.</p>
     </header>
 
     @switch (estado()) {
@@ -44,6 +51,49 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
               @if (msg()) { <span class="ok">{{ msg() }}</span> }
             </div>
           </form>
+        </section>
+
+        <!-- ⚠️ ESPELHO, não segunda fonte da verdade: a configuração continua
+             sendo por NÚMERO (canal_configuracao). Está aqui porque é onde as
+             pessoas procuram — "horário de atendimento" se lê como fato da
+             empresa, não do canal. Com mais de um número, esta tela não tenta
+             adivinhar qual: manda para a tela que sabe. -->
+        <section class="painel">
+          <h2 class="txt-secao">Atendimento</h2>
+          @switch (situacaoCanais()) {
+            @case ('carregando') { <div class="bloco esq"></div> }
+            @case ('erro') {
+              <p class="vazio">Não foi possível carregar seus números.
+                <a routerLink="/canal-config">Abrir Config. do Canal</a></p>
+            }
+            @case ('nenhum') {
+              <p class="vazio">Nenhum número conectado ainda.
+                Conecte um em <a routerLink="/numeros">Meus Números</a>.</p>
+            }
+            @case ('varios') {
+              <p class="dica">Você tem {{ canais().length }} números, e o horário é de cada um.</p>
+              <ul class="nums">
+                @for (c of canais(); track c.id) { <li>{{ c.nomeAmigavel }}</li> }
+              </ul>
+              <a class="btn btn--secundario" routerLink="/canal-config">Configurar por número</a>
+            }
+            @case ('um') {
+              <p class="dica">Do número <strong>{{ canais()[0]?.nomeAmigavel }}</strong>.</p>
+              <form class="form" (submit)="salvarHorario($event)">
+                <label class="campo">Mensagem de ausência
+                  <textarea rows="2" [value]="ausencia()"
+                            (input)="ausencia.set($any($event.target).value)"
+                            placeholder="Enviada a quem escreve fora do horário."></textarea>
+                </label>
+                <ui-horario-atendimento [(horario)]="horario" />
+                <div class="acoes">
+                  <button class="btn btn--primario" type="submit" [disabled]="salvandoHorario()">
+                    {{ salvandoHorario() ? 'Salvando…' : 'Salvar atendimento' }}</button>
+                  @if (msgHorario()) { <span class="ok">{{ msgHorario() }}</span> }
+                </div>
+              </form>
+            }
+          }
         </section>
 
         <section class="painel">
@@ -103,6 +153,9 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
     .papeis { display: flex; gap: 4px; flex-wrap: wrap; flex: none; justify-content: flex-end; }
     .papel { font-size: 11px; padding: 2px 8px; border-radius: var(--raio-completo); background: var(--superficie); color: var(--texto-secundario); border: 1px solid var(--borda); }
     .sem-papel { font-size: 11px; color: var(--texto-suave); }
+    .dica { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
+    .nums { list-style: none; margin: 0 0 var(--espacamento-3); padding: 0; display: grid; gap: var(--espacamento-1); }
+    .nums li { color: var(--texto); font-size: 13px; }
   `,
 })
 export class ConfigPagina implements OnInit {
@@ -113,6 +166,25 @@ export class ConfigPagina implements OnInit {
   readonly equipe = signal<readonly Membro[]>([])
   readonly nome = signal(''); readonly fuso = signal('America/Sao_Paulo')
   readonly salvando = signal(false); readonly msg = signal<string | null>(null)
+
+  readonly canais = signal<readonly CanalResumo[]>([])
+  readonly canaisFalharam = signal(false)
+  readonly horario = signal<HorarioAtendimento>({})
+  readonly ausencia = signal('')
+  readonly salvandoHorario = signal(false)
+  readonly msgHorario = signal<string | null>(null)
+
+  /**
+   * ⚠️ Estado PRÓPRIO da seção. Se a lista de números falhar, esta tela não
+   * quebra inteira — o quinto estado da skill de layout: o principal carrega, o
+   * secundário avisa no lugar dele.
+   */
+  readonly situacaoCanais = computed<'carregando' | 'erro' | 'nenhum' | 'um' | 'varios'>(() => {
+    if (this.canaisFalharam()) return 'erro'
+    if (this.estado() !== 'pronto') return 'carregando'
+    const n = this.canais().length
+    return n === 0 ? 'nenhum' : n === 1 ? 'um' : 'varios'
+  })
 
   ngOnInit(): void { void this.carregar() }
   inicial(n: string): string { return (n.trim()[0] ?? '?').toUpperCase() }
@@ -128,6 +200,7 @@ export class ConfigPagina implements OnInit {
       this.empresa.set(emp); this.nome.set(emp.nome); this.fuso.set(emp.fuso)
       this.equipe.set(eq.itens)
       this.estado.set('pronto')
+      void this.carregarAtendimento()
     } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
   }
 
@@ -141,5 +214,33 @@ export class ConfigPagina implements OnInit {
       const emp = this.empresa()
       if (emp) this.empresa.set({ ...emp, nome: this.nome().trim(), fuso: this.fuso() })
     } catch { this.msg.set('Não foi possível salvar.') } finally { this.salvando.set(false) }
+  }
+
+  /** ⚠️ Pós-carga e tolerante a falha: nunca derruba a tela principal. */
+  private async carregarAtendimento(): Promise<void> {
+    this.canaisFalharam.set(false)
+    try {
+      const r = await firstValueFrom(this.http.get<{ itens: CanalResumo[] }>('/v1/canais'))
+      this.canais.set(r.itens)
+      const unico = r.itens.length === 1 ? r.itens[0] : null
+      if (!unico) return
+      const cf = await firstValueFrom(this.http.get<ConfigCanal>(`/v1/canais/${unico.id}/config`))
+      this.horario.set({ ...cf.horarioAtendimento })
+      this.ausencia.set(cf.mensagemAusencia ?? '')
+    } catch { this.canaisFalharam.set(true) }
+  }
+
+  async salvarHorario(ev: Event): Promise<void> {
+    ev.preventDefault()
+    const unico = this.canais().length === 1 ? this.canais()[0] : null
+    if (!unico || this.salvandoHorario()) return
+    this.salvandoHorario.set(true); this.msgHorario.set(null)
+    try {
+      await firstValueFrom(this.http.put(`/v1/canais/${unico.id}/config`, {
+        horarioAtendimento: somenteDiasAbertos(this.horario()),
+        mensagemAusencia: this.ausencia(),
+      }))
+      this.msgHorario.set('Atendimento salvo.')
+    } catch { this.msgHorario.set('Não foi possível salvar.') } finally { this.salvandoHorario.set(false) }
   }
 }

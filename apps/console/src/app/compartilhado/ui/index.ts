@@ -7,3 +7,5 @@ export { EsqueletoComponente } from './esqueleto.componente.js'
 export { CabecalhoTelaComponente } from './cabecalho-tela.componente.js'
 export { EstadoComponente } from './estado.componente.js'
 export { ToastServico, ToastsComponente, type Toast } from './toast.js'
+export { HorarioAtendimentoComponente, somenteDiasAbertos, DIAS,
+         type Faixa, type HorarioAtendimento } from './horario-atendimento.componente.js'

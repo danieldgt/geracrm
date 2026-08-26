@@ -51,14 +51,26 @@ export async function rotasCanalConfig(app: FastifyInstance): Promise<void> {
         const [canal] = await tx<{ id: string }[]>`
           SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!canal) return null
+        // ⚠️ Atualização PARCIAL de verdade: campo que não veio no corpo NÃO é
+        //    apagado. Os três são opcionais no contrato, e a versão anterior
+        //    gravava null em quem faltasse — então salvar só o horário (o que a
+        //    tela de Configurações Gerais faz) apagaria a assinatura do canal em
+        //    silêncio. Contrato que diz "opcional" e age como "obrigatório" é a
+        //    mesma mentira dos outros defeitos desta semana.
+        const veioHorario = horario !== undefined
+        const veioAusencia = req.body?.mensagemAusencia !== undefined
+        const veioAssinatura = req.body?.assinatura !== undefined
         await tx`
           INSERT INTO canal_configuracao (tenant_id, canal_id, horario_atendimento, mensagem_ausencia, assinatura)
           VALUES (tenant_atual(), ${req.params.id}, ${JSON.stringify(horario ?? {})}::text::jsonb,
                   ${req.body?.mensagemAusencia?.trim() || null}, ${req.body?.assinatura?.trim() || null})
           ON CONFLICT (tenant_id, canal_id) DO UPDATE SET
-            horario_atendimento = EXCLUDED.horario_atendimento,
-            mensagem_ausencia   = EXCLUDED.mensagem_ausencia,
-            assinatura          = EXCLUDED.assinatura`
+            horario_atendimento = CASE WHEN ${veioHorario}    THEN EXCLUDED.horario_atendimento
+                                       ELSE canal_configuracao.horario_atendimento END,
+            mensagem_ausencia   = CASE WHEN ${veioAusencia}   THEN EXCLUDED.mensagem_ausencia
+                                       ELSE canal_configuracao.mensagem_ausencia END,
+            assinatura          = CASE WHEN ${veioAssinatura} THEN EXCLUDED.assinatura
+                                       ELSE canal_configuracao.assinatura END`
         return canal
       })
       if (!r) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
