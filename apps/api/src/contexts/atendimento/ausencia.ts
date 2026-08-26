@@ -53,11 +53,22 @@ export type ResultadoAusencia =
   | 'dentro_do_expediente'
   | 'sem_mensagem_configurada'
   | 'ja_respondida'
-  | 'conversa_assumida'
+  | 'atendente_presente'
   | 'envio_recusado'
 
 /** ⚠️ Uma resposta a cada 6h por conversa. Ver `responderAusencia`. */
 const HORAS_ENTRE_RESPOSTAS = 6
+
+/**
+ * Por quanto tempo uma pessoa continua "na mesa" depois do último sinal de vida.
+ *
+ * ⚠️ Existe porque a versão anterior perguntava apenas se HAVIA atendimento
+ * aberto com atendente — sem prazo. Em produção (26/ago) uma conversa assumida
+ * em 12/ago e esquecida fez o cliente escrever 14 dias depois e não receber
+ * nada: a assunção esquecida desligava a resposta automática para sempre, e o
+ * sintoma era SILÊNCIO — ninguém no CRM descobria.
+ */
+const MINUTOS_DE_PRESENCA = 60
 
 /**
  * Responde a ausência, se for o caso. **Pós-commit** — é rede.
@@ -68,9 +79,10 @@ const HORAS_ENTRE_RESPOSTAS = 6
  * da mensagem (`automatica: 'ausencia'`), então a conta é exata — não depende de
  * comparar o texto, que muda quando alguém edita a configuração.
  *
- * ⚠️ **Não responde se alguém assumiu a conversa**: se há atendente ali, quem
- * responde é ele — e receber "estamos fechados" no meio de um atendimento humano
- * é a pior forma de descobrir que existe um robô.
+ * ⚠️ **Não responde se há atendente PRESENTE**: quem responde é ele — receber
+ * "estamos fechados" no meio de um atendimento humano é a pior forma de
+ * descobrir que existe um robô. Presença tem prazo (`MINUTOS_DE_PRESENCA`):
+ * assunção esquecida não é presença, é um registro velho.
  */
 export async function responderAusencia(
   tenantId: string, conversaId: string, canalId: string, agora: Date = new Date(),
@@ -81,15 +93,38 @@ export async function responderAusencia(
       horario_atendimento: HorarioAtendimento | null
       dia_iso: number
       hora_local: string
-      assumida: boolean
+      atendente_presente: boolean
       ja_respondida: boolean
     }[]>`
       SELECT cfg.mensagem_ausencia, cfg.horario_atendimento,
              EXTRACT(ISODOW FROM (${agora}::timestamptz AT TIME ZONE t.fuso))::int AS dia_iso,
              to_char(${agora}::timestamptz AT TIME ZONE t.fuso, 'HH24:MI')          AS hora_local,
+             -- ⚠️ TEM GENTE ALI AGORA? — e não "existe um registro de assunção".
+             --    A pergunta antiga não tinha prazo, então um atendimento
+             --    assumido e esquecido calava a ausência para sempre naquela
+             --    conversa. E o raciocínio que resolve é simples: a ausência só
+             --    roda FORA DO EXPEDIENTE, e com a loja fechada não há ninguém
+             --    na mesa — a trava existe para quem está digitando NESTE
+             --    instante, não para uma linha de banco de 14 dias atrás.
              EXISTS (SELECT 1 FROM atendimento a
                       WHERE a.tenant_id = cfg.tenant_id AND a.conversa_id = ${conversaId}
-                        AND a.estado <> 'encerrado' AND a.atendente_id IS NOT NULL) AS assumida,
+                        AND a.estado <> 'encerrado' AND a.atendente_id IS NOT NULL
+                        AND (
+                          -- acabou de assumir e ainda não digitou: está chegando
+                          a.assumido_em > ${agora}::timestamptz
+                                          - make_interval(mins => ${MINUTOS_DE_PRESENCA})
+                          -- ⚠️ ou respondeu com as próprias mãos. A coluna
+                          --    enviada_por_id separa pessoa de sistema: disparo
+                          --    de campanha vai sem autor, e sem esse filtro uma
+                          --    campanha passaria por atendente presente.
+                          OR EXISTS (SELECT 1 FROM mensagem m
+                                      WHERE m.tenant_id = cfg.tenant_id
+                                        AND m.conversa_id = ${conversaId}
+                                        AND m.direcao = 'saliente'
+                                        AND m.enviada_por_id IS NOT NULL
+                                        AND m.criado_em > ${agora}::timestamptz
+                                            - make_interval(mins => ${MINUTOS_DE_PRESENCA}))
+                        )) AS atendente_presente,
              EXISTS (SELECT 1 FROM mensagem m
                       WHERE m.tenant_id = cfg.tenant_id AND m.conversa_id = ${conversaId}
                         AND m.direcao = 'saliente'
@@ -104,7 +139,7 @@ export async function responderAusencia(
 
   // Sem configuração nenhuma para este canal: nada a fazer, e não é erro.
   if (!contexto?.mensagem_ausencia?.trim()) return 'sem_mensagem_configurada'
-  if (contexto.assumida) return 'conversa_assumida'
+  if (contexto.atendente_presente) return 'atendente_presente'
   if (!foraDoExpediente(contexto.horario_atendimento, contexto.dia_iso, contexto.hora_local)) {
     return 'dentro_do_expediente'
   }
