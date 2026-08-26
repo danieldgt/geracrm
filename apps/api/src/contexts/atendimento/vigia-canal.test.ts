@@ -150,3 +150,51 @@ describe('Vigia contra o banco — a consulta existe de verdade', () => {
     expect(c!.estado).toBe('suspenso')
   })
 })
+
+/**
+ * ⚠️ O CARIMBO (0069). Encontrado em produção em 2026-08-25: a linha do canal
+ * dizia `estado = 'conectado'` com `conectado_em = NULL` e nenhuma coluna de
+ * atualização — impossível distinguir "o vigia acabou de confirmar" de "foi
+ * escrito no cadastro em 09/ago e ninguém nunca conferiu".
+ *
+ * O caso que importa é o de NADA MUDAR: é nele que a versão anterior não
+ * escrevia coisa alguma, e o estado envelhecia em silêncio parecendo saúde.
+ */
+describe('Carimbo de verificação', () => {
+  it('⚠️ carimba mesmo quando o estado NÃO muda', async () => {
+    // Já desconectado; a verificação vai confirmar que segue desconectado.
+    await canalPlugZapi('desconectado')
+    const [antes] = await donoV<{ verificado_em: Date | null }[]>`
+      SELECT verificado_em FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
+    expect(antes!.verificado_em).toBeNull()
+
+    await vigiarConexaoCanais(sqlV, AGORA_V)
+
+    const [depois] = await donoV<{ estado: string; verificado_em: Date | null }[]>`
+      SELECT estado, verificado_em FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
+    expect(depois!.estado).toBe('desconectado')          // nada mudou…
+    expect(depois!.verificado_em).toEqual(AGORA_V)       // …e mesmo assim carimbou
+  })
+
+  it('carimba também na passada que derruba o canal', async () => {
+    await canalPlugZapi('conectado')
+    await vigiarConexaoCanais(sqlV, AGORA_V)
+    const [c] = await donoV<{ estado: string; verificado_em: Date | null }[]>`
+      SELECT estado, verificado_em FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
+    expect(c!.estado).toBe('desconectado')
+    expect(c!.verificado_em).toEqual(AGORA_V)
+  })
+
+  /**
+   * ⚠️ Canal suspenso não entra na consulta do vigia — e portanto não recebe
+   * carimbo. Isso é correto: ninguém verificou nada. Carimbar aqui registraria
+   * uma observação que não houve.
+   */
+  it('canal suspenso não ganha carimbo', async () => {
+    await canalPlugZapi('suspenso')
+    await vigiarConexaoCanais(sqlV, AGORA_V)
+    const [c] = await donoV<{ verificado_em: Date | null }[]>`
+      SELECT verificado_em FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
+    expect(c!.verificado_em).toBeNull()
+  })
+})

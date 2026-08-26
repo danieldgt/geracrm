@@ -41,10 +41,11 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
       const linhas = await tx<{
         id: string; tipo: string; provedor: string | null; nome_amigavel: string; estado: string
         credenciais_cifradas: Buffer | null; ultimo_erro: string | null
+        verificado_em: Date | null
         disparo_pausado: boolean; pausado_motivo: string | null
       }[]>`
         SELECT c.id, c.tipo, c.provedor, c.nome_amigavel, c.estado, c.credenciais_cifradas,
-               c.ultimo_erro,
+               c.ultimo_erro, c.verificado_em,
                coalesce(cfg.disparo_pausado, false) AS disparo_pausado,
                cfg.pausado_motivo
           FROM canal_conectado c
@@ -56,6 +57,11 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
         itens: linhas.map((l) => ({
           id: l.id, tipo: l.tipo, provedor: l.provedor, nomeAmigavel: l.nome_amigavel,
           estado: l.estado, ultimoErro: l.ultimo_erro,
+          // ⚠️ O estado vai acompanhado de QUANDO foi observado (0069). Sem o
+          //    carimbo, a tela não consegue distinguir "conectado agora" de
+          //    "conectado da última vez que alguém olhou" — e foi assim que um
+          //    número morto ficou passando por saudável.
+          verificadoEm: l.verificado_em?.toISOString() ?? null,
           // ⚠️ A pausa aparece AQUI, na tela da frota, e não só na de config: uma
           //    pausa automática que ninguém vê repete o incidente que a originou
           //    — o produto sabendo de algo que o operador não sabe.
@@ -214,7 +220,11 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
         await tx`
           UPDATE canal_conectado
              SET estado = ${resultado.conectado ? 'conectado' : 'desconectado'},
-                 ultimo_erro = ${resultado.conectado ? null : (resultado.detalhe ?? null)}
+                 ultimo_erro = ${resultado.conectado ? null : (resultado.detalhe ?? null)},
+                 -- ⚠️ Teste manual é observação como a do vigia: carimba igual.
+                 --    Se só o vigia carimbasse, clicar em "Testar conexão" daria
+                 --    uma resposta fresca na tela e um carimbo velho no banco.
+                 verificado_em = now()
            WHERE id = ${req.params.id}`
       })
       return reply.send(resultado)

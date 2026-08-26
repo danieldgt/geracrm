@@ -21,6 +21,8 @@ export interface Canal {
   readonly nomeAmigavel: string
   readonly estado: string
   readonly ultimoErro: string | null
+  /** ⚠️ Quando o estado foi OBSERVADO (0069). `null` = nunca verificado. */
+  readonly verificadoEm?: string | null
   /** Pausa de DISPARO (manual ou automática por queda de entrega). */
   readonly disparoPausado?: boolean
   readonly pausadoMotivo?: string | null

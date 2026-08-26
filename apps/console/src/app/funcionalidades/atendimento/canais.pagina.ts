@@ -9,7 +9,7 @@ import { firstValueFrom } from 'rxjs'
 import { CanaisServico, type Canal, type ProvedorCanal } from './canais.servico.js'
 import { RouterLink } from '@angular/router'
 import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
-import { abrirAvancado } from './canais.regras.js'
+import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.regras.js'
 
 /**
  * Cadastro de celular / canal — Meta (oficial) e não-oficiais (PlugZapi + futuros).
@@ -77,7 +77,15 @@ import { abrirAvancado } from './canais.regras.js'
                       @if (!ehOficial(c)) { <span class="tag risco">⚠️ risco de banimento</span> }
                     </span>
                   </div>
-                  <span class="selo">{{ rotuloEstado(c.estado) }}</span>
+                  <!-- ⚠️ O estado NUNCA aparece sozinho: vem com quando foi
+                       observado. "Conectado" sem prazo de validade foi o que
+                       deixou um número morto passar por saudável em 24/ago, e
+                       em 25/ago a linha em produção dizia "conectado" sem
+                       carimbo nenhum — escrito no cadastro, jamais conferido. -->
+                  <span class="selo">
+                    {{ rotuloEstado(c.estado) }}
+                    <span class="carimbo" [class.suspeito]="carimboSuspeito(c)">{{ carimbo(c) }}</span>
+                  </span>
                 </div>
                 @if (c.estado === 'desconectado' && c.ultimoErro) {
                   <p class="err">{{ c.ultimoErro }}</p>
@@ -261,7 +269,11 @@ import { abrirAvancado } from './canais.regras.js'
     .tag { font-size: 11px; padding: 1px 6px; border-radius: var(--raio-controle); border: 1px solid var(--borda); color: var(--texto-secundario); background: var(--superficie); }
     .tag.oficial { color: var(--sucesso); border-color: var(--sucesso); }
     .tag.risco { color: var(--erro); border-color: var(--erro); }
-    .selo { font-size: 12px; color: var(--texto-secundario); white-space: nowrap; }
+    .selo { font-size: 12px; color: var(--texto-secundario); white-space: nowrap; text-align: right; }
+    .carimbo { display: block; font-size: 11px; color: var(--texto-suave); }
+    /* ⚠️ Carimbo velho é AVISO, não rodapé: o estado pode estar certo, mas
+       ninguém confirmou — e é essa a diferença que a pessoa precisa enxergar. */
+    .carimbo.suspeito { color: var(--atencao); }
     .err { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--erro); }
     .pausado { margin: var(--espacamento-2) 0 0; padding: var(--espacamento-2) var(--espacamento-3);
       border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--texto);
@@ -315,6 +327,14 @@ export class CanaisPagina implements OnInit, OnDestroy {
   /** Segundos até o QR atual expirar, por canal. */
   readonly restante = signal<Record<string, number>>({})
   readonly #timers = new Map<string, ReturnType<typeof setInterval>>()
+  /**
+   * ⚠️ Relógio da tela. Sem ele, "verificado há 3 min" ficaria congelado numa
+   * aba aberta 8 horas — o texto viraria a mesma mentira confortável que o
+   * carimbo existe para desfazer. Meio minuto basta: a menor unidade exibida é
+   * o minuto.
+   */
+  readonly agora = signal(new Date())
+  #relogio: ReturnType<typeof setInterval> | null = null
   readonly qr = signal<Record<string, { imagem?: string; erro?: string }>>({})
   readonly buscandoQr = signal<string | null>(null)
 
@@ -368,6 +388,7 @@ export class CanaisPagina implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    this.#relogio = setInterval(() => this.agora.set(new Date()), 30_000)
     void this.servico.carregar().then(() => {
       // Aquecimento por número (só faz sentido no não-oficial).
       for (const c of this.servico.canais()) {
@@ -382,6 +403,10 @@ export class CanaisPagina implements OnInit, OnDestroy {
   nomeProvedor(cod: string | null): string {
     return this.servico.provedores().find((p) => p.codigo === cod)?.nome ?? (cod ?? '—')
   }
+  /** Texto do carimbo — a regra é pura e testada em `canais.regras.ts`. */
+  carimbo(c: Canal): string { return idadeVerificacao(c.verificadoEm, this.agora()) }
+  carimboSuspeito(c: Canal): boolean { return verificacaoAtrasada(c.verificadoEm, this.agora()) }
+
   rotuloEstado(e: string): string {
     return e === 'conectado' ? 'Conectado' : e === 'desconectado' ? 'Desconectado' : 'Aguardando teste'
   }
@@ -508,6 +533,7 @@ export class CanaisPagina implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     for (const t of this.#timers.values()) clearInterval(t)
     this.#timers.clear()
+    if (this.#relogio) { clearInterval(this.#relogio); this.#relogio = null }
   }
 
   #carimbar(canalId: string): void {

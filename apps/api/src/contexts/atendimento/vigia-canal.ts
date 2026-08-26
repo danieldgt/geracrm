@@ -51,29 +51,53 @@ export async function vigiarConexaoCanais(sql: Sql, agora: Date): Promise<Resumo
     let verificados = 0, caiu = 0, voltou = 0
 
     for (const c of canais) {
-      const canal = criarCanal(c.provedor!, decifrar(c.credenciais_cifradas!))
-      // ⚠️ Só pergunta onde a sessão pode cair. No oficial, "conectado" viria de
-      //    uma verificação que não aconteceu — e inventar isso é pior que não ter.
-      if (!canal.capacidades.sessaoPodeCair) continue
+      // ⚠️ Um canal quebrado não pode parar a vigilância dos OUTROS. `decifrar`
+      //    lança em credencial corrompida, e sem esta cerca a passada inteira
+      //    morria no primeiro canal ruim — de TODOS os tenants, a cada 5 min,
+      //    virando um `warn` que ninguém lê. É a mesma regra do webhook: um
+      //    evento que falha não pode travar a fila do resto.
+      try {
+        const canal = criarCanal(c.provedor!, decifrar(c.credenciais_cifradas!))
+        // ⚠️ Só pergunta onde a sessão pode cair. No oficial, "conectado" viria de
+        //    uma verificação que não aconteceu — e inventar isso é pior que não ter.
+        if (!canal.capacidades.sessaoPodeCair) continue
 
-      verificados++
-      const r = await canal.verificarConexao()
+        verificados++
+        const r = await canal.verificarConexao()
 
-      if (!r.conectado && c.estado !== 'desconectado') {
-        await sql`
-          UPDATE canal_conectado
-             SET estado = 'desconectado', ultimo_erro = ${r.detalhe ?? 'sessão caiu'}
-           WHERE tenant_id = ${c.tenant_id} AND id = ${c.id}`
-        await abrirAlerta(sql, c.tenant_id, c.nome_amigavel, r.detalhe ?? null)
-        caiu++
-      } else if (r.conectado && c.estado === 'desconectado') {
-        await sql`
-          UPDATE canal_conectado SET estado = 'conectado', ultimo_erro = NULL
-           WHERE tenant_id = ${c.tenant_id} AND id = ${c.id}`
-        await sql`
-          UPDATE alerta SET resolvido_em = ${agora}
-           WHERE tenant_id = ${c.tenant_id} AND tipo = 'canal_desconectado' AND resolvido_em IS NULL`
-        voltou++
+        if (!r.conectado && c.estado !== 'desconectado') {
+          await sql`
+            UPDATE canal_conectado
+               SET estado = 'desconectado', ultimo_erro = ${r.detalhe ?? 'sessão caiu'},
+                   verificado_em = ${agora}
+             WHERE tenant_id = ${c.tenant_id} AND id = ${c.id}`
+          await abrirAlerta(sql, c.tenant_id, c.nome_amigavel, r.detalhe ?? null)
+          caiu++
+        } else if (r.conectado && c.estado === 'desconectado') {
+          await sql`
+            UPDATE canal_conectado
+               SET estado = 'conectado', ultimo_erro = NULL, verificado_em = ${agora}
+             WHERE tenant_id = ${c.tenant_id} AND id = ${c.id}`
+          await sql`
+            UPDATE alerta SET resolvido_em = ${agora}
+             WHERE tenant_id = ${c.tenant_id} AND tipo = 'canal_desconectado' AND resolvido_em IS NULL`
+          voltou++
+        } else {
+          // ⚠️ Nada MUDOU — mas a verificação ACONTECEU, e é isso que o carimbo
+          //    registra. Gravar só na mudança deixaria "conectado" envelhecendo
+          //    em silêncio, indistinguível do valor de cadastro nunca conferido:
+          //    o defeito que o `0069` existe para fechar.
+          await sql`
+            UPDATE canal_conectado SET verificado_em = ${agora}
+             WHERE tenant_id = ${c.tenant_id} AND id = ${c.id}`
+        }
+      } catch {
+        // ⚠️ Sem resposta do fornecedor NÃO carimba e NÃO muda estado: o carimbo
+        //    significa "última vez que obtivemos resposta". Deixá-lo envelhecer é
+        //    o aviso — a tela mostra "verificado há 3 h" e a pessoa vê que a
+        //    vigilância parou. Carimbar aqui seria registrar uma observação que
+        //    não houve, e mentir com precisão é pior que não saber.
+        continue
       }
     }
 
