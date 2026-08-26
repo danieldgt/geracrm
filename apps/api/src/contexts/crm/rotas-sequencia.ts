@@ -90,22 +90,20 @@ export async function rotasSequencia(app: FastifyInstance): Promise<void> {
       const offsetDias = req.body?.offsetDias
       if (!titulo) return reply.code(422).send({ erro: 'passo.titulo_obrigatorio', mensagem: 'Diga o que fazer neste passo.' })
       if (!Number.isInteger(offsetDias) || offsetDias! < 0) return reply.code(422).send({ erro: 'passo.offset_invalido', mensagem: 'Informe D+N (dias ≥ 0).' })
-      try {
-        const seq = await req.comTenant(async (tx) => {
-          // Garante a existência da sequência (senão a FK dá erro genérico).
-          const [existe] = await tx<{ id: string }[]>`SELECT id FROM sequencia WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
-          if (!existe) return null
-          const [linha] = await tx<{ prox: number }[]>`
-            SELECT COALESCE(max(seq), 0) + 1 AS prox FROM sequencia_passo
-             WHERE tenant_id = tenant_atual() AND sequencia_id = ${req.params.id}`
-          const prox = linha!.prox
-          await tx`INSERT INTO sequencia_passo (tenant_id, sequencia_id, seq, offset_dias, titulo, descricao)
-                   VALUES (tenant_atual(), ${req.params.id}, ${prox}, ${offsetDias!}, ${titulo}, ${req.body?.descricao?.trim() || null})`
-          return prox
-        })
-        if (seq === null) return reply.code(404).send({ erro: 'sequencia.nao_encontrada' })
-        return reply.code(201).send({ seq })
-      } catch (e) { throw e }
+      const seq = await req.comTenant(async (tx) => {
+        // Garante a existência da sequência (senão a FK dá erro genérico).
+        const [existe] = await tx<{ id: string }[]>`SELECT id FROM sequencia WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        if (!existe) return null
+        const [linha] = await tx<{ prox: number }[]>`
+          SELECT COALESCE(max(seq), 0) + 1 AS prox FROM sequencia_passo
+           WHERE tenant_id = tenant_atual() AND sequencia_id = ${req.params.id}`
+        const prox = linha!.prox
+        await tx`INSERT INTO sequencia_passo (tenant_id, sequencia_id, seq, offset_dias, titulo, descricao)
+                 VALUES (tenant_atual(), ${req.params.id}, ${prox}, ${offsetDias!}, ${titulo}, ${req.body?.descricao?.trim() || null})`
+        return prox
+      })
+      if (seq === null) return reply.code(404).send({ erro: 'sequencia.nao_encontrada' })
+      return reply.code(201).send({ seq })
     },
   )
 

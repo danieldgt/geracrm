@@ -131,7 +131,7 @@ export class InboxServico {
 
   abrirRail(): void { this.railAberto.set(true) }
   fecharRail(): void { this.railAberto.set(false); this.pararPresenca() }
-  alternarRail(): void { this.railAberto() ? this.fecharRail() : this.abrirRail() }
+  alternarRail(): void { if (this.railAberto()) this.fecharRail(); else this.abrirRail() }
   alternarSobrepor(): void {
     const v = !this.railSobrepor()
     this.railSobrepor.set(v)

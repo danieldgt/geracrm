@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { criarApp } from '../app.js'
-import { sql, encerrarBanco } from '../db/index.js'
+import { encerrarBanco } from '../db/index.js'
 import postgres from 'postgres'
 
 // ⚠️ Preparo de dados usa conexão de DONO; a API usa geracrm_api, sem superusuário.

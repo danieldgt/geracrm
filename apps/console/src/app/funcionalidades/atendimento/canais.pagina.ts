@@ -6,7 +6,7 @@ const SEGUNDOS_QR = 20
 const MAX_RENOVACOES = 9
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
-import { CanaisServico, type Canal, type ProvedorCanal } from './canais.servico.js'
+import { CanaisServico, type Canal } from './canais.servico.js'
 import { RouterLink } from '@angular/router'
 import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
 import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.regras.js'

@@ -77,7 +77,7 @@ export function adaptadorDaPlataforma(
       { clientId: cfg.clientId, clientSecret: cfg.clientSecret, refreshToken: cfg.refreshToken },
       // ⚠️ `exactOptionalPropertyTypes`: passar `buscar: undefined` é erro de
       //    tipo. O espalhamento condicional omite a chave em vez de zerá-la.
-      { ...(opcoes.buscar ? { buscar: opcoes.buscar } : {}) },
+      opcoes.buscar ? { buscar: opcoes.buscar } : {},
     )
     return new PlataformaGoogleAds(
       {
@@ -85,7 +85,7 @@ export function adaptadorDaPlataforma(
         loginCustomerId: cfg.loginCustomerId,
         obterAccessToken: () => provedor.obter(),
       },
-      { ...(opcoes.buscar ? { buscar: opcoes.buscar } : {}) },
+      opcoes.buscar ? { buscar: opcoes.buscar } : {},
     )
   }
 

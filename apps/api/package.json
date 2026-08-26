@@ -15,7 +15,7 @@
     "geracloud:precos": "tsx --env-file=../../.env src/contexts/integracao/geracloud-precos.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "echo 'eslint pendente'",
+    "lint": "oxlint src",
     "plugzapi:validar": "tsx src/contexts/atendimento/canais/plugzapi-validar.ts"
   },
   "dependencies": {

@@ -13,7 +13,7 @@ self.addEventListener('push', (evento) => {
   let dados = { titulo: 'Mensagem nova', corpo: 'Você tem uma mensagem no atendimento', conversaId: '' }
   try {
     if (evento.data) dados = { ...dados, ...evento.data.json() }
-  } catch (_) { /* payload ilegível: fica o genérico */ }
+  } catch { /* payload ilegível: fica o genérico */ }
 
   evento.waitUntil(
     self.registration.showNotification(dados.titulo, {

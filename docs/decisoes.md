@@ -512,3 +512,50 @@ janela, sem template — envia texto livre, com o alerta de risco).
 
 **Aprendizado reaproveitável.** Implementar PlugZapi agora destrava o Inbox com dado real e ensina o
 fluxo de envio/recebimento; quando a Meta liberar, o oficial é só outro adaptador na mesma porta.
+
+## ADR-022 — Lint: oxlint, porque o typescript-eslint recusa TypeScript 7
+
+**Contexto.** O `pnpm lint` deste monorepo era literalmente `echo 'eslint pendente'` em quatro dos
+cinco pacotes (`apps/api`, `apps/console`, `packages/shared`, `packages/conectores`). O CLAUDE.md
+exige `pnpm lint typecheck test` verdes antes de commitar em `main` — ou seja, **um terço do portão
+obrigatório não verificava nada**, e passava por verde há meses.
+
+A tentativa óbvia falhou de forma dura, não ambígua:
+
+```
+Error: typescript-eslint does not support TS 7.0.
+```
+
+Não é aviso de peer dependency: é um `throw` proposital do pacote. O `typescript-eslint` analisa
+código pela API do compilador TypeScript, e o TS 7 é a reescrita em Go, com outra API. O projeto
+está em TypeScript 7.0.2.
+
+**Decisão.** Usar **oxlint** (parser oxc, em Rust) como linter do monorepo.
+
+⚠️ A alternativa seria **rebaixar o TypeScript do projeto inteiro** para caber na faixa que o
+`typescript-eslint` aceita (`<6.1.0`). Isso inverte a hierarquia: a ferramenta de checagem passaria
+a ditar a versão da linguagem em que o produto é escrito. O oxlint tem parser próprio e é indiferente
+à versão de TypeScript instalada — a dependência que causou o problema deixa de existir.
+
+**Escopo das regras: `correctness` apenas, e isso é deliberado.**
+
+| Categoria | Achados hoje | Decisão |
+|---|---|---|
+| `correctness` | 0 (depois de 19 correções) | **ligada, como erro** |
+| `suspicious` | 37 | fora — inclui regras de **Next.js** (`no-async-endpoint-handlers`, `next`) que não se aplicam a Fastify |
+| `perf` | 332 | fora — ruído |
+| `pedantic` | 924 | fora — ruído |
+
+Lint com mil avisos é lido como zero avisos. A régua começa baixa e **verde**, e sobe por decisão
+explícita — nunca por categoria inteira sem olhar o que ela traz.
+
+**Consequências.**
+- `pnpm lint` agora **reprova de verdade** (`exit 1`) — conferido injetando um `no-dupe-keys`.
+- 19 achados corrigidos na adoção, três deles reais: um `try { } catch (e) { throw e }` que fingia
+  tratar erro, um `init?.headers` que lançaria `TypeError` em vez de falhar limpo no teste, e um
+  ternário usado como comando.
+- ⚠️ **Os lints caseiros continuam sendo testes**, não regras de oxlint: `cor-literal.spec.ts`,
+  `crase-em-template.spec.ts` e `crase-em-sql.test.ts` verificam invariantes do NOSSO domínio (cor
+  literal fora dos tokens, crase dentro de template literal) que nenhum linter genérico conhece.
+  Rodam em `pnpm test` e são complementares, não substituíveis.
+- Se um dia o `typescript-eslint` suportar TS 7, reabrir a discussão é opcional — não obrigatório.

@@ -102,7 +102,7 @@ describe('GeraCloud — chamada à API com o token', () => {
       }
       urlApi = u
       // ⚠️ Confirma também que o token vai como Bearer, não a senha.
-      expect((init?.headers as Record<string, string>).authorization).toBe('Bearer tok-abc')
+      expect((init?.headers as Record<string, string> | undefined)?.authorization).toBe('Bearer tok-abc')
       return { status: 200, ok: true, json: async () => ({ razaoSocial: 'X' }) } as Response
     }) as typeof fetch
 

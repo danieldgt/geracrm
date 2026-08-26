@@ -8,7 +8,7 @@
     "build": "ng build",
     "typecheck": "ng build --configuration development --output-path dist/typecheck && tsc -p tsconfig.spec.json --noEmit",
     "test": "vitest run",
-    "lint": "echo 'eslint pendente'"
+    "lint": "oxlint src public"
   },
   "dependencies": {
     "@angular/cdk": "^21.2.14",

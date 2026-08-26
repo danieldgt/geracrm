@@ -174,7 +174,7 @@ export class CanalConfigPagina implements OnInit {
       this.cfg.set(cf)
       this.assinatura.set(cf.assinatura ?? '')
       this.ausencia.set(cf.mensagemAusencia ?? '')
-      this.horario.set({ ...(cf.horarioAtendimento ?? {}) })
+      this.horario.set({ ...cf.horarioAtendimento })
     } catch { /* mantém */ }
   }
 

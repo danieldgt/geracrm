@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import postgres from 'postgres'
 
