@@ -350,3 +350,37 @@ describe('⚠️ O fornecedor aceita no máximo 3 modelos', () => {
     expect(c.model).toBe('a/1')
   })
 })
+
+describe('⚠️ Numa cadeia, a falha precisa dizer QUEM falhou', () => {
+  /**
+   * Com três modelos rodando por trás, "não usou a ferramenta" não diz qual sai
+   * da lista — e a pessoa fica trocando no escuro. Medido em produção: o
+   * roteamento varia entre execuções porque modelos grátis são limitados.
+   */
+  const chamar = (corpo: unknown) =>
+    new LlmOpenRouter({ apiKey: 'k', modelo: 'a/1,b/2' },
+      { buscar: respostaFalsa(corpo).fetch }).conversar(PEDIDO)
+
+  it('modelo que responde em TEXTO é nomeado, com o que ele disse', async () => {
+    const r = await chamar({
+      model: 'b/2',
+      choices: [{ finish_reason: 'stop', message: { content: 'Claro, temos atacado!' } }],
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.detalhe).toContain('b/2')
+      expect(r.detalhe).toContain('sem usar a ferramenta')
+      expect(r.detalhe).toContain('Claro, temos atacado!')
+    }
+  })
+
+  /** ⚠️ Usar a ferramenta e vir sem texto é OUTRO problema, com outra ação. */
+  it('ferramenta sem texto tem mensagem própria', async () => {
+    const r = await chamar({
+      model: 'a/1',
+      choices: [{ message: { tool_calls: [{ function: { arguments: '{"proximoPasso":"continuar"}' } }] } }],
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.detalhe).toContain('sem preencher o texto')
+  })
+})

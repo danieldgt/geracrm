@@ -126,9 +126,28 @@ export class LlmOpenRouter implements PortaLlm {
       return { ok: false, motivo: 'conteudo_recusado', detalhe: 'filtro de conteúdo do provedor' }
     }
 
+    // ⚠️ Numa CADEIA de fallback, saber QUEM respondeu é o que torna a falha
+    //    operável: sem isso, "não usou a ferramenta" não diz qual dos três
+    //    modelos precisa sair da lista, e a pessoa fica trocando no escuro.
+    const quem = typeof dados?.['model'] === 'string' ? dados['model'] : this.#modelo
+
     const chamada = (Array.isArray(mensagem['tool_calls']) ? mensagem['tool_calls'][0] : null) as
       Record<string, unknown> | null
-    const fn = (chamada?.['function'] ?? {}) as Record<string, unknown>
+
+    // ⚠️ NÃO usar a ferramenta é diferente de usar e vir sem texto. A primeira é
+    //    modelo que não suporta (ou ignorou) tool_choice — troca-se o modelo. A
+    //    segunda é resposta malformada — outro problema, outra ação. Uma
+    //    mensagem só para os dois casos manda a pessoa consertar o que não está
+    //    quebrado.
+    if (!chamada) {
+      const texto = typeof mensagem['content'] === 'string' ? mensagem['content'].slice(0, 120) : ''
+      return {
+        ok: false, motivo: 'resposta_inesperada',
+        detalhe: `${quem} respondeu sem usar a ferramenta${texto ? ` (disse: "${texto}")` : ''}`,
+      }
+    }
+
+    const fn = (chamada['function'] ?? {}) as Record<string, unknown>
 
     // ⚠️ Aqui os argumentos vêm como STRING de JSON, não como objeto — é a
     //    diferença de formato que justifica este adaptador existir. JSON
@@ -139,18 +158,18 @@ export class LlmOpenRouter implements PortaLlm {
       const bruto = fn['arguments']
       entrada = typeof bruto === 'string' ? JSON.parse(bruto) : (bruto as Record<string, unknown>)
     } catch {
-      return { ok: false, motivo: 'resposta_inesperada', detalhe: 'argumentos da ferramenta não são JSON válido' }
+      return {
+        ok: false, motivo: 'resposta_inesperada',
+        detalhe: `${quem} devolveu argumentos que não são JSON válido (provavelmente truncado)`,
+      }
     }
 
     const proposta = propostaDoRetorno(entrada)
     if (!proposta) {
-      return { ok: false, motivo: 'resposta_inesperada', detalhe: 'resposta sem chamada de ferramenta' }
+      return { ok: false, motivo: 'resposta_inesperada', detalhe: `${quem} usou a ferramenta sem preencher o texto` }
     }
-    // ⚠️ O custo reporta o modelo que REALMENTE respondeu (o OpenRouter devolve
-    //    em `model`), não o primeiro da lista — senão a conta de quem caiu no
-    //    fallback ficaria atribuída ao modelo errado.
-    const respondeu = typeof dados?.['model'] === 'string' ? dados['model'] : this.#modelo
-    return { ok: true, dados: proposta, custo: extrairCusto(dados, respondeu) }
+    // ⚠️ O custo é atribuído a QUEM respondeu, não ao primeiro da lista.
+    return { ok: true, dados: proposta, custo: extrairCusto(dados, quem) }
   }
 }
 
