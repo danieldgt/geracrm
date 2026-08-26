@@ -24,6 +24,7 @@ import { rotasCampanha } from './contexts/crm/rotas-campanha.js'
 import { rotasConversas } from './contexts/atendimento/rotas-conversas.js'
 import { rotasCanais } from './contexts/atendimento/rotas-canais.js'
 import { rotasCanalConfig } from './contexts/atendimento/rotas-canal-config.js'
+import { rotasAgente } from './contexts/atendimento/agente/rotas-agente.js'
 import { rotasMensagensLog } from './contexts/atendimento/rotas-mensagens-log.js'
 import { rotasWebhook } from './contexts/atendimento/rotas-webhook.js'
 import { rotasWebhookMeta } from './contexts/atendimento/rotas-webhook-meta.js'
@@ -89,6 +90,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasConversas)
   await app.register(rotasCanais)
   await app.register(rotasCanalConfig)
+  await app.register(rotasAgente)
   await app.register(rotasMensagensLog)
   await app.register(rotasWebhook)
   await app.register(rotasWebhookMeta)

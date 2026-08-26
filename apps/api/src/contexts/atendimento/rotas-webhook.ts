@@ -3,6 +3,7 @@ import { sql, comTenantServico } from '../../db/index.js'
 import { parseWebhookPlugZapi } from './canais/plugzapi.js'
 import { ingerirMensagemEntrante, registrarStatusMensagem } from './ingestao-mensagem.js'
 import { responderAusencia } from './ausencia.js'
+import { conduzirTurno } from './agente/turno.js'
 import { midiaHabilitada } from './midia/armazenamento.js'
 import { copiarMidiaEntrante } from './midia/copiar-entrante.js'
 
@@ -83,8 +84,19 @@ export async function rotasWebhook(app: FastifyInstance): Promise<void> {
             if (ausencia === 'enviada') {
               req.log.info({ canalId, conversaId: r.conversaId }, 'resposta de ausência enviada')
             }
+
+            // ⚠️ O AGENTE SDR (AQ-19) entra DEPOIS da ausência, nunca junto.
+            //    Se a ausência acabou de sair nesta mesma mensagem, o agente
+            //    fica para a PRÓXIMA: mandar as duas de uma vez faria a primeira
+            //    ("voltamos às 9h") contradizer a segunda, que puxa conversa.
+            //    Quem escreve de novo depois da ausência mostrou interesse — é
+            //    esse o lead que vale o custo de uma conversa com IA (§4.3.1).
+            if (ausencia !== 'enviada') {
+              const t = await conduzirTurno(canal.tenant_id, r.conversaId, canalId)
+              if (t.falou) req.log.info({ canalId, conversaId: r.conversaId, encerrouPor: t.encerrouPor }, 'agente falou')
+            }
           } catch (erro) {
-            req.log.warn({ erro, canalId }, 'falha ao responder ausência (mensagem do cliente já está salva)')
+            req.log.warn({ erro, canalId }, 'falha na resposta automática (mensagem do cliente já está salva)')
           }
         }
 

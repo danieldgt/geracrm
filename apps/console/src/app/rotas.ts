@@ -79,6 +79,8 @@ const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/crm/sequencias.pagina.js').then((m) => m.SequenciasPagina),
   'canal-config': () =>
     import('./funcionalidades/atendimento/canal-config.pagina.js').then((m) => m.CanalConfigPagina),
+  'agente': () =>
+    import('./funcionalidades/atendimento/agente.pagina.js').then((m) => m.AgentePagina),
   mensagens: () =>
     import('./funcionalidades/atendimento/mensagens-enviadas.pagina.js').then((m) => m.MensagensEnviadasPagina),
   config: () =>

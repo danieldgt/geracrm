@@ -1,5 +1,6 @@
 import { comTenantServico, type Sql } from '../../db/index.js'
 import { enviarTextoNaConversa } from './envio-conversa.js'
+import { fragmentoAtendentePresente } from './presenca-atendente.js'
 
 /**
  * RESPOSTA DE AUSÊNCIA — o campo que existia na tela e não fazia nada.
@@ -60,16 +61,6 @@ export type ResultadoAusencia =
 /** ⚠️ Uma resposta a cada 6h por conversa. Ver `responderAusencia`. */
 const HORAS_ENTRE_RESPOSTAS = 6
 
-/**
- * Por quanto tempo uma pessoa continua "na mesa" depois do último sinal de vida.
- *
- * ⚠️ Existe porque a versão anterior perguntava apenas se HAVIA atendimento
- * aberto com atendente — sem prazo. Em produção (26/ago) uma conversa assumida
- * em 12/ago e esquecida fez o cliente escrever 14 dias depois e não receber
- * nada: a assunção esquecida desligava a resposta automática para sempre, e o
- * sintoma era SILÊNCIO — ninguém no CRM descobria.
- */
-const MINUTOS_DE_PRESENCA = 60
 
 /**
  * Responde a ausência, se for o caso. **Pós-commit** — é rede.
@@ -100,32 +91,7 @@ export async function responderAusencia(
       SELECT cfg.mensagem_ausencia, cfg.horario_atendimento,
              EXTRACT(ISODOW FROM (${agora}::timestamptz AT TIME ZONE t.fuso))::int AS dia_iso,
              to_char(${agora}::timestamptz AT TIME ZONE t.fuso, 'HH24:MI')          AS hora_local,
-             -- ⚠️ TEM GENTE ALI AGORA? — e não "existe um registro de assunção".
-             --    A pergunta antiga não tinha prazo, então um atendimento
-             --    assumido e esquecido calava a ausência para sempre naquela
-             --    conversa. E o raciocínio que resolve é simples: a ausência só
-             --    roda FORA DO EXPEDIENTE, e com a loja fechada não há ninguém
-             --    na mesa — a trava existe para quem está digitando NESTE
-             --    instante, não para uma linha de banco de 14 dias atrás.
-             EXISTS (SELECT 1 FROM atendimento a
-                      WHERE a.tenant_id = cfg.tenant_id AND a.conversa_id = ${conversaId}
-                        AND a.estado <> 'encerrado' AND a.atendente_id IS NOT NULL
-                        AND (
-                          -- acabou de assumir e ainda não digitou: está chegando
-                          a.assumido_em > ${agora}::timestamptz
-                                          - make_interval(mins => ${MINUTOS_DE_PRESENCA})
-                          -- ⚠️ ou respondeu com as próprias mãos. A coluna
-                          --    enviada_por_id separa pessoa de sistema: disparo
-                          --    de campanha vai sem autor, e sem esse filtro uma
-                          --    campanha passaria por atendente presente.
-                          OR EXISTS (SELECT 1 FROM mensagem m
-                                      WHERE m.tenant_id = cfg.tenant_id
-                                        AND m.conversa_id = ${conversaId}
-                                        AND m.direcao = 'saliente'
-                                        AND m.enviada_por_id IS NOT NULL
-                                        AND m.criado_em > ${agora}::timestamptz
-                                            - make_interval(mins => ${MINUTOS_DE_PRESENCA}))
-                        )) AS atendente_presente,
+             ${fragmentoAtendentePresente(tx, conversaId, agora)} AS atendente_presente,
              EXISTS (SELECT 1 FROM mensagem m
                       WHERE m.tenant_id = cfg.tenant_id AND m.conversa_id = ${conversaId}
                         AND m.direcao = 'saliente'
