@@ -1,6 +1,7 @@
 # Agente SDR (AQ-19 / EP-18) — escopo antes do código
 
-> **Estado:** proposta de escopo. Nada implementado. Decisões pendentes marcadas com **[DECIDIR]**.
+> **Estado:** escopo com as quatro decisões bloqueantes RESPONDIDAS (2026-08-26). Nada implementado
+> ainda. As decisões restantes seguem marcadas com **[DECIDIR]**.
 > **Regras que governam:** skill `geracrm-ia` (camada "agente autônomo"), ADR-005, ADR-021, INV-50.
 
 ---
@@ -94,15 +95,25 @@ motivo da entrega.
 
 Sem estas, qualquer implementação é chute caro.
 
-### 4.1 **[DECIDIR]** Qual é o negócio do cliente-alvo?
+### 4.1 ✅ O que qualifica um lead — **decidido**
 
-Um agente de qualificação precisa saber **o que separa um lead bom de um ruim** — e isso é
-específico do ramo. Para a Gera3 (varejo/atacado via GeraCloud), candidatos: é CNPJ? compra para
-revenda? qual volume? qual cidade? já é cliente?
+Seis sinais, definidos pelo dono do produto:
 
-Sem essa lista, o agente conversa bonito e não qualifica nada.
+| Sinal | Origem | Observação |
+|---|---|---|
+| **Histórico de compra** | nosso banco (carga do ERP) | ⚠️ Já temos — não perguntar o que sabemos |
+| **Tipo de compra** (consumo final ou revenda) | conversa | O separador varejo/atacado (ADR-019) |
+| **Cidade** | conversa ou cadastro | Define atendimento e frete |
+| **Volume** | conversa | Qualifica o tamanho |
+| **CNPJ** | conversa | ⚠️ Validar dígito antes de gravar |
+| **Interações** | nosso banco | Histórico de conversa já existente |
 
-### 4.2 **[DECIDIR]** Base de conhecimento: de onde vem?
+⚠️ **Três dos seis já estão no nosso banco.** O agente que pergunta o CNPJ de quem já é cliente
+soa como um formulário, não como atendimento — e é o jeito mais rápido de a pessoa desistir. A
+regra que sai daqui: **o agente carrega o que já sabe antes de abrir a boca, e só pergunta o
+buraco.**
+
+### 4.2 ✅ Base de conhecimento: **híbrido** — decidido
 
 O agente precisa responder sobre a loja: o que vende, prazo, forma de pagamento, entrega. Opções:
 
@@ -110,11 +121,20 @@ O agente precisa responder sobre a loja: o que vende, prazo, forma de pagamento,
 - **Extraído do catálogo/ERP** — automático, e desatualiza sozinho quando o ERP muda.
 - **Híbrido** — catálogo do ERP + texto livre para políticas.
 
-⚠️ Isto define quanto trabalho de onboarding cada cliente novo dá. É decisão de produto, não técnica.
+**Decidido: híbrido** — catálogo/ERP para o que muda sozinho (produto, preço, estoque) e texto
+curado pelo cliente para políticas (prazo, pagamento, entrega, troca).
 
-### 4.3 **[DECIDIR]** O agente atende 24/7 ou só fora do expediente?
+⚠️ **Consequência de onboarding:** cada cliente novo precisa escrever o texto de políticas antes de
+ligar o agente. Isso é trabalho dele, não nosso — e um agente ligado com a base vazia responde
+"não sei" a tudo, o que é pior que não ter agente. **[DECIDIR]** se o produto BLOQUEIA ligar o
+agente com a base de políticas vazia. Recomendo bloquear.
 
-Três desenhos, com consequências opostas:
+### 4.3 ✅ Fora do expediente — **decidido**
+
+Confirmada a recomendação: começa fora do expediente, onde o agente compete com o silêncio e não
+com uma pessoa. Errar contra o silêncio é barato.
+
+As três opções ficam registradas para quando o 24/7 voltar à mesa:
 
 | Desenho | Consequência |
 |---|---|
@@ -122,8 +142,27 @@ Três desenhos, com consequências opostas:
 | 24/7 com humano por cima | Máximo ganho. ⚠️ Agente e humano na mesma conversa ao mesmo tempo é o problema difícil |
 | 24/7, humano só no handoff | Simples de programar, mas o time perde o contato com o cliente |
 
-**Recomendo o primeiro para a fatia 1** — é onde o agente compete com o silêncio, não com uma
-pessoa. Errar contra o silêncio é barato.
+### 4.3.1 ⚠️ E a resposta de ausência? — **[DECIDIR], e bloqueia a fatia 1**
+
+Escolher "fora do expediente" cria um choque que não existia: **a ausência já ocupa esse horário.**
+Ela está em produção, funcionando, e dispara em 2 segundos. Se o agente também responder, o cliente
+recebe duas mensagens automáticas seguidas — e a primeira, "voltamos amanhã às 9h", **contradiz** a
+segunda, que puxa conversa.
+
+Três desenhos possíveis:
+
+| Desenho | O cliente vê | Custo |
+|---|---|---|
+| **Agente substitui a ausência** quando ligado | Só o agente | ⚠️ Perde o "voltamos às 9h", que administra expectativa |
+| **Ausência primeiro, agente se a pessoa responder** | "Voltamos às 9h" e, se ela insistir, o agente | Mais conversas mortas; mas quem responde está engajado |
+| **Agente só para contato NOVO**, ausência para quem já é cliente | Depende de quem é | Mais código, e o cliente antigo perde o agente |
+
+**Recomendo o segundo.** A ausência é honesta (ninguém está mesmo) e barata; quem responde depois
+dela mostrou interesse, que é exatamente o lead que vale o custo do agente. E o desenho degrada
+sozinho: se o agente cair, sobra a ausência, que é o comportamento de hoje.
+
+⚠️ Isto precisa ser decidido antes da fatia 1 porque muda o gatilho: o agente não escuta "mensagem
+entrante fora do expediente", e sim "mensagem entrante **depois** de uma ausência já enviada".
 
 ### 4.4 **[DECIDIR]** Canal: oficial, não-oficial, ou os dois?
 
@@ -131,11 +170,26 @@ pessoa. Errar contra o silêncio é barato.
 aumenta volume e padrão-de-robô no número. Ligar o agente no não-oficial é aumentar a aposta que o
 cliente já está fazendo — e ele precisa saber disso na interface, não no contrato.
 
-### 4.5 **[DECIDIR]** O agente fala preço?
+### 4.5 ✅ Fala preço, lendo do ERP — **decidido, com um bloqueio pela frente**
 
-Preço é a informação que mais gera conflito quando errada. Se sim, ele lê do catálogo/ERP em tempo
-real (nunca do prompt) e a tabela por cliente precisa estar resolvida — hoje há um `TODO` aberto
-exatamente aí no conector GeraCloud.
+Decisão: sim, e o preço vem do ERP em tempo real, nunca do prompt.
+
+⚠️ **O conector NÃO consegue fazer isso hoje, e isso não é detalhe.** Em
+`packages/conectores/src/geracloud/conector.ts`, `consultarPrecos` recebe o cliente e o **ignora**:
+
+```ts
+async consultarPrecos(_clienteExterno: string, skusExternos) {
+  // TODO: map customer → price table. …WHICH table belongs to a customer
+  // was not found while reading the source
+```
+
+Ele devolve a tela de venda padrão. Num produto que atende **varejo e atacado** (ADR-019), tabela de
+preço varia por cliente — então o agente diria o preço errado, com confiança, fora do expediente,
+sem ninguém olhando. É o modo de falha nº 1 do §8 acontecendo na primeira semana.
+
+**Portanto:** falar preço é requisito do produto, mas **não entra na fatia 1**. Vira pré-requisito:
+resolver `cliente → tabela de preço` no conector (investigação na API do GeraCloud) antes de o
+agente cotar qualquer valor. Até lá, ele coleta a intenção de compra e entrega ao humano.
 
 ### 4.6 **[DECIDIR]** Quem responde quando o agente erra feio?
 
@@ -166,10 +220,18 @@ A última linha da direita é a que ninguém gosta de medir e a que mais importa
 
 Cada fatia entrega valor sozinha e pode parar ali sem deixar coisa pela metade.
 
-**Fatia 1 — Agente fora do expediente, sem escrever nada no cadastro.**
+**Fatia 1 — Agente fora do expediente, sem escrever nada no cadastro e SEM falar preço.**
 Recebe, conversa, extrai dados, **propõe** qualificação e entrega ao humano de manhã com resumo.
 Nada entra no cadastro sem uma pessoa aprovar. É o agente com rodinhas: se ele for ruim, o custo é
 um resumo ruim que alguém descarta.
+
+⚠️ **Sem preço na fatia 1** (§4.5): o conector ainda não resolve `cliente → tabela de preço`, e
+cotar da tabela padrão é dizer o número errado com confiança. O agente reconhece a intenção de
+compra, registra, e entrega ao humano.
+
+Os seis sinais de qualificação (§4.1) entram assim: **histórico, interações e cadastro vêm do nosso
+banco antes da primeira mensagem**; tipo de compra, cidade e volume são o que o agente pergunta —
+e só se ainda não souber.
 
 **Fatia 2 — Extração entra no cadastro sozinha**, depois que a fatia 1 mostrar que a extração é
 confiável (medida contra o conjunto de casos reais, não por impressão).
@@ -211,14 +273,32 @@ Escrever isto evita a conversa de "mas eu achei que também faria":
 
 ---
 
-## 9. O que eu preciso de você para começar
+## 9. Situação das decisões
 
-Em ordem de bloqueio:
+✅ **Respondidas em 2026-08-26** — as quatro que bloqueavam o início:
 
-1. **§4.1** — a lista do que qualifica um lead no seu negócio. É o que o agente vai perseguir.
-2. **§4.3** — fora do expediente ou 24/7. Recomendo fora do expediente.
-3. **§4.2** — de onde vem a base de conhecimento.
-4. **§4.5** — se ele fala preço.
+| | Decisão |
+|---|---|
+| §4.1 | Qualifica por histórico, tipo de compra (final/revenda), cidade, volume, CNPJ e interações |
+| §4.2 | Base híbrida: ERP para o que muda sozinho, texto curado para políticas |
+| §4.3 | Fora do expediente, inicialmente |
+| §4.5 | Fala preço, lendo do ERP — **bloqueado até o conector resolver cliente → tabela** |
 
-As demais (**§4.4**, **§4.6**, limite de turnos, rascunho de pedido) dá para decidir durante a
-fatia 1, mas as quatro acima definem o que se constrói.
+⚠️ **Aberta e bloqueando a fatia 1:** §4.3.1 — como o agente convive com a resposta de ausência,
+que já ocupa esse horário em produção. Recomendação registrada: ausência primeiro, agente se a
+pessoa responder.
+
+**Podem esperar a fatia 1 acontecer:** §4.4 (canal), §4.6 (desligar por conversa ou por número),
+teto de turnos, se o agente monta rascunho de pedido, e se o produto bloqueia ligar o agente com a
+base de políticas vazia.
+
+---
+
+## 10. Pré-requisito técnico fora deste escopo
+
+**`cliente → tabela de preço` no conector GeraCloud.** Hoje `consultarPrecos` ignora o cliente e
+devolve a tela de venda padrão. Enquanto isso não for resolvido, o agente não cota preço — e o
+produto inteiro fica sem preço por cliente, o que já afeta o pedido assistido, não só o agente.
+
+É uma investigação na API do GeraCloud (`/tabela-preco/todas` existe; falta descobrir qual tabela
+pertence a qual cliente), e vale por si — independe do agente ser construído.
