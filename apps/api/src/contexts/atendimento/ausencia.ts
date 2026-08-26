@@ -12,7 +12,8 @@ import { enviarTextoNaConversa } from './envio-conversa.js'
  *
  * ⚠️ **Isto NÃO é o agente (AQ-19).** Não interpreta, não decide, não conversa:
  * diz que ninguém está e quando alguém volta. É a diferença entre administrar a
- * expectativa e fingir atendimento.
+ * expectativa e fingir atendimento. O escopo do agente — e por que ele exige
+ * outro nível de rigor — está em `docs/agente-sdr-escopo.md`.
  */
 
 /** Faixa de atendimento de um dia. `null` = fechado. */
