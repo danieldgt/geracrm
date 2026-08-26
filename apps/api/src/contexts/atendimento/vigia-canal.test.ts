@@ -198,3 +198,62 @@ describe('Carimbo de verificação', () => {
     expect(c!.verificado_em).toBeNull()
   })
 })
+
+/**
+ * ⚠️ O ALERTA ÓRFÃO. Encontrado em produção em 2026-08-25: o número estava de
+ * pé (vigia respondendo `caiu: 0`) e a faixa vermelha de 24/ago continuava
+ * acesa, com o alerta CRÍTICO preso em `resolvido_em = NULL`.
+ *
+ * Causa: fechar dependia de o vigia VER a transição `desconectado → conectado`.
+ * O "Testar conexão" da tela grava `estado = 'conectado'` por fora — então o
+ * estado voltou sem transição, e o alerta perdeu para sempre o único evento que
+ * o fecharia. Alerta crítico impossível de fechar é pior que alerta nenhum:
+ * ensina o operador a ignorar a faixa vermelha.
+ */
+const canalDePe = {
+  criar: () => ({
+    capacidades: { sessaoPodeCair: true },
+    verificarConexao: async () => ({ conectado: true }),
+  }),
+} as unknown as { criar: typeof import('./canais/fabrica.js').criarCanal }
+
+async function alertaAberto(): Promise<number> {
+  const [r] = await donoV<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM alerta
+     WHERE tenant_id = ${TV} AND tipo = 'canal_desconectado' AND resolvido_em IS NULL`
+  return r!.n
+}
+
+describe('Alerta de canal caído', () => {
+  it('⚠️ fecha o alerta com o canal JÁ conectado — sem depender da transição', async () => {
+    // O estado do incidente real: canal marcado conectado (voltou pela tela) e
+    // alerta de ontem ainda aberto. Nenhuma transição vai acontecer.
+    await canalPlugZapi('conectado')
+    await donoV`INSERT INTO alerta (tenant_id, id, tipo, severidade, mensagem)
+                VALUES (${TV}, gen_random_uuid(), 'canal_desconectado', 'critico', 'caiu ontem')`
+    expect(await alertaAberto()).toBe(1)
+
+    const r = await vigiarConexaoCanais(sqlV, AGORA_V, canalDePe)
+
+    expect(r.voltou).toBe(0)          // não houve transição…
+    expect(await alertaAberto()).toBe(0)  // …e mesmo assim o alerta fechou
+  })
+
+  it('fecha também na volta com transição', async () => {
+    await canalPlugZapi('desconectado')
+    await donoV`INSERT INTO alerta (tenant_id, id, tipo, severidade, mensagem)
+                VALUES (${TV}, gen_random_uuid(), 'canal_desconectado', 'critico', 'caiu')`
+    const r = await vigiarConexaoCanais(sqlV, AGORA_V, canalDePe)
+    expect(r.voltou).toBe(1)
+    expect(await alertaAberto()).toBe(0)
+  })
+
+  /** ⚠️ Canal caído NÃO pode ter o alerta fechado — seria apagar a notícia ruim. */
+  it('canal ainda caído mantém o alerta aberto', async () => {
+    await canalPlugZapi('desconectado')
+    await donoV`INSERT INTO alerta (tenant_id, id, tipo, severidade, mensagem)
+                VALUES (${TV}, gen_random_uuid(), 'canal_desconectado', 'critico', 'caiu')`
+    await vigiarConexaoCanais(sqlV, AGORA_V)   // credencial falsa = segue caído
+    expect(await alertaAberto()).toBe(1)
+  })
+})

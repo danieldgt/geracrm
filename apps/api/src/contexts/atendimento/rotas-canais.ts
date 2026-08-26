@@ -226,6 +226,17 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
                  --    uma resposta fresca na tela e um carimbo velho no banco.
                  verificado_em = now()
            WHERE id = ${req.params.id}`
+        // ⚠️ Conectou pela tela? O alerta de canal caído fecha AQUI também.
+        //    Enquanto só o vigia fechava — e só ao ver a transição — testar pela
+        //    tela ressuscitava o número por fora e deixava o alerta crítico
+        //    órfão: em produção (25/ago) a faixa vermelha de 24/ago seguia acesa
+        //    com o canal de pé. `tenant_atual()` vem do token (ADR-001).
+        if (resultado.conectado) {
+          await tx`
+            UPDATE alerta SET resolvido_em = now()
+             WHERE tenant_id = tenant_atual() AND tipo = 'canal_desconectado'
+               AND resolvido_em IS NULL`
+        }
       })
       return reply.send(resultado)
     },
