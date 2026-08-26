@@ -1,18 +1,18 @@
+import { ESQUEMA_RESPOSTA, instrucaoDeSistema, propostaDoRetorno } from './instrucao.js'
 import type {
   CapacidadesLlm, CustoDoTurno, MotivoFalhaLlm, PedidoDeTurno,
   PortaLlm, PropostaDeTurno, ResultadoLlm,
 } from './porta.js'
 
 /**
- * Adaptador de LLM — Anthropic (Claude). Um dos adaptadores da porta `PortaLlm`.
+ * Adaptador de LLM — Anthropic (Claude) DIRETO. Um dos adaptadores da porta.
  *
  * ⚠️ Só ESTE arquivo conhece o formato da Anthropic. O agente fala com a porta e
- * não sabe se a resposta veio em `content[]`, `choices[]` ou outra coisa — é a
- * mesma regra dos conectores de ERP e das plataformas de mídia (ADR-008).
+ * não sabe se a resposta veio em `content[]` ou em `choices[]` — mesma regra dos
+ * conectores de ERP e das plataformas de mídia (ADR-008).
  *
  * ⚠️ `buscar` é injetável e o fornecedor é SEMPRE mockado em teste: chamar a API
- * real no CI custa dinheiro, é lento e falha quando a rede oscila (skill
- * `geracrm-ia`).
+ * real no CI custa dinheiro, é lento e falha quando a rede oscila.
  */
 
 const URL_MENSAGENS = 'https://api.anthropic.com/v1/messages'
@@ -42,16 +42,12 @@ export class LlmClaude implements PortaLlm {
   readonly #buscar: typeof fetch
   readonly #timeoutMs: number
 
-  constructor(
-    cred: CredencialClaude,
-    opcoes: { buscar?: typeof fetch; timeoutMs?: number } = {},
-  ) {
+  constructor(cred: CredencialClaude, opcoes: { buscar?: typeof fetch; timeoutMs?: number } = {}) {
     this.#apiKey = cred.apiKey
     this.#modelo = cred.modelo?.trim() || MODELO_PADRAO
     this.#buscar = opcoes.buscar ?? fetch
     // ⚠️ Um cliente esperando no WhatsApp não aguenta 60s. Estourou, vai para a
-    //    fila humana — que é melhor que uma resposta que chega depois de a
-    //    pessoa ter desistido.
+    //    fila humana — melhor que uma resposta que chega depois da desistência.
     this.#timeoutMs = opcoes.timeoutMs ?? 20_000
   }
 
@@ -67,8 +63,12 @@ export class LlmClaude implements PortaLlm {
       // ⚠️ Saída estruturada por ferramenta: pedir "responda em JSON" no texto
       //    funciona até o dia em que o modelo resolve explicar o JSON antes de
       //    escrevê-lo. A ferramenta torna o formato parte do contrato.
-      tools: [FERRAMENTA_RESPOSTA],
-      tool_choice: { type: 'tool', name: FERRAMENTA_RESPOSTA.name },
+      tools: [{
+        name: ESQUEMA_RESPOSTA.nome,
+        description: ESQUEMA_RESPOSTA.descricao,
+        input_schema: ESQUEMA_RESPOSTA.parametros,
+      }],
+      tool_choice: { type: 'tool', name: ESQUEMA_RESPOSTA.nome },
     }
 
     let resposta: Response
@@ -97,95 +97,13 @@ export class LlmClaude implements PortaLlm {
       return { ok: false, motivo: 'conteudo_recusado', detalhe: 'o modelo recusou responder' }
     }
 
-    const proposta = extrairProposta(dados)
+    const blocos = Array.isArray(dados?.['content']) ? dados['content'] as Record<string, unknown>[] : []
+    const uso = blocos.find((b) => b['type'] === 'tool_use')
+    const proposta = propostaDoRetorno(uso?.['input'] as Record<string, unknown> | undefined)
     if (!proposta) {
       return { ok: false, motivo: 'resposta_inesperada', detalhe: 'sem bloco de ferramenta na resposta' }
     }
     return { ok: true, dados: proposta, custo: extrairCusto(dados, this.#modelo) }
-  }
-}
-
-/**
- * ⚠️ O ESQUEMA é o contrato. Campo que não está aqui não volta — e o que volta
- * ainda é validado pelo domínio antes de encostar no cadastro.
- */
-const FERRAMENTA_RESPOSTA = {
-  name: 'responder_ao_lead',
-  description: 'Responde ao lead e propõe o próximo passo.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      texto: { type: 'string', description: 'A mensagem a enviar, em pt-BR, curta.' },
-      proximoPasso: { type: 'string', enum: ['continuar', 'entregar', 'desistir'] },
-      motivo: { type: 'string', description: 'Por que entregar ou desistir. Vazio se continuar.' },
-      extraido: {
-        type: 'object',
-        description: 'Só o que o LEAD disse nesta conversa. Nunca deduza nem invente.',
-        properties: {
-          tipoCompra: { type: 'string', enum: ['consumo_final', 'revenda'] },
-          cidade: { type: 'string' },
-          volume: { type: 'string' },
-          cnpj: { type: 'string' },
-        },
-      },
-    },
-    required: ['texto', 'proximoPasso'],
-  },
-} as const
-
-/**
- * A instrução de sistema.
- *
- * ⚠️ **Nenhuma regra de negócio aqui.** Preço, pedido mínimo e prazo são domínio
- * — o que entra é o que o cliente CUROU (políticas) e o que já sabemos do lead.
- * Regra escrita no prompt falha em silêncio e ninguém testa.
- */
-function instrucaoDeSistema(p: PedidoDeTurno): string {
-  const l = p.lead
-  const sabemos = [
-    l.nome ? `Nome: ${l.nome}.` : null,
-    l.jaEhCliente ? `JÁ É CLIENTE (${l.comprasNoUltimoAno} compras no último ano).` : 'Ainda não é cliente.',
-    l.ultimaCompraEm ? `Última compra em ${l.ultimaCompraEm}.` : null,
-    l.cidade ? `Cidade: ${l.cidade}.` : null,
-    l.temCnpj ? 'CNPJ já cadastrado.' : null,
-  ].filter(Boolean).join(' ')
-
-  return [
-    'Você atende no WhatsApp de uma loja, FORA DO HORÁRIO comercial.',
-    'Seu papel é entender o que a pessoa precisa e preparar a entrega para um humano pela manhã.',
-    '',
-    'REGRAS:',
-    `- Escreva em pt-BR, no máximo ${p.maxCaracteres} caracteres, tom de gente.`,
-    '- NUNCA fale preço, prazo de entrega ou desconto que não esteja nas POLÍTICAS abaixo.',
-    '- NUNCA prometa, feche pedido ou confirme disponibilidade.',
-    '- NÃO pergunte o que já sabemos (abaixo). Pergunte só o que falta.',
-    '- Se a pessoa pedir humano, reclamar, cobrar ou falar de problema com pedido: proximoPasso = entregar.',
-    '- Se não souber responder pelas políticas: proximoPasso = entregar, com o motivo.',
-    '- Em extraido, só o que a pessoa DISSE nesta conversa. Nunca deduza.',
-    '',
-    `O QUE JÁ SABEMOS: ${sabemos || 'nada além do contato.'}`,
-    '',
-    'POLÍTICAS DA LOJA:',
-    p.politicas.trim(),
-  ].join('\n')
-}
-
-function extrairProposta(dados: Record<string, unknown> | null): PropostaDeTurno | null {
-  const blocos = Array.isArray(dados?.['content']) ? dados['content'] as Record<string, unknown>[] : []
-  const uso = blocos.find((b) => b['type'] === 'tool_use')
-  const entrada = uso?.['input'] as Record<string, unknown> | undefined
-  const texto = typeof entrada?.['texto'] === 'string' ? entrada['texto'].trim() : ''
-  if (!texto) return null
-
-  const passo = entrada?.['proximoPasso']
-  const proximoPasso = passo === 'entregar' || passo === 'desistir' ? passo : 'continuar'
-  const extraido = (entrada?.['extraido'] ?? {}) as Record<string, string | number | boolean | null>
-
-  return {
-    texto,
-    proximoPasso,
-    motivo: typeof entrada?.['motivo'] === 'string' ? entrada['motivo'] : '',
-    extraidoBruto: extraido,
   }
 }
 
