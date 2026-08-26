@@ -21,6 +21,16 @@ import type {
 
 const URL_COMPLETIONS = 'https://openrouter.ai/api/v1/chat/completions'
 const MAX_TOKENS_SAIDA = 700
+/**
+ * ⚠️ Limite do OpenRouter: o array `models` aceita no MÁXIMO 3 itens. Medido em
+ * produção (26/08) com uma lista de 7 — a resposta foi
+ * "'models' array must have 3 items or fewer".
+ *
+ * ⚠️ Cortar em silêncio seria pior: quem configurou sete acha que tem sete de
+ * reserva. Por isso a ordem importa e está documentada — vale o que vier
+ * PRIMEIRO em IA_MODELO, e o resto é ignorado pelo fornecedor, não por nós.
+ */
+const MAX_MODELOS = 3
 
 export interface CredencialOpenRouter {
   readonly apiKey: string
@@ -149,9 +159,12 @@ export class LlmOpenRouter implements PortaLlm {
  * existe porque é o que a pessoa naturalmente cola do catálogo — e recusar isso
  * produziria um 400 sobre "modelo inexistente" com o nome inteiro da lista
  * dentro, que é um erro impossível de entender.
+ *
+ * ⚠️ Corta em `MAX_MODELOS` porque o fornecedor recusa listas maiores. **A ORDEM
+ * DECIDE**: os primeiros são os que valem.
  */
 function listaDeModelos(bruto: string): readonly string[] {
-  return bruto.split(',').map((m) => m.trim()).filter(Boolean)
+  return bruto.split(',').map((m) => m.trim()).filter(Boolean).slice(0, MAX_MODELOS)
 }
 
 function extrairCusto(dados: Record<string, unknown> | null, modelo: string): CustoDoTurno {

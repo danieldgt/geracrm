@@ -333,3 +333,20 @@ describe('⚠️ IA_MODELO com vários modelos = cadeia de fallback', () => {
     expect(r.ok && r.custo.modelo).toBe('c/tres')
   })
 })
+
+describe('⚠️ O fornecedor aceita no máximo 3 modelos', () => {
+  /**
+   * Medido em produção: lista de 7 devolveu "'models' array must have 3 items or
+   * fewer". Cortamos no cliente para o erro não chegar ao cliente final — e a
+   * ORDEM de IA_MODELO passa a decidir quem fica.
+   */
+  it('lista longa é cortada nos três primeiros, na ordem escrita', async () => {
+    const { fetch, corpoEnviado } = respostaFalsa(RESPOSTA_OR)
+    await new LlmOpenRouter(
+      { apiKey: 'k', modelo: 'a/1,b/2,c/3,d/4,e/5,f/6,g/7' }, { buscar: fetch },
+    ).conversar(PEDIDO)
+    const c = corpoEnviado() as { model: string; models: string[] }
+    expect(c.models).toEqual(['a/1', 'b/2', 'c/3'])
+    expect(c.model).toBe('a/1')
+  })
+})
