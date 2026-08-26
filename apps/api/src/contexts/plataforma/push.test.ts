@@ -103,6 +103,32 @@ describe('⚠️ O payload não carrega a conversa', () => {
   })
 })
 
+/**
+ * ⚠️ O aviso da MESMA conversa substitui o anterior na tela (a `tag` do service
+ * worker existe para não empilhar dez avisos da mesma pessoa). Se o texto for
+ * idêntico, a substituição é indistinguível de nada ter acontecido — e foi
+ * exatamente assim que o push passou por "morto" em 26/08, com a entrega
+ * funcionando o tempo todo. O corpo tem de CARREGAR a novidade.
+ */
+describe('O aviso que substitui precisa trazer notícia', () => {
+  it('a partir da segunda, diz quantas mensagens novas', () => {
+    const p = JSON.parse(montarPayload('Maria da Silva', CONVERSA, 3))
+    expect(p.corpo).toContain('Maria da Silva')
+    expect(p.corpo).toContain('3')
+    // ⚠️ E continua sem o texto da mensagem: a tela de bloqueio é pública.
+    expect(JSON.stringify(p)).not.toContain('mensagem do cliente')
+  })
+
+  it('a primeira continua com a frase simples', () => {
+    expect(JSON.parse(montarPayload('Maria da Silva', CONVERSA, 1)).corpo)
+      .toBe('Maria da Silva respondeu')
+  })
+
+  it('sem nome e repetida, ainda conta', () => {
+    expect(JSON.parse(montarPayload('', CONVERSA, 4)).corpo).toContain('4')
+  })
+})
+
 describe('Despacho', () => {
   it('sem cursor (ninguém assinou), não empurra nada', async () => {
     await notificar('Maria')

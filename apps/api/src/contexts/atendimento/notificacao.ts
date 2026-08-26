@@ -106,7 +106,12 @@ async function notificar(
       INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, conversa_id)
       VALUES (tenant_atual(), ${randomUUID()}, ${usuarioId}, ${tipo}, ${titulo}, ${conversaId})
       ON CONFLICT (tenant_id, usuario_id, conversa_id) WHERE lida_em IS NULL AND conversa_id IS NOT NULL
-      DO UPDATE SET criado_em = now(), titulo = EXCLUDED.titulo`
+      -- ⚠️ A coluna vezes soma (0070). O push usa isso para que o aviso que
+      --    SUBSTITUI o anterior na tela diga que houve novidade — sem ele, a
+      --    segunda mensagem troca o aviso pelo mesmo texto e a pessoa conclui
+      --    que o push morreu.
+      DO UPDATE SET criado_em = now(), titulo = EXCLUDED.titulo,
+                    vezes = notificacao.vezes + 1`
 
     // Evento no canal do usuário — só avisa "algo novo no seu sino".
     await tx`

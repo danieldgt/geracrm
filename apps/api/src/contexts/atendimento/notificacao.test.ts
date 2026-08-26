@@ -142,6 +142,32 @@ describe('PLT-07: notificação de mensagem entrante', () => {
     expect(await contarNaoLidas()).toBe(1)
   })
 
+  /**
+   * ⚠️ O dedup acima é o que faz o push parecer morto: o segundo aviso da mesma
+   * conversa SUBSTITUI o primeiro na tela (a `tag` do service worker). Sem saber
+   * quantas mensagens entraram, o aviso substituto repete a mesma frase e a
+   * pessoa conclui que parou de funcionar — aconteceu em produção em 26/08.
+   */
+  it('⚠️ a pendência CONTA as mensagens que dedupou', async () => {
+    await dono`DELETE FROM notificacao WHERE tenant_id = ${T}`
+    await abrirAtendimento()
+    await notificar(); await notificar(); await notificar()
+    const [n] = await dono<{ vezes: number }[]>`
+      SELECT vezes FROM notificacao WHERE tenant_id = ${T} AND lida_em IS NULL LIMIT 1`
+    expect(n!.vezes).toBe(3)
+  })
+
+  it('lida a pendência, a contagem recomeça do 1', async () => {
+    await dono`DELETE FROM notificacao WHERE tenant_id = ${T}`
+    await abrirAtendimento()
+    await notificar(); await notificar()
+    await dono`UPDATE notificacao SET lida_em = now() WHERE tenant_id = ${T}`
+    await notificar()
+    const [n] = await dono<{ vezes: number }[]>`
+      SELECT vezes FROM notificacao WHERE tenant_id = ${T} AND lida_em IS NULL LIMIT 1`
+    expect(n!.vezes).toBe(1)
+  })
+
   it('marcar lida zera; nova entrante cria OUTRA pendência', async () => {
     await dono`DELETE FROM notificacao WHERE tenant_id = ${T}`
     await abrirAtendimento()

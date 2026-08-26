@@ -86,16 +86,30 @@ export function envioReal(cfg: ConfigVapid): EnviarPush {
  * O que aparece no aparelho. ⚠️ Nome de quem escreveu, nunca o texto: o título
  * é lido por quem estiver olhando a tela de bloqueio, e a conversa é do cliente.
  */
-export function montarPayload(titulo: string, conversaId: string): string {
+export function montarPayload(titulo: string, conversaId: string, vezes = 1): string {
   return JSON.stringify({
     titulo: 'Mensagem nova',
-    corpo: titulo ? `${titulo} respondeu` : 'Você tem uma mensagem no atendimento',
+    // ⚠️ A contagem existe por causa da `tag` do service worker: o aviso da mesma
+    //    conversa SUBSTITUI o anterior na tela. Repetir "Fulano respondeu" faz a
+    //    substituição parecer que nada aconteceu — e foi assim que o push passou
+    //    por "morto" em 26/08, estando vivo. Ver `0070`.
+    corpo: corpoDoAviso(titulo, vezes),
     conversaId,
   })
 }
 
+function corpoDoAviso(titulo: string, vezes: number): string {
+  if (!titulo) {
+    return vezes > 1
+      ? `${vezes} mensagens novas no atendimento`
+      : 'Você tem uma mensagem no atendimento'
+  }
+  return vezes > 1 ? `${titulo} · ${vezes} mensagens novas` : `${titulo} respondeu`
+}
+
 interface Pendente {
   titulo: string
+  vezes: number
   conversa_id: string | null
   assinatura_id: string
   endpoint: string
@@ -128,7 +142,7 @@ export async function despacharPushDoTenant(
   sql: Sql, tenantId: string, enviar: EnviarPush,
 ): Promise<ResultadoPush> {
   const pendentes = await sql<Pendente[]>`
-    SELECT n.titulo, n.conversa_id,
+    SELECT n.titulo, n.vezes, n.conversa_id,
            p.id AS assinatura_id, p.endpoint, p.p256dh, p.auth
       FROM notificacao n
       JOIN push_assinatura p ON p.tenant_id = n.tenant_id AND p.usuario_id = n.usuario_id
@@ -146,7 +160,7 @@ export async function despacharPushDoTenant(
   for (const p of pendentes) {
     const r = await enviar(
       { id: p.assinatura_id, tenant_id: tenantId, endpoint: p.endpoint, p256dh: p.p256dh, auth: p.auth },
-      montarPayload(p.titulo, p.conversa_id ?? ''),
+      montarPayload(p.titulo, p.conversa_id ?? '', p.vezes),
     )
     if (r.ok) {
       enviados++
