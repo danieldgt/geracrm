@@ -292,3 +292,44 @@ describe('Adaptador OpenRouter', () => {
     if (!r.ok) expect(r.motivo).toBe('conteudo_recusado')
   })
 })
+
+describe('⚠️ IA_MODELO com vários modelos = cadeia de fallback', () => {
+  /**
+   * Colar a lista do catálogo é o que a pessoa naturalmente faz — aconteceu em
+   * produção em 26/08. Recusar produziria um 400 sobre "modelo inexistente" com
+   * a lista inteira dentro do nome, que é impossível de entender.
+   */
+  const comLista = (corpo: unknown) => {
+    const { fetch, corpoEnviado } = respostaFalsa(corpo)
+    return {
+      llm: new LlmOpenRouter(
+        { apiKey: 'k', modelo: ' a/um , b/dois ,c/tres ' }, { buscar: fetch }),
+      corpoEnviado,
+    }
+  }
+
+  it('manda o primeiro em model e a lista inteira em models', async () => {
+    const { llm, corpoEnviado } = comLista(RESPOSTA_OR)
+    await llm.conversar(PEDIDO)
+    const c = corpoEnviado() as { model: string; models: string[] }
+    expect(c.model).toBe('a/um')
+    expect(c.models).toEqual(['a/um', 'b/dois', 'c/tres'])
+  })
+
+  it('com um modelo só, NÃO manda models — nada a rotear', async () => {
+    const { fetch, corpoEnviado } = respostaFalsa(RESPOSTA_OR)
+    await new LlmOpenRouter({ apiKey: 'k', modelo: 'a/um' }, { buscar: fetch }).conversar(PEDIDO)
+    expect(corpoEnviado()).not.toHaveProperty('models')
+  })
+
+  /**
+   * ⚠️ Sem isto, a conta de quem caiu no fallback ficaria atribuída ao primeiro
+   * da lista — e a medição de custo por modelo, que é o que decide qual manter,
+   * apontaria para o modelo errado.
+   */
+  it('o custo reporta quem REALMENTE respondeu, não o primeiro da lista', async () => {
+    const { llm } = comLista({ ...RESPOSTA_OR, model: 'c/tres' })
+    const r = await llm.conversar(PEDIDO)
+    expect(r.ok && r.custo.modelo).toBe('c/tres')
+  })
+})

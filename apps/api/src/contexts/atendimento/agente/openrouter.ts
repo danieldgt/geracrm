@@ -39,12 +39,15 @@ export class LlmOpenRouter implements PortaLlm {
 
   readonly #apiKey: string
   readonly #modelo: string
+  /** ⚠️ Cadeia de fallback: se o primeiro não atender, o OpenRouter tenta o próximo. */
+  readonly #modelos: readonly string[]
   readonly #buscar: typeof fetch
   readonly #timeoutMs: number
 
   constructor(cred: CredencialOpenRouter, opcoes: { buscar?: typeof fetch; timeoutMs?: number } = {}) {
     this.#apiKey = cred.apiKey
-    this.#modelo = cred.modelo.trim()
+    this.#modelos = listaDeModelos(cred.modelo)
+    this.#modelo = this.#modelos[0] ?? cred.modelo.trim()
     this.#buscar = opcoes.buscar ?? fetch
     this.#timeoutMs = opcoes.timeoutMs ?? 20_000
   }
@@ -52,6 +55,11 @@ export class LlmOpenRouter implements PortaLlm {
   async conversar(pedido: PedidoDeTurno): Promise<ResultadoLlm<PropostaDeTurno>> {
     const corpo = {
       model: this.#modelo,
+      // ⚠️ Só manda `models` quando há mais de um: a lista é a CADEIA DE
+      //    FALLBACK do OpenRouter — se o primeiro estiver fora, esgotado ou não
+      //    aceitar ferramenta, ele tenta o próximo antes de desistir. Um modelo
+      //    a mais é mais barato que mandar a conversa para a fila humana.
+      ...(this.#modelos.length > 1 ? { models: this.#modelos } : {}),
       max_tokens: MAX_TOKENS_SAIDA,
       // No formato OpenAI a instrução é a primeira MENSAGEM, não um campo à parte.
       messages: [
@@ -128,8 +136,22 @@ export class LlmOpenRouter implements PortaLlm {
     if (!proposta) {
       return { ok: false, motivo: 'resposta_inesperada', detalhe: 'resposta sem chamada de ferramenta' }
     }
-    return { ok: true, dados: proposta, custo: extrairCusto(dados, this.#modelo) }
+    // ⚠️ O custo reporta o modelo que REALMENTE respondeu (o OpenRouter devolve
+    //    em `model`), não o primeiro da lista — senão a conta de quem caiu no
+    //    fallback ficaria atribuída ao modelo errado.
+    const respondeu = typeof dados?.['model'] === 'string' ? dados['model'] : this.#modelo
+    return { ok: true, dados: proposta, custo: extrairCusto(dados, respondeu) }
   }
+}
+
+/**
+ * ⚠️ `IA_MODELO` aceita UM slug ou vários separados por vírgula. Aceitar a lista
+ * existe porque é o que a pessoa naturalmente cola do catálogo — e recusar isso
+ * produziria um 400 sobre "modelo inexistente" com o nome inteiro da lista
+ * dentro, que é um erro impossível de entender.
+ */
+function listaDeModelos(bruto: string): readonly string[] {
+  return bruto.split(',').map((m) => m.trim()).filter(Boolean)
 }
 
 function extrairCusto(dados: Record<string, unknown> | null, modelo: string): CustoDoTurno {
