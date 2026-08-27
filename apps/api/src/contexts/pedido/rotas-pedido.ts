@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { marcarResumoEnviado } from './confirmacao-pedido.js'
 import { efetivarPedido } from './efetivacao.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { enviarTextoNaConversa } from '../atendimento/envio-conversa.js'
@@ -493,7 +494,11 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     '/v1/pedidos/:id/cancelar', { preHandler: exigirTenant },
     async (req, reply) => {
       const [r] = await req.comTenant((tx) => tx`
-        UPDATE pedido SET estado = 'cancelado', atualizado_em = now()
+        UPDATE pedido SET estado = 'cancelado', atualizado_em = now(),
+                          -- ⚠️ Exigidos pelo CHECK do 0073: cancelado sem motivo
+                          --    vira mistério na semana seguinte.
+                          cancelado_em = now(),
+                          cancelado_motivo = 'cancelado pelo operador'
          WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND estado = 'rascunho' RETURNING id`)
       if (!r) return reply.code(409).send({ erro: 'pedido.nao_cancelavel', mensagem: 'Só um rascunho pode ser cancelado.' })
       return reply.send({ ok: true })
@@ -548,9 +553,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       if (!r.ok && r.motivo === 'conversa_nao_encontrada') return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       // Enviou → fica aguardando o SIM do cliente (só a partir de rascunho).
       if (r.ok) {
-        await req.comTenant((tx) => tx`
-          UPDATE pedido SET estado = 'aguardando_confirmacao', atualizado_em = now()
-           WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND estado = 'rascunho'`)
+        await req.comTenant((tx) => marcarResumoEnviado(tx, req.params.id, dados.conversaId))
       }
       // Devolve o conversaId para o front abrir o chat onde a mensagem caiu.
       return reply.send({ ok: r.ok, motivo: r.ok ? undefined : r.motivo, conversaId: dados.conversaId })

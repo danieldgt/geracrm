@@ -4,7 +4,7 @@ import type { MensagemEntrante } from './canais/porta.js'
 import { confirmarPedidoPorResposta } from '../pedido/confirmacao-pedido.js'
 import { consumirCodigoOrigem } from '../aquisicao/consumo-codigo.js'
 import { emSavepoint, type Sql } from '../../db/index.js'
-import { notificarMensagemEntrante } from './notificacao.js'
+import { notificarMensagemEntrante, notificarConfirmacaoSemPedido } from './notificacao.js'
 
 /**
  * Ingestão de mensagem ENTRANTE — o nosso fluxo (INV-12), não o do ERP.
@@ -190,7 +190,16 @@ export async function ingerirMensagemEntrante(
   if (msg.texto) {
     const texto = msg.texto
     try {
-      await emSavepoint(tx, (sp) => confirmarPedidoPorResposta(sp, conversaId, texto, msg.recebidaEm))
+      const r = await emSavepoint(tx, (sp) => confirmarPedidoPorResposta(sp, conversaId, texto, msg.recebidaEm))
+      // ⚠️ Cliente dizendo SIM sem nada para confirmar precisa de OLHO HUMANO.
+      //    Em 27/08 ele mandou "EU QUERO", "CONFIRME", "SIM SIM SIM", "FINALIZE"
+      //    e o produto ficou mudo — e cada repetição confirmava um pedido antigo
+      //    da pilha. Não respondemos ao cliente de propósito: pode ser que ele
+      //    queira MESMO um segundo pedido, e um robô dizendo "já confirmado"
+      //    encerraria a venda. Quem fala aqui é gente.
+      if (r.tipo === 'sem_pendente' || r.tipo === 'fora_da_janela') {
+        await emSavepoint(tx, (sp) => notificarConfirmacaoSemPedido(sp, conversaId))
+      }
     } catch { /* não bloqueia a mensagem */ }
 
     // 6.6 ⚠️ Veio da landing page? A primeira mensagem carrega o código de origem

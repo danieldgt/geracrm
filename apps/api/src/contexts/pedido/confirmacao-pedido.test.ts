@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import postgres from 'postgres'
-import { ehAfirmativo, confirmarPedidoPorResposta } from './confirmacao-pedido.js'
+import { ehAfirmativo, confirmarPedidoPorResposta, marcarResumoEnviado } from './confirmacao-pedido.js'
 import type { Sql } from '../../db/index.js'
 
 describe('ehAfirmativo', () => {
@@ -49,7 +49,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   await dono`DELETE FROM pedido WHERE tenant_id = ${T}`
   await dono`DELETE FROM outbox WHERE tenant_id = ${T} AND tipo = 'pedido.confirmado'`
-  await dono`INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, estado) VALUES (${T}, ${PED}, ${C1}, ${CONV}, 'aguardando_confirmacao')`
+  await dono`INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, estado, resumo_enviado_em)
+             VALUES (${T}, ${PED}, ${C1}, ${CONV}, 'aguardando_confirmacao', now())`
 })
 
 afterAll(async () => {
@@ -68,8 +69,8 @@ afterAll(async () => {
 
 describe('confirmarPedidoPorResposta', () => {
   it('⚠️ SIM confirma o pedido pendente e emite o evento', async () => {
-    const id = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'Sim, pode confirmar', new Date()))
-    expect(id).toBe(PED)
+    const r = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'Sim, pode confirmar', new Date()))
+    expect(r).toEqual({ tipo: 'confirmado', pedidoId: PED })
     const [p] = await dono<{ estado: string; confirmado_em: Date | null }[]>`SELECT estado, confirmado_em FROM pedido WHERE id = ${PED}`
     expect(p!.estado).toBe('confirmado')
     expect(p!.confirmado_em).not.toBeNull()
@@ -78,21 +79,119 @@ describe('confirmarPedidoPorResposta', () => {
   })
 
   it('resposta ambígua NÃO confirma', async () => {
-    const id = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim, mas troca a cor', new Date()))
-    expect(id).toBeNull()
+    const r = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim, mas troca a cor', new Date()))
+    expect(r).toEqual({ tipo: 'nao_afirmativo' })
     const [p] = await dono<{ estado: string }[]>`SELECT estado FROM pedido WHERE id = ${PED}`
     expect(p!.estado).toBe('aguardando_confirmacao')
   })
 
   it('idempotente: segundo SIM não reconfirma', async () => {
     await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim', new Date()))
-    const id2 = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim', new Date()))
-    expect(id2).toBeNull() // já não está mais aguardando
+    const r2 = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim', new Date()))
+    expect(r2).toEqual({ tipo: 'sem_pendente' })
   })
 
-  it('sem pedido pendente na conversa → null', async () => {
+  it('sem pedido pendente na conversa', async () => {
     await dono`UPDATE pedido SET estado = 'rascunho' WHERE id = ${PED}`
-    const id = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim', new Date()))
-    expect(id).toBeNull()
+    const r = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim', new Date()))
+    expect(r).toEqual({ tipo: 'sem_pendente' })
+  })
+})
+
+/**
+ * ⚠️ A JANELA DE 24H — nasceu de um incidente real (2026-08-27).
+ *
+ * O cliente recebeu o resumo de um pedido, disse "Sim" (confirmou o certo) e
+ * seguiu entusiasmado com "EU QUERO", "CONFIRME", "SIM SIM SIM". Cada afirmativa
+ * extra confirmou outro pendente da mesma conversa — inclusive um de TRÊS DIAS
+ * antes, que ele nunca viu ali. É a reclamação clássica: "confirmei um e vieram
+ * dois".
+ */
+describe('⚠️ Janela de 24h do "sim"', () => {
+  const envioHa = (horas: number) => dono`
+    UPDATE pedido SET estado = 'aguardando_confirmacao',
+                      resumo_enviado_em = now() - make_interval(hours => ${horas})
+     WHERE id = ${PED}`
+
+  it('resumo de 23 h atrás ainda confirma — quem responde de manhã é comércio normal', async () => {
+    await envioHa(23)
+    const r = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim', new Date()))
+    expect(r).toEqual({ tipo: 'confirmado', pedidoId: PED })
+  })
+
+  it('resumo de 25 h atrás NÃO confirma — quem confirma aí é uma pessoa', async () => {
+    await envioHa(25)
+    const r = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim', new Date()))
+    expect(r).toEqual({ tipo: 'fora_da_janela', pedidoId: PED })
+    const [p] = await dono<{ estado: string }[]>`SELECT estado FROM pedido WHERE id = ${PED}`
+    expect(p!.estado).toBe('aguardando_confirmacao')  // segue pendente, não confirmado
+  })
+
+  /**
+   * ⚠️ Pedido anterior ao 0073 não tem carimbo. Sem saber quando o cliente viu
+   * aquilo, confirmar é chute — e foi exatamente assim que o resumo de três dias
+   * antes virou pedido.
+   */
+  it('resumo SEM carimbo não confirma', async () => {
+    await dono`UPDATE pedido SET estado = 'aguardando_confirmacao', resumo_enviado_em = NULL WHERE id = ${PED}`
+    const r = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim', new Date()))
+    expect(r).toEqual({ tipo: 'fora_da_janela', pedidoId: PED })
+  })
+})
+
+/**
+ * ⚠️ UM PEDIDO PENDENTE POR CONVERSA — a outra metade do conserto de 27/08.
+ *
+ * Sem isto a conversa acumula pendentes e cada "sim" extra confirma outro da
+ * pilha. O superado é cancelado COM MOTIVO, não apagado: o vendedor precisa
+ * poder abrir, entender e reaproveitar o conteúdo depois.
+ */
+describe('⚠️ Resumo novo supera o pendente anterior', () => {
+  const OUTRO = 'c0f10000-9999-4000-8000-000000000002'
+
+  beforeEach(async () => {
+    await dono`DELETE FROM pedido WHERE tenant_id = ${T} AND id = ${OUTRO}`
+    await dono`UPDATE pedido SET estado = 'aguardando_confirmacao', resumo_enviado_em = now(),
+                                 cancelado_em = NULL, cancelado_motivo = NULL
+                WHERE id = ${PED}`
+  })
+
+  it('cancela o pendente anterior, com motivo, e deixa só um', async () => {
+    await dono`INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, estado)
+               VALUES (${T}, ${OUTRO}, ${C1}, ${CONV}, 'rascunho')`
+
+    const superados = await comoT((tx) => marcarResumoEnviado(tx, OUTRO, CONV))
+    expect(superados).toBe(1)
+
+    const [antigo] = await dono<{ estado: string; cancelado_motivo: string | null; cancelado_em: Date | null }[]>`
+      SELECT estado, cancelado_motivo, cancelado_em FROM pedido WHERE id = ${PED}`
+    expect(antigo!.estado).toBe('cancelado')
+    expect(antigo!.cancelado_motivo).toContain('resumo novo')
+    expect(antigo!.cancelado_em).not.toBeNull()
+
+    const [novo] = await dono<{ estado: string; resumo_enviado_em: Date | null }[]>`
+      SELECT estado, resumo_enviado_em FROM pedido WHERE id = ${OUTRO}`
+    expect(novo!.estado).toBe('aguardando_confirmacao')
+    expect(novo!.resumo_enviado_em).not.toBeNull()
+  })
+
+  /** ⚠️ Depois de superar, um "sim" só pode confirmar UM pedido. */
+  it('depois disso, o SIM confirma um só e o segundo não acha nada', async () => {
+    await dono`INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, estado)
+               VALUES (${T}, ${OUTRO}, ${C1}, ${CONV}, 'rascunho')`
+    await comoT((tx) => marcarResumoEnviado(tx, OUTRO, CONV))
+
+    const r1 = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'sim', new Date()))
+    expect(r1).toEqual({ tipo: 'confirmado', pedidoId: OUTRO })
+    const r2 = await comoT((tx) => confirmarPedidoPorResposta(tx, CONV, 'SIM SIM SIM', new Date()))
+    expect(r2).toEqual({ tipo: 'sem_pendente' })
+  })
+
+  it('rascunho de OUTRA conversa não é tocado', async () => {
+    await dono`INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, estado)
+               VALUES (${T}, ${OUTRO}, ${C1}, NULL, 'aguardando_confirmacao')`
+    await comoT((tx) => marcarResumoEnviado(tx, PED, CONV))
+    const [fora] = await dono<{ estado: string }[]>`SELECT estado FROM pedido WHERE id = ${OUTRO}`
+    expect(fora!.estado).toBe('aguardando_confirmacao')
   })
 })

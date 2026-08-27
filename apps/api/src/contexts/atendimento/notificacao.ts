@@ -28,18 +28,52 @@ export async function notificarMensagemEntrante(
   tx: Sql,
   p: { conversaId: string },
 ): Promise<void> {
+  const q = await quemAvisar(tx, p.conversaId)
+  if (q) await notificar(tx, q.alvos, q.tipo, q.titulo, p.conversaId)
+}
+
+/**
+ * ⚠️ O cliente está dizendo SIM e NÃO há pedido para confirmar.
+ *
+ * Aconteceu em produção (27/08): o cliente confirmou o pedido certo e seguiu com
+ * "EU QUERO", "CONFIRME", "SIM SIM SIM", "FINALIZE" — e o produto ficou mudo. Ele
+ * repetiu porque não teve retorno, e cada repetição confirmava um pedido antigo
+ * da pilha.
+ *
+ * ⚠️ Avisa o ATENDENTE, e não responde ao cliente — decisão de produto de 27/08.
+ * Quem fala com o cliente nesse caso é gente: pode ser que ele queira mesmo um
+ * segundo pedido, e um robô dizendo "já está confirmado" encerraria a venda.
+ *
+ * ⚠️ Reaproveita a pendência da conversa (uma por usuário/conversa): o título
+ * TROCA para dizer o que está acontecendo, em vez de empilhar um aviso paralelo
+ * que competiria com o da mensagem nova.
+ */
+export async function notificarConfirmacaoSemPedido(
+  tx: Sql, conversaId: string,
+): Promise<void> {
+  const q = await quemAvisar(tx, conversaId)
+  if (!q) return
+  await notificar(tx, q.alvos, 'pedido.confirmacao_sem_pendente',
+    `${q.titulo} — está confirmando, e não há pedido pendente`, conversaId)
+}
+
+/**
+ * Quem precisa saber de algo nesta conversa: o atendente que a assumiu ou, sem
+ * dono, a fila. ⚠️ Um lugar só — duas cópias divergiriam e um dos avisos
+ * passaria a acordar a pessoa errada.
+ */
+async function quemAvisar(
+  tx: Sql, conversaId: string,
+): Promise<{ alvos: readonly string[]; tipo: string; titulo: string } | null> {
   const [alvo] = await tx<{ atendente_id: string; titulo: string }[]>`
     SELECT a.atendente_id, ct.nome AS titulo
       FROM atendimento a
       JOIN conversa c ON c.tenant_id = a.tenant_id AND c.id = a.conversa_id
       JOIN contato  ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contato_id
-     WHERE a.tenant_id = tenant_atual() AND a.conversa_id = ${p.conversaId}
+     WHERE a.tenant_id = tenant_atual() AND a.conversa_id = ${conversaId}
        AND a.estado <> 'encerrado' AND a.atendente_id IS NOT NULL
      LIMIT 1`
-  if (alvo) {
-    await notificar(tx, [alvo.atendente_id], 'mensagem.nova', alvo.titulo, p.conversaId)
-    return
-  }
+  if (alvo) return { alvos: [alvo.atendente_id], tipo: 'mensagem.nova', titulo: alvo.titulo }
 
   // ── Sem dono: é a FILA que precisa saber ────────────────────────────────
   const [contexto] = await tx<{ titulo: string; canal_id: string; dono_carteira: string | null }[]>`
@@ -49,12 +83,12 @@ export async function notificarMensagemEntrante(
              LIMIT 1) AS dono_carteira
       FROM conversa c
       JOIN contato ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contato_id
-     WHERE c.tenant_id = tenant_atual() AND c.id = ${p.conversaId}`
-  if (!contexto) return
+     WHERE c.tenant_id = tenant_atual() AND c.id = ${conversaId}`
+  if (!contexto) return null
 
   const alvos = await destinatariosDaFila(tx, contexto.canal_id, contexto.dono_carteira)
-  if (alvos.length === 0) return
-  await notificar(tx, alvos, 'fila.nova', contexto.titulo, p.conversaId)
+  if (alvos.length === 0) return null
+  return { alvos, tipo: 'fila.nova', titulo: contexto.titulo }
 }
 
 /**
