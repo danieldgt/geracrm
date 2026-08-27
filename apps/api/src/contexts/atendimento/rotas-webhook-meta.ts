@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { sql, comTenantServico } from '../../db/index.js'
 import { parseWebhookMeta, verificarAssinaturaMeta } from './canais/meta.js'
 import { ingerirMensagemEntrante, registrarStatusMensagem } from './ingestao-mensagem.js'
+import { responderAutomaticamente } from './resposta-automatica.js'
 
 /**
  * Webhook da Meta (WhatsApp Cloud API / Instagram Direct).
@@ -78,11 +79,34 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
             req.log.info({ tipo: ev.conteudo.tipo }, 'webhook meta: mídia adiada')
             continue
           }
-          await comTenantServico(canal.tenant_id, (tx) =>
+          const r = await comTenantServico(canal.tenant_id, (tx) =>
             ingerirMensagemEntrante(tx, canal.canal_id, {
               deE164: ev.de, idExterno: ev.idExterno, tipo: 'texto', texto: ev.conteudo.texto,
               nomeRemetente: ev.nomePerfil ?? undefined, recebidaEm: new Date(ev.timestamp * 1000),
             }))
+
+          // ⚠️ Ausência e agente valem no canal OFICIAL igual: quem escreve às
+          //    23h merece a mesma resposta, venha por onde vier. Faltava aqui —
+          //    o produto respondia sozinho só no não-oficial, e isso só apareceria
+          //    no dia em que o registro na Meta saísse.
+          //
+          // ⚠️ Pós-commit e best-effort: a mensagem do cliente já está salva, e
+          //    erro aqui NÃO pode virar 500 — a Meta reenviaria o evento em loop,
+          //    travando a fila sequencial de todos os clientes.
+          //
+          // ⚠️ A janela de 24h está aberta por construção: o cliente ACABOU de
+          //    escrever. É o único momento em que texto livre é permitido no
+          //    oficial, e é exatamente quando isto roda.
+          if (r.ok && !r.duplicada) {
+            try {
+              const auto = await responderAutomaticamente(canal.tenant_id, r.conversaId, canal.canal_id)
+              if (auto.ausencia === 'enviada' || auto.agenteFalou) {
+                req.log.info({ canalId: canal.canal_id, ...auto }, 'resposta automática (meta)')
+              }
+            } catch (erro) {
+              req.log.warn({ erro, canalId: canal.canal_id }, 'resposta automática falhou (mensagem já está salva)')
+            }
+          }
         } else if (ev.status === 'enviada' || ev.status === 'entregue' || ev.status === 'lida') {
           await comTenantServico(canal.tenant_id, (tx) => registrarStatusMensagem(tx, ev.idExterno, ev.status as 'enviada' | 'entregue' | 'lida'))
         }
