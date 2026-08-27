@@ -26,7 +26,7 @@ const FILTROS = [
   { chave: 'rascunho', rotulo: 'Rascunhos' },
   { chave: 'aguardando_confirmacao', rotulo: 'Aguardando SIM' },
   { chave: 'confirmado', rotulo: 'Confirmados' },
-  { chave: 'efetivado', rotulo: 'Efetivados' },
+  { chave: 'efetivado', rotulo: 'No ERP' },
   { chave: 'falhou', rotulo: 'Falharam' },
 ]
 
@@ -133,6 +133,16 @@ const FILTROS = [
             <!-- ⚠️ Cancelado NÃO é um sumiço: mostra por quê e deixa reaproveitar.
                  Um pedido superado por um resumo novo continua valendo como
                  trabalho de montagem — o vendedor abre, ajusta e reenvia. -->
+            <!-- ⚠️ O ERP recebe ORÇAMENTO, não venda: o status é fixo nessa via.
+                 Sem dizer isso aqui, o operador lê "no ERP" e entende que a
+                 venda fechou — e descobre o contrário no fim do mês. -->
+            @if (d.estado === 'efetivado') {
+              <p class="m-orcamento">
+                <strong>Orçamento criado no ERP.</strong>
+                Para faturar, converta em venda no GeraCloud.
+              </p>
+            }
+
             @if (d.estado === 'cancelado') {
               <div class="m-cancel">
                 <div><strong>Cancelado</strong> — {{ d.canceladoMotivo ?? 'sem motivo registrado' }}</div>
@@ -209,6 +219,9 @@ const FILTROS = [
       border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--texto);
       font-size: 13px; display: grid; gap: var(--espacamento-2); justify-items: start; }
     .m-cancel .err { color: var(--erro); font-size: 12px; }
+    .m-orcamento { margin-top: var(--espacamento-3); padding: var(--espacamento-3);
+      border-radius: var(--raio-controle); background: var(--acao-suave); color: var(--texto);
+      font-size: 13px; line-height: 1.5; }
     .badge--aguardando_conferencia { background: var(--atencao-suave); color: var(--atencao); }
     .mais { margin-top: var(--espacamento-4); }
     @media (max-width: 560px) { .data { display: none; } }
@@ -273,7 +286,7 @@ export class PedidosPagina implements OnInit {
     return p.join(' · ')
   }
   rotuloEstado(e: string): string {
-    return { rascunho: 'Rascunho', aguardando_confirmacao: 'Aguardando SIM', confirmado: 'Confirmado', efetivado: 'Efetivado', falhou: 'Falhou', cancelado: 'Cancelado', aguardando_conferencia: 'Conferência', enviando: 'Enviando', validando: 'Validando' }[e] ?? e
+    return { rascunho: 'Rascunho', aguardando_confirmacao: 'Aguardando SIM', confirmado: 'Confirmado', efetivado: 'No ERP', falhou: 'Falhou', cancelado: 'Cancelado', aguardando_conferencia: 'Conferência', enviando: 'Enviando', validando: 'Validando' }[e] ?? e
   }
   trocar(f: string): void { this.filtro.set(f); void this.carregar() }
 

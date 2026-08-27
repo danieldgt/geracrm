@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { marcarResumoEnviado } from './confirmacao-pedido.js'
 import { efetivarPedido } from './efetivacao.js'
+import { conectorDoTenant } from '../integracao/conector-do-tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { enviarTextoNaConversa } from '../atendimento/envio-conversa.js'
 import { resumoPedidoTexto, codigoReferencia } from './resumo-pedido.js'
@@ -380,12 +381,13 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     { preHandler: exigirTenant },
     async (req, reply) => {
       const r = await req.comTenant(async (tx) => {
-        // Conector fonte-de-venda do tenant (para o `sistema` da identidade externa).
-        const [cx] = await tx<{ conector: string }[]>`
-          SELECT conector FROM conexao_erp WHERE tenant_id = tenant_atual() AND fonte_de_venda LIMIT 1`
-        // ⚠️ Nenhum conector atual tem escritaPedido → passamos null (degrada).
-        //    Quando um conector com escrita existir, instancia-se aqui.
-        return efetivarPedido(tx, null, cx?.conector ?? '', req.params.id, new Date())
+        // ⚠️ O conector REAL do tenant, com a credencial cifrada dele. Antes isto
+        //    era `null` fixo e todo pedido caía em `degradado` — a escrita no
+        //    GeraCloud existia, testada contra o ERP, e nunca era usada.
+        //    Sem conexão ou sem adaptador de escrita, o conector volta null e a
+        //    degradação segue visível (ADR-008): o rascunho não se perde.
+        const cx = await conectorDoTenant(tx)
+        return efetivarPedido(tx, cx.conector, cx.sistema, req.params.id, new Date())
       })
 
       switch (r.tipo) {
@@ -395,7 +397,15 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         case 'degradado':      return reply.send({ ok: false, degradado: true, mensagem: 'Seu ERP não recebe pedido automático. Exporte e registre no ERP.' })
         case 'aguardando_conferencia': return reply.code(202).send({ ok: false, estado: 'aguardando_conferencia', mensagem: 'A resposta do ERP se perdeu. Estamos conferindo se o pedido entrou — não reenvie.' })
         case 'falha':          return reply.code(409).send({ ok: false, estado: 'falhou', falha: r.falha, mensagem: mensagemFalha(r.falha) })
-        case 'efetivado':      return reply.send({ ok: true, numeroExterno: r.numeroExterno })
+        case 'efetivado':
+          // ⚠️ No GeraCloud esta via cria ORÇAMENTO, não venda (status fixo
+          //    'Orcamento' — ver orcamento.ts). Quem ler "efetivado" e entender
+          //    "venda fechada" se surpreende no fim do mês, então a mensagem diz
+          //    o que existe do outro lado e o que ainda falta fazer lá.
+          return reply.send({
+            ok: true, numeroExterno: r.numeroExterno,
+            mensagem: 'Orçamento criado no ERP. Converta em venda por lá para faturar.',
+          })
       }
     },
   )
