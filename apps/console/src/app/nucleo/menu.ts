@@ -66,7 +66,7 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'SLA, tempo de primeira resposta (humana), a contra-métrica MC-05.' },
       { rota: 'canal-config', rotulo: 'Config. do Canal', icone: '⚙️', status: 'pronto', onda: 'O1',
         descricao: 'Horário de atendimento, mensagem de ausência, assinatura.' },
-      { rota: 'agente', rotulo: 'Agente SDR', icone: '🤖', status: 'construcao', onda: 'O4',
+      { rota: 'agente', rotulo: 'Agente SDR', icone: '🤖', status: 'pronto', onda: 'O4',
         descricao: 'Atende fora do expediente, coleta o que falta e entrega ao humano — com auditoria.' },
     ],
   },

@@ -14,7 +14,11 @@ import { guardaAuth } from './nucleo/auth.guarda.js'
  */
 
 // As telas reais já construídas. Lazy para não pesar o bundle inicial.
-const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
+/**
+ * ⚠️ Exportado para o teste: tela registrada aqui e marcada como `construcao` no
+ * menu fica ESCONDIDA atrás do placeholder, sem erro nenhum. Ver `rotas.spec.ts`.
+ */
+export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
   conversas: () =>
     import('./funcionalidades/atendimento/inbox.pagina.js').then((m) => m.InboxPagina),
   numeros: () =>
