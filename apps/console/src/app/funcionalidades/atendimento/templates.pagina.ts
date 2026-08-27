@@ -123,7 +123,9 @@ const ERRO_CRIAR: Record<string, string> = {
     }
   `,
   styles: `
-    :host { display: block; height: 100%; padding: var(--espacamento-6); overflow: auto; }
+    /* min-height (não height 100%): a casca é célula de grid e não resolve
+       percentual — ver altura-de-tela.spec.ts. */
+    :host { display: block; min-height: 100dvh; padding: var(--espacamento-6); overflow: auto; }
     .cabecalho { margin-bottom: var(--espacamento-3); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }

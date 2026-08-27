@@ -302,7 +302,10 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
       --wa-chat: var(--fundo); --wa-in: var(--superficie-elevada); --wa-out: var(--acao-suave);
       --wa-text: var(--texto); --wa-sec: var(--texto-secundario); --wa-green: var(--acao);
       --wa-line: var(--borda);
-      display: block; height: 100%; min-height: 0; color: var(--wa-text);
+      /* ⚠️ 100dvh, não height 100%: a casca é célula de grid e não resolve
+         percentual do filho — ver altura-de-tela.spec.ts. O inbox ocupa a tela
+         inteira e o scroll é das colunas internas. */
+      display: block; height: 100dvh; min-height: 0; color: var(--wa-text);
       /* ⚠️ O inbox reage à PRÓPRIA largura (é filho do rail redimensionável),
          não à da janela — container query em vez de @media. */
       container-type: inline-size;

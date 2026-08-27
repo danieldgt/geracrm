@@ -133,7 +133,13 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
     }
   `,
   styles: `
-    :host { display: block; height: 100%; padding: var(--espacamento-6); overflow: hidden; display: flex; flex-direction: column; }
+    /* ⚠️ NÃO volte para height 100%. A casca põe a tela numa CÉLULA DE GRID com
+       overflow próprio, e célula de grid não resolve altura percentual do filho:
+       o 100% vira zero, o board com flex 1 colapsa e os cards espremem para 1px.
+       Aconteceu com 813 leads em 27/ago. E havia DOIS display na mesma regra —
+       o segundo vencia calado. */
+    :host { display: flex; flex-direction: column; min-height: 100dvh;
+      padding: var(--espacamento-6); overflow: hidden; }
     .cabecalho { margin-bottom: var(--espacamento-4); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
     /* Painel de métricas */
     .metricas { margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
@@ -154,9 +160,9 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
-    .board { display: flex; gap: var(--espacamento-3); align-items: flex-start; flex: 1; min-height: 0; padding-bottom: var(--espacamento-2); }
+    .board { display: flex; gap: var(--espacamento-3); align-items: stretch; flex: 1; min-height: 0; overflow-x: auto; padding-bottom: var(--espacamento-2); }
     .col-esq { width: 280px; height: 200px; border-radius: var(--raio-painel); background: var(--superficie); flex: none; }
-    .coluna { width: 280px; flex: none; display: flex; flex-direction: column; max-height: 100%;
+    .coluna { width: 280px; flex: none; display: flex; flex-direction: column; min-height: 0;
       background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; }
     .coluna--ganho { border-top: 2px solid var(--sucesso); }
     .coluna--perdido { border-top: 2px solid var(--erro); }
