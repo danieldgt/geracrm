@@ -297,6 +297,14 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
     /* ⚠️ Layout estilo WhatsApp, mas COR pela identidade do app (neutro + azul,
        claro/escuro) — os apelidos --wa-* agora apontam para os tokens, então o
        inbox é coeso com o resto e troca de tema junto. */
+    /* ⚠️ Altura DEFINIDA, e há dois jeitos de errar isto — os dois já
+       aconteceram nesta tela:
+       · height 100% vira ZERO, porque a casca é célula de grid e não resolve
+         percentual do filho (foi o incidente dos 813 leads virando listras);
+       · min-height não LIMITA nada, então o host cresce com o conteúdo, a
+         coluna cresce junto e o overflow-y dela nunca dispara — a página
+         inteira passa a rolar no lugar da coluna.
+       O que sobra é a viewport menos a barra da casca. */
     :host {
       --wa-sidebar: var(--superficie); --wa-panel: var(--superficie-elevada); --wa-hover: var(--superficie-hover);
       --wa-chat: var(--fundo); --wa-in: var(--superficie-elevada); --wa-out: var(--acao-suave);
@@ -305,7 +313,7 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
       /* ⚠️ 100dvh, não height 100%: a casca é célula de grid e não resolve
          percentual do filho — ver altura-de-tela.spec.ts. O inbox ocupa a tela
          inteira e o scroll é das colunas internas. */
-      display: block; height: 100dvh; min-height: 0; color: var(--wa-text);
+      display: block; height: calc(100dvh - var(--altura-barra-topo)); min-height: 0; color: var(--wa-text);
       /* ⚠️ O inbox reage à PRÓPRIA largura (é filho do rail redimensionável),
          não à da janela — container query em vez de @media. */
       container-type: inline-size;

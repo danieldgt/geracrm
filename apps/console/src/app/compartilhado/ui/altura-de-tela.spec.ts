@@ -17,7 +17,14 @@ import { dirname, resolve } from 'node:path'
  * "não consigo ver nada". As outras TRÊS telas com a mesma regra não reclamavam
  * porque tinham poucos cards — estavam quebradas do mesmo jeito, esperando dado.
  *
- * O caminho certo é `min-height: 100dvh`, que não depende do pai.
+ * ⚠️ E `min-height: 100dvh` TAMBÉM está errado, pelo motivo oposto: não limita
+ * nada. O host cresce com o conteúdo, a coluna cresce junto e o `overflow-y`
+ * dela nunca dispara — a página inteira rola no lugar da coluna. Foi o que eu
+ * introduzi ao consertar o colapso, e só apareceu quando o usuário disse que o
+ * Painel de Atendimentos "não abria".
+ *
+ * O caminho certo é `height: calc(100dvh - var(--altura-barra-topo))`: altura
+ * DEFINIDA, que não depende do pai e limita de verdade.
  *
  * ⚠️ Este teste também pega o `display` DUPLICADO na mesma regra, que era o outro
  * lado do defeito: `display: block` seguido de `display: flex` na mesma linha.
@@ -33,7 +40,15 @@ function achar(dir: string, achados: string[] = []): string[] {
 
     for (const regra of src.match(/:host\s*\{[^}]*\}/g) ?? []) {
       if (/height:\s*100%/.test(regra)) {
-        achados.push(`${ent.name}: ':host' com height 100% — use min-height: 100dvh`)
+        achados.push(`${ent.name}: ':host' com height 100% — vira ZERO na célula de grid`)
+      }
+      // ⚠️ O OUTRO jeito de errar, descoberto em 27/ago: `min-height` não LIMITA
+      //    nada. O host cresce com o conteúdo, a coluna cresce junto e o
+      //    `overflow-y` dela nunca dispara — a página inteira passa a rolar no
+      //    lugar da coluna, e o kanban vira uma tira. Foi o que eu introduzi ao
+      //    consertar o colapso: troquei um defeito pelo seu oposto.
+      if (/min-height:\s*100dvh/.test(regra)) {
+        achados.push(`${ent.name}: ':host' com min-height 100dvh — não limita, a coluna perde o scroll`)
       }
       if ((regra.match(/(?:^|[;{\s])display\s*:/g) ?? []).length > 1) {
         achados.push(`${ent.name}: ':host' declara 'display' duas vezes — a segunda vence calada`)

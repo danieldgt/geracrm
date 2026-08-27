@@ -125,7 +125,15 @@ const ERRO_CRIAR: Record<string, string> = {
   styles: `
     /* min-height (não height 100%): a casca é célula de grid e não resolve
        percentual — ver altura-de-tela.spec.ts. */
-    :host { display: block; min-height: 100dvh; padding: var(--espacamento-6); overflow: auto; }
+    /* ⚠️ Altura DEFINIDA, e há dois jeitos de errar isto — os dois já
+       aconteceram nesta tela:
+       · height 100% vira ZERO, porque a casca é célula de grid e não resolve
+         percentual do filho (foi o incidente dos 813 leads virando listras);
+       · min-height não LIMITA nada, então o host cresce com o conteúdo, a
+         coluna cresce junto e o overflow-y dela nunca dispara — a página
+         inteira passa a rolar no lugar da coluna.
+       O que sobra é a viewport menos a barra da casca. */
+    :host { display: block; height: calc(100dvh - var(--altura-barra-topo)); padding: var(--espacamento-6); overflow: auto; }
     .cabecalho { margin-bottom: var(--espacamento-3); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }

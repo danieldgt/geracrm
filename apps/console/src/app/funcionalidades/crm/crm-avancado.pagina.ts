@@ -86,7 +86,15 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
        o 100% vira zero, o board com flex 1 colapsa e os cards espremem para 1px.
        Aconteceu com 813 leads em 27/ago. E havia DOIS display na mesma regra —
        o segundo vencia calado. */
-    :host { display: flex; flex-direction: column; min-height: 100dvh;
+    /* ⚠️ Altura DEFINIDA, e há dois jeitos de errar isto — os dois já
+       aconteceram nesta tela:
+       · height 100% vira ZERO, porque a casca é célula de grid e não resolve
+         percentual do filho (foi o incidente dos 813 leads virando listras);
+       · min-height não LIMITA nada, então o host cresce com o conteúdo, a
+         coluna cresce junto e o overflow-y dela nunca dispara — a página
+         inteira passa a rolar no lugar da coluna.
+       O que sobra é a viewport menos a barra da casca. */
+    :host { display: flex; flex-direction: column; height: calc(100dvh - var(--altura-barra-topo));
       padding: var(--espacamento-6); overflow: hidden; }
     .cabecalho { margin-bottom: var(--espacamento-4); }
     h1 { margin: 0; color: var(--texto); }
