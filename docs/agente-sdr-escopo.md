@@ -1,7 +1,7 @@
 # Agente SDR (AQ-19 / EP-18) — escopo antes do código
 
-> **Estado:** escopo com as quatro decisões bloqueantes RESPONDIDAS (2026-08-26). Nada implementado
-> ainda. As decisões restantes seguem marcadas com **[DECIDIR]**.
+> **Estado (2026-08-27):** **fatia 1 implementada e no ar**, desligada por padrão. As decisões
+> bloqueantes foram respondidas; o que resta em aberto está marcado com **[DECIDIR]**.
 > **Regras que governam:** skill `geracrm-ia` (camada "agente autônomo"), ADR-005, ADR-021, INV-50.
 
 ---
@@ -82,8 +82,9 @@ Ele **para e chama humano** quando:
 - **Sinal emocional.** Cliente irritado, ameaça de cancelamento, reclamação pública.
 - **Pedido de humano.** "Quero falar com alguém" encerra o turno do agente, sempre.
 - **Qualificou.** Missão cumprida — entrega com contexto.
-- **Limite de turnos.** **[DECIDIR]** quantas idas e vindas antes de desistir. Sem teto, um cliente
-  confuso conversa com o robô por vinte mensagens e vai embora.
+- **Limite de turnos.** ✅ Implementado: `agente_config.max_turnos`, padrão 6, ajustável de 1 a 20
+  por número na tela. Bater no teto ENCERRA a sessão com motivo — sem isso ela ficaria aberta para
+  sempre e a conversa nunca chegaria ao humano.
 
 ⚠️ **Handoff sem contexto é pior que não ter agente**: o cliente repete tudo para o humano, e a
 sensação é de ter perdido tempo com uma máquina. O handoff carrega resumo, dados extraídos e o
@@ -129,8 +130,9 @@ curado pelo cliente para políticas (prazo, pagamento, entrega, troca).
 
 ⚠️ **Consequência de onboarding:** cada cliente novo precisa escrever o texto de políticas antes de
 ligar o agente. Isso é trabalho dele, não nosso — e um agente ligado com a base vazia responde
-"não sei" a tudo, o que é pior que não ter agente. **[DECIDIR]** se o produto BLOQUEIA ligar o
-agente com a base de políticas vazia. Recomendo bloquear.
+"não sei" a tudo, o que é pior que não ter agente. ✅ **Implementado: o produto BLOQUEIA** — recusa
+na tela com a frase que diz o que fazer, e um CHECK no banco como rede de segurança (`0071`).
+Modelo de texto pronto em `agente-politicas-exemplo.md`.
 
 ### 4.3 ✅ Fora do expediente — **decidido**
 
@@ -145,7 +147,7 @@ As três opções ficam registradas para quando o 24/7 voltar à mesa:
 | 24/7 com humano por cima | Máximo ganho. ⚠️ Agente e humano na mesma conversa ao mesmo tempo é o problema difícil |
 | 24/7, humano só no handoff | Simples de programar, mas o time perde o contato com o cliente |
 
-### 4.3.1 ⚠️ E a resposta de ausência? — **[DECIDIR], e bloqueia a fatia 1**
+### 4.3.1 ✅ E a resposta de ausência? — **decidido e implementado**
 
 Escolher "fora do expediente" cria um choque que não existia: **a ausência já ocupa esse horário.**
 Ela está em produção, funcionando, e dispara em 2 segundos. Se o agente também responder, o cliente
@@ -160,12 +162,9 @@ Três desenhos possíveis:
 | **Ausência primeiro, agente se a pessoa responder** | "Voltamos às 9h" e, se ela insistir, o agente | Mais conversas mortas; mas quem responde está engajado |
 | **Agente só para contato NOVO**, ausência para quem já é cliente | Depende de quem é | Mais código, e o cliente antigo perde o agente |
 
-**Recomendo o segundo.** A ausência é honesta (ninguém está mesmo) e barata; quem responde depois
-dela mostrou interesse, que é exatamente o lead que vale o custo do agente. E o desenho degrada
-sozinho: se o agente cair, sobra a ausência, que é o comportamento de hoje.
-
-⚠️ Isto precisa ser decidido antes da fatia 1 porque muda o gatilho: o agente não escuta "mensagem
-entrante fora do expediente", e sim "mensagem entrante **depois** de uma ausência já enviada".
+✅ **Escolhido o segundo** (26/08) e implementado: o agente não escuta "mensagem fora do
+expediente", e sim "mensagem **depois** de uma ausência já enviada, nas últimas 12h". Vale para os
+dois webhooks — não-oficial e Meta — a partir de um lugar só (`resposta-automatica.ts`).
 
 ### 4.4 **[DECIDIR]** Canal: oficial, não-oficial, ou os dois?
 
