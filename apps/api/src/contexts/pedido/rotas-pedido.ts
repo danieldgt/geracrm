@@ -286,8 +286,10 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
           id: string; estado: string; total_centavos: string; total_pecas: string; contato_id: string | null
           ultimo_erro: unknown; forma_pagamento: string | null; observacao: string | null; nome: string | null
           contato: string | null; numero_externo: string | null; criado_em: Date; confirmado_em: Date | null
+          cancelado_em: Date | null; cancelado_motivo: string | null
         }[]>`SELECT p.id, p.estado, p.total_centavos::text, p.total_pecas::text, p.contato_id, p.ultimo_erro,
                     p.forma_pagamento, p.observacao, p.nome, p.numero_externo, p.criado_em, p.confirmado_em,
+                    p.cancelado_em, p.cancelado_motivo,
                     c.nome AS contato
                FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
               WHERE p.id = ${req.params.id}`
@@ -312,6 +314,11 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         numeroExterno: dados.pedido.numero_externo,
         criadoEm: dados.pedido.criado_em,
         confirmadoEm: dados.pedido.confirmado_em,
+        // ⚠️ O motivo vai para a TELA. Cancelamento sem razão visível vira
+        //    mistério na semana seguinte — e o vendedor precisa saber se aquele
+        //    pedido foi superado por um resumo novo ou cancelado à mão.
+        canceladoEm: dados.pedido.cancelado_em,
+        canceladoMotivo: dados.pedido.cancelado_motivo,
         ultimoErro: dados.pedido.ultimo_erro ?? null,
         formaPagamento: dados.pedido.forma_pagamento,
         observacao: dados.pedido.observacao,
@@ -490,6 +497,39 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
   )
 
   /** Cancela um rascunho (não efetivado). */
+  /**
+   * REABRIR um pedido cancelado — volta a rascunho para ser editado e reenviado.
+   *
+   * ⚠️ Existe porque cancelar não pode ser um sumiço. Um pedido é superado por um
+   * resumo novo (ou cancelado por engano) e o trabalho de montagem continua
+   * valendo: o vendedor abre, ajusta e manda de novo. Sem isto, "cancelado com
+   * motivo" seria só uma lápide bonita.
+   */
+  app.post<{ Params: { id: string } }>(
+    '/v1/pedidos/:id/reabrir', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const [r] = await req.comTenant((tx) => tx<{ id: string }[]>`
+        UPDATE pedido
+           SET estado = 'rascunho', atualizado_em = now(),
+               -- ⚠️ Exigido pelo CHECK do 0073: fora de cancelado, os campos de
+               --    cancelamento têm de estar vazios.
+               cancelado_em = NULL, cancelado_motivo = NULL,
+               -- O resumo antigo não vale mais: quem reabrir precisa enviar outro.
+               resumo_enviado_em = NULL, confirmado_em = NULL
+         WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND estado = 'cancelado'
+        RETURNING id`)
+      // ⚠️ Falha de negócio NOMEADA com ação corretiva, não 404 genérico: só
+      //    pedido CANCELADO reabre, e a tela precisa poder dizer isso.
+      if (!r) {
+        return reply.code(422).send({
+          erro: 'pedido.nao_reabrivel',
+          mensagem: 'Só um pedido cancelado pode ser reaberto.',
+        })
+      }
+      return reply.send({ ok: true })
+    },
+  )
+
   app.post<{ Params: { id: string } }>(
     '/v1/pedidos/:id/cancelar', { preHandler: exigirTenant },
     async (req, reply) => {

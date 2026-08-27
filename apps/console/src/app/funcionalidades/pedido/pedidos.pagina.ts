@@ -15,6 +15,7 @@ interface PedidoDetalhe {
   readonly id: string; readonly estado: string; readonly contatoId: string | null; readonly contato: string | null
   readonly nome: string | null; readonly numeroExterno: string | null; readonly criadoEm: string; readonly confirmadoEm: string | null
   readonly formaPagamento: string | null; readonly observacao: string | null
+  readonly canceladoEm: string | null; readonly canceladoMotivo: string | null
   readonly totalCentavos: number; readonly totalPecas: number; readonly itens: LinhaItem[]
   readonly proximasEtapas?: readonly EtapaDef[]
 }
@@ -129,6 +130,18 @@ const FILTROS = [
               @if (d.observacao) { <div><span class="lab">Obs.</span> {{ d.observacao }}</div> }
             </div>
 
+            <!-- ⚠️ Cancelado NÃO é um sumiço: mostra por quê e deixa reaproveitar.
+                 Um pedido superado por um resumo novo continua valendo como
+                 trabalho de montagem — o vendedor abre, ajusta e reenvia. -->
+            @if (d.estado === 'cancelado') {
+              <div class="m-cancel">
+                <div><strong>Cancelado</strong> — {{ d.canceladoMotivo ?? 'sem motivo registrado' }}</div>
+                <button class="btn btn--secundario btn--pequeno" (click)="reabrir(d.id)" [disabled]="reabrindo()">
+                  {{ reabrindo() ? 'Reabrindo…' : 'Reabrir como rascunho' }}</button>
+                @if (erroReabrir()) { <span class="err">{{ erroReabrir() }}</span> }
+              </div>
+            }
+
             <div class="m-total">
               <span>{{ d.totalPecas }} peças · {{ d.itens.length }} {{ d.itens.length === 1 ? 'item' : 'itens' }}</span>
               <strong class="txt-dados">{{ reais(d.totalCentavos) }}</strong>
@@ -192,6 +205,10 @@ const FILTROS = [
     .badge--efetivado { background: var(--sucesso-suave); color: var(--sucesso); }
     .badge--falhou { background: var(--erro-suave); color: var(--erro); }
     .badge--cancelado { background: var(--superficie); color: var(--texto-suave); }
+    .m-cancel { margin-top: var(--espacamento-3); padding: var(--espacamento-3);
+      border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--texto);
+      font-size: 13px; display: grid; gap: var(--espacamento-2); justify-items: start; }
+    .m-cancel .err { color: var(--erro); font-size: 12px; }
     .badge--aguardando_conferencia { background: var(--atencao-suave); color: var(--atencao); }
     .mais { margin-top: var(--espacamento-4); }
     @media (max-width: 560px) { .data { display: none; } }
@@ -239,6 +256,8 @@ export class PedidosPagina implements OnInit {
   readonly proximoCursor = signal<string | null>(null)
   readonly carregandoMais = signal(false)
   readonly detalhe = signal<PedidoDetalhe | null>(null)
+  readonly reabrindo = signal(false)
+  readonly erroReabrir = signal<string | null>(null)
   readonly carregandoDet = signal(false)
   readonly acionando = signal<string | null>(null)
   readonly etapaMsg = signal<{ ok: boolean; texto: string } | null>(null)
@@ -284,10 +303,31 @@ export class PedidosPagina implements OnInit {
     } catch { /* mantém */ } finally { this.carregandoMais.set(false) }
   }
 
+  /**
+   * Reabre um pedido cancelado como rascunho.
+   *
+   * ⚠️ Cancelar não pode ser um sumiço: o pedido superado por um resumo novo
+   * continua valendo como trabalho de montagem. Reabrir devolve ao rascunho para
+   * o vendedor ajustar e enviar de novo.
+   */
+  async reabrir(id: string): Promise<void> {
+    if (this.reabrindo()) return
+    this.reabrindo.set(true); this.erroReabrir.set(null)
+    try {
+      await firstValueFrom(this.http.post(`/v1/pedidos/${id}/reabrir`, {}))
+      await this.abrir(id)     // relê o detalhe já como rascunho
+      await this.carregar()    // e a lista, que mudou de estado
+    } catch (e) {
+      // ⚠️ A API devolve a frase pronta com a ação corretiva — não invente outra.
+      this.erroReabrir.set(e instanceof HttpErrorResponse && typeof e.error?.mensagem === 'string'
+        ? e.error.mensagem : 'Não foi possível reabrir.')
+    } finally { this.reabrindo.set(false) }
+  }
+
   async abrir(id: string): Promise<void> {
     this.carregandoDet.set(true)
     // Abre o modal já com um esqueleto mínimo enquanto carrega os itens.
-    this.detalhe.set({ id, estado: '', contatoId: null, contato: null, nome: null, numeroExterno: null, criadoEm: new Date().toISOString(), confirmadoEm: null, formaPagamento: null, observacao: null, totalCentavos: 0, totalPecas: 0, itens: [] })
+    this.detalhe.set({ id, estado: '', contatoId: null, contato: null, nome: null, numeroExterno: null, criadoEm: new Date().toISOString(), confirmadoEm: null, canceladoEm: null, canceladoMotivo: null, formaPagamento: null, observacao: null, totalCentavos: 0, totalPecas: 0, itens: [] })
     try {
       const d = await firstValueFrom(this.http.get<PedidoDetalhe>(`/v1/pedidos/${id}`))
       this.detalhe.set(d)

@@ -104,3 +104,46 @@ describe('CRUD do pedido', () => {
     expect((await chamar('POST', `/v1/pedidos/${efet}/cancelar`)).statusCode).toBe(409)
   })
 })
+
+/**
+ * ⚠️ REABRIR — porque cancelar não pode ser um sumiço.
+ *
+ * Um pedido superado por um resumo novo (ou cancelado por engano, como o de
+ * 27/08) continua valendo como trabalho de montagem. Sem reabrir, "cancelado
+ * com motivo" seria só uma lápide bonita: o vendedor veria a razão e teria de
+ * refazer tudo do zero.
+ */
+describe('POST /v1/pedidos/:id/reabrir', () => {
+  const cancelado = async () => {
+    const id = (await chamar('POST', '/v1/pedidos', { contatoId: CONTATO }) as { json: () => { id: string } })
+      .json().id
+    await dono`UPDATE pedido SET estado = 'cancelado', cancelado_em = now(),
+                                 cancelado_motivo = 'substituído por um resumo novo nesta conversa'
+                WHERE tenant_id = ${T} AND id = ${id}`
+    return id
+  }
+
+  it('cancelado volta a rascunho, limpo para ser editado', async () => {
+    const id = await cancelado()
+    expect((await chamar('POST', `/v1/pedidos/${id}/reabrir`)).statusCode).toBe(200)
+    const [p] = await dono<{ estado: string; cancelado_em: Date | null; cancelado_motivo: string | null; resumo_enviado_em: Date | null }[]>`
+      SELECT estado, cancelado_em, cancelado_motivo, resumo_enviado_em FROM pedido WHERE id = ${id}`
+    expect(p!.estado).toBe('rascunho')
+    // ⚠️ Exigido pelo CHECK do 0073, e correto: fora de cancelado não há motivo.
+    expect(p!.cancelado_em).toBeNull()
+    expect(p!.cancelado_motivo).toBeNull()
+    // ⚠️ O resumo antigo não vale mais: quem reabre precisa enviar outro.
+    expect(p!.resumo_enviado_em).toBeNull()
+  })
+
+  /** ⚠️ Falha de negócio NOMEADA com ação corretiva, não 404 genérico. */
+  it('pedido que não está cancelado recusa com motivo', async () => {
+    const id = (await chamar('POST', '/v1/pedidos', { contatoId: CONTATO }) as { json: () => { id: string } })
+      .json().id
+    const r = await chamar('POST', `/v1/pedidos/${id}/reabrir`)
+    expect(r.statusCode).toBe(422)
+    const corpo = r.json() as { erro: string; mensagem: string }
+    expect(corpo.erro).toBe('pedido.nao_reabrivel')
+    expect(corpo.mensagem).toContain('cancelado')
+  })
+})
