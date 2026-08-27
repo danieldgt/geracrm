@@ -94,6 +94,16 @@ export interface TabelaPrecoCanonica {
   readonly descricao: string
   /** ⚠️ A tabela padrão — a que o painel usa sem condição comercial específica. */
   readonly padrao: boolean
+  /**
+   * ⚠️ 'venda' ou 'custo'. **O ERP sabe, e ignorar isso é o caminho para cotar
+   * o CUSTO a um cliente** — expondo margem numa conversa de WhatsApp. Antes
+   * disto o produto separava por NOME da tabela, com remendos do tipo
+   * `NOT ILIKE '%teste%'`; bastava alguém criar "Custo Varejo" no ERP para o
+   * remendo falhar em silêncio.
+   */
+  readonly proposito: 'venda' | 'custo'
+  /** Tabela desativada no ERP não deve ser usada para cotar nada. */
+  readonly ativa: boolean
 }
 
 export interface SaldoFidelidadeCanonico {

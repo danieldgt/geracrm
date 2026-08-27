@@ -47,6 +47,12 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
                             SELECT sp.preco_centavos::text FROM sku_preco sp
                               JOIN tabela_preco tp ON tp.tenant_id = sp.tenant_id AND tp.id_externo = sp.tabela_externa
                              WHERE sp.tenant_id = s.tenant_id AND sp.sku_id = s.id
+                               -- ⚠️ NUNCA uma tabela de CUSTO, e nunca uma
+                               --    desativada. O ERP marca as duas coisas
+                               --    (0074); antes disso a única defesa era o
+                               --    nome, e bastava existir "Custo Varejo" para
+                               --    o produto cotar margem a um cliente.
+                               AND tp.proposito = 'venda' AND tp.ativa
                                AND tp.descricao ILIKE ${perfilPadrao}
                                AND tp.descricao NOT ILIKE '%cfe%' AND tp.descricao NOT ILIKE '%teste%'
                              ORDER BY tp.padrao DESC, tp.id_externo
@@ -126,6 +132,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
           SELECT sp.preco_centavos FROM sku_preco sp
             JOIN tabela_preco tp ON tp.tenant_id = sp.tenant_id AND tp.id_externo = sp.tabela_externa
            WHERE sp.tenant_id = ${tx(s)}.tenant_id AND sp.sku_id = ${tx(s)}.id
+             -- ⚠️ Nunca CUSTO, nunca desativada (0074) — ver a nota na busca acima.
+             AND tp.proposito = 'venda' AND tp.ativa
              AND tp.descricao ILIKE ${perfilPadrao} AND tp.descricao NOT ILIKE '%cfe%' AND tp.descricao NOT ILIKE '%teste%'
            ORDER BY tp.padrao DESC, tp.id_externo LIMIT 1)`
         return tx<{

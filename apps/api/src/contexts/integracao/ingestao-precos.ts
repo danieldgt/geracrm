@@ -43,10 +43,14 @@ export async function ingerirPrecos(
 
   for (const tabela of relevantes) {
     await tx`
-      INSERT INTO tabela_preco (tenant_id, id_externo, descricao, padrao, sistema)
-      VALUES (${tenantId}, ${tabela.idExterno}, ${tabela.descricao}, ${tabela.padrao}, ${sistema})
+      INSERT INTO tabela_preco (tenant_id, id_externo, descricao, padrao, sistema, proposito, ativa)
+      VALUES (${tenantId}, ${tabela.idExterno}, ${tabela.descricao}, ${tabela.padrao}, ${sistema},
+              -- ⚠️ O ERP sabe qual tabela é de CUSTO. Descartar isso foi o que
+              --    obrigou a escolher preço por semelhança de NOME (0074).
+              ${tabela.proposito ?? 'venda'}, ${tabela.ativa ?? true})
       ON CONFLICT (tenant_id, sistema, id_externo)
-      DO UPDATE SET descricao = EXCLUDED.descricao, padrao = EXCLUDED.padrao, visto_em = now()
+      DO UPDATE SET descricao = EXCLUDED.descricao, padrao = EXCLUDED.padrao,
+                    proposito = EXCLUDED.proposito, ativa = EXCLUDED.ativa, visto_em = now()
     `
 
     // Os SKUs que temos, com o id externo do ERP (o codigoBarra.id).

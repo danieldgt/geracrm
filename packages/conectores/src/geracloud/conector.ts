@@ -385,7 +385,15 @@ export class ConectorGeraCloud implements ConectorErp {
         const id = String(t.id)
         if (vistos.has(id)) continue // mesma tabela repete entre lojas
         vistos.add(id)
-        out.push({ idExterno: id, descricao: String(t.descricao ?? ''), padrao: t.padrao === true })
+        out.push({
+          idExterno: id, descricao: String(t.descricao ?? ''), padrao: t.padrao === true,
+          // ⚠️ Medido ao vivo (27/08): `tipo` 0 = CUSTO, 1 = venda. As tabelas
+          //    "CUSTO", "Custo Padrão" e "FORMA DE FABRICACAO" vêm com 0.
+          proposito: t.tipo === 0 ? 'custo' : 'venda',
+          // ⚠️ E `status` 0 = ativa, 1 = inativa — o mesmo do cliente no pdv-core.
+          //    Sem isto, tabelas antigas e desativadas competem pela escolha.
+          ativa: t.status === 0 || t.status === undefined,
+        })
       }
     }
     return out
