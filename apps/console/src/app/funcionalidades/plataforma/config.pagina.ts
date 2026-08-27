@@ -9,7 +9,11 @@ import {
 interface Empresa { readonly nome: string; readonly fuso: string; readonly plano: string }
 interface CanalResumo { readonly id: string; readonly nomeAmigavel: string }
 interface ConfigCanal { readonly horarioAtendimento: HorarioAtendimento; readonly mensagemAusencia: string | null }
-interface Membro { readonly id: string; readonly nome: string; readonly email: string | null; readonly ativo: boolean; readonly papeis: { papel: string; filial: string }[] }
+interface Membro {
+  readonly id: string; readonly nome: string; readonly email: string | null; readonly ativo: boolean
+  readonly papeis: { papel: string; filial: string }[]
+  readonly ausente: boolean; readonly vistoEm: string | null; readonly canais: number
+}
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 const FUSOS = ['America/Sao_Paulo', 'America/Recife', 'America/Manaus', 'America/Cuiaba', 'America/Belem', 'America/Fortaleza', 'America/Rio_Branco']
 const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor', supervisor: 'Supervisor', vendedor: 'Vendedor', atendente: 'Atendente' }
@@ -106,7 +110,17 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
                 <li class="u" [class.inativo]="!u.ativo">
                   <span class="ava">{{ inicial(u.nome) }}</span>
                   <div class="u-col encolhe">
-                    <span class="u-nome">{{ u.nome }} @if (!u.ativo) { <span class="tag-inativo">inativo</span> }</span>
+                    <span class="u-nome">
+                      {{ u.nome }}
+                      @if (!u.ativo) { <span class="tag-inativo">inativo</span> }
+                      <!-- ⚠️ Cor SEMPRE com rótulo ao lado: verde e âmbar sozinhos
+                           não dizem nada para quem não enxerga a diferença. -->
+                      @if (u.ativo) {
+                        <span class="disp" [class.fora]="!estaDisponivel(u)">
+                          {{ estaDisponivel(u) ? 'disponível' : rotuloIndisponivel(u) }}
+                        </span>
+                      }
+                    </span>
                     @if (u.email) { <span class="u-email">{{ u.email }}</span> }
                   </div>
                   <div class="papeis">
@@ -149,6 +163,9 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
     .u-col { display: flex; flex-direction: column; gap: 1px; flex: 1; }
     .u-nome { color: var(--texto); font-size: 14px; }
     .tag-inativo { font-size: 11px; color: var(--texto-suave); }
+    .disp { font-size: 11px; color: var(--sucesso); border: 1px solid var(--sucesso);
+      border-radius: var(--raio-completo); padding: 0 6px; white-space: nowrap; }
+    .disp.fora { color: var(--texto-suave); border-color: var(--borda); }
     .u-email { color: var(--texto-suave); font-size: 12px; }
     .papeis { display: flex; gap: 4px; flex-wrap: wrap; flex: none; justify-content: flex-end; }
     .papel { font-size: 11px; padding: 2px 8px; border-radius: var(--raio-completo); background: var(--superficie); color: var(--texto-secundario); border: 1px solid var(--borda); }
@@ -188,6 +205,24 @@ export class ConfigPagina implements OnInit {
 
   ngOnInit(): void { void this.carregar() }
   inicial(n: string): string { return (n.trim()[0] ?? '?').toUpperCase() }
+
+  /**
+   * ⚠️ A MESMA régua do servidor (`disponibilidade.ts`): 5 minutos de batimento.
+   * Se as duas divergirem, a tela vai dizer que alguém está disponível enquanto
+   * o agente já assumiu as conversas dele — e ninguém entende por quê.
+   */
+  estaDisponivel(u: Membro): boolean {
+    if (u.ausente || !u.vistoEm) return false
+    return Date.now() - new Date(u.vistoEm).getTime() < 5 * 60_000
+  }
+
+  /** Por que não está disponível — o motivo importa mais que o estado. */
+  rotuloIndisponivel(u: Membro): string {
+    if (u.ausente) return 'ausente'
+    if (!u.vistoEm) return 'nunca entrou'
+    const min = Math.floor((Date.now() - new Date(u.vistoEm).getTime()) / 60_000)
+    return min < 60 ? `fora há ${min} min` : `fora há ${Math.floor(min / 60)} h`
+  }
   rotuloPapel(p: string): string { return PAPEL_ROTULO[p] ?? p }
 
   async carregar(): Promise<void> {
