@@ -115,6 +115,9 @@ buraco.**
 
 ### 4.2 ✅ Base de conhecimento: **híbrido** — decidido
 
+> Modelo pronto do texto curado, com as quatro regras que decidem se ele
+> funciona: `docs/agente-politicas-exemplo.md`.
+
 O agente precisa responder sobre a loja: o que vende, prazo, forma de pagamento, entrega. Opções:
 
 - **Texto curado pelo cliente** — ele escreve, versionamos. Simples, e o erro é dele.
