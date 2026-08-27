@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { comTenantServico, type Sql } from '../../../db/index.js'
 import { enviarTextoNaConversa } from '../envio-conversa.js'
-import { foraDoExpediente, type HorarioAtendimento } from '../ausencia.js'
+import { quemAtende, ninguemDisponivel, motivoDisponibilidade } from '../disponibilidade.js'
 import { fragmentoAtendentePresente } from '../presenca-atendente.js'
 import { carregarContextoDoLead } from './contexto-lead.js'
 import { validarExtracao } from './extracao.js'
@@ -37,9 +37,6 @@ interface Reuniao {
   readonly ativo: boolean
   readonly politicas: string | null
   readonly max_turnos: number
-  readonly horario: HorarioAtendimento | null
-  readonly dia_iso: number
-  readonly hora_local: string
   readonly ausencia_ja_enviada: boolean
   readonly atendente_presente: boolean
   readonly sessao_id: string | null
@@ -55,12 +52,17 @@ export async function conduzirTurno(
   //    verdade — dinheiro, lentidão e falha por rede oscilante.
   deps: { readonly llm?: PortaLlm; readonly enviar?: typeof enviarTextoNaConversa } = {},
 ): Promise<ResultadoTurno> {
-  const reuniao = await comTenantServico(tenantId, (tx) => reunirContexto(tx, conversaId, canalId, agora))
+  const [reuniao, equipe] = await comTenantServico(tenantId, async (tx) => [
+    await reunirContexto(tx, conversaId, canalId, agora),
+    await quemAtende(tx, canalId, agora),
+  ] as const)
   if (!reuniao) return { falou: false, motivo: 'agente_desligado' }
 
   const decisao = portaoDoAgente({
     agenteAtivo: reuniao.ativo,
-    foraDoExpediente: foraDoExpediente(reuniao.horario, reuniao.dia_iso, reuniao.hora_local),
+    // ⚠️ "Ninguém para atender ESTE número" — todos ausentes, ninguém logado, ou
+    //    a loja fechada. Ver `disponibilidade.ts` para a regra e o porquê.
+    ninguemDisponivel: ninguemDisponivel(equipe),
     ausenciaJaEnviada: reuniao.ausencia_ja_enviada,
     atendentePresente: reuniao.atendente_presente,
     sessaoAtiva: reuniao.sessao_id ? { turnos: reuniao.sessao_turnos ?? 0 } : null,
@@ -110,13 +112,17 @@ export async function conduzirTurno(
   if (!envio.ok) return { falou: false, motivo: 'envio_recusado' }
 
   const encerrouPor = r.dados.proximoPasso === 'continuar' ? null : (r.dados.motivo || r.dados.proximoPasso)
+  // ⚠️ Por que o agente pôde assumir, guardado junto da sessão: depois, "por que
+  //    o robô falou com o meu cliente às 14h?" tem resposta sem reconstruir o
+  //    estado da equipe naquele minuto — que já passou.
+  const porQueAssumiu = motivoDisponibilidade(equipe)
 
   await comTenantServico(tenantId, async (tx) => {
     const sessaoId = reuniao.sessao_id ?? randomUUID()
     if (!reuniao.sessao_id) {
       await tx`
-        INSERT INTO agente_sessao (tenant_id, id, conversa_id, canal_id, iniciada_em)
-        VALUES (tenant_atual(), ${sessaoId}, ${conversaId}, ${canalId}, ${agora})`
+        INSERT INTO agente_sessao (tenant_id, id, conversa_id, canal_id, iniciada_em, motivo_entrada)
+        VALUES (tenant_atual(), ${sessaoId}, ${conversaId}, ${canalId}, ${agora}, ${porQueAssumiu})`
     }
     await tx`
       UPDATE agente_sessao
@@ -146,9 +152,6 @@ async function reunirContexto(
     SELECT coalesce(ag.ativo, false) AS ativo,
            ag.politicas,
            coalesce(ag.max_turnos, 6) AS max_turnos,
-           cfg.horario_atendimento AS horario,
-           EXTRACT(ISODOW FROM (${agora}::timestamptz AT TIME ZONE t.fuso))::int AS dia_iso,
-           to_char(${agora}::timestamptz AT TIME ZONE t.fuso, 'HH24:MI')         AS hora_local,
            EXISTS (SELECT 1 FROM mensagem m
                     WHERE m.tenant_id = tenant_atual() AND m.conversa_id = ${conversaId}
                       AND m.direcao = 'saliente'

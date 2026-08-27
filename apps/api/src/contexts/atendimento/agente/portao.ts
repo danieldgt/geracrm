@@ -6,8 +6,9 @@
  * testada, separada de qualquer modelo de linguagem: o que o agente diz é
  * incerto por natureza; SE ele diz não pode ser.
  *
- * ⚠️ O gatilho não é "chegou mensagem fora do expediente" — é "chegou mensagem
- * DEPOIS de a resposta de ausência já ter saído". Decisão de produto de
+ * ⚠️ O gatilho tem DUAS condições, e as duas nasceram de decisões de produto:
+ * (1) não há ninguém disponível para atender este número (27/ago, ver
+ * `disponibilidade.ts`) e (2) a resposta de ausência já saiu. A segunda é de
  * 2026-08-26 (§4.3.1 do escopo), e a razão é boa: a ausência é honesta e barata
  * ("voltamos às 9h"), e quem escreve de novo DEPOIS dela mostrou interesse — que
  * é exatamente o lead que vale o custo de uma conversa com IA. De quebra, o
@@ -22,7 +23,14 @@
 export interface ContextoPortao {
   /** `agente_config.ativo` — o botão de desligar, lido a cada mensagem. */
   readonly agenteAtivo: boolean
-  readonly foraDoExpediente: boolean
+  /**
+   * ⚠️ NÃO é mais "fora do expediente". É "não há ninguém para atender ESTE
+   * número": todos ausentes, ninguém logado, ou a loja fechada. Decisão do dono
+   * do produto (27/ago) — a regra antiga deixava o cliente no vácuo quando o
+   * consultor entrava em reunião às 14h, porque tecnicamente era horário
+   * comercial. Ver `disponibilidade.ts`.
+   */
+  readonly ninguemDisponivel: boolean
   /** A ausência já saiu nesta conversa? É o gatilho. */
   readonly ausenciaJaEnviada: boolean
   /** Mesma régua de presença da resposta de ausência (atividade recente). */
@@ -36,7 +44,7 @@ export interface ContextoPortao {
 
 export type MotivoNaoEntra =
   | 'agente_desligado'
-  | 'dentro_do_expediente'
+  | 'tem_quem_atenda'
   | 'sem_ausencia_antes'
   | 'atendente_presente'
   | 'teto_de_turnos'
@@ -65,8 +73,9 @@ export function portaoDoAgente(c: ContextoPortao): DecisaoPortao {
   // ⚠️ Primeiro de todos. Desligar tem de vencer qualquer outra condição.
   if (!c.agenteAtivo) return NAO('agente_desligado')
 
-  // Fatia 1 é só fora do expediente: dentro dele, quem atende é gente.
-  if (!c.foraDoExpediente) return NAO('dentro_do_expediente')
+  // ⚠️ Havendo alguém disponível, quem atende é GENTE. O agente cobre o vácuo,
+  //    não substitui o time.
+  if (!c.ninguemDisponivel) return NAO('tem_quem_atenda')
 
   // ⚠️ Alguém está na mesa AGORA (mesma régua da resposta de ausência): o robô
   //    não fala por cima de atendimento humano. Vale inclusive de madrugada —

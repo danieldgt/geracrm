@@ -10,7 +10,7 @@ import { portaoDoAgente, type ContextoPortao } from './portao.js'
  */
 const BASE: ContextoPortao = {
   agenteAtivo: true,
-  foraDoExpediente: true,
+  ninguemDisponivel: true,
   ausenciaJaEnviada: true,
   atendentePresente: false,
   sessaoAtiva: null,
@@ -66,9 +66,13 @@ describe('⚠️ Desligar vence tudo', () => {
 })
 
 describe('Fronteiras da fatia 1', () => {
-  it('dentro do expediente quem atende é gente', () => {
-    expect(portaoDoAgente(com({ foraDoExpediente: false })))
-      .toEqual({ entra: false, motivo: 'dentro_do_expediente' })
+  /**
+   * ⚠️ O agente cobre o VÁCUO, não substitui o time. Um consultor disponível —
+   * logado, não-ausente, dentro do expediente — cala o agente na hora.
+   */
+  it('havendo quem atenda, o agente não fala', () => {
+    expect(portaoDoAgente(com({ ninguemDisponivel: false })))
+      .toEqual({ entra: false, motivo: 'tem_quem_atenda' })
   })
 
   /** ⚠️ Se tem gente ali, tem gente ali — inclusive de madrugada. */
