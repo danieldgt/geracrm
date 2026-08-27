@@ -5,6 +5,14 @@
 
 html { color-scheme: light dark; }
 
+/* ─── Layout da casca ─────────────────────────────────────────────────────────
+ * Altura da barra superior. Fica AQUI, e não solta em cada arquivo, porque a
+ * tela precisa desse número para saber quanto sobra para ela: a célula de grid
+ * do conteúdo mede `100dvh - esta altura`, e uma tela de altura fixa (kanban,
+ * inbox) só rola por dentro se souber a própria altura.
+ * ⚠️ Trocar por percentual não funciona — ver `altura-de-tela.spec.ts`. */
+:root { --altura-barra-topo: 52px; }
+
 /* ⚠️ box-sizing global impede padding/borda de estourarem a largura e quebrarem
  *    o layout (sobreposição). É a base de "sem quebra de layout". */
 *, *::before, *::after { box-sizing: border-box; }

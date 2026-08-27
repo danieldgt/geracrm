@@ -199,7 +199,13 @@ export class ConectorGeraCloud implements ConectorErp {
    */
   async #buscarCru(caminho: string, corpo: string): Promise<{ status: number; texto: string }> {
     const abortar = new AbortController()
-    const relogio = setTimeout(() => abortar.abort(), this.#timeout)
+    // ⚠️ Timeout PRÓPRIO, maior que o de leitura. O padrão de 2 s existe para o
+    //    painel de pedido não travar numa consulta (contrato de saldo síncrono),
+    //    mas o orçamento leva ~2,7 s medidos — com 2 s ele abortava SEMPRE, e a
+    //    falha vinha como `resposta_perdida`: o pior desfecho, porque o pedido
+    //    PODE ter sido criado e o produto manda para conferência humana em vez
+    //    de retentar. Aqui, esperar é mais barato que duvidar.
+    const relogio = setTimeout(() => abortar.abort(), Math.max(this.#timeout, 15_000))
     try {
       const r = await this.#buscar(`${this.#base}${caminho}`, {
         method: 'POST',
@@ -559,14 +565,66 @@ export class ConectorGeraCloud implements ConectorErp {
     chaveIdempotencia: string
   }): Promise<Resultado<{ numeroExterno: string }, FalhaEfetivacao>> {
     let clientePDV: Record<string, unknown>
+    let catalogo: Record<string, unknown> = {}
+    let tabelaPreco: Record<string, unknown> | null = null
     const estoques: Record<string, Record<string, unknown>> = {}
+    const precos: Record<string, Record<string, unknown>> = {}
     try {
-      clientePDV = await this.#pedir<Record<string, unknown>>(`/clientespdv/${pedido.clienteExterno}`)
-      // ⚠️ Um a um de propósito: o lote desta rota devolve a TELA DE VENDA, com
-      //    preço e saldo — e nós precisamos do registro de estoque cru, que é o
-      //    que o catálogo manda dentro do item.
+      // ⚠️ NÃO existe `/clientespdv/{id}`: essa rota devolve o HTML do SPA, e o
+      //    `.json()` estoura com "Unexpected token '<'". Medido ao vivo em
+      //    27/ago. O catálogo usa `?filtro=`, e é o que funciona.
+      const achados = linhasDe(
+        await this.#pedir<unknown>(`/clientespdv?filtro=${encodeURIComponent(pedido.clienteExterno)}&inicio=0&limite=50`))
+      const cli = achados.find((c) => String((c as Record<string, unknown>)['id']) === pedido.clienteExterno)
+      if (!cli) return { ok: false, falha: { tipo: 'cliente_sem_cadastro_fiscal' } }
+      clientePDV = cli as Record<string, unknown>
+
+      // ⚠️ Idem para o estoque: a rota de detalhe por id não existe. O catálogo
+      //    busca em LOTE por código de barras.
+      // ⚠️ `limite=1` por item, e NÃO um lote com `filtro=` de vários ids: o
+      //    `filtro` do ERP não filtra por id — devolve a página inteira. Com
+      //    limite 200 a resposta passa de 600 KB e o `.json()` estoura, o que
+      //    aparecia como `nao_chegou` sem o POST nem ter sido tentado (27/ago).
       for (const i of pedido.itens) {
-        estoques[i.skuExterno] = await this.#pedir<Record<string, unknown>>(`/estoques/${i.skuExterno}`)
+        const [e] = linhasDe(await this.#pedir<unknown>(
+          `/estoques?filtro=${encodeURIComponent(i.skuExterno)}&inicio=0&limite=1`))
+        if (!e || String((e as Record<string, unknown>)['id']) !== i.skuExterno) {
+          return { ok: false, falha: { tipo: 'item_inativo', skuExterno: i.skuExterno } }
+        }
+        estoques[i.skuExterno] = e as Record<string, unknown>
+      }
+
+      // ⚠️ O CATÁLOGO é obrigatório e traz a TABELA DE PREÇO usada na cotação.
+      const catalogos = linhasDe(await this.#pedir<unknown>('/catalogos?inicio=0&limite=100'))
+      const cat = catalogos.find((c) => {
+        const v = c as Record<string, unknown>
+        return v['status'] === 0 && v['tabelaPreco']
+      }) ?? catalogos[0]
+      if (!cat) return { ok: false, falha: { tipo: 'nao_chegou' } }
+      catalogo = cat as Record<string, unknown>
+      tabelaPreco = (catalogo['tabelaPreco'] ?? null) as Record<string, unknown> | null
+
+      // ⚠️ E o PREÇO de cada SKU na tabela: sem `produtoPreco` no item, o ERP
+      //    responde 400 com "Ocorreu um erro ao enviar o Pedido! :( null" —
+      //    mensagem que não diz o que falta. Foi o que separou 400 de 200 no
+      //    teste ao vivo (27/ago).
+      const idTabela = tabelaPreco?.['id']
+      if (idTabela === undefined) return { ok: false, falha: { tipo: 'nao_chegou' } }
+      const codigos = pedido.itens
+        .map((i) => (estoques[i.skuExterno]?.['codigoBarra'] as Record<string, unknown> | undefined)?.['id'])
+        .filter((c) => c !== undefined)
+      const tabelaDePrecos = linhasDe(await this.#pedir<unknown>(
+        `/tabela-preco/${idTabela}/precos?idsCodigosBarras=${codigos.join(',')}`))
+      for (const i of pedido.itens) {
+        const cb = (estoques[i.skuExterno]?.['codigoBarra'] as Record<string, unknown> | undefined)?.['id']
+        const pr = tabelaDePrecos.find((x) => {
+          const v = (x as Record<string, unknown>)['codigoBarra'] as Record<string, unknown> | undefined
+          return String(v?.['id']) === String(cb)
+        })
+        // ⚠️ SKU sem preço na tabela é falha de NEGÓCIO nomeada, não erro de
+        //    sistema: o item existe, mas não está cotável naquela tabela.
+        if (!pr) return { ok: false, falha: { tipo: 'item_inativo', skuExterno: i.skuExterno } }
+        precos[i.skuExterno] = pr as Record<string, unknown>
       }
     } catch {
       // ⚠️ Falhar aqui é ANTES de escrever: nada foi criado no ERP, então é
@@ -578,11 +636,12 @@ export class ConectorGeraCloud implements ConectorErp {
       clientePDV,
       itens: pedido.itens.map((i) => ({
         estoque: estoques[i.skuExterno]!,
+        produtoPreco: precos[i.skuExterno]!,
         quantidade: i.quantidade,
         precoUnitarioCentavos: i.valorUnitarioCentavos,
       })),
-      catalogo: {},
-      tabelaPreco: null,
+      catalogo,
+      tabelaPreco,
       chaveIdempotencia: pedido.chaveIdempotencia,
       agora: new Date(),
     })

@@ -36,6 +36,17 @@ export function dataBr(d: Date): string {
 export interface ItemOrcamento {
   /** O objeto de estoque do ERP (traz `codigoBarra`), como o catálogo envia. */
   readonly estoque: Record<string, unknown>
+  /**
+   * ⚠️ **OBRIGATÓRIO.** O registro de preço do SKU na tabela, vindo de
+   * `GET /tabela-preco/{id}/precos?idsCodigosBarras=`.
+   *
+   * ⚠️ Sem ele o ERP responde **HTTP 400 "Ocorreu um erro ao enviar o Pedido!
+   * :( null"** — mensagem que não diz o que falta. Medido ao vivo em 27/ago: a
+   * mesma requisição, com este campo, passou a devolver 200 e o PDF do
+   * orçamento. É o que liga o item à tabela de preço; sem isso o ERP não sabe
+   * precificar e desiste sem explicar.
+   */
+  readonly produtoPreco: Record<string, unknown>
   readonly quantidade: number
   readonly precoUnitarioCentavos: number
 }
@@ -60,6 +71,9 @@ export interface DadosOrcamento {
 export function montarOrcamento(d: DadosOrcamento): Record<string, unknown> {
   const itens = d.itens.map((i) => ({
     estoque: i.estoque,
+    // ⚠️ Sem `produtoPreco` o ERP devolve 400 com mensagem inútil — ver a nota
+    //    em `ItemOrcamento`. Foi a diferença entre 400 e 200 no teste ao vivo.
+    produtoPreco: i.produtoPreco,
     quantidade: i.quantidade,
     precoDoMomento: paraReais(i.precoUnitarioCentavos * i.quantidade),
     valorFinalDesconto: 0,

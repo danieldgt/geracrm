@@ -108,12 +108,18 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     }
   `,
   styles: `
-    /* ⚠️ NÃO volte para height 100%. A casca põe a tela numa CÉLULA DE GRID com
-       overflow próprio, e célula de grid não resolve altura percentual do filho:
-       o 100% vira zero, o board com flex 1 colapsa e os cards espremem para 1px.
-       Aconteceu com 813 leads em 27/ago. E havia DOIS display na mesma regra —
-       o segundo vencia calado. */
-    :host { display: flex; flex-direction: column; min-height: 100dvh;
+    /* ⚠️ Altura DEFINIDA — e nem 100%, nem min-height. Um kanban só funciona se
+       a tela souber a própria altura; as duas alternativas erradas já quebraram:
+       - height 100% vira ZERO: a casca põe a tela numa CÉLULA DE GRID, que não
+         resolve altura percentual do filho. O board com flex 1 colapsa e os
+         cards espremem para 1px (incidente dos 813 leads, 27/ago);
+       - min-height 100dvh não LIMITA nada: a coluna cresce junto com os cards,
+         a rolagem interna da coluna nunca dispara e o painel vira uma tira que
+         empurra a página — com 11 mil cards numa coluna, tela inutilizável.
+       O que sobra para a tela é a viewport MENOS a barra superior da casca.
+       ⚠️ E um só display por regra: dois na mesma regra, o segundo vence calado. */
+    :host { display: flex; flex-direction: column;
+      height: calc(100dvh - var(--altura-barra-topo));
       padding: var(--espacamento-6); overflow: hidden; }
     .cabecalho { margin-bottom: var(--espacamento-4); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
     h1 { margin: 0; color: var(--texto); }

@@ -47,8 +47,8 @@ describe('⚠️ Data em DD/MM/YYYY HH:mm:ss', () => {
 
 describe('O corpo do orçamento', () => {
   const itens = [
-    { estoque: { id: 1, codigoBarra: { id: 555 } }, quantidade: 2, precoUnitarioCentavos: 8990 },
-    { estoque: { id: 2, codigoBarra: { id: 556 } }, quantidade: 1, precoUnitarioCentavos: 5000 },
+    { estoque: { id: 1, codigoBarra: { id: 555 } }, produtoPreco: { id: 90 }, quantidade: 2, precoUnitarioCentavos: 8990 },
+    { estoque: { id: 2, codigoBarra: { id: 556 } }, produtoPreco: { id: 91 }, quantidade: 1, precoUnitarioCentavos: 5000 },
   ]
 
   it('soma o total em reais', () => {
@@ -72,6 +72,19 @@ describe('O corpo do orçamento', () => {
     const c = montarOrcamento({ ...BASE, itens })
     const linhas = c['itens'] as Record<string, unknown>[]
     expect(linhas[0]!['estoque']).toMatchObject({ codigoBarra: { id: 555 } })
+  })
+
+  /**
+   * ⚠️ Sem `produtoPreco` o ERP devolve 400 com "Ocorreu um erro ao enviar o
+   * Pedido! :( null" — mensagem que não diz o que falta. Medido ao vivo em
+   * 27/ago: a MESMA requisição, só com este campo a mais, passou de 400 para 200
+   * com o PDF do orçamento. É o que liga o item à tabela de preço.
+   */
+  it('⚠️ o item leva produtoPreco — sem ele o ERP recusa sem explicar', () => {
+    const c = montarOrcamento({ ...BASE, itens })
+    const linhas = c['itens'] as Record<string, unknown>[]
+    expect(linhas[0]!['produtoPreco']).toMatchObject({ id: 90 })
+    expect(linhas[1]!['produtoPreco']).toMatchObject({ id: 91 })
   })
 
   it('status é sempre Orcamento nesta via', () => {
