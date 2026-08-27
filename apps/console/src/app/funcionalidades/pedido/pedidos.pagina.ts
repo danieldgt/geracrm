@@ -89,7 +89,7 @@ const FILTROS = [
     <!-- Modal de detalhes do pedido -->
     @if (detalhe(); as d) {
       <div class="overlay" (click)="fechar()">
-        <div class="modal" role="dialog" aria-modal="true" (click)="$event.stopPropagation()">
+        <div class="modal" role="dialog" aria-modal="true" tabindex="-1" (click)="$event.stopPropagation()">
           <header class="m-topo">
             <div>
               <span class="badge" [class]="'badge--' + d.estado">{{ rotuloEstado(d.estado) }}</span>

@@ -172,7 +172,10 @@ import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.r
     }
 
     @if (editando(); as ed) {
-      <div class="painel" role="dialog" aria-modal="true" aria-labelledby="tp">
+      <!-- ⚠️ Modal de verdade: com margin-top, o formulário abria no FIM da
+           página e o botão parecia não fazer nada. Ver modal-de-verdade.spec.ts. -->
+      <div class="fundo" (click)="fechar()"></div>
+      <div class="painel" role="dialog" aria-modal="true" aria-labelledby="tp" tabindex="-1">
         <h2 id="tp">Conectar número</h2>
 
         <label class="campo">
@@ -294,7 +297,14 @@ import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.r
     .qr .relogio.urgente { color: var(--erro); }
     .resultado { margin: var(--espacamento-3) 0 0; font-size: 13px; color: var(--erro); }
     .resultado.ok { color: var(--sucesso); }
-    .painel { margin-top: var(--espacamento-6); padding: var(--espacamento-6); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); box-shadow: var(--elevacao-modal); }
+    .fundo { position: fixed; inset: 0; background: rgb(0 0 0 / .5); z-index: 40; }
+    .painel { position: fixed; z-index: 41; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: min(560px, calc(100vw - var(--espacamento-6) * 2));
+      max-height: min(88dvh, 720px); overflow-y: auto;
+      padding: var(--espacamento-6); border: 1px solid var(--borda);
+      border-radius: var(--raio-painel); background: var(--superficie-elevada);
+      box-shadow: var(--elevacao-modal); }
+    .painel:focus { outline: none; }
     .painel h2 { margin: 0 0 var(--espacamento-4); font-size: 16px; }
     .campo { display: grid; gap: var(--espacamento-1); margin-bottom: var(--espacamento-4); }
     .rotulo { font-weight: 500; font-size: 13px; color: var(--texto); }

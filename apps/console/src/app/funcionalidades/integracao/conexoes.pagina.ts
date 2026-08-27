@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, signal, computed, effect, viewChild, ElementRef, HostListener, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
@@ -206,8 +206,16 @@ interface TabelaPreco {
       </section>
     }
 
+    <!-- ⚠️ MODAL de verdade. Antes era um bloco no FIM da página, posicionado
+         por margin-top: clicar em "Preencher credenciais" abria o formulário
+         abaixo da lista, das tabelas de preço e das sincronizações — fora da
+         vista. O botão parecia não fazer nada.
+         E o aria-modal estava mentindo: sem position fixed e sem mover o foco,
+         o leitor de tela anunciava "diálogo" com o foco parado onde estava. -->
     @if (editando(); as ed) {
-      <div class="painel" role="dialog" aria-modal="true" aria-labelledby="titulo-painel">
+      <div class="fundo" (click)="fechar()"></div>
+      <div class="painel" role="dialog" aria-modal="true" aria-labelledby="titulo-painel"
+           tabindex="-1" #painel>
         <h2 id="titulo-painel">
           {{ ed.conexaoId ? 'Trocar credenciais' : 'Conectar ERP' }}
         </h2>
@@ -287,7 +295,16 @@ interface TabelaPreco {
     .acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-4); }
     .resultado { margin: var(--espacamento-3) 0 0; font-size: 13px; color: var(--erro); }
     .resultado--ok { color: var(--sucesso); }
-    .painel { margin-top: var(--espacamento-6); padding: var(--espacamento-6); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); box-shadow: var(--elevacao-modal); }
+    .fundo { position: fixed; inset: 0; background: rgb(0 0 0 / .5); z-index: 40; }
+    .painel { position: fixed; z-index: 41; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: min(560px, calc(100vw - var(--espacamento-6) * 2));
+      /* ⚠️ Rola por DENTRO: em tela baixa, um formulário longo empurraria os
+         botões para fora e não haveria como salvar. */
+      max-height: min(88dvh, 720px); overflow-y: auto;
+      padding: var(--espacamento-6); border: 1px solid var(--borda);
+      border-radius: var(--raio-painel); background: var(--superficie-elevada);
+      box-shadow: var(--elevacao-modal); }
+    .painel:focus { outline: none; }
     .painel h2 { margin: 0 0 var(--espacamento-4); font-size: 16px; }
     .campo { display: grid; gap: var(--espacamento-1); margin-bottom: var(--espacamento-4); }
     .rotulo { font-weight: 500; font-size: 13px; color: var(--texto); }
@@ -420,6 +437,24 @@ export class ConexoesPagina implements OnInit {
     this.limpar()
     this.editando.set({ conector: primeiro?.codigo ?? '', nome: '' })
   }
+
+  private readonly painel = viewChild<ElementRef<HTMLElement>>('painel')
+
+  /**
+   * ⚠️ Leva o FOCO para o painel ao abrir. Sem isso, quem usa teclado continua
+   * na lista atrás do modal, e quem usa leitor de tela ouve "diálogo" sem sair
+   * do lugar — o `aria-modal` vira uma promessa que a tela não cumpre.
+   */
+  // ⚠️ Guardado numa propriedade LIDA (readonly comum, não privada): o effect
+  //    precisa existir enquanto o componente viver, mas um membro privado que
+  //    ninguém lê é removido pelo lint — e com ele o foco pararia de funcionar.
+  protected readonly focarAoAbrir = effect(() => {
+    if (this.editando()) queueMicrotask(() => this.painel()?.nativeElement.focus())
+  })
+
+  /** Esc fecha — é o que todo mundo tenta primeiro num diálogo. */
+  @HostListener('document:keydown.escape')
+  aoEscape(): void { if (this.editando()) this.fechar() }
 
   abrirCredencial(c: Conexao): void {
     this.limpar()
