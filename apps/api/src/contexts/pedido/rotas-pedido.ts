@@ -29,7 +29,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     // ⚠️ Preço é POR PERFIL (ADR-019): atacado ≠ varejo. Varejo é opt-in
     //    explícito; o padrão é atacado (o cliente-piloto é varejo mas a maioria
     //    do fluxo B2B é atacado — e a tela deixa trocar).
-    const perfilPadrao = q.perfil === 'varejo' ? '%varejo%' : '%atacado%'
+    const perfil = q.perfil === 'varejo' ? 'varejo' : 'atacado'
+    const perfilPadrao = `%${perfil}%`
 
     // ⚠️ Preço vem da tabela do ERP para o perfil (`sku_preco` + `tabela_preco`),
     //    não da tela. Escolha DETERMINÍSTICA: descrição do perfil, sem os ruídos
@@ -54,8 +55,25 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
                                --    nome, e bastava existir "Custo Varejo" para
                                --    o produto cotar margem a um cliente.
                                AND tp.proposito = 'venda' AND tp.ativa
-                               AND tp.descricao ILIKE ${perfilPadrao}
-                               AND tp.descricao NOT ILIKE '%cfe%' AND tp.descricao NOT ILIKE '%teste%'
+                               -- ⚠️ DECLARADO ganha do nome (0077). O nome só
+                               --    vale enquanto o dono da loja não disser qual
+                               --    tabela é qual — renomear no ERP não pode
+                               --    mudar o preço do produto em silêncio.
+                               -- ⚠️ A exclusividade está no NOT EXISTS, não numa
+                               --    ordenação: havendo tabela DECLARADA para o
+                               --    perfil, o ramo do nome não casa com nada.
+                               --    Ordenar por "declarada primeiro" seria um
+                               --    desempate que nunca acontece — e sugeriria
+                               --    uma precedência frouxa onde ela é absoluta.
+                               AND (tp.perfil = ${perfil}
+                                    OR (tp.perfil IS NULL
+                                        AND NOT EXISTS (SELECT 1 FROM tabela_preco d
+                                                         WHERE d.tenant_id = sp.tenant_id
+                                                           AND d.sistema = tp.sistema
+                                                           AND d.perfil = ${perfil})
+                                        AND tp.descricao ILIKE ${perfilPadrao}
+                                        AND tp.descricao NOT ILIKE '%cfe%'
+                                        AND tp.descricao NOT ILIKE '%teste%'))
                              ORDER BY tp.padrao DESC, tp.id_externo
                              LIMIT 1),
                           -- ⚠️ Saldo da última sincronização + a data; NÃO ao vivo (ADR-008).
@@ -119,7 +137,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const q = req.query
       const busca = (q.busca ?? '').trim()
-      const perfilPadrao = q.perfil === 'varejo' ? '%varejo%' : '%atacado%'
+      const perfil = q.perfil === 'varejo' ? 'varejo' : 'atacado'
+      const perfilPadrao = `%${perfil}%`
       const precoMin = q.precoMin ? Number(q.precoMin) : null
       const precoMax = q.precoMax ? Number(q.precoMax) : null
       let curDesc: string | null = null, curId: string | null = null
@@ -133,9 +152,16 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
           SELECT sp.preco_centavos FROM sku_preco sp
             JOIN tabela_preco tp ON tp.tenant_id = sp.tenant_id AND tp.id_externo = sp.tabela_externa
            WHERE sp.tenant_id = ${tx(s)}.tenant_id AND sp.sku_id = ${tx(s)}.id
-             -- ⚠️ Nunca CUSTO, nunca desativada (0074) — ver a nota na busca acima.
+             -- ⚠️ Nunca CUSTO, nunca desativada (0074); e DECLARADO ganha do
+             --    nome (0077) — ver a nota na busca acima.
              AND tp.proposito = 'venda' AND tp.ativa
-             AND tp.descricao ILIKE ${perfilPadrao} AND tp.descricao NOT ILIKE '%cfe%' AND tp.descricao NOT ILIKE '%teste%'
+             AND (tp.perfil = ${perfil}
+                  OR (tp.perfil IS NULL
+                      AND NOT EXISTS (SELECT 1 FROM tabela_preco d
+                                       WHERE d.tenant_id = sp.tenant_id AND d.sistema = tp.sistema
+                                         AND d.perfil = ${perfil})
+                      AND tp.descricao ILIKE ${perfilPadrao}
+                      AND tp.descricao NOT ILIKE '%cfe%' AND tp.descricao NOT ILIKE '%teste%'))
            ORDER BY tp.padrao DESC, tp.id_externo LIMIT 1)`
         return tx<{
           id: string; referencia: string; descricao: string; categoria: string | null

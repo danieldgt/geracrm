@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
 import { criarApp } from '../../app.js'
@@ -30,12 +30,13 @@ const catalogo = (perfil: string) =>
   app.inject({ method: 'GET', url: `/v1/catalogo?perfil=${perfil}`, headers: { 'x-tenant-id': T } })
 
 /** Uma tabela do ERP com preço para o nosso SKU. */
-const tabela = (idExterno: string, descricao: string, proposito: string, ativa: boolean, centavos: number) =>
+const tabela = (idExterno: string, descricao: string, proposito: string, ativa: boolean, centavos: number, perfil: string | null = null) =>
   dono.begin(async (tx) => {
-    await tx`INSERT INTO tabela_preco (tenant_id, id_externo, descricao, padrao, sistema, proposito, ativa)
-             VALUES (${T}, ${idExterno}, ${descricao}, false, ${SISTEMA}, ${proposito}, ${ativa})
+    await tx`INSERT INTO tabela_preco (tenant_id, id_externo, descricao, padrao, sistema, proposito, ativa, perfil)
+             VALUES (${T}, ${idExterno}, ${descricao}, false, ${SISTEMA}, ${proposito}, ${ativa}, ${perfil})
              ON CONFLICT (tenant_id, sistema, id_externo) DO UPDATE
-               SET descricao = EXCLUDED.descricao, proposito = EXCLUDED.proposito, ativa = EXCLUDED.ativa`
+               SET descricao = EXCLUDED.descricao, proposito = EXCLUDED.proposito,
+                   ativa = EXCLUDED.ativa, perfil = EXCLUDED.perfil`
     await tx`INSERT INTO sku_preco (tenant_id, sku_id, tabela_externa, preco_centavos)
              VALUES (${T}, ${SKU}, ${idExterno}, ${centavos})
              ON CONFLICT (tenant_id, sku_id, tabela_externa) DO UPDATE SET preco_centavos = EXCLUDED.preco_centavos`
@@ -119,5 +120,70 @@ describe('Perfil separa atacado de varejo (ADR-019)', () => {
     await dono`DELETE FROM tabela_preco WHERE tenant_id = ${T}`
     await tabela('905', 'TABELA VAREJO', 'venda', true, 9900)
     expect(await precoDoSku('atacado')).toBeNull()
+  })
+})
+
+/**
+ * ⚠️ O MAPEAMENTO DECLARADO (0077) — o nome deixa de mandar.
+ *
+ * Escolher a tabela por semelhança de nome é frágil por natureza: renomear no
+ * ERP muda o preço do produto sem erro nenhum. E há um sintoma vivo — no ERP de
+ * produção NENHUMA tabela ativa casa com '%atacado%', então o perfil atacado
+ * devolve "sem preço" para tudo, num CRM cujo caso principal é B2B (ADR-019).
+ */
+describe('⚠️ Perfil declarado ganha do nome', () => {
+  beforeEach(async () => {
+    await dono`DELETE FROM sku_preco WHERE tenant_id = ${T}`
+    await dono`DELETE FROM tabela_preco WHERE tenant_id = ${T}`
+  })
+
+  it('tabela declarada atacado vale, mesmo com nome que não diz nada', async () => {
+    await tabela('910', 'TABELA PEDRO', 'venda', true, 4900, 'atacado')
+    expect(await precoDoSku('atacado')).toBe(4900)
+  })
+
+  /** É o caso do ERP real: a tabela de atacado não tem "atacado" no nome. */
+  it('destrava o atacado quando nenhum nome casa', async () => {
+    await tabela('911', 'A VISTA', 'venda', true, 3900, 'atacado')
+    await tabela('912', 'TABELA VAREJO', 'venda', true, 9900, 'varejo')
+    expect(await precoDoSku('atacado')).toBe(3900)
+    expect(await precoDoSku('varejo')).toBe(9900)
+  })
+
+  /**
+   * ⚠️ Declarado VENCE o nome, e a exclusividade é ABSOLUTA: havendo declaração
+   * para o perfil, a tabela que casa por nome deixa de ser candidata. Não é
+   * desempate por ordenação — se fosse, um `padrao = true` na tabela do nome
+   * poderia virar o jogo.
+   */
+  it('com as duas coisas, a declaração manda', async () => {
+    await tabela('913', 'TABELA VAREJO', 'venda', true, 9900)          // casa por nome
+    await tabela('914', 'PROMOCAO ESPECIAL', 'venda', true, 7700, 'varejo')  // declarada
+    expect(await precoDoSku('varejo')).toBe(7700)
+  })
+
+  it('nem com a do nome marcada como PADRÃO no ERP', async () => {
+    await tabela('918', 'TABELA VAREJO', 'venda', true, 9900)
+    await dono`UPDATE tabela_preco SET padrao = true WHERE tenant_id = ${T} AND id_externo = '918'`
+    await tabela('919', 'PROMOCAO ESPECIAL', 'venda', true, 7700, 'varejo')
+    expect(await precoDoSku('varejo')).toBe(7700)
+  })
+
+  /** Sem declaração, o nome segue valendo — é degradação, não erro. */
+  it('sem nada declarado, o nome ainda funciona', async () => {
+    await tabela('915', 'TABELA VAREJO', 'venda', true, 9900)
+    expect(await precoDoSku('varejo')).toBe(9900)
+  })
+
+  /**
+   * ⚠️ Declarar UM perfil não pode quebrar o outro. Se a existência de qualquer
+   * declaração desligasse o palpite por nome, declarar varejo deixaria o atacado
+   * sem preço — um conserto que quebra o vizinho.
+   */
+  it('declarar varejo não tira o palpite do atacado', async () => {
+    await tabela('916', 'PROMOCAO', 'venda', true, 7700, 'varejo')
+    await tabela('917', 'TABELA ATACADO', 'venda', true, 4900)
+    expect(await precoDoSku('varejo')).toBe(7700)
+    expect(await precoDoSku('atacado')).toBe(4900)
   })
 })

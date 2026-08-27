@@ -294,6 +294,66 @@ export async function rotasIntegracao(app: FastifyInstance): Promise<void> {
       return responder(reply, resultado)
     },
   )
+
+  /**
+   * As tabelas de preço do ERP, para o dono da loja declarar qual é qual.
+   *
+   * ⚠️ Só as COTÁVEIS: venda e ativa (0074). Oferecer uma tabela de custo aqui
+   * seria oferecer o erro — e o erro que aquela migration fechou é justamente
+   * cotar a margem da loja a um cliente.
+   */
+  app.get('/v1/integracao/tabelas-preco', { preHandler: exigirTenant }, async (req, reply) => {
+    const itens = await req.comTenant((tx) => tx<{
+      id_externo: string; descricao: string; padrao: boolean; perfil: string | null; skus: number
+    }[]>`
+      SELECT tp.id_externo, tp.descricao, tp.padrao, tp.perfil,
+             (SELECT count(*)::int FROM sku_preco sp
+               WHERE sp.tenant_id = tenant_atual() AND sp.tabela_externa = tp.id_externo) AS skus
+        FROM tabela_preco tp
+       WHERE tp.tenant_id = tenant_atual() AND tp.proposito = 'venda' AND tp.ativa
+       ORDER BY tp.padrao DESC, tp.descricao
+       LIMIT 100`)
+    return reply.send({
+      itens: itens.map((t) => ({
+        idExterno: t.id_externo, descricao: t.descricao, padrao: t.padrao, perfil: t.perfil,
+        // ⚠️ Quantos SKUs têm preço nela: tabela vazia é escolha ruim, e a pessoa
+        //    não tem como saber isso pelo nome.
+        skus: t.skus,
+      })),
+    })
+  })
+
+  /** Declara qual tabela pratica varejo e qual pratica atacado. */
+  app.put<{ Body: { varejo?: string | null; atacado?: string | null } }>(
+    '/v1/integracao/tabelas-preco/perfis', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const varejo = req.body?.varejo?.trim() || null
+      const atacado = req.body?.atacado?.trim() || null
+      // ⚠️ A MESMA tabela nos dois perfis apagaria a distinção que o produto faz
+      //    entre varejo e atacado (ADR-019). O índice único do 0077 recusaria
+      //    com erro de banco; aqui vira uma frase que diz o porquê.
+      if (varejo && atacado && varejo === atacado) {
+        return reply.code(422).send({
+          erro: 'tabela.perfil_duplicado',
+          mensagem: 'Varejo e atacado precisam de tabelas diferentes.',
+        })
+      }
+      await req.comTenant(async (tx) => {
+        // ⚠️ Limpa antes: trocar a tabela de um perfil não pode deixar a antiga
+        //    declarada, senão o índice único recusa a nova.
+        await tx`UPDATE tabela_preco SET perfil = NULL WHERE tenant_id = tenant_atual()`
+        for (const [perfil, id] of [['varejo', varejo], ['atacado', atacado]] as const) {
+          if (!id) continue
+          await tx`
+            UPDATE tabela_preco SET perfil = ${perfil}
+             WHERE tenant_id = tenant_atual() AND id_externo = ${id}
+               AND proposito = 'venda' AND ativa`
+        }
+      })
+      return reply.send({ ok: true })
+    },
+  )
+
 }
 
 /** Traduz as únicas parciais do banco em erro que a tela sabe explicar. */
