@@ -140,10 +140,21 @@ export class LlmOpenRouter implements PortaLlm {
     //    mensagem só para os dois casos manda a pessoa consertar o que não está
     //    quebrado.
     if (!chamada) {
-      const texto = typeof mensagem['content'] === 'string' ? mensagem['content'].slice(0, 120) : ''
+      const conteudo = typeof mensagem['content'] === 'string' ? mensagem['content'] : ''
+      // ⚠️ TOLERÂNCIA DELIBERADA, medida em produção (26/08): modelos com suporte
+      //    fraco a ferramenta produzem o JSON CERTO e erram só o envelope — vem
+      //    em `content` em vez de `tool_calls`. Descartar isso jogaria fora uma
+      //    resposta boa por formalidade.
+      //
+      //    ⚠️ Não é afrouxar a validação: o que sai daqui passa pelo mesmo
+      //    `propostaDoRetorno` e, depois, pela validação de extração. Tolerar o
+      //    ENVELOPE não é confiar no CONTEÚDO.
+      const doTexto = propostaDoRetorno(jsonDoTexto(conteudo))
+      if (doTexto) return { ok: true, dados: doTexto, custo: extrairCusto(dados, quem) }
+
       return {
         ok: false, motivo: 'resposta_inesperada',
-        detalhe: `${quem} respondeu sem usar a ferramenta${texto ? ` (disse: "${texto}")` : ''}`,
+        detalhe: `${quem} respondeu sem usar a ferramenta${conteudo ? ` (disse: "${conteudo.slice(0, 120)}")` : ''}`,
       }
     }
 
@@ -182,6 +193,22 @@ export class LlmOpenRouter implements PortaLlm {
  * ⚠️ Corta em `MAX_MODELOS` porque o fornecedor recusa listas maiores. **A ORDEM
  * DECIDE**: os primeiros são os que valem.
  */
+/**
+ * Tenta ler JSON de um texto livre, aceitando cerca de markdown.
+ *
+ * ⚠️ Só é chamado quando NÃO houve chamada de ferramenta. Se não parecer JSON,
+ * devolve `undefined` e a falha segue nomeada — não se inventa resposta a partir
+ * de prosa.
+ */
+function jsonDoTexto(texto: string): Record<string, unknown> | undefined {
+  const limpo = texto.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
+  if (!limpo.startsWith('{')) return undefined
+  try {
+    const v = JSON.parse(limpo)
+    return v && typeof v === 'object' ? v as Record<string, unknown> : undefined
+  } catch { return undefined }
+}
+
 function listaDeModelos(bruto: string): readonly string[] {
   return bruto.split(',').map((m) => m.trim()).filter(Boolean).slice(0, MAX_MODELOS)
 }

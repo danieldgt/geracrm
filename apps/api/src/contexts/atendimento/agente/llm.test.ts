@@ -384,3 +384,39 @@ describe('⚠️ Numa cadeia, a falha precisa dizer QUEM falhou', () => {
     if (!r.ok) expect(r.detalhe).toContain('sem preencher o texto')
   })
 })
+
+describe('⚠️ Modelo que acerta o JSON e erra o envelope', () => {
+  /**
+   * Medido em produção: modelos com suporte fraco a ferramenta devolvem o JSON
+   * CERTO dentro de `content`, sem `tool_calls`. Descartar seria jogar fora uma
+   * resposta boa por formalidade. Tolerar o ENVELOPE não é confiar no CONTEÚDO:
+   * tudo segue passando pela validação de extração.
+   */
+  const semFerramenta = (content: string) =>
+    new LlmOpenRouter({ apiKey: 'k', modelo: 'a/1' }, {
+      buscar: respostaFalsa({ model: 'a/1', choices: [{ message: { content } }] }).fetch,
+    }).conversar(PEDIDO)
+
+  it('JSON em content é aceito', async () => {
+    const r = await semFerramenta('{"texto":"Boa noite! Sim, temos atacado.","proximoPasso":"continuar"}')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.dados.texto).toContain('atacado')
+  })
+
+  it('aceita com cerca de markdown em volta', async () => {
+    const r = await semFerramenta('```json\n{"texto":"Oi!","proximoPasso":"continuar"}\n```')
+    expect(r.ok).toBe(true)
+  })
+
+  /** ⚠️ Prosa NÃO vira resposta: não se inventa estrutura a partir de texto. */
+  it('texto solto continua sendo falha nomeada', async () => {
+    const r = await semFerramenta('Claro, temos atacado sim!')
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.detalhe).toContain('sem usar a ferramenta')
+  })
+
+  it('JSON válido mas sem texto também falha', async () => {
+    const r = await semFerramenta('{"proximoPasso":"continuar"}')
+    expect(r.ok).toBe(false)
+  })
+})
