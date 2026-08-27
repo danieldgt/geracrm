@@ -3,6 +3,7 @@ import type {
   PrecoCanonico, TabelaPrecoCanonica, VendaCanonica, SaldoFidelidadeCanonico,
   Pagina, Resultado, FalhaEfetivacao,
 } from '../porta.js'
+import { montarOrcamento, traduzirRespostaOrcamento } from './orcamento.js'
 
 /**
  * GeraCloud adapter (pdv-core).
@@ -36,7 +37,11 @@ export const CAPACIDADES_GERACLOUD: Capacidades = {
   saldoSincrono: true,
   tabelaPrecoSincrona: true,
   creditoCliente: false,
-  escritaPedido: false,
+  // ⚠️ Só ORÇAMENTO (POST /catalogos-publico/orcamento). O ERP não expõe criação
+  //    de VENDA por esta via — `status` é fixo em 'Orcamento' no próprio catálogo
+  //    do fornecedor. O produto precisa dizer isso na tela: quem lê "efetivado" e
+  //    entende "venda fechada" vai se surpreender no fim do mês.
+  escritaPedido: true,
   // No outbound webhook anywhere in the codebase. Sync is scheduled — and the
   // resulting lag in revenue attribution must be declared on screen.
   webhookDeVenda: false,
@@ -181,6 +186,34 @@ export class ConectorGeraCloud implements ConectorErp {
     // submission instead of letting the salesperson assemble blind.
     this.#timeout = op.timeoutMs ?? 2_000
     this.#buscar = op.buscar ?? fetch
+  }
+
+  /**
+   * POST cru — para `catalogos-publico/*`, que é ROTA PÚBLICA e devolve ARQUIVO.
+   *
+   * ⚠️ Não passa pelo `#pedir` de propósito: aquele exige token e faz
+   * `.json()` na resposta. Aqui não há token (confirmado ao vivo: a rota
+   * responde 200 sem `Authorization`), e a resposta do orçamento é um blob —
+   * `.json()` estouraria em cima de um pedido que FOI criado, e o erro pareceria
+   * falha de envio.
+   */
+  async #buscarCru(caminho: string, corpo: string): Promise<{ status: number; texto: string }> {
+    const abortar = new AbortController()
+    const relogio = setTimeout(() => abortar.abort(), this.#timeout)
+    try {
+      const r = await this.#buscar(`${this.#base}${caminho}`, {
+        method: 'POST',
+        signal: abortar.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: corpo,
+      })
+      // ⚠️ Lê como TEXTO: em erro o ERP manda mensagem, em sucesso manda o
+      //    arquivo. Só a mensagem de erro interessa, e ela cabe em texto.
+      const texto = r.ok ? '' : await r.text().catch(() => '')
+      return { status: r.status, texto }
+    } finally {
+      clearTimeout(relogio)
+    }
   }
 
   async #pedir<T>(caminho: string, init?: RequestInit): Promise<T> {
@@ -508,6 +541,101 @@ export class ConectorGeraCloud implements ConectorErp {
    * `expiraEm` is the field that makes FID-04 work: the ERP already computes
    * the deadline and nobody tells the customer before the money is gone.
    */
+  /**
+   * Cria o ORÇAMENTO no ERP a partir do pedido confirmado (ADR-005).
+   *
+   * ⚠️ Contrato extraído do JS do catálogo público — o ERP não tem especificação.
+   * Detalhes em `orcamento.ts`; os que mais custam: valores em REAIS decimais,
+   * `precoDoMomento` é o total da linha, e a resposta é um ARQUIVO (o número do
+   * pedido não volta).
+   *
+   * ⚠️ A nossa porta passa IDs (`clienteExterno`, `skuExterno`); o ERP quer os
+   * OBJETOS. Buscar isso é trabalho do adaptador — o domínio não deve conhecer a
+   * forma do fornecedor (ADR-008).
+   */
+  async efetivarPedido(pedido: {
+    clienteExterno: string
+    itens: readonly { skuExterno: string; quantidade: number; valorUnitarioCentavos: number }[]
+    chaveIdempotencia: string
+  }): Promise<Resultado<{ numeroExterno: string }, FalhaEfetivacao>> {
+    let clientePDV: Record<string, unknown>
+    const estoques: Record<string, Record<string, unknown>> = {}
+    try {
+      clientePDV = await this.#pedir<Record<string, unknown>>(`/clientespdv/${pedido.clienteExterno}`)
+      // ⚠️ Um a um de propósito: o lote desta rota devolve a TELA DE VENDA, com
+      //    preço e saldo — e nós precisamos do registro de estoque cru, que é o
+      //    que o catálogo manda dentro do item.
+      for (const i of pedido.itens) {
+        estoques[i.skuExterno] = await this.#pedir<Record<string, unknown>>(`/estoques/${i.skuExterno}`)
+      }
+    } catch {
+      // ⚠️ Falhar aqui é ANTES de escrever: nada foi criado no ERP, então é
+      //    `nao_chegou` e pode retentar sem risco de duplicar.
+      return { ok: false, falha: { tipo: 'nao_chegou' } }
+    }
+
+    const corpo = montarOrcamento({
+      clientePDV,
+      itens: pedido.itens.map((i) => ({
+        estoque: estoques[i.skuExterno]!,
+        quantidade: i.quantidade,
+        precoUnitarioCentavos: i.valorUnitarioCentavos,
+      })),
+      catalogo: {},
+      tabelaPreco: null,
+      chaveIdempotencia: pedido.chaveIdempotencia,
+      agora: new Date(),
+    })
+
+    let status: number, texto: string
+    try {
+      const r = await this.#buscarCru('/catalogos-publico/orcamento', JSON.stringify(corpo))
+      status = r.status
+      texto = r.texto
+    } catch {
+      // ⚠️ Timeout ou queda DEPOIS de enviar: o orçamento PODE existir lá.
+      //    Reenviar é o que o INV-53 existe para impedir.
+      return { ok: false, falha: { tipo: 'resposta_perdida' } }
+    }
+    return traduzirRespostaOrcamento(status, texto)
+  }
+
+  /**
+   * RECONCILIAÇÃO — "este pedido já existe lá?" (INV-53).
+   *
+   * ⚠️ É o que torna `resposta_perdida` recuperável. Sem isto, um timeout deixa
+   * o pedido preso em conferência para sempre, e a única saída seria reenviar às
+   * cegas — que é exatamente o que duplica pedido no ERP do cliente.
+   *
+   * ⚠️ Funciona por **consulta exata** porque gravamos a chave em `observacao`
+   * (ver `orcamento.ts`). O ERP não tem idempotência própria; sem esse gancho
+   * sobraria busca heurística por cliente + valor + janela de minutos, que não
+   * sabe distinguir "achei o meu" de "achei um parecido" — e casos ambíguos
+   * teriam de ir para conferência humana de qualquer forma.
+   */
+  async consultarPedidoPorChave(chaveIdempotencia: string): Promise<{ numeroExterno: string } | null> {
+    try {
+      // `POST /vendas/pedidos-catalogo` é BUSCA paginada (o corpo é o filtro).
+      const r = await this.#pedir<unknown>('/vendas/pedidos-catalogo?inicio=0&limite=50&ordem=id', {
+        method: 'POST',
+        body: JSON.stringify({ observacao: `CRM ${chaveIdempotencia}` }),
+      })
+      const achado = linhasDe(r).find((linha) => {
+        const v = linha as Record<string, unknown>
+        return String(v['observacao'] ?? '').includes(chaveIdempotencia)
+      }) as Record<string, unknown> | undefined
+      // ⚠️ Filtramos pelo conteúdo mesmo mandando o filtro: se o ERP ignorar o
+      //    campo, a busca voltaria tudo e o primeiro item seria um pedido de
+      //    outra pessoa. Confiar no filtro do fornecedor sem conferir é como
+      //    duplica-se pedido em silêncio.
+      return achado ? { numeroExterno: String(achado['id'] ?? '') } : null
+    } catch {
+      // ⚠️ Não deu para perguntar: devolve `null`, e o pedido SEGUE em
+      //    conferência. Fingir que não existe mandaria reenviar.
+      return null
+    }
+  }
+
   async consultarSaldoFidelidade(clienteExterno: string): Promise<SaldoFidelidadeCanonico | null> {
     const dados = await this.#pedir<{ content?: unknown[] }>(
       `/movimentacoes-cartao-cashback?idClientePdv=${encodeURIComponent(clienteExterno)}&size=200`,
