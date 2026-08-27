@@ -156,3 +156,52 @@ describe('ADR-005: efetivação do pedido', () => {
     expect(r.tipo).toBe('vazio')
   })
 })
+
+/**
+ * ⚠️ O BECO SEM SAÍDA DO 'confirmado'.
+ *
+ * A jornada do chat termina com o cliente dizendo SIM: o pedido vira
+ * 'confirmado'. Mas a efetivação só aceitava 'rascunho' e 'falhou' — então o
+ * pedido confirmado NUNCA chegaria ao ERP, nem com o conector de escrita pronto.
+ * O defeito só apareceria no dia em que a escrita fosse ligada, com o pedido de
+ * um cliente real parado no meio do caminho.
+ */
+describe('⚠️ Pedido confirmado no chat pode efetivar', () => {
+  const confirmado = async () => {
+    const id = await novoRascunho()
+    await dono`UPDATE pedido SET estado = 'confirmado', confirmado_em = now()
+                WHERE tenant_id = ${T} AND id = ${id}`
+    return id
+  }
+
+  it('confirmado efetiva e vira efetivado', async () => {
+    const id = await confirmado()
+    const r = await comoTenant((tx) => efetivarPedido(
+      tx, conectorFake(() => ({ ok: true, valor: { numeroExterno: 'ERP-77' } })),
+      SISTEMA, id, AGORA))
+    expect(r).toEqual({ tipo: 'efetivado', numeroExterno: 'ERP-77' })
+    expect((await lerPedido(id)).estado).toBe('efetivado')
+  })
+
+  /** ⚠️ Efetivado é imutável — reenviar duplicaria pedido no ERP do cliente. */
+  it('efetivado não efetiva de novo', async () => {
+    const id = await confirmado()
+    await dono`UPDATE pedido SET estado = 'efetivado' WHERE tenant_id = ${T} AND id = ${id}`
+    const r = await comoTenant((tx) => efetivarPedido(
+      tx, conectorFake(() => ({ ok: true, valor: { numeroExterno: 'X' } })), SISTEMA, id, AGORA))
+    expect(r).toEqual({ tipo: 'nao_rascunho' })
+  })
+
+  /**
+   * ⚠️ 'aguardando_conferencia' é o estado do INV-53: a resposta do ERP se
+   * perdeu e o pedido PODE existir lá. Reenviar às cegas é exatamente o que não
+   * se pode fazer.
+   */
+  it('aguardando_conferencia NÃO reenvia', async () => {
+    const id = await confirmado()
+    await dono`UPDATE pedido SET estado = 'aguardando_conferencia' WHERE tenant_id = ${T} AND id = ${id}`
+    const r = await comoTenant((tx) => efetivarPedido(
+      tx, conectorFake(() => ({ ok: true, valor: { numeroExterno: 'X' } })), SISTEMA, id, AGORA))
+    expect(r).toEqual({ tipo: 'nao_rascunho' })
+  })
+})

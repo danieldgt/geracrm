@@ -34,8 +34,17 @@ export async function efetivarPedido(
     SELECT estado, contato_id, versao_conteudo AS versao
       FROM pedido WHERE tenant_id = tenant_atual() AND id = ${pedidoId}`
   if (!pedido) return { tipo: 'nao_encontrado' }
-  // Rascunho (montando) ou 'falhou' (retentar) podem efetivar. Efetivado é imutável.
-  if (pedido.estado !== 'rascunho' && pedido.estado !== 'falhou') return { tipo: 'nao_rascunho' }
+  // ⚠️ Quem pode efetivar:
+  //    · 'rascunho'   — o vendedor montou e manda (pedido assistido);
+  //    · 'confirmado' — o CLIENTE disse sim no chat (ADR-005). Sem este, a
+  //      jornada do chat morria em 'confirmado': o cliente confirmava e o pedido
+  //      nunca chegava ao ERP, nem com o conector pronto. Era um beco sem saída
+  //      que só apareceria no dia em que a escrita fosse ligada;
+  //    · 'falhou'     — retentar depois de falha de negócio.
+  //    'efetivado' é imutável, e os intermediários ('enviando',
+  //    'aguardando_conferencia') não reenviam às cegas — é o INV-53.
+  const PODEM_EFETIVAR = ['rascunho', 'confirmado', 'falhou']
+  if (!PODEM_EFETIVAR.includes(pedido.estado)) return { tipo: 'nao_rascunho' }
 
   const itens = await sql<{ sku_snapshot: string; quantidade: string; valor_unitario_centavos: string }[]>`
     SELECT sku_snapshot, quantidade::text, valor_unitario_centavos::text
