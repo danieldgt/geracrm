@@ -275,3 +275,85 @@ desenho do pedido assistido e precisa ser respondido antes de PED-11/PED-12.
   estava certo, e que colunas fixas teriam quebrado.
 - **A ausência de webhook** é a descoberta que mais muda o produto: a latência da atribuição de
   receita precisa aparecer na interface.
+
+
+---
+
+## 8. ⚠️ A escrita de pedido — contrato extraído do catálogo público (27/ago)
+
+**Correção do §3b:** `POST /vendas/pedidos-catalogo` **NÃO cria pedido**. No
+bundle o método é `buscarPedidosCatalogo`, tem paginação (`inicio`, `limite`,
+`ordem`) e o corpo é o FILTRO — é `POST` só porque o filtro é complexo demais
+para query string. Implementar a escrita por ali teria falhado.
+
+O caminho real, extraído do JS do catálogo (`catalogoService.enviarPedido` e
+`carregarDadosPedido`):
+
+```
+POST {urlBase}/catalogos-publico/orcamento
+```
+
+⚠️ **Responde `blob`**, não JSON: `{ responseType: "blob" }`. O catálogo devolve
+um PDF/arquivo do orçamento — então **o número do pedido NÃO volta no corpo**.
+Isso muda a nossa efetivação: `numeroExterno` terá de vir de uma consulta
+posterior, ou o campo fica vazio até a sincronização seguinte.
+
+### O corpo
+
+| Campo | Valor | Nota |
+|---|---|---|
+| `clientePDV` | objeto do cliente | ⚠️ o OBJETO inteiro, não um id |
+| `itens[]` | lista de `ItemVenda` | ver abaixo |
+| `status` | `"Orcamento"` | fixo |
+| `modo` | `"NFCEOffline"` (gestão) ou o modo do catálogo | |
+| `valor` | **decimal com 2 casas** (`Number(total.toFixed(2))`) | ⚠️ reais, NÃO centavos |
+| `usernameVendedor` | username ou `"catalogo"` | |
+| `isCatalogo` | `true` | |
+| `frete` | `0` | |
+| `formasPagamento[]` | vazio, ou `PagamentoDiverso(idForma, 1, valor)` | |
+| `catalogo` / `tabelaPreco` | objeto do catálogo e a tabela dele | |
+| `dataAbertura` | `"DD/MM/YYYY HH:mm:ss"` | ⚠️ formato brasileiro, não ISO |
+| `observacao` | **texto livre** | ⚠️ ver idempotência abaixo |
+| `cupomDesconto` | só se houver | |
+
+**Item** (`new ItemVenda(estoque, produtoPreco)`), com estes campos calculados
+antes do envio:
+
+- `precoDoMomento` = `preco * quantidade`, **decimal** — ⚠️ é o TOTAL da linha,
+  não o unitário, apesar do nome;
+- `valorFinalDesconto`, `valorFinalAcrescimo`, `frete` = `0`;
+- `valorFinalDescontoPromocao` = calculado quando há promoção.
+
+⚠️ O item carrega o objeto de **estoque** inteiro (com `codigoBarra`), não um id
+solto. O preço vem de `GET tabela-preco/{id}/precos?idsCodigosBarras=`.
+
+### Cliente: pessoa física e jurídica são caminhos diferentes
+
+`ajustarClientePDVFisicoJuridico` mostra a regra, e ela é do domínio do ERP:
+
+- `tipo === "PESSOA FISICA"` → exige **CPF**, e `delete cnpj`;
+- caso contrário → exige **CNPJ** (+ `inscricaoEstadual` opcional), e `delete cpf`;
+- CPF/CNPJ/telefone entram **só com dígitos**; CEP sem hífen.
+
+⚠️ Mandar os dois documentos, ou nenhum, é recusa — o próprio front avisa
+"Obrigatório informar o CNPJ" antes de enviar.
+
+### ✅ A pergunta da idempotência tem resposta: `observacao`
+
+É texto livre e vai no corpo. É onde gravamos a chave `pedidoId:versao` (INV-53),
+o que transforma a reconciliação depois de um timeout numa **consulta exata** em
+vez da busca heurística por cliente + valor + janela de minutos (§6.3). É a
+diferença entre "achei o meu pedido" e "achei um parecido".
+
+### O que ainda falta confirmar
+
+| # | Pergunta | Como responder |
+|---|---|---|
+| 1 | O `blob` da resposta traz o número do pedido em algum lugar? | Criar um orçamento de teste na apresentação e abrir o arquivo |
+| 2 | `catalogos-publico/` exige autenticação? | O nome sugere rota pública por chave de catálogo — confirmar |
+| 3 | Dá para criar VENDA (não orçamento) por API? | `status: "Orcamento"` é fixo no catálogo; o PDV pode ter outra rota |
+
+⚠️ **A 3 é decisão de produto, não técnica:** se o ERP só aceita ORÇAMENTO por
+esta via, o pedido confirmado no chat vira orçamento no GeraCloud e alguém
+converte em venda lá dentro. É honesto e já resolve — mas precisa estar claro na
+tela, senão o operador acha que a venda foi fechada.
