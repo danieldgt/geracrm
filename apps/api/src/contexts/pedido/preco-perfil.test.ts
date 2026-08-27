@@ -187,3 +187,65 @@ describe('⚠️ Perfil declarado ganha do nome', () => {
     expect(await precoDoSku('atacado')).toBe(4900)
   })
 })
+
+/**
+ * ⚠️ A ROTA que a tela usa para declarar. O que ela protege: só tabela COTÁVEL
+ * pode ser declarada, e os dois perfis não podem apontar para a mesma — senão a
+ * distinção que o produto inteiro faz entre varejo e atacado (ADR-019) some.
+ */
+describe('Declarar o perfil pela API', () => {
+  const declarar = (corpo: Record<string, unknown>) =>
+    app.inject({
+      method: 'PUT', url: '/v1/integracao/tabelas-preco/perfis',
+      headers: { 'x-tenant-id': T }, payload: corpo,
+    })
+
+  beforeEach(async () => {
+    await dono`DELETE FROM sku_preco WHERE tenant_id = ${T}`
+    await dono`DELETE FROM tabela_preco WHERE tenant_id = ${T}`
+  })
+
+  it('declara e o catálogo passa a usar', async () => {
+    await tabela('920', 'A VISTA', 'venda', true, 3900)
+    expect(await precoDoSku('atacado')).toBeNull()          // nome não casa
+    expect((await declarar({ atacado: '920' })).statusCode).toBe(200)
+    expect(await precoDoSku('atacado')).toBe(3900)          // agora casa
+  })
+
+  it('trocar a tabela de um perfil libera a anterior', async () => {
+    await tabela('921', 'PRIMEIRA', 'venda', true, 1000)
+    await tabela('922', 'SEGUNDA', 'venda', true, 2000)
+    await declarar({ varejo: '921' })
+    await declarar({ varejo: '922' })
+    expect(await precoDoSku('varejo')).toBe(2000)
+    const [antiga] = await dono<{ perfil: string | null }[]>`
+      SELECT perfil FROM tabela_preco WHERE tenant_id = ${T} AND id_externo = '921'`
+    expect(antiga!.perfil).toBeNull()
+  })
+
+  /** ⚠️ Frase com a ação corretiva, não erro de banco vazando para a tela. */
+  it('a mesma tabela nos dois perfis é recusada com motivo', async () => {
+    await tabela('923', 'UNICA', 'venda', true, 1000)
+    const r = await declarar({ varejo: '923', atacado: '923' })
+    expect(r.statusCode).toBe(422)
+    expect((r.json() as { mensagem: string }).mensagem).toContain('diferentes')
+  })
+
+  /** ⚠️ Declarar uma tabela de CUSTO seria declarar o erro que o 0074 fechou. */
+  it('tabela de custo não pode ser declarada', async () => {
+    await tabela('924', 'CUSTO PADRAO', 'custo', true, 500)
+    expect((await declarar({ varejo: '924' })).statusCode).toBe(200)  // aceita a chamada…
+    const [t] = await dono<{ perfil: string | null }[]>`
+      SELECT perfil FROM tabela_preco WHERE tenant_id = ${T} AND id_externo = '924'`
+    expect(t!.perfil).toBeNull()   // …mas NÃO grava: o filtro está no UPDATE
+  })
+
+  it('limpar a declaração devolve o palpite por nome', async () => {
+    await tabela('925', 'TABELA VAREJO', 'venda', true, 9900)
+    await tabela('926', 'PROMO', 'venda', true, 5000)
+    await declarar({ varejo: '926' })
+    expect(await precoDoSku('varejo')).toBe(5000)
+    await declarar({})
+    expect(await precoDoSku('varejo')).toBe(9900)
+  })
+})

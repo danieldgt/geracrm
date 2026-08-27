@@ -1,8 +1,15 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
+import { HttpClient, HttpErrorResponse } from '@angular/common/http'
+import { firstValueFrom } from 'rxjs'
 import { ConexoesServico } from './conexoes.servico.js'
 import { FormularioCredencialComponente } from './formulario-credencial.componente.js'
 import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from './tipos.js'
+
+interface TabelaPreco {
+  readonly idExterno: string; readonly descricao: string
+  readonly padrao: boolean; readonly perfil: string | null; readonly skus: number
+}
 
 /**
  * Configurações → ERP.
@@ -141,6 +148,42 @@ import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from '
     <!-- INT-08: o que cada sincronização trouxe e rejeitou. Estado PARCIAL da
          tela — some sozinho se a carga nunca rodou, sem derrubar as conexões. -->
     @if (servico.operacoes().length) {
+      <!-- ⚠️ Qual tabela pratica varejo e qual pratica atacado. Sem declarar, o
+           produto adivinha pelo NOME da tabela — e renomear no ERP passa a mudar
+           o preço do catálogo, sem erro nenhum. Hoje é assim que o perfil
+           atacado fica sem preço: nenhuma tabela ativa tem "atacado" no nome. -->
+      @if (tabelas().length > 0) {
+        <section class="sync">
+          <h2 class="sync-titulo">Tabelas de preço</h2>
+          <p class="tp-dica">Diga qual tabela do ERP vale para cada perfil. Sem isso, o
+            catálogo tenta adivinhar pelo nome — e erra quando o nome não diz.</p>
+
+          <div class="tp-linhas">
+            @for (perfil of PERFIS; track perfil) {
+              <label class="tp-linha">
+                <span class="tp-perfil">{{ perfil === 'varejo' ? 'Varejo' : 'Atacado' }}</span>
+                <select [value]="escolha()[perfil] ?? ''"
+                        (change)="escolher(perfil, $any($event.target).value)">
+                  <option value="">— adivinhar pelo nome —</option>
+                  @for (t of tabelas(); track t.idExterno) {
+                    <option [value]="t.idExterno">
+                      {{ t.descricao }} ({{ t.skus }} {{ t.skus === 1 ? 'item' : 'itens' }})
+                    </option>
+                  }
+                </select>
+              </label>
+            }
+          </div>
+
+          <div class="tp-acoes">
+            <button class="btn btn--primario btn--pequeno" (click)="salvarPerfis()"
+                    [disabled]="salvandoPerfis()">
+              {{ salvandoPerfis() ? 'Salvando…' : 'Salvar tabelas' }}</button>
+            @if (msgPerfis()) { <span [class]="erroPerfis() ? 'tp-err' : 'tp-ok'">{{ msgPerfis() }}</span> }
+          </div>
+        </section>
+      }
+
       <section class="sync">
         <h2 class="sync-titulo">Últimas sincronizações</h2>
         <table class="sync-tabela">
@@ -252,6 +295,15 @@ import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from '
     select, .campo input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .erro-geral { color: var(--erro); font-size: 13px; }
     .sync { margin-top: var(--espacamento-6); }
+    .tp-dica { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
+    .tp-linhas { display: grid; gap: var(--espacamento-2); max-width: 560px; }
+    .tp-linha { display: flex; align-items: center; gap: var(--espacamento-3); }
+    .tp-perfil { min-width: 72px; color: var(--texto); font-size: 13px; }
+    .tp-linha select { flex: 1; padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
+      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
+    .tp-acoes { display: flex; align-items: center; gap: var(--espacamento-3); margin-top: var(--espacamento-3); }
+    .tp-ok { color: var(--sucesso); font-size: 13px; }
+    .tp-err { color: var(--erro); font-size: 13px; }
     .sync-titulo { margin: 0 0 var(--espacamento-3); font-size: 15px; color: var(--texto); }
     .sync-tabela { width: 100%; border-collapse: collapse; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
     .sync-tabela th, .sync-tabela td { padding: var(--espacamento-2) var(--espacamento-3); text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); }
@@ -264,6 +316,13 @@ import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from '
 })
 export class ConexoesPagina implements OnInit {
   readonly servico = inject(ConexoesServico)
+  private readonly http = inject(HttpClient)
+  readonly PERFIS = ['varejo', 'atacado'] as const
+  readonly tabelas = signal<readonly TabelaPreco[]>([])
+  readonly escolha = signal<Record<string, string>>({})
+  readonly salvandoPerfis = signal(false)
+  readonly msgPerfis = signal<string | null>(null)
+  readonly erroPerfis = signal(false)
 
   readonly editando = signal<{ conexaoId?: string; conector: string; nome: string } | null>(null)
   readonly credencial = signal<Record<string, string>>({})
@@ -280,6 +339,48 @@ export class ConexoesPagina implements OnInit {
   ngOnInit(): void {
     void this.servico.carregar()
     void this.servico.carregarOperacoes()
+    void this.carregarTabelas()
+  }
+
+  /**
+   * As tabelas de preço COTÁVEIS do ERP e o perfil declarado de cada uma.
+   *
+   * ⚠️ A API já filtra: só venda e ativa. Oferecer uma tabela de CUSTO aqui
+   * seria oferecer o erro — cotar a margem da loja a um cliente.
+   */
+  private async carregarTabelas(): Promise<void> {
+    try {
+      const r = await firstValueFrom(
+        this.http.get<{ itens: TabelaPreco[] }>('/v1/integracao/tabelas-preco'))
+      this.tabelas.set(r.itens)
+      // O que já está declarado vira o estado inicial dos seletores.
+      const atual: Record<string, string> = {}
+      for (const t of r.itens) if (t.perfil) atual[t.perfil] = t.idExterno
+      this.escolha.set(atual)
+    } catch { /* sem ERP conectado: a seção não aparece */ }
+  }
+
+  escolher(perfil: string, idExterno: string): void {
+    this.escolha.update((a) => ({ ...a, [perfil]: idExterno }))
+    this.msgPerfis.set(null)
+  }
+
+  async salvarPerfis(): Promise<void> {
+    if (this.salvandoPerfis()) return
+    this.salvandoPerfis.set(true); this.msgPerfis.set(null); this.erroPerfis.set(false)
+    try {
+      await firstValueFrom(this.http.put('/v1/integracao/tabelas-preco/perfis', {
+        varejo: this.escolha()['varejo'] || null,
+        atacado: this.escolha()['atacado'] || null,
+      }))
+      this.msgPerfis.set('Tabelas salvas. O catálogo já usa a partir de agora.')
+      await this.carregarTabelas()
+    } catch (e) {
+      // ⚠️ A API devolve a frase pronta com a ação corretiva — não invente outra.
+      this.erroPerfis.set(true)
+      this.msgPerfis.set(e instanceof HttpErrorResponse && typeof e.error?.mensagem === 'string'
+        ? e.error.mensagem : 'Não foi possível salvar.')
+    } finally { this.salvandoPerfis.set(false) }
   }
 
   mensagem(motivo: keyof typeof MENSAGEM_FALHA) { return MENSAGEM_FALHA[motivo] }
