@@ -268,9 +268,18 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
                   <input #arquivoImg type="file" accept="image/*" hidden
                          (change)="aoEscolherImagem($event, t.id)" />
                   <button class="ic" type="button" title="Gerar pedido" (click)="gerarPedido(t.id)">📋</button>
-                  <input class="entrada" type="text" placeholder="Digite uma mensagem" #entrada
-                         [ngModel]="servico.rascunho()" (ngModelChange)="servico.rascunho.set($event)"
-                         (keydown.enter)="enviarEVoltarAoCampo(entrada)" [disabled]="servico.enviando()" />
+                  <!-- ⚠️ textarea, não input: input type=text NÃO cresce, por
+                       definição — nenhum CSS resolve. Quem cola um parágrafo via
+                       uma linha e não consegue reler o que escreveu antes de
+                       mandar para o cliente.
+                       ⚠️ Enter ENVIA e Shift+Enter quebra linha, como no
+                       WhatsApp: inverter isso faria a vendedora mandar a
+                       mensagem pela metade o dia inteiro. -->
+                  <textarea class="entrada" rows="1" placeholder="Digite uma mensagem" #entrada
+                            [ngModel]="servico.rascunho()" (ngModelChange)="servico.rascunho.set($event)"
+                            (input)="ajustarAltura(entrada)"
+                            (keydown.enter)="aoApertarEnter($event, entrada)"
+                            [disabled]="servico.enviando()"></textarea>
                   @if (servico.rascunho().trim()) {
                     <button class="enviar" type="button" (click)="enviarEVoltarAoCampo(entrada)"
                             [disabled]="servico.enviando()"
@@ -457,13 +466,21 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
     .ed-x { background: var(--wa-hover); color: var(--wa-text); }
 
     /* ── Composer ── */
-    .composer { position: relative; min-height: 56px; display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: var(--wa-panel); flex-wrap: wrap; z-index: 1; }
+    .composer { position: relative; min-height: 56px; display: flex; align-items: flex-end; gap: 10px; padding: 8px 16px; background: var(--wa-panel); flex-wrap: wrap; z-index: 1; }
     .emoji-panel { position: absolute; left: 12px; bottom: 60px; width: min(360px, 80%); max-height: 240px; overflow-y: auto; padding: 8px; background: var(--wa-panel); border: 1px solid var(--wa-line); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.5); display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; z-index: 6; }
     .emoji { border: 0; background: none; cursor: pointer; font-size: 20px; padding: 4px; border-radius: 6px; line-height: 1; }
     .emoji:hover { background: var(--wa-hover); }
     .ic { flex: none; width: 34px; height: 34px; border: 0; border-radius: 50%; background: none; color: var(--wa-sec); font-size: 20px; cursor: pointer; }
     .ic:disabled { opacity: .5; cursor: default; }
-    .entrada { flex: 1; padding: 10px 14px; border: 0; border-radius: 20px; background: var(--wa-hover); color: var(--wa-text); font: inherit; font-size: 14px; }
+    /* ⚠️ Cresce com o texto até 8 linhas e então rola por dentro. Sem o teto, um
+       texto longo empurraria a conversa inteira para fora da tela — o composer
+       comeria o histórico que a pessoa precisa ler para responder.
+       resize:none porque a alça de redimensionar do navegador brigaria com o
+       ajuste automático. */
+    .entrada { flex: 1; padding: 10px 14px; border: 0; border-radius: 20px;
+      background: var(--wa-hover); color: var(--wa-text); font: inherit; font-size: 14px;
+      resize: none; overflow-y: auto; max-height: 168px; line-height: 21px;
+      min-height: 41px; font-family: inherit; }
     .entrada::placeholder { color: var(--wa-sec); }
     .entrada:focus { outline: none; }
     .enviar { flex: none; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--wa-green); color: #04231d; font-size: 16px; cursor: pointer; display: grid; place-items: center; }
@@ -649,6 +666,33 @@ export class InboxPagina implements OnDestroy {
     return typeof c?.legenda === 'string' ? c.legenda : ''
   }
 
+  /**
+   * Ajusta a altura do campo ao conteúdo, até o teto do CSS.
+   *
+   * ⚠️ Zera antes de medir: sem isso o `scrollHeight` fica preso na maior altura
+   * já atingida, e o campo NUNCA encolhe quando a pessoa apaga o texto.
+   */
+  /**
+   * Enter envia; Shift+Enter quebra linha — como no WhatsApp.
+   *
+   * ⚠️ Inverter isso faria a vendedora mandar a mensagem pela metade o dia
+   * inteiro. E a lógica mora aqui, não no template: expressão com vírgula e
+   * parênteses o parser do Angular recusa, e o erro que aparece é "Unclosed
+   * block", que não menciona nada disso.
+   */
+  aoApertarEnter(ev: Event, el: HTMLTextAreaElement): void {
+    if ((ev as KeyboardEvent).shiftKey) return
+    ev.preventDefault()
+    this.enviarEVoltarAoCampo(el)
+    // Voltou ao vazio: o campo encolhe junto.
+    el.style.height = 'auto'
+  }
+
+  ajustarAltura(el: HTMLTextAreaElement): void {
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+
   /** ＋ do composer: escolhe imagem, lê como data URL e envia (legenda = rascunho). */
   aoEscolherImagem(ev: Event, conversaId: string): void {
     const input = ev.target as HTMLInputElement
@@ -768,7 +812,7 @@ export class InboxPagina implements OnDestroy {
    * Angular reprocessa o sinal `enviando()`. `setTimeout(0)` põe o foco atrás
    * dessa renderização — focar um input desabilitado é um no-op silencioso.
    */
-  async enviarEVoltarAoCampo(campo: HTMLInputElement): Promise<void> {
+  async enviarEVoltarAoCampo(campo: HTMLInputElement | HTMLTextAreaElement): Promise<void> {
     try {
       await this.servico.enviar()
     } finally {
