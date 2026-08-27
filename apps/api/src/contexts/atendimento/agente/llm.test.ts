@@ -420,3 +420,54 @@ describe('⚠️ Modelo que acerta o JSON e erra o envelope', () => {
     expect(r.ok).toBe(false)
   })
 })
+
+describe('⚠️ Segunda tentativa com o modelo reserva', () => {
+  /**
+   * A cadeia do OpenRouter só troca de modelo quando o PROVEDOR falha —
+   * "respondeu sem usar a ferramenta" é sucesso para eles. Medido: 4/6 com o
+   * melhor modelo grátis. A segunda tentativa é nossa, e só para o caso que
+   * outro modelo conserta.
+   */
+  function duasRespostas(primeira: unknown, segunda: unknown) {
+    const corpos: unknown[] = []
+    let n = 0
+    const f = (async (_u: string, init?: RequestInit) => {
+      corpos.push(JSON.parse(String(init?.body ?? '{}')))
+      const c = n++ === 0 ? primeira : segunda
+      return { ok: true, status: 200, json: async () => c } as Response
+    }) as unknown as typeof fetch
+    return {
+      llm: new LlmOpenRouter({ apiKey: 'k', modelo: 'a/1,b/2' }, { buscar: f }),
+      corpos: () => corpos,
+    }
+  }
+  const semFerramenta = { model: 'a/1', choices: [{ message: { content: 'pensando alto…' } }] }
+
+  it('resposta inútil faz tentar de novo, com o RESERVA', async () => {
+    const { llm, corpos } = duasRespostas(semFerramenta, RESPOSTA_OR)
+    const r = await llm.conversar(PEDIDO)
+    expect(r.ok).toBe(true)
+    const [um, dois] = corpos() as { model: string; models?: string[] }[]
+    expect(um!.model).toBe('a/1')
+    expect(dois!.model).toBe('b/2')          // o reserva, sozinho
+    expect(dois!.models).toBeUndefined()
+  })
+
+  it('falhando duas vezes, devolve a falha do PRINCIPAL — é ele que sai da lista', async () => {
+    const { llm } = duasRespostas(semFerramenta, { model: 'b/2', choices: [{ message: { content: 'nada' } }] })
+    const r = await llm.conversar(PEDIDO)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.detalhe).toContain('a/1')
+  })
+
+  /** ⚠️ Limite de taxa NÃO se repete: insistir piora para todos os tenants. */
+  it('não repete em limite de taxa nem em credencial inválida', async () => {
+    for (const [status, motivo] of [[429, 'limite_de_taxa'], [401, 'credencial_invalida']] as const) {
+      const { fetch, corpoEnviado } = respostaFalsa({ error: { message: 'x' } }, status)
+      const r = await new LlmOpenRouter({ apiKey: 'k', modelo: 'a/1,b/2' }, { buscar: fetch }).conversar(PEDIDO)
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.motivo).toBe(motivo)
+      expect((corpoEnviado() as { model: string }).model).toBe('a/1')
+    }
+  })
+})

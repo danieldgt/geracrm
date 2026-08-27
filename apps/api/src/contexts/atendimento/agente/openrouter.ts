@@ -62,14 +62,38 @@ export class LlmOpenRouter implements PortaLlm {
     this.#timeoutMs = opcoes.timeoutMs ?? 20_000
   }
 
+  /**
+   * ⚠️ A cadeia `models` do OpenRouter só troca de modelo quando o PROVEDOR
+   * falha. "Respondeu sem usar a ferramenta" é, para eles, uma resposta bem
+   * sucedida — então a cadeia deles não cobre a falha mais comum com modelos
+   * pequenos. Medido em 26/08: 4 de 6 com o melhor modelo grátis.
+   *
+   * ⚠️ Por isso a segunda tentativa é NOSSA, e só para o caso que outro modelo
+   * conserta: resposta inútil. Credencial inválida, crédito acabado e limite de
+   * taxa NÃO são repetidos — insistir não resolve e, no limite de taxa, piora
+   * para todos os tenants que dividem a chave.
+   */
   async conversar(pedido: PedidoDeTurno): Promise<ResultadoLlm<PropostaDeTurno>> {
+    const primeira = await this.#tentar(pedido, this.#modelos)
+    if (primeira.ok || primeira.motivo !== 'resposta_inesperada') return primeira
+
+    const reserva = this.#modelos.slice(1)
+    if (reserva.length === 0) return primeira
+
+    const segunda = await this.#tentar(pedido, reserva)
+    // ⚠️ Falhou de novo? Devolve a falha da PRIMEIRA: é a do modelo que você
+    //    escolheu como principal, e é a que diz o que tirar da lista.
+    return segunda.ok ? segunda : primeira
+  }
+
+  async #tentar(pedido: PedidoDeTurno, modelos: readonly string[]): Promise<ResultadoLlm<PropostaDeTurno>> {
     const corpo = {
-      model: this.#modelo,
+      model: modelos[0] ?? this.#modelo,
       // ⚠️ Só manda `models` quando há mais de um: a lista é a CADEIA DE
       //    FALLBACK do OpenRouter — se o primeiro estiver fora, esgotado ou não
       //    aceitar ferramenta, ele tenta o próximo antes de desistir. Um modelo
       //    a mais é mais barato que mandar a conversa para a fila humana.
-      ...(this.#modelos.length > 1 ? { models: this.#modelos } : {}),
+      ...(modelos.length > 1 ? { models: modelos } : {}),
       max_tokens: MAX_TOKENS_SAIDA,
       // No formato OpenAI a instrução é a primeira MENSAGEM, não um campo à parte.
       messages: [
@@ -129,7 +153,7 @@ export class LlmOpenRouter implements PortaLlm {
     // ⚠️ Numa CADEIA de fallback, saber QUEM respondeu é o que torna a falha
     //    operável: sem isso, "não usou a ferramenta" não diz qual dos três
     //    modelos precisa sair da lista, e a pessoa fica trocando no escuro.
-    const quem = typeof dados?.['model'] === 'string' ? dados['model'] : this.#modelo
+    const quem = typeof dados?.['model'] === 'string' ? dados['model'] : (modelos[0] ?? this.#modelo)
 
     const chamada = (Array.isArray(mensagem['tool_calls']) ? mensagem['tool_calls'][0] : null) as
       Record<string, unknown> | null
