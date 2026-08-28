@@ -40,6 +40,25 @@ export interface ContextoPortao {
   /** Já houve sessão ENCERRADA nesta conversa (entregue ou desistiu). */
   readonly sessaoJaEncerrada: boolean
   readonly maxTurnos: number
+  /**
+   * ⚠️ AS TRÊS REGRAS CONFIGURÁVEIS (0078). Eram decisões fixas aqui dentro;
+   * agora vêm de `agente_config`, com os padrões iguais ao que estava escrito.
+   *
+   * ⚠️ Elas ligam e desligam GUARDAS, nunca o desligamento do agente — `ativo`
+   * continua vencendo tudo. Uma configuração que pudesse fazer um agente
+   * desligado falar não seria configuração, seria um buraco.
+   */
+  readonly regras: RegrasDePortao
+}
+
+/** O subconjunto de `RegrasDoAgente` que a decisão de ENTRAR consulta. */
+export interface RegrasDePortao {
+  /** `false` = o robô fala mesmo com a equipe disponível. */
+  readonly soQuandoNinguemDisponivel: boolean
+  /** `false` = entra já na primeira mensagem, sem esperar o cliente insistir. */
+  readonly exigirAusenciaAntes: boolean
+  /** `true` = volta a falar numa conversa em que já encerrou. */
+  readonly reabrirAposEncerrada: boolean
 }
 
 export type MotivoNaoEntra =
@@ -74,8 +93,9 @@ export function portaoDoAgente(c: ContextoPortao): DecisaoPortao {
   if (!c.agenteAtivo) return NAO('agente_desligado')
 
   // ⚠️ Havendo alguém disponível, quem atende é GENTE. O agente cobre o vácuo,
-  //    não substitui o time.
-  if (!c.ninguemDisponivel) return NAO('tem_quem_atenda')
+  //    não substitui o time. DESLIGÁVEL (0078): quem quer o robô atendendo junto
+  //    com a equipe desliga isto na tela — e assume o que vem junto.
+  if (c.regras.soQuandoNinguemDisponivel && !c.ninguemDisponivel) return NAO('tem_quem_atenda')
 
   // ⚠️ Alguém está na mesa AGORA (mesma régua da resposta de ausência): o robô
   //    não fala por cima de atendimento humano. Vale inclusive de madrugada —
@@ -92,11 +112,14 @@ export function portaoDoAgente(c: ContextoPortao): DecisaoPortao {
   // ⚠️ Já conversou e saiu nesta conversa (entregou ou desistiu): não recomeça
   //    sozinho. Reabrir daria ao cliente um robô que ressuscita depois de ter
   //    dito que ia chamar alguém — a forma mais rápida de perder a confiança na
-  //    entrega ao humano.
-  if (c.sessaoJaEncerrada) return NAO('sessao_ja_encerrada')
+  //    entrega ao humano. DESLIGÁVEL (0078) para triagem permanente e para
+  //    conversa de teste, que sem isto trava no primeiro encerramento.
+  if (!c.regras.reabrirAposEncerrada && c.sessaoJaEncerrada) return NAO('sessao_ja_encerrada')
 
-  // ⚠️ O GATILHO. Só entra depois de a ausência ter falado.
-  if (!c.ausenciaJaEnviada) return NAO('sem_ausencia_antes')
+  // ⚠️ O GATILHO. Só entra depois de a ausência ter falado. DESLIGÁVEL (0078):
+  //    sem ele o agente responde já na primeira mensagem — mais alcance, mais
+  //    custo, e sem o filtro que separa quem tem interesse de quem sumiu.
+  if (c.regras.exigirAusenciaAntes && !c.ausenciaJaEnviada) return NAO('sem_ausencia_antes')
 
   return { entra: true, sessao: 'nova' }
 }

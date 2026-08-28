@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { REGRAS_AGENTE_PADRAO, validarRegrasAgente, type RegrasDoAgente } from '@geracrm/shared'
 import { exigirTenant } from '../../../plugins/tenant.js'
 import { faltaParaLlm } from './fabrica.js'
 
@@ -19,15 +20,45 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
     '/v1/canais/:id/agente', { preHandler: exigirTenant },
     async (req, reply) => {
       const [cfg] = await req.comTenant((tx) => tx<{
-        ativo: boolean; politicas: string | null; max_turnos: number
+        ativo: boolean; politicas: string | null
+        so_quando_ninguem_disponivel: boolean; exigir_ausencia_antes: boolean
+        horas_desde_ausencia: number; reabrir_apos_encerrada: boolean
+        minutos_presenca: number; max_turnos: number
+        max_caracteres: number; falas_de_contexto: number
       }[]>`
-        SELECT ativo, politicas, max_turnos FROM agente_config
+        SELECT ativo, politicas,
+               so_quando_ninguem_disponivel, exigir_ausencia_antes,
+               horas_desde_ausencia, reabrir_apos_encerrada,
+               minutos_presenca, max_turnos, max_caracteres, falas_de_contexto
+          FROM agente_config
          WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`)
 
+      const p = REGRAS_AGENTE_PADRAO
       return reply.send({
         ativo: cfg?.ativo ?? false,
         politicas: cfg?.politicas ?? '',
-        maxTurnos: cfg?.max_turnos ?? 6,
+        // ⚠️ Canal sem linha recebe os PADRÕES, não zeros: a tela abre já
+        //    mostrando o agente que ele terá ao ser ligado, e não um formulário
+        //    vazio que o dono teria de adivinhar como preencher.
+        regras: {
+          soQuandoNinguemDisponivel: cfg?.so_quando_ninguem_disponivel ?? p.soQuandoNinguemDisponivel,
+          exigirAusenciaAntes: cfg?.exigir_ausencia_antes ?? p.exigirAusenciaAntes,
+          horasDesdeAusencia: cfg?.horas_desde_ausencia ?? p.horasDesdeAusencia,
+          reabrirAposEncerrada: cfg?.reabrir_apos_encerrada ?? p.reabrirAposEncerrada,
+          minutosPresenca: cfg?.minutos_presenca ?? p.minutosPresenca,
+          maxTurnos: cfg?.max_turnos ?? p.maxTurnos,
+          maxCaracteres: cfg?.max_caracteres ?? p.maxCaracteres,
+          falasDeContexto: cfg?.falas_de_contexto ?? p.falasDeContexto,
+        } satisfies RegrasDoAgente,
+        // ⚠️ Os padrões vão junto para a tela poder oferecer "voltar ao padrão"
+        //    sem ter uma segunda cópia deles em TypeScript do console.
+        padroes: p,
+        // ⚠️ COMPATIBILIDADE, remover no próximo deploy. `maxTurnos` mudou de
+        //    lugar (foi para `regras`), e API e console sobem separados: na
+        //    janela em que a API nova serve o console velho, tirar isto agora
+        //    deixaria o campo em branco na tela. Mesma disciplina aditiva das
+        //    migrations — mudar de lugar são dois deploys.
+        maxTurnos: cfg?.max_turnos ?? p.maxTurnos,
         // ⚠️ A tela precisa dizer o NOME da variável que falta, não "IA
         //    indisponível": erro genérico manda abrir chamado, nome manda
         //    resolver.
@@ -36,16 +67,28 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
     },
   )
 
-  app.put<{ Params: { id: string }; Body: { ativo?: boolean; politicas?: string; maxTurnos?: number } }>(
+  app.put<{
+    Params: { id: string }
+    Body: { ativo?: boolean; politicas?: string } & Partial<Record<keyof RegrasDoAgente, unknown>>
+  }>(
     '/v1/canais/:id/agente', { preHandler: exigirTenant },
     async (req, reply) => {
       const politicas = req.body?.politicas?.trim() ?? ''
       const ativo = req.body?.ativo === true
-      const maxTurnos = Number(req.body?.maxTurnos ?? 6)
 
-      if (!Number.isInteger(maxTurnos) || maxTurnos < 1 || maxTurnos > 20) {
-        return reply.code(422).send({ erro: 'agente.turnos_invalidos', mensagem: 'Entre 1 e 20 idas e vindas.' })
+      // ⚠️ A validação é a MESMA função que a tela usa (packages/shared): faixa
+      //    duplicada entre input e endpoint é o clássico que aceita de um lado e
+      //    recusa do outro. O CHECK do 0078 é a terceira rede, para o que não
+      //    passa por aqui — script, teste, UPDATE à mão.
+      const v = validarRegrasAgente({ ...req.body, maxTurnos: req.body?.maxTurnos })
+      if (!v.ok) {
+        return reply.code(422).send({
+          erro: 'agente.regra_invalida',
+          mensagem: v.erros[0]!.mensagem,
+          campos: v.erros.map((e) => e.campo),
+        })
       }
+      const r = v.regras
       // ⚠️ Falha de negócio é retorno TIPIFICADO com ação corretiva, não erro de
       //    banco vazando para a tela. O CHECK do 0071 é a rede de segurança;
       //    esta é a mensagem que a pessoa lê.
@@ -62,19 +105,34 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         })
       }
 
-      const r = await req.comTenant(async (tx) => {
+      const gravado = await req.comTenant(async (tx) => {
         const [canal] = await tx<{ id: string }[]>`
           SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!canal) return null
         await tx`
-          INSERT INTO agente_config (tenant_id, canal_id, ativo, politicas, max_turnos, atualizado_em)
-          VALUES (tenant_atual(), ${req.params.id}, ${ativo}, ${politicas || null}, ${maxTurnos}, now())
+          INSERT INTO agente_config (
+            tenant_id, canal_id, ativo, politicas, max_turnos,
+            so_quando_ninguem_disponivel, exigir_ausencia_antes, horas_desde_ausencia,
+            reabrir_apos_encerrada, minutos_presenca, max_caracteres, falas_de_contexto,
+            atualizado_em)
+          VALUES (tenant_atual(), ${req.params.id}, ${ativo}, ${politicas || null}, ${r.maxTurnos},
+                  ${r.soQuandoNinguemDisponivel}, ${r.exigirAusenciaAntes}, ${r.horasDesdeAusencia},
+                  ${r.reabrirAposEncerrada}, ${r.minutosPresenca}, ${r.maxCaracteres}, ${r.falasDeContexto},
+                  now())
           ON CONFLICT (tenant_id, canal_id) DO UPDATE SET
             ativo = EXCLUDED.ativo, politicas = EXCLUDED.politicas,
-            max_turnos = EXCLUDED.max_turnos, atualizado_em = now()`
+            max_turnos = EXCLUDED.max_turnos,
+            so_quando_ninguem_disponivel = EXCLUDED.so_quando_ninguem_disponivel,
+            exigir_ausencia_antes = EXCLUDED.exigir_ausencia_antes,
+            horas_desde_ausencia = EXCLUDED.horas_desde_ausencia,
+            reabrir_apos_encerrada = EXCLUDED.reabrir_apos_encerrada,
+            minutos_presenca = EXCLUDED.minutos_presenca,
+            max_caracteres = EXCLUDED.max_caracteres,
+            falas_de_contexto = EXCLUDED.falas_de_contexto,
+            atualizado_em = now()`
         return canal
       })
-      if (!r) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
+      if (!gravado) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
       return reply.send({ ok: true })
     },
   )

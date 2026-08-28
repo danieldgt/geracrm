@@ -69,6 +69,15 @@ const ligarAgente = (ativo: boolean, maxTurnos = 6) => dono`
   ON CONFLICT (tenant_id, canal_id) DO UPDATE
     SET ativo = EXCLUDED.ativo, max_turnos = EXCLUDED.max_turnos`
 
+/**
+ * Muda UMA regra de entrada do canal (0078). O `ligarAgente` continua gravando os
+ * padrões — é o que mantém os outros casos deste arquivo descrevendo o agente de
+ * fábrica, e não uma configuração de teste.
+ */
+const regra = (coluna: string, valor: boolean | number) => dono`
+  UPDATE agente_config SET ${dono(coluna)} = ${valor}
+   WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
+
 beforeAll(async () => {
   await dono`INSERT INTO plano (id, codigo, nome) VALUES (${PLANO}, 'plano-turno-agente', 'Pro') ON CONFLICT DO NOTHING`
   await dono`INSERT INTO perfil_vertical_modelo (id, codigo, nome) VALUES (${MODELO}, 'modelo-turno-agente', 'Varejo') ON CONFLICT DO NOTHING`
@@ -225,6 +234,76 @@ describe('⚠️ Atendente presente cala o agente', () => {
     await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id, estado, assumido_em)
                VALUES (${T}, gen_random_uuid(), ${CONVERSA}, ${CANAL}, 1, ${USUARIO}, 'em_atendimento', now())`
     expect(await turno(llmFalso({}))).toEqual({ falou: false, motivo: 'atendente_presente' })
+    expect(enviados).toEqual([])
+  })
+})
+
+
+/**
+ * ⚠️ AS REGRAS CONFIGURÁVEIS, DE PONTA A PONTA (0078).
+ *
+ * O portão já tem os casos puros. Estes provam o que a tela promete: que a
+ * coluna gravada chega até a decisão. Uma regra que existe no formulário e morre
+ * antes do portão é a pior falha possível deste recurso — o dono acha que
+ * mudou o agente e o agente não mudou.
+ */
+describe('⚠️ Regras de entrada configuradas mudam a decisão', () => {
+  /**
+   * O caso medido em produção em 28/ago: a conversa de teste travou em
+   * `sessao_ja_encerrada` e o agente ficou permanentemente mudo nela.
+   */
+  it('reabrir ligado destrava a conversa em que ele já encerrou', async () => {
+    await ligarAgente(true); await ausenciaHa(5)
+    await turno(llmFalso({ proximoPasso: 'entregar', motivo: 'cliente pediu humano' }))
+    expect(await turno(llmFalso({}))).toEqual({ falou: false, motivo: 'sessao_ja_encerrada' })
+
+    await regra('reabrir_apos_encerrada', true)
+    expect(await turno(llmFalso({}))).toMatchObject({ falou: true })
+  })
+
+  it('sem exigir a ausência, fala já na primeira mensagem', async () => {
+    await ligarAgente(true)
+    expect(await turno(llmFalso({}))).toEqual({ falou: false, motivo: 'sem_ausencia_antes' })
+
+    await regra('exigir_ausencia_antes', false)
+    expect(await turno(llmFalso({}))).toMatchObject({ falou: true })
+  })
+
+  /** A validade da ausência é dado: 13h deixa de ser "velha" quando o canal diz 24. */
+  it('validade da ausência maior aceita o gatilho que estava vencido', async () => {
+    await ligarAgente(true); await ausenciaHa(13 * 60)
+    expect(await turno(llmFalso({}))).toEqual({ falou: false, motivo: 'sem_ausencia_antes' })
+
+    await regra('horas_desde_ausencia', 24)
+    expect(await turno(llmFalso({}))).toMatchObject({ falou: true })
+  })
+
+  /**
+   * ⚠️ A régua de presença virou dado, e o predicado é o mesmo da resposta de
+   * ausência. Este caso prova que o número do canal chega ao SQL — sem ele, a
+   * parametrização do fragmento poderia estar sendo ignorada em silêncio.
+   */
+  it('régua de presença menor deixa o robô voltar a falar antes', async () => {
+    await ligarAgente(true); await ausenciaHa(5)
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
+               VALUES (${T}, ${USUARIO}, 'sub-turno-agente', 'Ana', 'ana@turno.local') ON CONFLICT (cognito_sub) DO NOTHING`
+    // Atendente que assumiu há 20 minutos: dentro dos 60 de fábrica.
+    await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id, estado, assumido_em)
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, ${CANAL}, 1, ${USUARIO}, 'em_atendimento',
+                       now() - interval '20 minutes')`
+    expect(await turno(llmFalso({}))).toEqual({ falou: false, motivo: 'atendente_presente' })
+
+    await regra('minutos_presenca', 10)
+    expect(await turno(llmFalso({}))).toMatchObject({ falou: true })
+  })
+
+  /** ⚠️ Nenhuma combinação de regras vence o botão de desligar (invariante 7). */
+  it('com tudo liberado, o agente desligado continua calado', async () => {
+    await ligarAgente(false)
+    await regra('exigir_ausencia_antes', false)
+    await regra('reabrir_apos_encerrada', true)
+    await regra('so_quando_ninguem_disponivel', false)
+    expect(await turno(llmFalso({}))).toEqual({ falou: false, motivo: 'agente_desligado' })
     expect(enviados).toEqual([])
   })
 })

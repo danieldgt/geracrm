@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
+import { REGRAS_AGENTE_PADRAO, type RegrasDoAgente } from '@geracrm/shared'
 import { criarApp } from '../../../app.js'
 import { encerrarBanco } from '../../../db/index.js'
 
@@ -60,16 +61,56 @@ afterAll(async () => {
 
 describe('Configuração do agente', () => {
   it('sem configuração, nasce DESLIGADO', async () => {
-    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { ativo: boolean; maxTurnos: number }
-    expect(r).toMatchObject({ ativo: false, maxTurnos: 6 })
+    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as
+      { ativo: boolean; regras: RegrasDoAgente }
+    expect(r.ativo).toBe(false)
+    // ⚠️ Canal nunca configurado devolve os PADRÕES, não zeros: a tela abre
+    //    mostrando o agente que ele terá ao ser ligado.
+    expect(r.regras).toEqual(REGRAS_AGENTE_PADRAO)
   })
 
   it('salva e relê', async () => {
     expect((await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, {
       ativo: true, politicas: POLITICAS, maxTurnos: 4,
     })).statusCode).toBe(200)
-    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { ativo: boolean; politicas: string; maxTurnos: number }
-    expect(r).toMatchObject({ ativo: true, politicas: POLITICAS, maxTurnos: 4 })
+    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as
+      { ativo: boolean; politicas: string; regras: RegrasDoAgente }
+    expect(r).toMatchObject({ ativo: true, politicas: POLITICAS })
+    expect(r.regras.maxTurnos).toBe(4)
+  })
+
+  /**
+   * ⚠️ AS REGRAS DE ENTRADA (0078). O que este caso protege é a ida e volta
+   * inteira: tela → validação → colunas → tela. Uma regra que a tela oferece e o
+   * banco não guarda é pior que não ter a opção — o dono acha que mudou algo.
+   */
+  it('salva e relê as regras de entrada', async () => {
+    expect((await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, {
+      ativo: true, politicas: POLITICAS,
+      soQuandoNinguemDisponivel: false, exigirAusenciaAntes: false, reabrirAposEncerrada: true,
+      horasDesdeAusencia: 24, minutosPresenca: 15, maxTurnos: 8,
+      maxCaracteres: 500, falasDeContexto: 20,
+    })).statusCode).toBe(200)
+    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { regras: RegrasDoAgente }
+    expect(r.regras).toEqual({
+      soQuandoNinguemDisponivel: false, exigirAusenciaAntes: false, reabrirAposEncerrada: true,
+      horasDesdeAusencia: 24, minutosPresenca: 15, maxTurnos: 8,
+      maxCaracteres: 500, falasDeContexto: 20,
+    })
+  })
+
+  /** PUT sem as regras não pode zerar o que já estava configurado. */
+  it('salvar só as políticas mantém as regras nos padrões, não em zero', async () => {
+    await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, { politicas: POLITICAS })
+    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { regras: RegrasDoAgente }
+    expect(r.regras).toEqual(REGRAS_AGENTE_PADRAO)
+  })
+
+  /** ⚠️ Compatibilidade de um deploy: o console velho ainda lê daqui. */
+  it('maxTurnos continua no topo da resposta', async () => {
+    await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, { politicas: POLITICAS, maxTurnos: 9 })
+    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { maxTurnos: number }
+    expect(r.maxTurnos).toBe(9)
   })
 
   it('canal inexistente → 404', async () => {
@@ -101,7 +142,17 @@ describe('⚠️ Não liga sem base de políticas', () => {
   it('teto de turnos fora da faixa é recusado com motivo', async () => {
     const r = await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, { politicas: POLITICAS, maxTurnos: 99 })
     expect(r.statusCode).toBe(422)
-    expect((r.json() as { erro: string }).erro).toBe('agente.turnos_invalidos')
+    const corpo = r.json() as { erro: string; mensagem: string; campos: string[] }
+    expect(corpo.erro).toBe('agente.regra_invalida')
+    // ⚠️ A tela precisa saber QUAL campo, não só que algo deu errado.
+    expect(corpo.campos).toContain('maxTurnos')
+    expect(corpo.mensagem).toContain('20')
+  })
+
+  it('regra numérica fora da faixa é recusada antes de chegar ao CHECK do banco', async () => {
+    const r = await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, { politicas: POLITICAS, minutosPresenca: 9999 })
+    expect(r.statusCode).toBe(422)
+    expect((r.json() as { campos: string[] }).campos).toContain('minutosPresenca')
   })
 })
 

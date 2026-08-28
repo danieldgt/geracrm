@@ -1,13 +1,17 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, computed, inject, signal, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { DatePipe } from '@angular/common'
 import { RouterLink } from '@angular/router'
 import { firstValueFrom } from 'rxjs'
+import {
+  FAIXAS_REGRAS_AGENTE, REGRAS_AGENTE_PADRAO, avisosDasRegras, type RegrasDoAgente,
+} from '@geracrm/shared'
 
 interface Canal { readonly id: string; readonly nomeAmigavel: string }
 interface ConfigAgente {
   readonly ativo: boolean; readonly politicas: string
-  readonly maxTurnos: number; readonly faltaConfigurar: readonly string[]
+  readonly regras: RegrasDoAgente; readonly padroes: RegrasDoAgente
+  readonly faltaConfigurar: readonly string[]
 }
 interface Sessao {
   readonly id: string; readonly conversaId: string; readonly contato: string | null
@@ -75,11 +79,75 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                   <span class="dica">O agente só responde o que estiver aqui. Sem isso, ele não pode ser ligado.</span>
                 </label>
 
-                <label class="campo curto">Máximo de idas e vindas
-                  <input type="number" min="1" max="20" [value]="maxTurnos()"
-                         (input)="maxTurnos.set(+$any($event.target).value)" />
-                  <span class="dica">Ao bater o teto, ele entrega a conversa ao humano.</span>
-                </label>
+                <fieldset class="grupo">
+                  <legend>Quando o agente entra</legend>
+
+                  <label class="chk">
+                    <input type="checkbox" [checked]="r().soQuandoNinguemDisponivel"
+                           (change)="mudar('soQuandoNinguemDisponivel', $any($event.target).checked)" />
+                    Só quando ninguém está disponível
+                  </label>
+                  <span class="dica">Desligado, ele responde junto com a equipe, em horário comercial.</span>
+
+                  <label class="chk">
+                    <input type="checkbox" [checked]="r().exigirAusenciaAntes"
+                           (change)="mudar('exigirAusenciaAntes', $any($event.target).checked)" />
+                    Esperar o cliente insistir depois da mensagem de ausência
+                  </label>
+                  <span class="dica">É o filtro que separa quem tem interesse de quem mandou “oi” e sumiu.</span>
+
+                  <label class="chk">
+                    <input type="checkbox" [checked]="r().reabrirAposEncerrada"
+                           (change)="mudar('reabrirAposEncerrada', $any($event.target).checked)" />
+                    Voltar a falar em conversa que ele já encerrou
+                  </label>
+                  <span class="dica">Desligado, ele nunca ressuscita depois de entregar ao humano.</span>
+
+                  <div class="numeros">
+                    <label class="campo curto">Validade da ausência (horas)
+                      <input type="number" [min]="faixas.horasDesdeAusencia.min" [max]="faixas.horasDesdeAusencia.max"
+                             [value]="r().horasDesdeAusencia"
+                             (input)="mudar('horasDesdeAusencia', +$any($event.target).value)" />
+                    </label>
+                    <label class="campo curto">Silêncio após um atendente (min)
+                      <input type="number" [min]="faixas.minutosPresenca.min" [max]="faixas.minutosPresenca.max"
+                             [value]="r().minutosPresenca"
+                             (input)="mudar('minutosPresenca', +$any($event.target).value)" />
+                    </label>
+                  </div>
+                </fieldset>
+
+                <fieldset class="grupo">
+                  <legend>Como ele responde</legend>
+                  <div class="numeros">
+                    <label class="campo curto">Máximo de idas e vindas
+                      <input type="number" [min]="faixas.maxTurnos.min" [max]="faixas.maxTurnos.max"
+                             [value]="r().maxTurnos" (input)="mudar('maxTurnos', +$any($event.target).value)" />
+                      <span class="dica">Ao bater o teto, entrega ao humano.</span>
+                    </label>
+                    <label class="campo curto">Tamanho da resposta
+                      <input type="number" [min]="faixas.maxCaracteres.min" [max]="faixas.maxCaracteres.max"
+                             [value]="r().maxCaracteres" (input)="mudar('maxCaracteres', +$any($event.target).value)" />
+                      <span class="dica">Caracteres. Parágrafo longo não é lido no celular.</span>
+                    </label>
+                    <label class="campo curto">Falas de contexto
+                      <input type="number" [min]="faixas.falasDeContexto.min" [max]="faixas.falasDeContexto.max"
+                             [value]="r().falasDeContexto"
+                             (input)="mudar('falasDeContexto', +$any($event.target).value)" />
+                      <span class="dica">Quanto da conversa vai ao modelo. Mais falas, mais custo por turno.</span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                <!-- ⚠️ Duas destas regras mudam QUEM fala com o cliente. A tela
+                     não pode deixar isso implícito num checkbox: sem o aviso, o
+                     dono liga a opção e descobre o efeito pelo cliente. -->
+                @if (avisos().length > 0) {
+                  <div class="aviso">
+                    <strong>O que muda com esta configuração</strong>
+                    <ul>@for (a of avisos(); track a) { <li>{{ a }}</li> }</ul>
+                  </div>
+                }
 
                 <label class="chk">
                   <input type="checkbox" [checked]="ativo()" (change)="ativo.set($any($event.target).checked)"
@@ -90,6 +158,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                 <div class="acoes">
                   <button class="btn btn--primario" type="submit" [disabled]="salvando()">
                     {{ salvando() ? 'Salvando…' : 'Salvar' }}</button>
+                  @if (mudouDoPadrao()) {
+                    <button class="btn btn--secundario" type="button" (click)="voltarAoPadrao()">
+                      Voltar ao padrão</button>
+                  }
                   @if (msg()) { <span [class]="erro() ? 'err' : 'ok'">{{ msg() }}</span> }
                 </div>
               </form>
@@ -152,6 +224,15 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     textarea, input, select { padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
       border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .dica { color: var(--texto-suave); font-size: 12px; }
+    .grupo { border: 1px solid var(--borda); border-radius: var(--raio-controle); padding: var(--espacamento-3);
+      display: grid; gap: var(--espacamento-2); margin: 0; min-width: 0; }
+    .grupo legend { padding: 0 var(--espacamento-2); color: var(--texto-secundario); font-size: 13px; }
+    /* ⚠️ auto-fit + minmax: em telas estreitas os campos empilham em vez de
+       espremer o input a ponto de esconder o número (regra de layout da casa). */
+    .numeros { display: grid; gap: var(--espacamento-3); margin-top: var(--espacamento-1);
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    .numeros .campo.curto { max-width: none; }
+    .aviso ul { margin: var(--espacamento-1) 0 0; padding-left: var(--espacamento-4); display: grid; gap: 2px; }
     .chk { display: inline-flex; align-items: center; gap: var(--espacamento-2); color: var(--texto); font-size: 14px; }
     .acoes { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; }
     .ok { color: var(--sucesso); font-size: 13px; }
@@ -183,13 +264,32 @@ export class AgentePagina implements OnInit {
   readonly canais = signal<readonly Canal[]>([])
   readonly canalId = signal('')
   readonly cfg = signal<ConfigAgente | null>(null)
-  readonly politicas = signal(''); readonly ativo = signal(false); readonly maxTurnos = signal(6)
+  readonly politicas = signal(''); readonly ativo = signal(false)
+  /** ⚠️ Um signal com o objeto inteiro, não oito soltos: eles são salvos juntos
+   *    e comparados juntos com o padrão. Oito signals divergem no primeiro campo
+   *    novo que alguém esquecer de incluir no salvar. */
+  readonly r = signal<RegrasDoAgente>(REGRAS_AGENTE_PADRAO)
+  readonly faixas = FAIXAS_REGRAS_AGENTE
   readonly salvando = signal(false); readonly msg = signal<string | null>(null); readonly erro = signal(false)
   readonly sessoes = signal<readonly Sessao[]>([])
   readonly proximoCursor = signal<string | null>(null)
   readonly carregandoMais = signal(false)
 
+  /** O que esta configuração muda, em português de gente. Regra do domínio. */
+  readonly avisos = computed(() => avisosDasRegras(this.r()))
+  /** Só oferece "voltar ao padrão" quando há o que voltar. */
+  readonly mudouDoPadrao = computed(() => {
+    const padrao = this.cfg()?.padroes ?? REGRAS_AGENTE_PADRAO
+    return (Object.keys(padrao) as (keyof RegrasDoAgente)[]).some((k) => this.r()[k] !== padrao[k])
+  })
+
   ngOnInit(): void { void this.carregar() }
+
+  mudar<K extends keyof RegrasDoAgente>(campo: K, valor: RegrasDoAgente[K]): void {
+    this.r.update((atual) => ({ ...atual, [campo]: valor }))
+  }
+
+  voltarAoPadrao(): void { this.r.set(this.cfg()?.padroes ?? REGRAS_AGENTE_PADRAO) }
 
   async carregar(): Promise<void> {
     this.estado.set('carregando')
@@ -212,7 +312,7 @@ export class AgentePagina implements OnInit {
   private async abrirCanal(id: string): Promise<void> {
     const c = await firstValueFrom(this.http.get<ConfigAgente>(`/v1/canais/${id}/agente`))
     this.cfg.set(c)
-    this.politicas.set(c.politicas); this.ativo.set(c.ativo); this.maxTurnos.set(c.maxTurnos)
+    this.politicas.set(c.politicas); this.ativo.set(c.ativo); this.r.set(c.regras)
     this.msg.set(null)
   }
 
@@ -236,7 +336,7 @@ export class AgentePagina implements OnInit {
     this.salvando.set(true); this.msg.set(null); this.erro.set(false)
     try {
       await firstValueFrom(this.http.put(`/v1/canais/${this.canalId()}/agente`, {
-        ativo: this.ativo(), politicas: this.politicas(), maxTurnos: this.maxTurnos(),
+        ativo: this.ativo(), politicas: this.politicas(), ...this.r(),
       }))
       this.msg.set('Salvo.')
       await this.abrirCanal(this.canalId())

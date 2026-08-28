@@ -25,20 +25,27 @@ export const MINUTOS_DE_PRESENCA = 60
  * sem autor, e sem esse filtro uma campanha enviada ao contato passaria por
  * atendente presente e calaria o produto por uma hora.
  */
-export function fragmentoAtendentePresente(sql: Sql, conversaId: string, agora: Date) {
+export function fragmentoAtendentePresente(
+  sql: Sql, conversaId: string, agora: Date,
+  // ⚠️ A régua virou DADO (0078): o agente lê a sua de `agente_config`, e a
+  //    resposta de ausência fica na de fábrica. O predicado continua sendo UM
+  //    só — o que varia é o número, não a lógica. Duas cópias da lógica é que
+  //    divergiriam, e o sintoma seria o robô falando por cima de um atendente.
+  minutos: number = MINUTOS_DE_PRESENCA,
+) {
   return sql`
     EXISTS (SELECT 1 FROM atendimento a
              WHERE a.tenant_id = tenant_atual() AND a.conversa_id = ${conversaId}
                AND a.estado <> 'encerrado' AND a.atendente_id IS NOT NULL
                AND (
                  a.assumido_em > ${agora}::timestamptz
-                                 - make_interval(mins => ${MINUTOS_DE_PRESENCA})
+                                 - make_interval(mins => ${minutos})
                  OR EXISTS (SELECT 1 FROM mensagem m
                              WHERE m.tenant_id = tenant_atual()
                                AND m.conversa_id = ${conversaId}
                                AND m.direcao = 'saliente'
                                AND m.enviada_por_id IS NOT NULL
                                AND m.criado_em > ${agora}::timestamptz
-                                   - make_interval(mins => ${MINUTOS_DE_PRESENCA}))
+                                   - make_interval(mins => ${minutos}))
                ))`
 }
