@@ -80,12 +80,10 @@ export async function rotasWebhook(app: FastifyInstance): Promise<void> {
         if (!r.duplicada) {
           try {
             const r2 = await responderAutomaticamente(canal.tenant_id, r.conversaId, canalId)
-            if (r2.ausencia === 'enviada') {
-              req.log.info({ canalId, conversaId: r.conversaId }, 'resposta de ausência enviada')
-            }
-            if (r2.agenteFalou) {
-              req.log.info({ canalId, conversaId: r.conversaId, encerrouPor: r2.agenteEncerrouPor }, 'agente falou')
-            }
+            // ⚠️ Registra o DESFECHO, inclusive o silêncio. Logar só quando algo
+            //    saiu deixava o caso mais perguntado do produto — "por que o
+            //    agente não respondeu?" — sem nenhuma linha para consultar.
+            req.log.info({ canalId, conversaId: r.conversaId, ...r2 }, 'resposta automática')
           } catch (erro) {
             req.log.warn({ erro, canalId }, 'falha na resposta automática (mensagem do cliente já está salva)')
           }

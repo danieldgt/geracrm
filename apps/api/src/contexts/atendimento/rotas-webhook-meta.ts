@@ -100,9 +100,9 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
           if (r.ok && !r.duplicada) {
             try {
               const auto = await responderAutomaticamente(canal.tenant_id, r.conversaId, canal.canal_id)
-              if (auto.ausencia === 'enviada' || auto.agenteFalou) {
-                req.log.info({ canalId: canal.canal_id, ...auto }, 'resposta automática (meta)')
-              }
+              // ⚠️ Sempre, inclusive o silêncio — ver a nota no webhook do
+              //    não-oficial. O motivo é o que torna a decisão auditável.
+              req.log.info({ canalId: canal.canal_id, conversaId: r.conversaId, ...auto }, 'resposta automática (meta)')
             } catch (erro) {
               req.log.warn({ erro, canalId: canal.canal_id }, 'resposta automática falhou (mensagem já está salva)')
             }

@@ -19,6 +19,15 @@ export interface ResumoAutomatico {
   readonly ausencia: string
   readonly agenteFalou: boolean
   readonly agenteEncerrouPor: string | null
+  /**
+   * ⚠️ POR QUE o agente não falou — o motivo tipificado do portão, não um
+   * booleano. Existe porque "o robô ficou quieto" era indistinguível de "o robô
+   * está quebrado" para quem opera: a decisão é calculada a cada mensagem, com
+   * seis motivos possíveis, e todos eles eram DESCARTADOS aqui. Sem isto, a
+   * única forma de responder "por que ele não respondeu ao meu cliente?" é
+   * reconstruir o estado da equipe e da conversa naquele minuto — que já passou.
+   */
+  readonly agenteMotivo: string | null
 }
 
 export async function responderAutomaticamente(
@@ -32,7 +41,7 @@ export async function responderAutomaticamente(
   //    puxa conversa. Quem escreve de novo depois da ausência mostrou interesse
   //    — é esse o lead que vale o custo de uma conversa com IA (§4.3.1).
   if (ausencia === 'enviada') {
-    return { ausencia, agenteFalou: false, agenteEncerrouPor: null }
+    return { ausencia, agenteFalou: false, agenteEncerrouPor: null, agenteMotivo: 'ausencia_recem_enviada' }
   }
 
   const t = await conduzirTurno(tenantId, conversaId, canalId)
@@ -40,5 +49,6 @@ export async function responderAutomaticamente(
     ausencia,
     agenteFalou: t.falou,
     agenteEncerrouPor: t.falou ? t.encerrouPor : null,
+    agenteMotivo: t.falou ? null : t.motivo,
   }
 }
