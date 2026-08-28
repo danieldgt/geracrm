@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { perfilDeCotacao } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { marcarResumoEnviado } from './confirmacao-pedido.js'
 import { efetivarPedido } from './efetivacao.js'
@@ -8,6 +9,7 @@ import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { enviarTextoNaConversa } from '../atendimento/envio-conversa.js'
 import { resumoPedidoTexto, codigoReferencia } from './resumo-pedido.js'
 import { ETAPAS_POS_CONFIRMACAO, etapaPos } from './proximas-etapas.js'
+import { fragmentoPrecoDeVenda } from './preco-de-venda.js'
 
 /**
  * Pedido assistido — o tira-pedido que nasce na conversa (ADR-005).
@@ -29,13 +31,12 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     // ⚠️ Preço é POR PERFIL (ADR-019): atacado ≠ varejo. Varejo é opt-in
     //    explícito; o padrão é atacado (o cliente-piloto é varejo mas a maioria
     //    do fluxo B2B é atacado — e a tela deixa trocar).
-    const perfil = q.perfil === 'varejo' ? 'varejo' : 'atacado'
-    const perfilPadrao = `%${perfil}%`
+    const perfil = perfilDeCotacao(q.perfil)
 
     // ⚠️ Preço vem da tabela do ERP para o perfil (`sku_preco` + `tabela_preco`),
-    //    não da tela. Escolha DETERMINÍSTICA: descrição do perfil, sem os ruídos
-    //    (CFe/teste), preferindo a padrão, desempate por id. SKU sem preço vira
-    //    `null` — o painel mostra "sem preço", não um número inventado.
+    //    nunca da tela — e QUAL tabela é a regra de `preco-de-venda.ts`, uma só
+    //    para o catálogo, a montagem e o agente. SKU sem preço vira `null`: o
+    //    painel mostra "sem preço", não um número inventado.
     const produtos = await req.comTenant((tx) => tx<{
       id: string; referencia: string; descricao: string
       skus: { id: string; atributos: Record<string, string>; codigo_barras: string | null;
@@ -45,37 +46,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
              coalesce(
                (SELECT json_agg(json_build_object(
                           'id', s.id, 'atributos', s.atributos, 'codigo_barras', s.codigo_barras,
-                          'preco_centavos', (
-                            SELECT sp.preco_centavos::text FROM sku_preco sp
-                              JOIN tabela_preco tp ON tp.tenant_id = sp.tenant_id AND tp.id_externo = sp.tabela_externa
-                             WHERE sp.tenant_id = s.tenant_id AND sp.sku_id = s.id
-                               -- ⚠️ NUNCA uma tabela de CUSTO, e nunca uma
-                               --    desativada. O ERP marca as duas coisas
-                               --    (0074); antes disso a única defesa era o
-                               --    nome, e bastava existir "Custo Varejo" para
-                               --    o produto cotar margem a um cliente.
-                               AND tp.proposito = 'venda' AND tp.ativa
-                               -- ⚠️ DECLARADO ganha do nome (0077). O nome só
-                               --    vale enquanto o dono da loja não disser qual
-                               --    tabela é qual — renomear no ERP não pode
-                               --    mudar o preço do produto em silêncio.
-                               -- ⚠️ A exclusividade está no NOT EXISTS, não numa
-                               --    ordenação: havendo tabela DECLARADA para o
-                               --    perfil, o ramo do nome não casa com nada.
-                               --    Ordenar por "declarada primeiro" seria um
-                               --    desempate que nunca acontece — e sugeriria
-                               --    uma precedência frouxa onde ela é absoluta.
-                               AND (tp.perfil = ${perfil}
-                                    OR (tp.perfil IS NULL
-                                        AND NOT EXISTS (SELECT 1 FROM tabela_preco d
-                                                         WHERE d.tenant_id = sp.tenant_id
-                                                           AND d.sistema = tp.sistema
-                                                           AND d.perfil = ${perfil})
-                                        AND tp.descricao ILIKE ${perfilPadrao}
-                                        AND tp.descricao NOT ILIKE '%cfe%'
-                                        AND tp.descricao NOT ILIKE '%teste%'))
-                             ORDER BY tp.padrao DESC, tp.id_externo
-                             LIMIT 1),
+                          'preco_centavos', ${fragmentoPrecoDeVenda(tx, 's', perfil)}::text,
                           -- ⚠️ Saldo da última sincronização + a data; NÃO ao vivo (ADR-008).
                           'saldo', (SELECT ss.quantidade::text FROM sku_saldo ss
                                      WHERE ss.tenant_id = s.tenant_id AND ss.sku_id = s.id),
@@ -137,8 +108,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const q = req.query
       const busca = (q.busca ?? '').trim()
-      const perfil = q.perfil === 'varejo' ? 'varejo' : 'atacado'
-      const perfilPadrao = `%${perfil}%`
+      const perfil = perfilDeCotacao(q.perfil)
       const precoMin = q.precoMin ? Number(q.precoMin) : null
       const precoMax = q.precoMax ? Number(q.precoMax) : null
       let curDesc: string | null = null, curId: string | null = null
@@ -148,21 +118,9 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         curDesc = d; curId = id
       }
       const produtos = await req.comTenant((tx) => {
-        const precoSku = (s: string) => tx`(
-          SELECT sp.preco_centavos FROM sku_preco sp
-            JOIN tabela_preco tp ON tp.tenant_id = sp.tenant_id AND tp.id_externo = sp.tabela_externa
-           WHERE sp.tenant_id = ${tx(s)}.tenant_id AND sp.sku_id = ${tx(s)}.id
-             -- ⚠️ Nunca CUSTO, nunca desativada (0074); e DECLARADO ganha do
-             --    nome (0077) — ver a nota na busca acima.
-             AND tp.proposito = 'venda' AND tp.ativa
-             AND (tp.perfil = ${perfil}
-                  OR (tp.perfil IS NULL
-                      AND NOT EXISTS (SELECT 1 FROM tabela_preco d
-                                       WHERE d.tenant_id = sp.tenant_id AND d.sistema = tp.sistema
-                                         AND d.perfil = ${perfil})
-                      AND tp.descricao ILIKE ${perfilPadrao}
-                      AND tp.descricao NOT ILIKE '%cfe%' AND tp.descricao NOT ILIKE '%teste%'))
-           ORDER BY tp.padrao DESC, tp.id_externo LIMIT 1)`
+        // ⚠️ A MESMA regra da busca rápida acima e da prévia do agente:
+        //    qual tabela o perfil cota mora em `preco-de-venda.ts`, não aqui.
+        const precoSku = (s: string) => fragmentoPrecoDeVenda(tx, s, perfil)
         return tx<{
           id: string; referencia: string; descricao: string; categoria: string | null
           skus: { id: string; atributos: Record<string, string>; codigo_barras: string | null; preco_centavos: string | null; saldo: string | null; saldo_em: string | null }[]

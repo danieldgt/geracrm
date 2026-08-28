@@ -1,6 +1,7 @@
 import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
 
 export interface SkuCatalogo {
   readonly id: string
@@ -50,7 +51,7 @@ export class PedidoServico {
   readonly pedido = signal<Pedido | null>(null)
   readonly salvandoItem = signal(false)
 
-  async buscar(termo: string, perfil: 'atacado' | 'varejo' = 'atacado'): Promise<void> {
+  async buscar(termo: string, perfil: PerfilPreco = PERFIL_PRECO_PADRAO): Promise<void> {
     this.buscando.set(true)
     try {
       const r = await firstValueFrom(

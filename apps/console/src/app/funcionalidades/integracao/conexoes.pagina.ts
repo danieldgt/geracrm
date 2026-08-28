@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs'
 import { ConexoesServico } from './conexoes.servico.js'
 import { FormularioCredencialComponente } from './formulario-credencial.componente.js'
 import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from './tipos.js'
+import { PERFIS_PRECO } from '@geracrm/shared'
 
 interface TabelaPreco {
   readonly idExterno: string; readonly descricao: string
@@ -334,7 +335,7 @@ interface TabelaPreco {
 export class ConexoesPagina implements OnInit {
   readonly servico = inject(ConexoesServico)
   private readonly http = inject(HttpClient)
-  readonly PERFIS = ['varejo', 'atacado'] as const
+  readonly PERFIS = PERFIS_PRECO
   readonly tabelas = signal<readonly TabelaPreco[]>([])
   readonly escolha = signal<Record<string, string>>({})
   readonly salvandoPerfis = signal(false)

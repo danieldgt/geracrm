@@ -1,6 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
 
 interface Sku { readonly id: string; readonly atributos: Record<string, string>; readonly precoCentavos: number | null; readonly saldo: number | null; readonly codigoBarras?: string | null }
 interface ProdutoApi { readonly id: string; readonly referencia: string; readonly descricao: string; readonly skus: readonly Sku[] }
@@ -180,7 +181,7 @@ export class CatalogoPagina implements OnInit {
   readonly itens = signal<readonly Produto[]>([])
   readonly temMais = signal(false)
   readonly busca = signal('')
-  readonly perfil = signal<'atacado' | 'varejo'>('atacado')
+  readonly perfil = signal<PerfilPreco>(PERFIL_PRECO_PADRAO)
   private cursor: string | null = null
   private timer?: ReturnType<typeof setTimeout>
 
@@ -203,7 +204,7 @@ export class CatalogoPagina implements OnInit {
     clearTimeout(this.timer)
     this.timer = setTimeout(() => void this.buscar(), 300)
   }
-  trocarPerfil(p: 'atacado' | 'varejo'): void { this.perfil.set(p); void this.buscar() }
+  trocarPerfil(p: PerfilPreco): void { this.perfil.set(p); void this.buscar() }
 
   /** Lista PAGINADA por cursor (regra do projeto: nada de top-N cru). `anexar`
    *  = "carregar mais"; sem ele, recomeça a lista. */

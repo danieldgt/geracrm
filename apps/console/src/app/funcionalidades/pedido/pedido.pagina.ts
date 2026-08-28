@@ -3,6 +3,7 @@ import { SlicePipe } from '@angular/common'
 import { ActivatedRoute } from '@angular/router'
 import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
+import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
 
 /**
  * Pedido Assistido — o tira-pedido que nasce na conversa (ADR-005, §3.9 do mapa).
@@ -317,7 +318,7 @@ export class PedidoAssistidoPagina implements OnInit {
 
   readonly aberto = signal<string | null>(null)
   readonly buscou = signal(false)
-  readonly perfil = signal<'atacado' | 'varejo'>('atacado')
+  readonly perfil = signal<PerfilPreco>(PERFIL_PRECO_PADRAO)
   readonly termo = signal('')
   // Filtros do catálogo robusto.
   readonly fCor = signal(''); readonly fTamanho = signal(''); readonly fCategoria = signal('')
@@ -367,7 +368,7 @@ export class PedidoAssistidoPagina implements OnInit {
     if (this.timer) clearTimeout(this.timer)
     this.timer = setTimeout(() => this.rodarBusca(), 250)
   }
-  trocarPerfil(p: 'atacado' | 'varejo'): void { this.perfil.set(p); this.rodarBusca() }
+  trocarPerfil(p: PerfilPreco): void { this.perfil.set(p); this.rodarBusca() }
   aplicarFiltro(): void { this.rodarBusca() }
 
   private paramsBusca() {
