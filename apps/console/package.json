@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "ng serve",
-    "build": "ng build",
-    "typecheck": "ng build --configuration development --output-path dist/typecheck && tsc -p tsconfig.spec.json --noEmit",
-    "test": "vitest run",
+    "build": "node scripts/gerar-versao.mjs && ng build",
+    "typecheck": "node scripts/gerar-versao.mjs && ng build --configuration development --output-path dist/typecheck && tsc -p tsconfig.spec.json --noEmit",
+    "test": "node scripts/gerar-versao.mjs && vitest run",
     "lint": "oxlint src public"
   },
   "dependencies": {

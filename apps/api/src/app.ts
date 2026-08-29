@@ -119,7 +119,16 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasAuth)
 
   /** Liveness — no database. Answers even with the bank down, on purpose. */
-  app.get('/saude', async () => ({ ok: true, versao: process.env.npm_package_version ?? '0.0.0' }))
+  /**
+   * ⚠️ `versao` responde "o que está no ar AGORA?", e por isso é o COMMIT, não o
+   * `npm_package_version` — que diz 0.0.0 desde o primeiro dia e que ninguém vai
+   * lembrar de subir. É o mesmo dado que o rodapé do console mostra, para que a
+   * pergunta "o deploy chegou?" tenha resposta sem abrir o painel do Railway.
+   */
+  app.get('/saude', async () => ({
+    ok: true,
+    versao: (process.env.RAILWAY_GIT_COMMIT_SHA ?? '').slice(0, 7) || 'local',
+  }))
 
   /** Readiness — with database. This is the one the deploy should look at. */
   app.get('/pronto', async (_req, reply) => {

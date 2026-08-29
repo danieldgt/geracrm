@@ -1,5 +1,8 @@
 import { Component, ChangeDetectionStrategy, signal, computed, inject, OnInit } from '@angular/core'
+import { HttpClient } from '@angular/common/http'
 import { RouterOutlet, RouterLink, RouterLinkActive, Router } from '@angular/router'
+import { firstValueFrom } from 'rxjs'
+import { VERSAO } from './versao.js'
 import { MENU } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
 import { MenuUsuarioComponente } from './menu-usuario.componente.js'
@@ -77,6 +80,20 @@ import { TemaServico } from './tema.servico.js'
             <p class="nada">Nada encontrado para “{{ filtro() }}”.</p>
           }
         </nav>
+
+        <!-- ⚠️ O rodapé responde "o que está no ar?" sem abrir o painel do
+             Railway. Mostra os DOIS lados porque console e API sobem separados
+             (watch path por app): quando divergem, é aqui que se vê — e essa
+             divergência já explicou mais de uma "mudança que não subiu". -->
+        <footer class="rodape" [title]="'Console ' + versao.commit + ' · API ' + (versaoApi() ?? '—')">
+          @if (recolhida()) {
+            <span class="txt-dados">{{ versao.commit }}</span>
+          } @else {
+            <span class="txt-dados">console {{ versao.commit }}</span>
+            <span class="txt-dados" [class.divergente]="divergente()">api {{ versaoApi() ?? '…' }}</span>
+            @if (divergente()) { <span class="alerta-versao">versões diferentes</span> }
+          }
+        </footer>
       </aside>
 
       <!-- Chat rail: o chat é a funcionalidade principal, sempre à mão, ancorado
@@ -167,6 +184,16 @@ import { TemaServico } from './tema.servico.js'
     .rotulo { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ponto { width: 6px; height: 6px; border-radius: var(--raio-completo); background: var(--atencao); flex: none; }
     .conteudo { grid-column: 2; grid-row: 2; overflow-y: auto; min-width: 0; background: var(--fundo); }
+    /* ⚠️ margin-top:auto empurra para o fim da lateral sem depender de altura
+       fixa — a lista de menu cresce e encolhe com o filtro.
+       ⚠️ Sem crase neste bloco: styles é um template literal, e uma crase aqui
+       fecha a string no meio do CSS. Mesmo tropeço que o crase-em-sql.test.ts
+       da API existe para pegar. */
+    .rodape { margin-top: auto; padding: var(--espacamento-2) var(--espacamento-3);
+      border-top: 1px solid var(--borda); display: flex; flex-wrap: wrap; gap: 2px var(--espacamento-2);
+      color: var(--texto-suave); font-size: 11px; line-height: 1.4; }
+    .rodape .divergente { color: var(--atencao); }
+    .rodape .alerta-versao { color: var(--atencao); flex-basis: 100%; }
     /* Responsivo: em telas estreitas a lateral vira trilho de ícones, sem
        sobrepor o conteúdo (grid mantém as colunas separadas). */
     @media (max-width: 640px) {
@@ -188,6 +215,23 @@ export class ShellComponente implements OnInit {
   readonly tema = inject(TemaServico)
   readonly inbox = inject(InboxServico)
   private readonly router = inject(Router)
+  private readonly http = inject(HttpClient)
+
+  /** O commit deste bundle, gravado no build (scripts/gerar-versao.mjs). */
+  readonly versao = VERSAO
+  /** O commit que a API respondeu. `null` enquanto não respondeu. */
+  readonly versaoApi = signal<string | null>(null)
+  /**
+   * ⚠️ Console e API sobem separados (watch path por app). Divergir é NORMAL
+   * durante um deploy e ANORMAL depois dele — e era invisível: a pessoa via a
+   * tela velha, jurava que a mudança não subiu, e ninguém tinha como conferir
+   * sem abrir o painel do Railway.
+   */
+  readonly divergente = computed(() => {
+    const api = this.versaoApi()
+    // 'local' é dev; comparar aí só produziria alarme falso na máquina de quem desenvolve.
+    return api !== null && api !== 'local' && this.versao.commit !== 'local' && api !== this.versao.commit
+  })
 
   /** Menu filtrado pela busca (rótulo ou descrição); grupos vazios somem. */
   readonly menuFiltrado = computed(() => {
@@ -223,5 +267,21 @@ export class ShellComponente implements OnInit {
     void this.alertas.carregar()
     // Alerta novo chega pelo SSE → rebusca os abertos (sem polling).
     this.eventos.escutar('alerta.novo', () => void this.alertas.carregar())
+    void this.carregarVersaoApi()
+  }
+
+  /**
+   * ⚠️ Uma vez, na abertura — não é polling (antipadrão medido no GeraCloud). A
+   * versão da API só muda com um deploy, e um deploy recarrega esta tela.
+   */
+  private async carregarVersaoApi(): Promise<void> {
+    try {
+      const r = await firstValueFrom(this.http.get<{ versao: string }>('/saude'))
+      this.versaoApi.set(r.versao)
+    } catch {
+      // ⚠️ Silencioso de propósito: é um rótulo de rodapé. Falhar aqui não pode
+      //    virar erro na tela de quem está trabalhando — fica no traço.
+      this.versaoApi.set(null)
+    }
   }
 }

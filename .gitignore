@@ -53,3 +53,6 @@ service-account*.json
 *-credentials.json
 *.pem
 *.p12
+
+# Gerado no build do console (scripts/gerar-versao.mjs).
+apps/console/src/app/nucleo/versao.ts
