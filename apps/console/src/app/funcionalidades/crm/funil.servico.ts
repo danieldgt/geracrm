@@ -26,6 +26,24 @@ export interface Coluna {
 }
 export interface Motivo { readonly codigo: string; readonly nome: string }
 
+/** Etapa na visão de CONFIGURAÇÃO: inclui as inativas, a ordem e o uso. */
+export interface EtapaConfig {
+  readonly id: string
+  readonly chave: string
+  readonly nome: string
+  readonly tipo: 'aberto' | 'ganho' | 'perdido'
+  readonly criterio: string | null
+  readonly ordem: number
+  readonly ativo: boolean
+  readonly total: number
+}
+export interface MotivoConfig {
+  readonly codigo: string
+  readonly nome: string
+  readonly ativo: boolean
+  readonly total: number
+}
+
 export interface MetricaEtapa {
   readonly chave: string; readonly nome: string; readonly tipo: string
   readonly entraram: number
@@ -58,6 +76,60 @@ export class FunilServico {
   readonly erroMove = signal<string | null>(null)
   readonly metricas = signal<Metricas | null>(null)
   readonly carregandoMetricas = signal(false)
+
+  // ── Configuração das raias (etapas e motivos) ──
+  readonly config = signal<readonly EtapaConfig[]>([])
+  readonly motivosConfig = signal<readonly MotivoConfig[]>([])
+  readonly erroConfig = signal<string | null>(null)
+  /** Houve mudança de estrutura — o board precisa recarregar ao fechar. */
+  readonly configSujo = signal(false)
+
+  async carregarConfig(): Promise<void> {
+    try {
+      const [etapas, motivos] = await Promise.all([
+        firstValueFrom(this.http.get<{ itens: EtapaConfig[] }>('/v1/funil/config/etapas')),
+        firstValueFrom(this.http.get<{ itens: MotivoConfig[] }>('/v1/funil/config/motivos')),
+      ])
+      this.config.set(etapas.itens)
+      this.motivosConfig.set(motivos.itens)
+    } catch { this.erroConfig.set('Não foi possível carregar a configuração.') }
+  }
+
+  /**
+   * ⚠️ A mensagem do servidor é MOSTRADA, não engolida: a API recusa deixar o
+   * funil sem nenhuma etapa aberta, e um botão que não faz nada em silêncio é
+   * pior do que o erro.
+   */
+  private async mutarConfig(acao: () => Promise<unknown>): Promise<boolean> {
+    this.erroConfig.set(null)
+    try {
+      await acao()
+      this.configSujo.set(true)
+      await this.carregarConfig()
+      return true
+    } catch (e) {
+      const corpo = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string }) : null
+      this.erroConfig.set(corpo?.mensagem ?? 'Não foi possível salvar a alteração.')
+      await this.carregarConfig()
+      return false
+    }
+  }
+
+  criarEtapa(nome: string, tipo: EtapaConfig['tipo']): Promise<boolean> {
+    return this.mutarConfig(() => firstValueFrom(this.http.post('/v1/funil/config/etapas', { nome, tipo })))
+  }
+  editarEtapa(id: string, campos: { nome?: string; ordem?: number; ativo?: boolean; tipo?: string }): Promise<boolean> {
+    return this.mutarConfig(() => firstValueFrom(this.http.patch(`/v1/funil/config/etapas/${id}`, campos)))
+  }
+  removerEtapa(id: string): Promise<boolean> {
+    return this.mutarConfig(() => firstValueFrom(this.http.delete(`/v1/funil/config/etapas/${id}`)))
+  }
+  criarMotivo(nome: string): Promise<boolean> {
+    return this.mutarConfig(() => firstValueFrom(this.http.post('/v1/funil/config/motivos', { nome })))
+  }
+  removerMotivo(codigo: string): Promise<boolean> {
+    return this.mutarConfig(() => firstValueFrom(this.http.delete(`/v1/funil/config/motivos/${codigo}`)))
+  }
 
   /** Métricas do funil + recompra (skill funil-de-vendas). Carrega sob demanda. */
   async carregarMetricas(): Promise<void> {

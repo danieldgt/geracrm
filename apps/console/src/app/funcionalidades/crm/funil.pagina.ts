@@ -1,6 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop'
-import { FunilServico, type Card, type Coluna } from './funil.servico.js'
+import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConfig } from './funil.servico.js'
 
 /**
  * Kanban do funil de relacionamento (Onda 2). Colunas paginadas + drag-drop
@@ -17,9 +17,12 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
         <h1 class="txt-titulo">Funil de vendas</h1>
         <p class="sub">Arraste o card conforme a relação com o cliente evolui.</p>
       </div>
-      <button class="btn" [class.btn--primario]="mostrarMetricas()" [class.btn--secundario]="!mostrarMetricas()" (click)="alternarMetricas()">
-        📊 {{ mostrarMetricas() ? 'Ocultar métricas' : 'Métricas' }}
-      </button>
+      <div class="acoes">
+        <button class="btn" [class.btn--primario]="mostrarMetricas()" [class.btn--secundario]="!mostrarMetricas()" (click)="alternarMetricas()">
+          📊 {{ mostrarMetricas() ? 'Ocultar métricas' : 'Métricas' }}
+        </button>
+        <button class="btn btn--secundario" (click)="abrirConfig()">⚙️ Configurar funil</button>
+      </div>
     </header>
 
     @if (mostrarMetricas()) {
@@ -131,6 +134,72 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
         <button class="btn btn--fantasma btn--bloco" (click)="cancelarPerda()">Cancelar</button>
       </div>
     }
+
+    <!-- Configuração das raias: a empresa monta o próprio funil. -->
+    @if (configAberta()) {
+      <div class="fora" (click)="fecharConfig()"></div>
+      <div class="cfg-modal" role="dialog" aria-label="Configurar funil">
+        <header class="cfg-topo">
+          <h2 class="txt-secao">Raias do funil</h2>
+          <button class="cfg-x" (click)="fecharConfig()" aria-label="Fechar">✕</button>
+        </header>
+        <p class="cfg-dica">
+          As raias viram as colunas do quadro. <b>Aberto</b> é negociação em andamento;
+          <b>Ganho</b> encerra com sucesso; <b>Perdido</b> encerra e pede o motivo.
+        </p>
+
+        @if (servico.erroConfig(); as e) { <p class="cfg-erro" role="alert">{{ e }}</p> }
+
+        <ul class="cfg-lista">
+          @for (e of servico.config(); track e.id) {
+            <li class="cfg-item" [class.cfg-item--off]="!e.ativo">
+              <span class="cfg-ordem">
+                <button (click)="reordenar(e, -1)" [disabled]="$first" aria-label="Subir">▲</button>
+                <button (click)="reordenar(e, 1)" [disabled]="$last" aria-label="Descer">▼</button>
+              </span>
+              <input class="cfg-nome" [value]="e.nome" (change)="renomear(e, $event)" aria-label="Nome da raia" />
+              <select class="cfg-select" [value]="e.tipo" (change)="mudarTipo(e, $event)" aria-label="Tipo da raia">
+                <option value="aberto">Aberto</option>
+                <option value="ganho">Ganho</option>
+                <option value="perdido">Perdido</option>
+              </select>
+              <span class="cfg-qtd txt-dados" [title]="e.total + ' oportunidade(s)'">{{ e.total }}</span>
+              <button class="cfg-toggle" (click)="alternarAtivo(e)">{{ e.ativo ? 'Ativa' : 'Inativa' }}</button>
+              <button class="cfg-del" (click)="removerEtapa(e)" aria-label="Remover raia">🗑</button>
+            </li>
+          }
+        </ul>
+
+        <div class="cfg-novo">
+          <input class="cfg-nome" [value]="novoNome()" (input)="novoNome.set(valor($event))"
+                 (keydown.enter)="criarEtapa()" placeholder="Nova raia…" aria-label="Nome da nova raia" />
+          <select class="cfg-select" [value]="novoTipo()" (change)="novoTipo.set(tipoDe($event))" aria-label="Tipo">
+            <option value="aberto">Aberto</option>
+            <option value="ganho">Ganho</option>
+            <option value="perdido">Perdido</option>
+          </select>
+          <button class="cfg-add" (click)="criarEtapa()" [disabled]="!novoNome().trim()">Adicionar</button>
+        </div>
+
+        <h3 class="cfg-sub txt-rotulo">Motivos de perda</h3>
+        <p class="cfg-dica">Quem arrasta um card para uma raia de perda escolhe um destes.</p>
+        <ul class="cfg-lista">
+          @for (m of servico.motivosConfig(); track m.codigo) {
+            <li class="cfg-item cfg-item--motivo" [class.cfg-item--off]="!m.ativo">
+              <span class="cfg-nome-fixo encolhe">{{ m.nome }}</span>
+              <span class="cfg-qtd txt-dados" [title]="m.total + ' perda(s)'">{{ m.total }}</span>
+              <button class="cfg-del" (click)="removerMotivo(m)" aria-label="Remover motivo">🗑</button>
+            </li>
+          }
+          @if (servico.motivosConfig().length === 0) { <li class="cfg-vazio">Nenhum motivo cadastrado.</li> }
+        </ul>
+        <div class="cfg-novo">
+          <input class="cfg-nome" [value]="novoMotivo()" (input)="novoMotivo.set(valor($event))"
+                 (keydown.enter)="criarMotivo()" placeholder="Novo motivo…" aria-label="Nome do novo motivo" />
+          <button class="cfg-add" (click)="criarMotivo()" [disabled]="!novoMotivo().trim()">Adicionar</button>
+        </div>
+      </div>
+    }
   `,
   styles: `
     /* ⚠️ NÃO volte para height 100%. A casca põe a tela numa CÉLULA DE GRID com
@@ -204,6 +273,44 @@ import { FunilServico, type Card, type Coluna } from './funil.servico.js'
     .motivo { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
       background: var(--superficie-elevada); color: var(--texto); font: inherit; text-align: left; }
     .motivo:hover { background: var(--superficie-hover); }
+    .acoes { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }
+    /* Modal de configuração das raias. Rola por dentro: o funil de ERP tem 6
+       raias, mas nada impede uma operação com 12 — a lista não pode empurrar o
+       modal para fora da viewport. */
+    .cfg-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 41;
+      width: min(560px, calc(100vw - var(--espacamento-8))); max-height: calc(100dvh - var(--espacamento-12));
+      overflow-y: auto; background: var(--superficie-elevada); border: 1px solid var(--borda);
+      border-radius: var(--raio-painel); box-shadow: var(--elevacao-modal); padding: var(--espacamento-5); }
+    .cfg-topo { display: flex; align-items: center; justify-content: space-between; }
+    .cfg-topo h2 { margin: 0; color: var(--texto); }
+    .cfg-x { border: 0; background: none; color: var(--texto-suave); font-size: 16px; padding: var(--espacamento-1); }
+    .cfg-dica { margin: var(--espacamento-1) 0 var(--espacamento-4); color: var(--texto-secundario); font-size: 12px; }
+    .cfg-erro { margin: 0 0 var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-3);
+      border-radius: var(--raio-controle); background: var(--erro-suave); color: var(--erro); font-size: 12px; }
+    .cfg-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--espacamento-2); }
+    .cfg-item { display: flex; align-items: center; gap: var(--espacamento-2); padding: var(--espacamento-2);
+      border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); }
+    .cfg-item--off { opacity: .55; }
+    .cfg-ordem { display: flex; flex-direction: column; gap: 2px; }
+    .cfg-ordem button { border: 1px solid var(--borda); border-radius: 3px; background: var(--superficie-elevada);
+      color: var(--texto-secundario); font-size: 11px; line-height: 1; padding: 3px 5px; }
+    .cfg-ordem button:hover:not(:disabled) { background: var(--superficie-hover); color: var(--texto); }
+    .cfg-ordem button:disabled { opacity: .25; cursor: default; }
+    .cfg-nome { flex: 1; min-width: 0; padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
+      border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 13px; }
+    .cfg-nome-fixo { flex: 1; min-width: 0; font-size: 13px; color: var(--texto); }
+    .cfg-select { padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
+      background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 12px; }
+    .cfg-qtd { min-width: 28px; text-align: right; font-size: 12px; color: var(--texto-suave); }
+    .cfg-toggle { padding: 2px 8px; border: 1px solid var(--borda-controle); border-radius: var(--raio-completo);
+      background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 11px; }
+    .cfg-del { border: 0; background: none; font-size: 13px; padding: var(--espacamento-1); }
+    .cfg-novo { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
+    .cfg-add { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid transparent; border-radius: var(--raio-controle);
+      background: var(--acao); color: var(--acao-texto); font: inherit; font-size: 13px; }
+    .cfg-add:disabled { opacity: .5; cursor: default; }
+    .cfg-sub { display: block; margin: var(--espacamento-6) 0 var(--espacamento-1); color: var(--texto); }
+    .cfg-vazio { color: var(--texto-suave); font-size: 12px; padding: var(--espacamento-2); }
     @media (max-width: 640px) { :host { padding: var(--espacamento-3); } .coluna, .col-esq { width: 240px; } }
   `,
 })
@@ -211,6 +318,10 @@ export class FunilPagina implements OnInit {
   readonly servico = inject(FunilServico)
   readonly perdendo = signal<{ card: Card; deEtapa: string; indice: number } | null>(null)
   readonly mostrarMetricas = signal(false)
+  readonly configAberta = signal(false)
+  readonly novoNome = signal('')
+  readonly novoTipo = signal<EtapaConfig['tipo']>('aberto')
+  readonly novoMotivo = signal('')
 
   ngOnInit(): void { void this.servico.carregar() }
 
@@ -258,5 +369,71 @@ export class FunilPagina implements OnInit {
   cancelarPerda(): void {
     this.perdendo.set(null)
     void this.servico.carregar() // reverte o move otimista
+  }
+
+  // ───────── Configuração das raias ─────────
+
+  valor(ev: Event): string { return (ev.target as HTMLInputElement).value }
+  tipoDe(ev: Event): EtapaConfig['tipo'] { return (ev.target as HTMLSelectElement).value as EtapaConfig['tipo'] }
+
+  abrirConfig(): void {
+    this.servico.erroConfig.set(null)
+    this.servico.configSujo.set(false)
+    this.configAberta.set(true)
+    void this.servico.carregarConfig()
+  }
+
+  /** ⚠️ Recarrega o quadro só se a estrutura mudou — o board é caro (uma busca por coluna). */
+  fecharConfig(): void {
+    this.configAberta.set(false)
+    if (this.servico.configSujo()) {
+      this.servico.configSujo.set(false)
+      void this.servico.carregar()
+    }
+  }
+
+  /** Troca a `ordem` com a raia vizinha. */
+  async reordenar(e: EtapaConfig, delta: number): Promise<void> {
+    const lista = [...this.servico.config()]
+    const i = lista.findIndex((x) => x.id === e.id)
+    const vizinho = lista[i + delta]
+    if (!vizinho) return
+    if (await this.servico.editarEtapa(e.id, { ordem: vizinho.ordem })) {
+      await this.servico.editarEtapa(vizinho.id, { ordem: e.ordem })
+    }
+  }
+
+  async renomear(e: EtapaConfig, ev: Event): Promise<void> {
+    const nome = this.valor(ev).trim()
+    if (!nome || nome === e.nome) return
+    await this.servico.editarEtapa(e.id, { nome })
+  }
+
+  async mudarTipo(e: EtapaConfig, ev: Event): Promise<void> {
+    await this.servico.editarEtapa(e.id, { tipo: this.tipoDe(ev) })
+  }
+
+  async alternarAtivo(e: EtapaConfig): Promise<void> {
+    await this.servico.editarEtapa(e.id, { ativo: !e.ativo })
+  }
+
+  async removerEtapa(e: EtapaConfig): Promise<void> {
+    await this.servico.removerEtapa(e.id)
+  }
+
+  async criarEtapa(): Promise<void> {
+    const nome = this.novoNome().trim()
+    if (!nome) return
+    if (await this.servico.criarEtapa(nome, this.novoTipo())) this.novoNome.set('')
+  }
+
+  async criarMotivo(): Promise<void> {
+    const nome = this.novoMotivo().trim()
+    if (!nome) return
+    if (await this.servico.criarMotivo(nome)) this.novoMotivo.set('')
+  }
+
+  async removerMotivo(m: MotivoConfig): Promise<void> {
+    await this.servico.removerMotivo(m.codigo)
   }
 }
