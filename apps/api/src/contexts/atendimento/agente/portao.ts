@@ -17,6 +17,12 @@
  *
  * Sem essa ordem, o cliente recebe duas automáticas seguidas e a primeira
  * ("voltamos amanhã") contradiz a segunda, que puxa conversa.
+ *
+ * ⚠️ As duas condições só passaram a fazer a MESMA pergunta em 2026-09-01. Antes
+ * disso a (1) era "ninguém disponível" e a (2), por dentro, ainda era "fora do
+ * expediente" — a ausência só saía com a loja fechada. Em horário comercial com
+ * a equipe toda offline, o gatilho nunca vinha e o agente esperava para sempre,
+ * registrando `sem_ausencia_antes`, um motivo que aponta para o lugar errado.
  */
 
 /** Tudo que a decisão precisa. Coletado por quem chama; aqui não há consulta. */
@@ -116,9 +122,13 @@ export function portaoDoAgente(c: ContextoPortao): DecisaoPortao {
   //    conversa de teste, que sem isto trava no primeiro encerramento.
   if (!c.regras.reabrirAposEncerrada && c.sessaoJaEncerrada) return NAO('sessao_ja_encerrada')
 
-  // ⚠️ O GATILHO. Só entra depois de a ausência ter falado. DESLIGÁVEL (0078):
-  //    sem ele o agente responde já na primeira mensagem — mais alcance, mais
-  //    custo, e sem o filtro que separa quem tem interesse de quem sumiu.
+  // ⚠️ O GATILHO. Só entra depois de a ausência ter falado — e a ausência sai
+  //    quando NÃO HÁ QUEM ATENDA (`ausencia.ts`), não mais só fora do
+  //    expediente. Enquanto foram duas réguas diferentes, isto era um beco sem
+  //    saída: em horário comercial sem ninguém na mesa, nunca virava verdade.
+  //    DESLIGÁVEL (0078): sem ele o agente responde já na primeira mensagem —
+  //    mais alcance, mais custo, e sem o filtro que separa quem tem interesse
+  //    de quem mandou "oi" e sumiu.
   if (c.regras.exigirAusenciaAntes && !c.ausenciaJaEnviada) return NAO('sem_ausencia_antes')
 
   return { entra: true, sessao: 'nova' }

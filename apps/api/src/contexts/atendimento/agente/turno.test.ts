@@ -307,3 +307,34 @@ describe('⚠️ Regras de entrada configuradas mudam a decisão', () => {
     expect(enviados).toEqual([])
   })
 })
+
+/**
+ * ⚠️ A LEITURA DA EQUIPE VEM DE FORA no fluxo entrante (2026-09-01).
+ *
+ * Quem lê o estado do número é `responderAutomaticamente`, uma vez, e o mesmo
+ * valor desce para a resposta de ausência e para cá. Se o turno reconsultasse o
+ * banco, os dois passos do MESMO evento poderiam discordar — basta um batimento
+ * de presença expirar no meio — e a discordância é silenciosa: a ausência sai
+ * dizendo que não tem ninguém e o agente cala por `tem_quem_atenda`.
+ */
+describe('⚠️ A equipe informada por quem chama é a que vale', () => {
+  it('com gente disponível na leitura recebida, o agente não fala', async () => {
+    await ligarAgente(true); await ausenciaHa(5)
+    const r = await conduzirTurno(T, CONVERSA, CANAL, new Date(), {
+      llm: llmFalso({}), enviar: enviarFalso,
+      equipe: { vinculados: 2, logados: 2, ativos: 2, foraDoExpediente: false },
+    })
+    expect(r).toEqual({ falou: false, motivo: 'tem_quem_atenda' })
+    expect(enviados).toEqual([])
+  })
+
+  /** Sem ninguém na leitura recebida, o caminho segue igual ao de sempre. */
+  it('com a equipe offline na leitura recebida, ele fala', async () => {
+    await ligarAgente(true); await ausenciaHa(5)
+    const r = await conduzirTurno(T, CONVERSA, CANAL, new Date(), {
+      llm: llmFalso({}), enviar: enviarFalso,
+      equipe: { vinculados: 2, logados: 0, ativos: 0, foraDoExpediente: false },
+    })
+    expect(r).toMatchObject({ falou: true })
+  })
+})

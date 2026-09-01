@@ -166,6 +166,28 @@ Três desenhos possíveis:
 expediente", e sim "mensagem **depois** de uma ausência já enviada, nas últimas 12h". Vale para os
 dois webhooks — não-oficial e Meta — a partir de um lugar só (`resposta-automatica.ts`).
 
+### 4.3.2 ✅ A ausência passou a seguir a mesma régua — **corrigido em 01/09**
+
+Em 27/ago o portão do agente deixou de perguntar "está fora do expediente?" e passou a perguntar
+"tem alguém para atender este número?" (`disponibilidade.ts`). A resposta de ausência ficou para
+trás: por dentro, ela continuou presa ao expediente.
+
+Como a ausência é o **gatilho** do agente (§4.3.1), duas réguas diferentes fecharam um beco: em
+horário comercial com a equipe toda offline, a ausência não saía (`dentro_do_expediente`) e o
+agente esperava para sempre um gatilho que nunca vinha — registrando `sem_ausencia_antes`, um
+motivo que manda quem investiga para o lugar errado. O caso pior é o tenant que nunca declarou
+horário: sem horário a loja conta como ABERTA, então o silêncio durava 24 h por dia.
+
+✅ A ausência passou a usar a mesma pergunta (`ninguemDisponivel`), e o estado da equipe é lido
+**uma vez por mensagem entrante**, em `resposta-automatica.ts`, descendo para os dois passos: duas
+leituras no mesmo evento poderiam discordar — basta um batimento de presença expirar entre elas — e
+a discordância seria silenciosa.
+
+⚠️ **Consequência para o texto da mensagem:** ela agora pode sair EM horário comercial (equipe
+offline), e aí "voltamos amanhã às 9h" vira mentira. A tela de Config. do Canal passou a pedir um
+texto que sirva aos dois casos ("no momento não há ninguém disponível"). O resto não mudou: uma
+resposta a cada 6 h por conversa, e nenhuma se houver atendente presente.
+
 ### 4.4 **[DECIDIR]** Canal: oficial, não-oficial, ou os dois?
 
 ⚠️ O canal não-oficial **carrega risco de banimento** (ADR-021), e um agente conversando 24/7

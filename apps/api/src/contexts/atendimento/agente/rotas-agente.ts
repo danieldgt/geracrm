@@ -19,19 +19,32 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
     '/v1/canais/:id/agente', { preHandler: exigirTenant },
     async (req, reply) => {
-      const [cfg] = await req.comTenant((tx) => tx<{
-        ativo: boolean; politicas: string | null
-        so_quando_ninguem_disponivel: boolean; exigir_ausencia_antes: boolean
-        horas_desde_ausencia: number; reabrir_apos_encerrada: boolean
-        minutos_presenca: number; max_turnos: number
-        max_caracteres: number; falas_de_contexto: number
-      }[]>`
-        SELECT ativo, politicas,
-               so_quando_ninguem_disponivel, exigir_ausencia_antes,
-               horas_desde_ausencia, reabrir_apos_encerrada,
-               minutos_presenca, max_turnos, max_caracteres, falas_de_contexto
-          FROM agente_config
-         WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`)
+      const { cfg, temMensagemAusencia } = await req.comTenant(async (tx) => {
+        const [linha] = await tx<{
+          ativo: boolean; politicas: string | null
+          so_quando_ninguem_disponivel: boolean; exigir_ausencia_antes: boolean
+          horas_desde_ausencia: number; reabrir_apos_encerrada: boolean
+          minutos_presenca: number; max_turnos: number
+          max_caracteres: number; falas_de_contexto: number
+        }[]>`
+          SELECT ativo, politicas,
+                 so_quando_ninguem_disponivel, exigir_ausencia_antes,
+                 horas_desde_ausencia, reabrir_apos_encerrada,
+                 minutos_presenca, max_turnos, max_caracteres, falas_de_contexto
+            FROM agente_config
+           WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
+        // ⚠️ A tela precisa saber se existe mensagem de ausência NESTE número:
+        //    com "esperar o cliente insistir" ligado (o padrão), o gatilho do
+        //    agente é a ausência ter saído — e sem texto escrito ela nunca sai.
+        //    O agente ficaria ligado e permanentemente mudo, sem nada na
+        //    interface explicando por quê. É o mesmo tipo de dependência
+        //    invisível que calou o agente em horário comercial até 01/09.
+        const [canal] = await tx<{ tem: boolean }[]>`
+          SELECT btrim(coalesce(mensagem_ausencia, '')) <> '' AS tem
+            FROM canal_configuracao
+           WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
+        return { cfg: linha, temMensagemAusencia: canal?.tem ?? false }
+      })
 
       const p = REGRAS_AGENTE_PADRAO
       return reply.send({
@@ -63,6 +76,13 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         //    indisponível": erro genérico manda abrir chamado, nome manda
         //    resolver.
         faltaConfigurar: faltaParaLlm(),
+        /**
+         * ⚠️ Sem isto, "esperar o cliente insistir depois da ausência" ligado
+         * num canal sem mensagem de ausência é um agente que nunca abre a boca —
+         * e o log diz `sem_ausencia_antes`, que soa como "ainda não chegou a
+         * hora" e não como "falta configurar". A tela avisa antes.
+         */
+        temMensagemAusencia,
       })
     },
   )

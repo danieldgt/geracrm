@@ -1,4 +1,5 @@
 import { comTenantServico, type Sql } from '../../db/index.js'
+import { ninguemDisponivel, quemAtende, type QuemAtende } from './disponibilidade.js'
 import { enviarTextoNaConversa } from './envio-conversa.js'
 import { fragmentoAtendentePresente } from './presenca-atendente.js'
 
@@ -15,44 +16,24 @@ import { fragmentoAtendentePresente } from './presenca-atendente.js'
  * diz que ninguém está e quando alguém volta. É a diferença entre administrar a
  * expectativa e fingir atendimento. O escopo do agente — e por que ele exige
  * outro nível de rigor — está em `docs/agente-sdr-escopo.md`.
- */
-
-/** Faixa de atendimento de um dia. `null` = fechado. */
-export interface Faixa { readonly de: string; readonly ate: string }
-export type HorarioAtendimento = Record<string, Faixa | null>
-
-/** 1 (segunda) … 7 (domingo) — o `ID` do `to_char` do Postgres. */
-const DIA_POR_ISO: Record<number, string> = {
-  1: 'seg', 2: 'ter', 3: 'qua', 4: 'qui', 5: 'sex', 6: 'sab', 7: 'dom',
-}
-
-/**
- * Está fora do expediente?
  *
- * ⚠️ **Horário não configurado devolve `false`** — ou seja, NÃO responde. Quem
- * não declarou expediente não declarou ausência: assumir "fechado" mandaria
- * resposta automática 24h por dia para todo tenant que nunca abriu essa tela.
+ * ⚠️ **A condição deixou de ser "fora do expediente" (2026-09-01).** Agora é a
+ * MESMA pergunta que libera o agente: *tem alguém para atender este número?*
+ * (`ninguemDisponivel`). O buraco era caro e silencioso: com a equipe toda
+ * offline às 14h, a ausência dizia "dentro do expediente" e não saía — e como a
+ * ausência é o GATILHO do agente (`exigirAusenciaAntes`, o padrão), o robô
+ * também nunca entrava. Resultado: o produto ficava mudo exatamente no caso que
+ * a decisão de 27/ago quis cobrir, e o motivo no log era `sem_ausencia_antes`,
+ * que aponta para o lugar errado.
  *
- * ⚠️ Faixa que vira a meia-noite (22:00–02:00) é tratada: sem isso, uma loja que
- * atende à noite seria considerada fechada durante o próprio expediente.
+ * ⚠️ Consequência para quem escreve o texto: ele pode sair EM horário comercial
+ * (equipe offline). "Voltamos amanhã às 9h" vira mentira nesse caso — a dica da
+ * tela pede um texto que sirva aos dois, do tipo "ninguém disponível agora".
  */
-export function foraDoExpediente(
-  horario: HorarioAtendimento | null | undefined, diaIso: number, horaLocal: string,
-): boolean {
-  if (!horario || Object.keys(horario).length === 0) return false
-
-  const faixa = horario[DIA_POR_ISO[diaIso] ?? '']
-  if (!faixa?.de || !faixa?.ate) return true   // dia declarado como fechado
-
-  // Comparação lexicográfica de "HH:MM" — funciona porque o formato é fixo.
-  return faixa.de <= faixa.ate
-    ? horaLocal < faixa.de || horaLocal >= faixa.ate
-    : horaLocal < faixa.de && horaLocal >= faixa.ate   // faixa que cruza a meia-noite
-}
 
 export type ResultadoAusencia =
   | 'enviada'
-  | 'dentro_do_expediente'
+  | 'tem_quem_atenda'
   | 'sem_mensagem_configurada'
   | 'ja_respondida'
   | 'atendente_presente'
@@ -75,22 +56,25 @@ const HORAS_ENTRE_RESPOSTAS = 6
  * "estamos fechados" no meio de um atendimento humano é a pior forma de
  * descobrir que existe um robô. Presença tem prazo (`MINUTOS_DE_PRESENCA`):
  * assunção esquecida não é presença, é um registro velho.
+ *
+ * ⚠️ `equipe` vem de fora quando quem chama já leu o estado do número — é o caso
+ * do fluxo entrante (`responderAutomaticamente`), onde a ausência e o agente
+ * decidem sobre a MESMA leitura. Duas leituras no mesmo evento poderiam
+ * divergir (um batimento cai entre elas) e produzir a contradição mais cara
+ * daqui: a ausência dizendo "não tem ninguém" e o agente calando por
+ * `tem_quem_atenda`.
  */
 export async function responderAusencia(
   tenantId: string, conversaId: string, canalId: string, agora: Date = new Date(),
+  equipe?: QuemAtende,
 ): Promise<ResultadoAusencia> {
   const contexto = await comTenantServico(tenantId, async (tx: Sql) => {
     const [linha] = await tx<{
       mensagem_ausencia: string | null
-      horario_atendimento: HorarioAtendimento | null
-      dia_iso: number
-      hora_local: string
       atendente_presente: boolean
       ja_respondida: boolean
     }[]>`
-      SELECT cfg.mensagem_ausencia, cfg.horario_atendimento,
-             EXTRACT(ISODOW FROM (${agora}::timestamptz AT TIME ZONE t.fuso))::int AS dia_iso,
-             to_char(${agora}::timestamptz AT TIME ZONE t.fuso, 'HH24:MI')          AS hora_local,
+      SELECT cfg.mensagem_ausencia,
              ${fragmentoAtendentePresente(tx, conversaId, agora)} AS atendente_presente,
              EXISTS (SELECT 1 FROM mensagem m
                       WHERE m.tenant_id = cfg.tenant_id AND m.conversa_id = ${conversaId}
@@ -99,17 +83,23 @@ export async function responderAusencia(
                         AND m.criado_em > ${agora}::timestamptz - make_interval(hours => ${HORAS_ENTRE_RESPOSTAS}))
                AS ja_respondida
         FROM canal_configuracao cfg
-        JOIN tenant t ON t.id = cfg.tenant_id
        WHERE cfg.tenant_id = tenant_atual() AND cfg.canal_id = ${canalId}`
-    return linha ?? null
+    // ⚠️ Canal sem mensagem escrita sai daqui sem gastar a segunda consulta: o
+    //    desfecho já é `sem_mensagem_configurada`, e isto roda a cada mensagem
+    //    entrante — uma consulta a mais por mensagem é carga real num inbox
+    //    movimentado.
+    if (!linha?.mensagem_ausencia?.trim()) return null
+    // ⚠️ Só vai ao banco pela equipe se quem chamou não trouxe a leitura.
+    return { ...linha, equipe: equipe ?? await quemAtende(tx, canalId, agora) }
   })
 
   // Sem configuração nenhuma para este canal: nada a fazer, e não é erro.
   if (!contexto?.mensagem_ausencia?.trim()) return 'sem_mensagem_configurada'
   if (contexto.atendente_presente) return 'atendente_presente'
-  if (!foraDoExpediente(contexto.horario_atendimento, contexto.dia_iso, contexto.hora_local)) {
-    return 'dentro_do_expediente'
-  }
+  // ⚠️ Fora do expediente, ninguém logado ou todos ausentes — a mesma régua do
+  //    agente, em `disponibilidade.ts`. Havendo quem atenda, quem responde é
+  //    GENTE: mandar "ninguém está aqui" com a equipe na mesa é pior que calar.
+  if (!ninguemDisponivel(contexto.equipe)) return 'tem_quem_atenda'
   if (contexto.ja_respondida) return 'ja_respondida'
 
   const r = await enviarTextoNaConversa(

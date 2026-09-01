@@ -1,5 +1,5 @@
 import type { Sql } from '../../db/index.js'
-import { foraDoExpediente, type HorarioAtendimento } from './ausencia.js'
+import { foraDoExpediente, type HorarioAtendimento } from './expediente.js'
 
 /**
  * TEM ALGUÉM PARA ATENDER ESTE NÚMERO?

@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { REGRAS_AGENTE_PADRAO, type RegrasDoAgente } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../../../db/index.js'
 import { enviarTextoNaConversa } from '../envio-conversa.js'
-import { quemAtende, ninguemDisponivel, motivoDisponibilidade } from '../disponibilidade.js'
+import {
+  quemAtende, ninguemDisponivel, motivoDisponibilidade, type QuemAtende,
+} from '../disponibilidade.js'
 import { fragmentoAtendentePresente } from '../presenca-atendente.js'
 import { carregarContextoDoLead } from './contexto-lead.js'
 import { validarExtracao } from './extracao.js'
@@ -55,7 +57,18 @@ export async function conduzirTurno(
   // ⚠️ Costuras de teste, no mesmo estilo do `{ buscar }` dos adaptadores: sem
   //    elas, testar o orquestrador chamaria o fornecedor de IA E o WhatsApp de
   //    verdade — dinheiro, lentidão e falha por rede oscilante.
-  deps: { readonly llm?: PortaLlm; readonly enviar?: typeof enviarTextoNaConversa } = {},
+  deps: {
+    readonly llm?: PortaLlm
+    readonly enviar?: typeof enviarTextoNaConversa
+    /**
+     * ⚠️ O estado da equipe, quando quem chama JÁ o leu — é o caso do fluxo
+     * entrante, onde a ausência decide sobre a mesma leitura (ver
+     * `resposta-automatica.ts`). Reler aqui custa uma consulta por mensagem e,
+     * pior, pode dar outra resposta: um batimento que expira entre as duas
+     * leituras faria a ausência sair e o agente calar por `tem_quem_atenda`.
+     */
+    readonly equipe?: QuemAtende
+  } = {},
 ): Promise<ResultadoTurno> {
   // ⚠️ A CONFIG VEM PRIMEIRO, e numa consulta própria — é a mudança que o 0078
   //    trouxe. A régua de presença deixou de ser constante e virou dado; um
@@ -67,7 +80,7 @@ export async function conduzirTurno(
     return {
       cfg,
       reuniao: await reunirContexto(tx, conversaId, agora, cfg.regras),
-      equipe: await quemAtende(tx, canalId, agora),
+      equipe: deps.equipe ?? await quemAtende(tx, canalId, agora),
     }
   })
   if (!dados) return { falou: false, motivo: 'agente_desligado' }

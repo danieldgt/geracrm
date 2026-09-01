@@ -179,3 +179,40 @@ describe('Auditoria', () => {
     expect((await chamar(T, 'GET', '/v1/agente/sessoes?cursor=lixo')).statusCode).toBe(422)
   })
 })
+
+/**
+ * ⚠️ A DEPENDÊNCIA INVISÍVEL entre o agente e a mensagem de ausência.
+ *
+ * Com `exigirAusenciaAntes` ligado (o padrão), o gatilho do agente é a ausência
+ * ter saído — e ela só sai se houver texto escrito para aquele número. Sem isso
+ * o agente fica ligado e permanentemente mudo, com `sem_ausencia_antes` no log,
+ * que parece "ainda não chegou a hora" e não "falta configurar". A tela avisa;
+ * este teste garante que o dado chega até ela.
+ */
+describe('⚠️ O gatilho depende da mensagem de ausência do canal', () => {
+  const configurarCanal = (mensagem: string | null) => dono`
+    INSERT INTO canal_configuracao (tenant_id, canal_id, mensagem_ausencia)
+    VALUES (${T}, ${CANAL}, ${mensagem})
+    ON CONFLICT (tenant_id, canal_id) DO UPDATE SET mensagem_ausencia = EXCLUDED.mensagem_ausencia`
+
+  afterAll(async () => { await dono`DELETE FROM canal_configuracao WHERE tenant_id = ${T}` })
+
+  it('sem configuração de canal nenhuma, a tela sabe que falta a mensagem', async () => {
+    await dono`DELETE FROM canal_configuracao WHERE tenant_id = ${T}`
+    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { temMensagemAusencia: boolean }
+    expect(r.temMensagemAusencia).toBe(false)
+  })
+
+  /** ⚠️ Espaço em branco não é mensagem: `responderAusencia` faz o mesmo trim. */
+  it('mensagem só com espaços conta como ausente', async () => {
+    await configurarCanal('   ')
+    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { temMensagemAusencia: boolean }
+    expect(r.temMensagemAusencia).toBe(false)
+  })
+
+  it('com a mensagem escrita, o aviso não aparece', async () => {
+    await configurarCanal('No momento não há ninguém disponível — retornamos assim que possível.')
+    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { temMensagemAusencia: boolean }
+    expect(r.temMensagemAusencia).toBe(true)
+  })
+})

@@ -70,8 +70,14 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                     <input [value]="assinatura()" (input)="assinatura.set($any($event.target).value)" placeholder="Ex.: Equipe Loja Centro" />
                   </label>
 
+                  <!-- ⚠️ A mensagem sai quando NÃO HÁ QUEM ATENDER este número: loja
+                       fechada, ninguém logado ou todos marcados como ausentes. Ela
+                       deixou de ser só "fora do expediente" em 2026-09-01, e por isso
+                       o texto não pode prometer horário — em horário comercial com a
+                       equipe offline, "voltamos amanhã às 9h" vira mentira. -->
                   <label class="campo">Mensagem de ausência
-                    <textarea rows="2" [value]="ausencia()" (input)="ausencia.set($any($event.target).value)" placeholder="Enviada fora do horário de atendimento."></textarea>
+                    <textarea rows="2" [value]="ausencia()" (input)="ausencia.set($any($event.target).value)" placeholder="Ex.: Recebemos sua mensagem! No momento não há ninguém disponível — retornamos assim que possível."></textarea>
+                    <span class="dica">Enviada quando ninguém pode atender este número: fora do horário, sem ninguém logado ou com todos marcados como ausentes. Uma vez a cada 6 h por conversa.</span>
                   </label>
 
 <ui-horario-atendimento [(horario)]="horario" />
@@ -113,6 +119,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .desde { color: var(--texto-suave); margin-left: var(--espacamento-1); }
     .form { display: grid; gap: var(--espacamento-4); }
     .campo { display: flex; flex-direction: column; gap: var(--espacamento-2); color: var(--texto); font-size: 13px; }
+    .dica { color: var(--texto-suave); font-size: 12px; }
     .campo input, .campo textarea { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; resize: vertical; }
     .acoes { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; }
     .pausar:hover { color: var(--erro); border-color: var(--erro); }

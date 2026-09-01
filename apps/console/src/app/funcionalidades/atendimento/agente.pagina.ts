@@ -12,6 +12,12 @@ interface ConfigAgente {
   readonly ativo: boolean; readonly politicas: string
   readonly regras: RegrasDoAgente; readonly padroes: RegrasDoAgente
   readonly faltaConfigurar: readonly string[]
+  /**
+   * ⚠️ Este NÚMERO tem mensagem de ausência escrita? Ver o aviso na tela.
+   * Opcional porque a API antiga não manda: durante o deploy, console novo e API
+   * velha convivem, e o aviso não pode aparecer por falta de campo.
+   */
+  readonly temMensagemAusencia?: boolean
 }
 interface Sessao {
   readonly id: string; readonly conversaId: string; readonly contato: string | null
@@ -36,7 +42,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
   template: `
     <header class="cabecalho">
       <h1 class="txt-titulo">Agente SDR</h1>
-      <p class="sub">Atende fora do expediente, coleta o que falta e entrega ao humano.</p>
+      <p class="sub">Atende quando ninguém está disponível, coleta o que falta e entrega ao humano.</p>
     </header>
 
     @switch (estado()) {
@@ -70,6 +76,24 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                   Até lá o agente não pode ser ligado.</p>
               }
 
+              <!-- ⚠️ Dependência INVISÍVEL: com "esperar o cliente insistir" ligado, o
+                   gatilho do agente é a mensagem de ausência ter saído. Sem texto
+                   escrito para este número ela nunca sai, e o robô fica ligado e mudo
+                   para sempre — o log diz "sem_ausencia_antes", que parece "ainda não
+                   chegou a hora". Melhor dizer antes do que explicar depois.
+                   ⚠️ Comparação com false, e não negação: API e console sobem
+                   SEPARADOS, então o console novo servido pela API antiga recebe o
+                   campo indefinido — negar acusaria falta de mensagem em TODO canal
+                   durante a janela de deploy.
+                   ⚠️ Sem crase neste comentário: ela fecharia o template literal do
+                   componente aqui dentro. -->
+              @if (r().exigirAusenciaAntes && c.temMensagemAusencia === false) {
+                <p class="aviso">Este número não tem <strong>mensagem de ausência</strong> escrita — e é
+                  ela que abre a porta do agente. Enquanto “esperar o cliente insistir” estiver ligado,
+                  ele nunca vai responder. Escreva a mensagem em
+                  <a routerLink="/canal-config">Config. do Canal</a> ou desligue a regra abaixo.</p>
+              }
+
               <form class="form" (submit)="salvar($event)">
                 <label class="campo">Políticas da loja
                   <textarea rows="5" [value]="politicas()"
@@ -94,7 +118,8 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                            (change)="mudar('exigirAusenciaAntes', $any($event.target).checked)" />
                     Esperar o cliente insistir depois da mensagem de ausência
                   </label>
-                  <span class="dica">É o filtro que separa quem tem interesse de quem mandou “oi” e sumiu.</span>
+                  <span class="dica">É o filtro que separa quem tem interesse de quem mandou “oi” e sumiu.
+                    A ausência sai sempre que ninguém pode atender — inclusive em horário comercial com a equipe offline.</span>
 
                   <label class="chk">
                     <input type="checkbox" [checked]="r().reabrirAposEncerrada"
