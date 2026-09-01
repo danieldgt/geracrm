@@ -14,19 +14,27 @@ import { garantirEtapasAtendimento } from './rotas-atendimento-kanban.js'
  * tipificado — e a tela já atualizou pelo tempo real.
  */
 
-/** Garante o `usuario` do chamador (por cognito_sub) e devolve o id. */
+/**
+ * Garante o `usuario` do chamador (por cognito_sub) e devolve o id.
+ *
+ * ⚠️ O conflito é resolvido por `(tenant_id, cognito_sub)`, não por `cognito_sub`
+ * sozinho: a MESMA pessoa pode ser usuária de dois clientes nossos — consultor,
+ * contador, e o staff que entra no cliente pelo PLT-05. Com o único global, a
+ * segunda empresa caía no UPDATE de uma linha de OUTRO tenant, o RLS FORCE
+ * recusava, o `RETURNING` voltava vazio e a rota estourava em 500. Vale para os
+ * ~25 pontos que chamam esta função — praticamente toda escrita do produto.
+ * A chave composta nasce na migration 0081; o único global sai na 0082.
+ */
 export async function garantirUsuarioId(tx: Sql, req: FastifyRequest): Promise<string> {
-  // Dev (header x-tenant-id, sem Cognito): sub sintético POR TENANT. ⚠️ Um sub
-  // fixo entre tenants faria o ON CONFLICT (cognito_sub, único global) tentar
-  // atualizar a linha de OUTRO tenant → RLS bloqueia. Em produção o sub do
-  // Cognito já é único por usuário, então isto só afeta o dev multi-tenant.
+  // Dev (header x-tenant-id, sem Cognito): sub sintético por tenant, para duas
+  // empresas locais não disputarem a mesma linha.
   const sub = req.usuarioSub ?? `dev-${req.tenantId ?? 'sem-tenant'}`
   const email = req.usuarioEmail ?? 'dogfooding@geracrm.local'
   const nome = (email.split('@')[0] ?? 'Atendente') || 'Atendente'
   const [u] = await tx<{ id: string }[]>`
     INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
     VALUES (tenant_atual(), ${randomUUID()}, ${sub}, ${nome}, ${email})
-    ON CONFLICT (cognito_sub) DO UPDATE SET email = EXCLUDED.email
+    ON CONFLICT (tenant_id, cognito_sub) DO UPDATE SET email = EXCLUDED.email
     RETURNING id`
   return u!.id
 }
