@@ -12,6 +12,7 @@ import { InboxServico } from './inbox.servico.js'
 import { EventosServico } from './eventos.servico.js'
 import { AlertasServico } from './alertas.servico.js'
 import { TemaServico } from './tema.servico.js'
+import { AuthServico } from './auth.servico.js'
 
 /**
  * A casca do console — topo + menu lateral + área de conteúdo.
@@ -214,6 +215,7 @@ export class ShellComponente implements OnInit {
   readonly alertas = inject(AlertasServico)
   readonly tema = inject(TemaServico)
   readonly inbox = inject(InboxServico)
+  private readonly auth = inject(AuthServico)
   private readonly router = inject(Router)
   private readonly http = inject(HttpClient)
 
@@ -233,11 +235,17 @@ export class ShellComponente implements OnInit {
     return api !== null && api !== 'local' && this.versao.commit !== 'local' && api !== this.versao.commit
   })
 
-  /** Menu filtrado pela busca (rótulo ou descrição); grupos vazios somem. */
+  /**
+   * Menu filtrado pela busca (rótulo ou descrição); grupos vazios somem.
+   *
+   * ⚠️ Grupos `soStaff` só aparecem para quem é staff do drezz. É higiene de
+   * interface — a autorização real é o 403 da API.
+   */
   readonly menuFiltrado = computed(() => {
+    const visiveis = MENU.filter((g) => !g.soStaff || this.auth.ehStaff())
     const q = this.filtro().trim().toLowerCase()
-    if (!q) return MENU
-    return MENU
+    if (!q) return visiveis
+    return visiveis
       .map((g) => ({ ...g, itens: g.itens.filter((i) =>
         i.rotulo.toLowerCase().includes(q) || i.descricao.toLowerCase().includes(q)) }))
       .filter((g) => g.itens.length > 0)

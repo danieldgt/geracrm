@@ -89,6 +89,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/atendimento/mensagens-enviadas.pagina.js').then((m) => m.MensagensEnviadasPagina),
   config: () =>
     import('./funcionalidades/plataforma/config.pagina.js').then((m) => m.ConfigPagina),
+  'clientes-plataforma': () =>
+    import('./funcionalidades/plataforma/clientes.pagina.js').then((m) => m.ClientesPlataformaPagina),
   automacoes: () =>
     import('./funcionalidades/crm/automacoes.pagina.js').then((m) => m.AutomacoesPagina),
   fidelidade: () =>

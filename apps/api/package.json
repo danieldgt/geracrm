@@ -19,6 +19,7 @@
     "plugzapi:validar": "tsx src/contexts/atendimento/canais/plugzapi-validar.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.1124.0",
     "@aws-sdk/client-s3": "^3.1106.0",
     "@aws-sdk/s3-request-presigner": "^3.1106.0",
     "@geracrm/conectores": "workspace:*",

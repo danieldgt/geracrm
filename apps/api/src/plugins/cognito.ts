@@ -18,6 +18,15 @@ export interface IdentidadeCognito {
   readonly tenantId: string
   readonly sub: string
   readonly email?: string | undefined
+  /**
+   * Grupos do pool (`cognito:groups`). Hoje só o `staff` importa — é o que
+   * autoriza as rotas de plataforma (cadastro de cliente).
+   *
+   * ⚠️ Vem do token ASSINADO, nunca de tabela nossa: revogar o acesso é tirar a
+   * pessoa do grupo no Cognito, e o efeito vale no próximo token — sem depender
+   * de nenhum estado no nosso banco poder ficar dessincronizado.
+   */
+  readonly grupos: readonly string[]
 }
 
 export interface VerificadorCognito {
@@ -61,10 +70,12 @@ export function criarVerificadorCognito(): VerificadorCognito | null {
         //    devolveria vazio, mascarando o problema como "não tem dados".
         throw new Error('cognito: usuário sem custom:tenant_id válido')
       }
+      const grupos = payload['cognito:groups']
       return {
         tenantId,
         sub: String(payload.sub),
         email: typeof payload['email'] === 'string' ? payload['email'] : undefined,
+        grupos: Array.isArray(grupos) ? grupos.filter((g): g is string => typeof g === 'string') : [],
       }
     },
   }

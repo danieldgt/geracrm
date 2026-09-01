@@ -28,6 +28,8 @@ declare module 'fastify' {
     usuarioSub?: string | undefined
     /** E-mail do usuário Cognito — para provisionar `usuario` (nome/email). */
     usuarioEmail?: string | undefined
+    /** Grupos do Cognito (`cognito:groups`). Autoriza as rotas de plataforma. */
+    usuarioGrupos?: readonly string[] | undefined
     /**
      * Runs a callback inside a transaction already scoped to this tenant.
      * Every domain query goes through here — RLS depends on it.
@@ -68,12 +70,12 @@ async function lerTenant(
   req: FastifyRequest,
   verificador: VerificadorCognito | null,
   permiteHeader: boolean,
-): Promise<{ tenantId?: string; sub?: string; email?: string | undefined }> {
+): Promise<{ tenantId?: string; sub?: string; email?: string | undefined; grupos?: readonly string[] }> {
   const token = extrairToken(req)
   if (verificador && token) {
     try {
       const id = await verificador.verificar(token)
-      return { tenantId: id.tenantId, sub: id.sub, email: id.email }
+      return { tenantId: id.tenantId, sub: id.sub, email: id.email, grupos: id.grupos }
     } catch (erro) {
       // ⚠️ Token inválido/expirado NÃO cai no header de dev: seria um caminho
       //    para escalar de "token ruim" para "escolho meu tenant". Fica sem
@@ -133,10 +135,11 @@ export const pluginTenant: FastifyPluginAsync = fp(
     })
 
     app.addHook('onRequest', async (req) => {
-      const { tenantId, sub, email } = await lerTenant(req, verificador, permiteHeader)
+      const { tenantId, sub, email, grupos } = await lerTenant(req, verificador, permiteHeader)
       req.tenantId = tenantId
       req.usuarioSub = sub
       req.usuarioEmail = email
+      req.usuarioGrupos = grupos ?? []
     })
   },
   { name: 'tenant' },
@@ -149,4 +152,30 @@ export async function exigirTenant(req: FastifyRequest): Promise<void> {
     erro.statusCode = 401
     throw erro
   }
+}
+
+/** Grupo do Cognito que autoriza as rotas de plataforma. */
+export const GRUPO_STAFF = 'staff'
+
+/**
+ * Guard das rotas de PLATAFORMA (cadastro de cliente) — as únicas que operam
+ * fora do escopo de um tenant.
+ *
+ * ⚠️ É o único lugar que autoriza `criar_tenant()`/`listar_tenants()`: as
+ * funções SECURITY DEFINER da migration 0080 não checam chamador (não têm como
+ * — a identidade está no JWT, não no banco). Tirar este guard de uma rota de
+ * plataforma expõe a base inteira de clientes.
+ *
+ * ⚠️ Em dev, o header `x-tenant-id` não carrega grupo nenhum; para exercitar
+ * estas rotas fora de produção existe `DEV_STAFF=on`, que vale pelas MESMAS
+ * duas travas do header de dev (nunca em produção).
+ */
+export async function exigirStaff(req: FastifyRequest): Promise<void> {
+  const ehStaff = (req.usuarioGrupos ?? []).includes(GRUPO_STAFF)
+  const bypassDev = process.env.NODE_ENV !== 'production' && process.env.DEV_STAFF === 'on'
+  if (ehStaff || bypassDev) return
+
+  const erro = new Error('autorizacao.sem_permissao') as Error & { statusCode?: number }
+  erro.statusCode = req.tenantId ? 403 : 401
+  throw erro
 }

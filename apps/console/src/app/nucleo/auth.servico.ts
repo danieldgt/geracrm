@@ -47,16 +47,35 @@ export class AuthServico {
 
   /** Dados do usuário decodificados do idToken (para o menu). null em dev/local. */
   readonly usuario = computed<{ nome: string; email: string | null } | null>(() => {
+    const p = this.claims()
+    if (!p) return null
+    const email = (p['email'] as string | undefined) ?? null
+    const nome = (p['name'] as string | undefined)
+      ?? (p['cognito:username'] as string | undefined)
+      ?? email?.split('@')[0] ?? 'Usuário'
+    return { nome, email }
+  })
+
+  /**
+   * É staff do drezz? Vale só para ESCONDER o menu de plataforma — quem autoriza
+   * é a API (o guard `exigirStaff` devolve 403). Um token adulterado no
+   * navegador revelaria o item de menu e nada mais: as rotas continuam fechadas.
+   *
+   * ⚠️ Em dev não há token; o menu aparece para que a tela seja acessível local.
+   */
+  readonly ehStaff = computed<boolean>(() => {
+    const p = this.claims()
+    if (!p) return !ehProducao()
+    const grupos = p['cognito:groups']
+    return Array.isArray(grupos) && grupos.includes('staff')
+  })
+
+  private readonly claims = computed<Record<string, unknown> | null>(() => {
     const t = this.idToken()
     if (!t) return null
     try {
       const base = t.split('.')[1]?.replace(/-/g, '+').replace(/_/g, '/') ?? ''
-      const p = JSON.parse(atob(base)) as Record<string, unknown>
-      const email = (p['email'] as string | undefined) ?? null
-      const nome = (p['name'] as string | undefined)
-        ?? (p['cognito:username'] as string | undefined)
-        ?? email?.split('@')[0] ?? 'Usuário'
-      return { nome, email }
+      return JSON.parse(atob(base)) as Record<string, unknown>
     } catch {
       return null
     }

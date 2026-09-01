@@ -27,6 +27,14 @@ export interface ItemMenu {
 export interface GrupoMenu {
   readonly titulo: string | null // null = itens de topo, sem cabeçalho de grupo
   readonly itens: readonly ItemMenu[]
+  /**
+   * Grupo do STAFF do drezz — some do menu para quem é cliente.
+   *
+   * ⚠️ Isto é higiene de interface, não segurança: a rota continua existindo e
+   * quem autoriza é a API (403 pelo guard `exigirStaff`). Esconder aqui só evita
+   * mostrar porta que não abre.
+   */
+  readonly soStaff?: boolean
 }
 
 export const MENU: readonly GrupoMenu[] = [
@@ -139,6 +147,14 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Quem fez o quê e quando — assunção, edição e remoção de mensagens.' },
       { rota: 'config', rotulo: 'Configurações Gerais', icone: '🔧', status: 'pronto', onda: 'O1',
         descricao: 'Empresa, usuários, papéis.' },
+    ],
+  },
+  {
+    titulo: 'Plataforma',
+    soStaff: true,
+    itens: [
+      { rota: 'clientes-plataforma', rotulo: 'Clientes', icone: '🏢', status: 'pronto', onda: 'O2',
+        descricao: 'Cadastrar e acompanhar as empresas que usam o sistema.' },
     ],
   },
 ]
