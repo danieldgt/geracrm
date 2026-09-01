@@ -8,9 +8,12 @@
  * qualquer uma exigia deploy, e o dono da loja — que é quem convive com o
  * resultado — não tinha como opinar.
  *
- * ⚠️ **Os padrões são exatamente o comportamento de hoje.** Isto é uma abertura
- * de controle, não uma mudança de produto: quem não mexer em nada continua com o
- * agente que já tinha.
+ * ⚠️ **Os padrões eram exatamente o comportamento de hoje** — com UMA exceção,
+ * consciente e datada: `horasParaReabrir` (01/09) nasceu mudando o produto de
+ * todo mundo, porque o comportamento anterior era um defeito. A trava de
+ * `sessao_ja_encerrada` não expirava nunca: uma conversa em que o agente falou
+ * uma vez ficava sem agente PARA SEMPRE, e o dono só descobria escrevendo para o
+ * próprio número e não recebendo nada. Decisão do dono do produto.
  *
  * ⚠️ Mora em `shared` porque a API valida e a tela oferece os MESMOS limites. Um
  * `min`/`max` duplicado entre input e endpoint é o clássico que aceita na tela e
@@ -41,6 +44,21 @@ export interface RegrasDoAgente {
    */
   readonly reabrirAposEncerrada: boolean
   /**
+   * Quanto tempo a conversa encerrada pelo agente fica SEM ele — quando
+   * `reabrirAposEncerrada` está desligado.
+   *
+   * ⚠️ Existe porque "não reabrir" virou "nunca mais", que é outra coisa. A
+   * primeira regra protege o handoff: o cliente ouviu "vou chamar alguém" e não
+   * pode receber o robô de volta cinco minutos depois. Mas dois dias depois, com
+   * outro assunto e ninguém na mesa, o silêncio não protege ninguém — é só
+   * silêncio. Passada a janela, a trava cai sozinha.
+   *
+   * ⚠️ E ela cai ANTES da hora quando um humano encerrou um atendimento depois
+   * da sessão: aí o ciclo que o agente abriu já foi fechado por gente, e a
+   * próxima mensagem é assunto novo, não a continuação do handoff.
+   */
+  readonly horasParaReabrir: number
+  /**
    * Por quantos minutos a atividade de um atendente na conversa cala o robô.
    *
    * ⚠️ Baixar isto faz o agente falar mais cedo depois de uma pessoa. A régua da
@@ -61,6 +79,11 @@ export const REGRAS_AGENTE_PADRAO: RegrasDoAgente = {
   exigirAusenciaAntes: true,
   horasDesdeAusencia: 12,
   reabrirAposEncerrada: false,
+  // ⚠️ O ÚNICO padrão que não repete o comportamento anterior — ver o topo.
+  //    24 h: dentro do mesmo dia o handoff ainda está de pé; no dia seguinte,
+  //    com ninguém disponível, o cliente merece resposta mais do que o robô
+  //    merece silêncio.
+  horasParaReabrir: 24,
   minutosPresenca: 60,
   maxTurnos: 6,
   maxCaracteres: 320,
@@ -74,6 +97,10 @@ export const REGRAS_AGENTE_PADRAO: RegrasDoAgente = {
  */
 export const FAIXAS_REGRAS_AGENTE = {
   horasDesdeAusencia: { min: 1, max: 72 },
+  // ⚠️ Até 30 dias: quem quer a trava praticamente perpétua tem como pedir, e
+  //    quem quer o agente de volta no mesmo turno também. O que não existe mais
+  //    é "para sempre" sem ninguém ter escolhido isso.
+  horasParaReabrir: { min: 1, max: 720 },
   minutosPresenca: { min: 5, max: 480 },
   maxTurnos: { min: 1, max: 20 },
   maxCaracteres: { min: 80, max: 1000 },
@@ -85,6 +112,7 @@ export type CampoNumericoDeRegra = keyof typeof FAIXAS_REGRAS_AGENTE
 /** Rótulos da tela e das mensagens de erro — uma escrita só para os dois. */
 export const ROTULO_REGRA: Record<CampoNumericoDeRegra, string> = {
   horasDesdeAusencia: 'Validade da ausência como gatilho (horas)',
+  horasParaReabrir: 'Silêncio numa conversa que ele já encerrou (horas)',
   minutosPresenca: 'Silêncio após um atendente responder (minutos)',
   maxTurnos: 'Máximo de idas e vindas',
   maxCaracteres: 'Tamanho máximo da resposta (caracteres)',
@@ -136,6 +164,7 @@ export function validarRegrasAgente(
     exigirAusenciaAntes: booleano('exigirAusenciaAntes'),
     reabrirAposEncerrada: booleano('reabrirAposEncerrada'),
     horasDesdeAusencia: numero('horasDesdeAusencia'),
+    horasParaReabrir: numero('horasParaReabrir'),
     minutosPresenca: numero('minutosPresenca'),
     maxTurnos: numero('maxTurnos'),
     maxCaracteres: numero('maxCaracteres'),
@@ -163,6 +192,10 @@ export function avisosDasRegras(r: RegrasDoAgente): readonly string[] {
   }
   if (r.reabrirAposEncerrada) {
     avisos.push('Depois de entregar uma conversa ao humano, ele volta a falar se o cliente escrever de novo.')
+  }
+  if (!r.reabrirAposEncerrada && r.horasParaReabrir >= 168) {
+    const dias = Math.round(r.horasParaReabrir / 24)
+    avisos.push(`Depois de encerrar, ele fica ${dias} dias sem falar naquela conversa — mesmo com ninguém disponível.`)
   }
   if (r.minutosPresenca < REGRAS_AGENTE_PADRAO.minutosPresenca) {
     avisos.push(`Ele volta a falar ${r.minutosPresenca} min depois de um atendente responder.`)

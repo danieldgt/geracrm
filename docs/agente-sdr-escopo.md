@@ -188,6 +188,25 @@ offline), e aí "voltamos amanhã às 9h" vira mentira. A tela de Config. do Can
 texto que sirva aos dois casos ("no momento não há ninguém disponível"). O resto não mudou: uma
 resposta a cada 6 h por conversa, e nenhuma se houver atendente presente.
 
+### 4.3.3 ✅ "Não ressuscita" ganhou prazo — **corrigido em 01/09**
+
+A regra de §4.3.1 tem uma companheira: depois de encerrar numa conversa, o agente não recomeça
+sozinho. A intenção continua certa — quem acabou de ouvir "vou chamar alguém" não pode receber o
+robô de volta em seguida; a entrega ao humano É o produto.
+
+O defeito era o prazo: não havia. "Não reabrir" virou "nunca mais". Medido em produção hoje: uma
+conversa de teste encerrada em 28/08 respondeu `sessao_ja_encerrada` a **seis mensagens seguidas**,
+com a equipe offline e o agente ligado — e nada na interface explicava o silêncio.
+
+✅ A trava passou a expirar, por `horas_para_reabrir` (0079), **24 h por padrão**. E cai antes do
+prazo quando um atendimento **humano** é encerrado depois da sessão: o ciclo que o robô abriu já foi
+fechado por gente, e a próxima mensagem é assunto novo, não a continuação do handoff.
+
+⚠️ **Este default MUDA o comportamento de todos os canais**, ao contrário do 0078, onde todo padrão
+repetia o que já existia. É deliberado: o comportamento anterior não era uma escolha de ninguém, era
+um defeito. Quem quiser a trava quase perpétua põe 720 (30 dias) na tela; quem quiser o agente de
+volta no mesmo turno põe 1.
+
 ### 4.4 **[DECIDIR]** Canal: oficial, não-oficial, ou os dois?
 
 ⚠️ O canal não-oficial **carrega risco de banimento** (ADR-021), e um agente conversando 24/7

@@ -338,3 +338,65 @@ describe('⚠️ A equipe informada por quem chama é a que vale', () => {
     expect(r).toMatchObject({ falou: true })
   })
 })
+
+/**
+ * ⚠️ A TRAVA DE "JÁ CONVERSEI AQUI" EXPIRA (0079) — de ponta a ponta.
+ *
+ * O portão já tem os casos puros; estes provam que a coluna e a conta de horas
+ * do banco chegam até a decisão. O defeito que motivou tudo foi medido em
+ * produção em 01/09: uma conversa encerrada em 28/08 respondeu
+ * `sessao_ja_encerrada` a seis mensagens seguidas, com a equipe offline e o
+ * agente ligado — e nada na interface explicava o silêncio.
+ */
+describe('⚠️ Depois de encerrar, o agente volta quando faz sentido', () => {
+  /** Envelhece a sessão encerrada: o relógio do teste é o do banco. */
+  const encerradaHaHoras = (horas: number) => dono`
+    UPDATE agente_sessao SET encerrada_em = now() - make_interval(hours => ${horas})
+     WHERE tenant_id = ${T} AND conversa_id = ${CONVERSA} AND estado <> 'ativa'`
+
+  const atendimentoHumanoEncerradoAgora = () => dono`
+    INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id,
+                             estado, assumido_em, encerrado_em)
+    VALUES (${T}, gen_random_uuid(), ${CONVERSA}, ${CANAL}, 2, ${USUARIO}, 'encerrado',
+            now() - interval '30 minutes', now())`
+
+  /** Uma sessão encerrada de verdade, pelo caminho normal: o agente entregou. */
+  const jaEncerrouAqui = async () => {
+    await ligarAgente(true); await ausenciaHa(5)
+    await turno(llmFalso({ proximoPasso: 'entregar', motivo: 'cliente pediu humano' }))
+    enviados.length = 0
+  }
+
+  it('recém-encerrada: continua calado, o handoff ainda está de pé', async () => {
+    await jaEncerrouAqui()
+    expect(await turno(llmFalso({}))).toEqual({ falou: false, motivo: 'sessao_ja_encerrada' })
+    expect(enviados).toEqual([])
+  })
+
+  it('encerrada há 25 h: a trava caiu sozinha e ele volta a responder', async () => {
+    await jaEncerrouAqui()
+    await encerradaHaHoras(25)
+    expect(await turno(llmFalso({}))).toMatchObject({ falou: true })
+  })
+
+  it('a janela é do canal: com 72 h, 25 h ainda é cedo', async () => {
+    await jaEncerrouAqui()
+    await encerradaHaHoras(25)
+    await regra('horas_para_reabrir', 72)
+    expect(await turno(llmFalso({}))).toEqual({ falou: false, motivo: 'sessao_ja_encerrada' })
+  })
+
+  /**
+   * ⚠️ O ciclo foi fechado por GENTE — o robô entregou, uma pessoa atendeu e
+   * encerrou. A próxima mensagem é assunto novo, e esperar o prazo aqui seria
+   * proteger uma promessa que já foi cumprida.
+   */
+  it('humano encerrou o atendimento depois: volta antes do prazo', async () => {
+    await jaEncerrouAqui()
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
+               VALUES (${T}, ${USUARIO}, 'sub-turno-agente', 'Ana', 'ana@turno.local')
+               ON CONFLICT (cognito_sub) DO NOTHING`
+    await atendimentoHumanoEncerradoAgora()
+    expect(await turno(llmFalso({}))).toMatchObject({ falou: true })
+  })
+})

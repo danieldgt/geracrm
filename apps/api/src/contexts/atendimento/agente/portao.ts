@@ -43,8 +43,15 @@ export interface ContextoPortao {
   readonly atendentePresente: boolean
   /** Sessão em curso, se houver. `null` = a próxima fala inicia uma. */
   readonly sessaoAtiva: { readonly turnos: number } | null
-  /** Já houve sessão ENCERRADA nesta conversa (entregue ou desistiu). */
-  readonly sessaoJaEncerrada: boolean
+  /**
+   * A última sessão ENCERRADA nesta conversa (entregue ou desistiu), se houver.
+   *
+   * ⚠️ Deixou de ser um booleano em 01/09, e a razão está no que o booleano
+   * escondia: ele dizia "já houve", nunca "quando" — e por isso a trava não
+   * tinha como expirar. Aqui entram os dois fatos que decidem se ela ainda faz
+   * sentido; o julgamento é do portão, não da consulta.
+   */
+  readonly sessaoEncerrada: SessaoEncerrada | null
   readonly maxTurnos: number
   /**
    * ⚠️ AS TRÊS REGRAS CONFIGURÁVEIS (0078). Eram decisões fixas aqui dentro;
@@ -57,14 +64,44 @@ export interface ContextoPortao {
   readonly regras: RegrasDePortao
 }
 
+/** O que se sabe sobre a última vez que o agente saiu desta conversa. */
+export interface SessaoEncerrada {
+  /** Horas decorridas desde o encerramento — calculadas no banco, com o mesmo `agora`. */
+  readonly horasDesde: number
+  /**
+   * ⚠️ Um atendimento HUMANO foi encerrado depois daquela sessão. Vale como
+   * "assunto fechado": o robô entregou, uma pessoa atendeu e concluiu. O que
+   * vier agora é conversa nova, não a continuação do handoff — e é por isso que
+   * este fato dispensa o prazo.
+   */
+  readonly humanoAtendeuDepois: boolean
+}
+
 /** O subconjunto de `RegrasDoAgente` que a decisão de ENTRAR consulta. */
 export interface RegrasDePortao {
   /** `false` = o robô fala mesmo com a equipe disponível. */
   readonly soQuandoNinguemDisponivel: boolean
   /** `false` = entra já na primeira mensagem, sem esperar o cliente insistir. */
   readonly exigirAusenciaAntes: boolean
-  /** `true` = volta a falar numa conversa em que já encerrou. */
+  /** `true` = volta a falar numa conversa em que já encerrou, sem esperar nada. */
   readonly reabrirAposEncerrada: boolean
+  /** Com `reabrirAposEncerrada` desligado, por quantas horas a trava vale. */
+  readonly horasParaReabrir: number
+}
+
+/**
+ * A trava de "já conversei aqui" ainda vale?
+ *
+ * ⚠️ Ela protege UMA coisa: o cliente que acabou de ouvir "vou chamar alguém"
+ * não pode receber o robô de volta em seguida. Isso tem prazo de validade, e
+ * confundir a proteção com o prazo foi o defeito: sem expirar, a conversa ficava
+ * sem agente para sempre — inclusive dias depois, com outro assunto e ninguém na
+ * mesa (medido em produção em 01/09, seis mensagens seguidas sem resposta).
+ */
+function travaAindaVale(s: SessaoEncerrada, horasParaReabrir: number): boolean {
+  // O ciclo já foi fechado por gente: o que vier agora é assunto novo.
+  if (s.humanoAtendeuDepois) return false
+  return s.horasDesde < horasParaReabrir
 }
 
 export type MotivoNaoEntra =
@@ -116,11 +153,16 @@ export function portaoDoAgente(c: ContextoPortao): DecisaoPortao {
   }
 
   // ⚠️ Já conversou e saiu nesta conversa (entregou ou desistiu): não recomeça
-  //    sozinho. Reabrir daria ao cliente um robô que ressuscita depois de ter
-  //    dito que ia chamar alguém — a forma mais rápida de perder a confiança na
-  //    entrega ao humano. DESLIGÁVEL (0078) para triagem permanente e para
-  //    conversa de teste, que sem isto trava no primeiro encerramento.
-  if (!c.regras.reabrirAposEncerrada && c.sessaoJaEncerrada) return NAO('sessao_ja_encerrada')
+  //    sozinho ENQUANTO a trava valer. Reabrir na hora daria ao cliente um robô
+  //    que ressuscita depois de ter dito que ia chamar alguém — a forma mais
+  //    rápida de perder a confiança na entrega ao humano. Mas a trava expira
+  //    (0079), porque "não agora" e "nunca mais" não são a mesma decisão.
+  //    DESLIGÁVEL por inteiro (0078) para triagem permanente e para conversa de
+  //    teste, que sem isso trava no primeiro encerramento.
+  if (!c.regras.reabrirAposEncerrada && c.sessaoEncerrada
+      && travaAindaVale(c.sessaoEncerrada, c.regras.horasParaReabrir)) {
+    return NAO('sessao_ja_encerrada')
+  }
 
   // ⚠️ O GATILHO. Só entra depois de a ausência ter falado — e a ausência sai
   //    quando NÃO HÁ QUEM ATENDA (`ausencia.ts`), não mais só fora do

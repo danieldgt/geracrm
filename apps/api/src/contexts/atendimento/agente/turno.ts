@@ -41,7 +41,9 @@ interface Reuniao {
   readonly atendente_presente: boolean
   readonly sessao_id: string | null
   readonly sessao_turnos: number | null
-  readonly sessao_ja_encerrada: boolean
+  /** NULL = nunca encerrou nesta conversa. Ver `sessaoEncerrada` no portão. */
+  readonly horas_desde_encerramento: number | null
+  readonly humano_atendeu_depois: boolean
 }
 
 /** A configuração do canal: o botão de desligar, a base curada e as regras. */
@@ -94,7 +96,10 @@ export async function conduzirTurno(
     ausenciaJaEnviada: reuniao.ausencia_ja_enviada,
     atendentePresente: reuniao.atendente_presente,
     sessaoAtiva: reuniao.sessao_id ? { turnos: reuniao.sessao_turnos ?? 0 } : null,
-    sessaoJaEncerrada: reuniao.sessao_ja_encerrada,
+    sessaoEncerrada: reuniao.horas_desde_encerramento === null ? null : {
+      horasDesde: Number(reuniao.horas_desde_encerramento),
+      humanoAtendeuDepois: reuniao.humano_atendeu_depois,
+    },
     maxTurnos: cfg.regras.maxTurnos,
     regras: cfg.regras,
   })
@@ -184,12 +189,13 @@ async function lerConfigDoCanal(tx: Sql, canalId: string): Promise<ConfigDoCanal
     ativo: boolean; politicas: string | null
     so_quando_ninguem_disponivel: boolean; exigir_ausencia_antes: boolean
     horas_desde_ausencia: number; reabrir_apos_encerrada: boolean
+    horas_para_reabrir: number
     minutos_presenca: number; max_turnos: number
     max_caracteres: number; falas_de_contexto: number
   }[]>`
     SELECT ativo, politicas,
            so_quando_ninguem_disponivel, exigir_ausencia_antes,
-           horas_desde_ausencia, reabrir_apos_encerrada,
+           horas_desde_ausencia, reabrir_apos_encerrada, horas_para_reabrir,
            minutos_presenca, max_turnos, max_caracteres, falas_de_contexto
       FROM agente_config
      WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}`
@@ -204,6 +210,7 @@ async function lerConfigDoCanal(tx: Sql, canalId: string): Promise<ConfigDoCanal
       exigirAusenciaAntes: l.exigir_ausencia_antes ?? p.exigirAusenciaAntes,
       horasDesdeAusencia: l.horas_desde_ausencia ?? p.horasDesdeAusencia,
       reabrirAposEncerrada: l.reabrir_apos_encerrada ?? p.reabrirAposEncerrada,
+      horasParaReabrir: l.horas_para_reabrir ?? p.horasParaReabrir,
       minutosPresenca: l.minutos_presenca ?? p.minutosPresenca,
       maxTurnos: l.max_turnos ?? p.maxTurnos,
       maxCaracteres: l.max_caracteres ?? p.maxCaracteres,
@@ -237,9 +244,25 @@ async function reunirContexto(
            (SELECT s.turnos FROM agente_sessao s
              WHERE s.tenant_id = tenant_atual() AND s.conversa_id = ${conversaId}
                AND s.estado = 'ativa') AS sessao_turnos,
-           EXISTS (SELECT 1 FROM agente_sessao s
-                    WHERE s.tenant_id = tenant_atual() AND s.conversa_id = ${conversaId}
-                      AND s.estado <> 'ativa') AS sessao_ja_encerrada`
+           -- ⚠️ QUANDO ele saiu, não SE saiu: a trava de sessao_ja_encerrada
+           --    passou a ter prazo (0079), e um booleano não tem como expirar.
+           --    A conta é do banco, com o mesmo instante do resto da decisão.
+           -- ⚠️ Sem crase neste comentário: ela fecharia o template SQL aqui
+           --    dentro (é o que o crase-em-sql.test.ts existe para pegar).
+           (SELECT extract(epoch FROM (${agora}::timestamptz - max(s.encerrada_em)))::float8 / 3600
+              FROM agente_sessao s
+             WHERE s.tenant_id = tenant_atual() AND s.conversa_id = ${conversaId}
+               AND s.estado <> 'ativa') AS horas_desde_encerramento,
+           -- ⚠️ Uma PESSOA encerrou um atendimento depois daquela sessão: o
+           --    ciclo que o robô abriu já foi fechado por gente, e o que vier
+           --    agora é assunto novo. Dispensa o prazo.
+           EXISTS (SELECT 1 FROM atendimento a
+                    WHERE a.tenant_id = tenant_atual() AND a.conversa_id = ${conversaId}
+                      AND a.estado = 'encerrado' AND a.encerrado_em IS NOT NULL
+                      AND a.encerrado_em > (SELECT max(s.encerrada_em) FROM agente_sessao s
+                                             WHERE s.tenant_id = tenant_atual()
+                                               AND s.conversa_id = ${conversaId}
+                                               AND s.estado <> 'ativa')) AS humano_atendeu_depois`
   // ⚠️ Sem `FROM`, a consulta devolve exatamente uma linha — os EXISTS e os
   //    subselects já são escalares. O `FROM tenant` de antes existia só para
   //    pendurar o LEFT JOIN da config, que agora tem consulta própria.

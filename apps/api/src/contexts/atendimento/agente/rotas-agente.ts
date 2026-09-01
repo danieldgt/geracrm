@@ -24,12 +24,13 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           ativo: boolean; politicas: string | null
           so_quando_ninguem_disponivel: boolean; exigir_ausencia_antes: boolean
           horas_desde_ausencia: number; reabrir_apos_encerrada: boolean
+          horas_para_reabrir: number
           minutos_presenca: number; max_turnos: number
           max_caracteres: number; falas_de_contexto: number
         }[]>`
           SELECT ativo, politicas,
                  so_quando_ninguem_disponivel, exigir_ausencia_antes,
-                 horas_desde_ausencia, reabrir_apos_encerrada,
+                 horas_desde_ausencia, reabrir_apos_encerrada, horas_para_reabrir,
                  minutos_presenca, max_turnos, max_caracteres, falas_de_contexto
             FROM agente_config
            WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
@@ -58,6 +59,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           exigirAusenciaAntes: cfg?.exigir_ausencia_antes ?? p.exigirAusenciaAntes,
           horasDesdeAusencia: cfg?.horas_desde_ausencia ?? p.horasDesdeAusencia,
           reabrirAposEncerrada: cfg?.reabrir_apos_encerrada ?? p.reabrirAposEncerrada,
+          horasParaReabrir: cfg?.horas_para_reabrir ?? p.horasParaReabrir,
           minutosPresenca: cfg?.minutos_presenca ?? p.minutosPresenca,
           maxTurnos: cfg?.max_turnos ?? p.maxTurnos,
           maxCaracteres: cfg?.max_caracteres ?? p.maxCaracteres,
@@ -133,11 +135,13 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           INSERT INTO agente_config (
             tenant_id, canal_id, ativo, politicas, max_turnos,
             so_quando_ninguem_disponivel, exigir_ausencia_antes, horas_desde_ausencia,
-            reabrir_apos_encerrada, minutos_presenca, max_caracteres, falas_de_contexto,
+            reabrir_apos_encerrada, horas_para_reabrir,
+            minutos_presenca, max_caracteres, falas_de_contexto,
             atualizado_em)
           VALUES (tenant_atual(), ${req.params.id}, ${ativo}, ${politicas || null}, ${r.maxTurnos},
                   ${r.soQuandoNinguemDisponivel}, ${r.exigirAusenciaAntes}, ${r.horasDesdeAusencia},
-                  ${r.reabrirAposEncerrada}, ${r.minutosPresenca}, ${r.maxCaracteres}, ${r.falasDeContexto},
+                  ${r.reabrirAposEncerrada}, ${r.horasParaReabrir},
+                  ${r.minutosPresenca}, ${r.maxCaracteres}, ${r.falasDeContexto},
                   now())
           ON CONFLICT (tenant_id, canal_id) DO UPDATE SET
             ativo = EXCLUDED.ativo, politicas = EXCLUDED.politicas,
@@ -146,6 +150,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
             exigir_ausencia_antes = EXCLUDED.exigir_ausencia_antes,
             horas_desde_ausencia = EXCLUDED.horas_desde_ausencia,
             reabrir_apos_encerrada = EXCLUDED.reabrir_apos_encerrada,
+            horas_para_reabrir = EXCLUDED.horas_para_reabrir,
             minutos_presenca = EXCLUDED.minutos_presenca,
             max_caracteres = EXCLUDED.max_caracteres,
             falas_de_contexto = EXCLUDED.falas_de_contexto,

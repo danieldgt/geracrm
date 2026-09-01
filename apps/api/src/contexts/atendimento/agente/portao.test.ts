@@ -15,13 +15,16 @@ const BASE: ContextoPortao = {
   ausenciaJaEnviada: true,
   atendentePresente: false,
   sessaoAtiva: null,
-  sessaoJaEncerrada: false,
+  sessaoEncerrada: null,
   maxTurnos: 6,
   // ⚠️ Os padrões de fábrica, não valores inventados para o teste: é o que
   //    garante que estes casos descrevem o agente que está em produção.
   regras: REGRAS_AGENTE_PADRAO,
 }
 const com = (mudanca: Partial<ContextoPortao>): ContextoPortao => ({ ...BASE, ...mudanca })
+/** Encerrou há N horas; `humanoAtendeuDepois` só quando o caso é sobre isso. */
+const encerradaHa = (horas: number, humanoAtendeuDepois = false) =>
+  ({ horasDesde: horas, humanoAtendeuDepois }) as const
 /** Muda uma regra, mantendo as outras nos padrões. */
 const comRegra = (r: Partial<RegrasDePortao>, ctx: Partial<ContextoPortao> = {}): ContextoPortao =>
   ({ ...BASE, ...ctx, regras: { ...REGRAS_AGENTE_PADRAO, ...r } })
@@ -119,13 +122,13 @@ describe('⚠️ O agente não ressuscita', () => {
    * que volta a falar depois de dizer "vou chamar alguém" destrói a confiança na
    * própria entrega — e a entrega é o produto.
    */
-  it('sessão já encerrada nesta conversa não abre outra', () => {
-    expect(portaoDoAgente(com({ sessaoJaEncerrada: true })))
+  it('encerrada há pouco nesta conversa não abre outra', () => {
+    expect(portaoDoAgente(com({ sessaoEncerrada: encerradaHa(1) })))
       .toEqual({ entra: false, motivo: 'sessao_ja_encerrada' })
   })
 
   it('nem mesmo com uma ausência nova antes', () => {
-    expect(portaoDoAgente(com({ sessaoJaEncerrada: true, ausenciaJaEnviada: true })))
+    expect(portaoDoAgente(com({ sessaoEncerrada: encerradaHa(1), ausenciaJaEnviada: true })))
       .toEqual({ entra: false, motivo: 'sessao_ja_encerrada' })
   })
 })
@@ -177,8 +180,8 @@ describe('⚠️ Regra: exigir a ausência antes', () => {
 })
 
 describe('⚠️ Regra: reabrir depois de encerrada', () => {
-  it('desligada (padrão), não ressuscita na conversa', () => {
-    expect(portaoDoAgente(com({ sessaoJaEncerrada: true })))
+  it('desligada (padrão), não ressuscita na conversa dentro do prazo', () => {
+    expect(portaoDoAgente(com({ sessaoEncerrada: encerradaHa(1) })))
       .toEqual({ entra: false, motivo: 'sessao_ja_encerrada' })
   })
 
@@ -186,9 +189,56 @@ describe('⚠️ Regra: reabrir depois de encerrada', () => {
    * O caso medido em produção (28/ago): a conversa de teste travou aqui e o
    * agente ficou permanentemente mudo nela. Com a chave ligada, volta.
    */
-  it('ligada, abre uma sessão NOVA na mesma conversa', () => {
-    expect(portaoDoAgente(comRegra({ reabrirAposEncerrada: true }, { sessaoJaEncerrada: true })))
+  it('ligada, abre uma sessão NOVA na mesma conversa, sem esperar prazo', () => {
+    expect(portaoDoAgente(comRegra({ reabrirAposEncerrada: true }, { sessaoEncerrada: encerradaHa(0.1) })))
       .toEqual({ entra: true, sessao: 'nova' })
+  })
+})
+
+/**
+ * ⚠️ A TRAVA TEM PRAZO (0079) — o defeito que ela corrige custou seis mensagens
+ * sem resposta em produção (01/09), numa conversa encerrada três dias antes.
+ *
+ * O que a trava protege é o handoff recente: quem acabou de ouvir "vou chamar
+ * alguém" não pode receber o robô de volta. Isso vale por horas, não para
+ * sempre — e confundir as duas coisas é o que deixava a conversa sem agente
+ * PARA SEMPRE, sem ninguém no CRM enxergando.
+ */
+describe('⚠️ Regra: por quanto tempo ele fica calado depois de encerrar', () => {
+  it('dentro da janela padrão (24 h), continua calado', () => {
+    expect(portaoDoAgente(com({ sessaoEncerrada: encerradaHa(23.9) })))
+      .toEqual({ entra: false, motivo: 'sessao_ja_encerrada' })
+  })
+
+  it('passada a janela, volta a falar — a trava caiu sozinha', () => {
+    expect(portaoDoAgente(com({ sessaoEncerrada: encerradaHa(24) })))
+      .toEqual({ entra: true, sessao: 'nova' })
+  })
+
+  it('a janela é configurável: com 72 h, um dia depois ainda cala', () => {
+    expect(portaoDoAgente(comRegra({ horasParaReabrir: 72 }, { sessaoEncerrada: encerradaHa(25) })))
+      .toEqual({ entra: false, motivo: 'sessao_ja_encerrada' })
+  })
+
+  it('e com 1 h, ele volta no mesmo turno', () => {
+    expect(portaoDoAgente(comRegra({ horasParaReabrir: 1 }, { sessaoEncerrada: encerradaHa(2) })))
+      .toEqual({ entra: true, sessao: 'nova' })
+  })
+
+  /**
+   * ⚠️ O ciclo do handoff foi fechado por GENTE: o robô entregou, uma pessoa
+   * atendeu e encerrou. O que vier agora é assunto novo — esperar o prazo aqui
+   * seria proteger uma promessa que já foi cumprida.
+   */
+  it('atendimento humano encerrado depois dispensa o prazo', () => {
+    expect(portaoDoAgente(com({ sessaoEncerrada: encerradaHa(0.5, true) })))
+      .toEqual({ entra: true, sessao: 'nova' })
+  })
+
+  /** ⚠️ Mas nada disso passa por cima de quem está na mesa AGORA. */
+  it('com atendente presente, nem o prazo vencido faz o robô falar', () => {
+    expect(portaoDoAgente(com({ sessaoEncerrada: encerradaHa(999), atendentePresente: true })))
+      .toEqual({ entra: false, motivo: 'atendente_presente' })
   })
 })
 
@@ -201,7 +251,7 @@ describe('⚠️ Nenhuma regra vence o desligamento', () => {
   it('com tudo liberado e o agente desligado, continua desligado', () => {
     expect(portaoDoAgente(comRegra(
       { soQuandoNinguemDisponivel: false, exigirAusenciaAntes: false, reabrirAposEncerrada: true },
-      { agenteAtivo: false, ninguemDisponivel: false, ausenciaJaEnviada: false, sessaoJaEncerrada: true },
+      { agenteAtivo: false, ninguemDisponivel: false, ausenciaJaEnviada: false, sessaoEncerrada: encerradaHa(0.1) },
     ))).toEqual({ entra: false, motivo: 'agente_desligado' })
   })
 

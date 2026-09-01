@@ -126,9 +126,18 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                            (change)="mudar('reabrirAposEncerrada', $any($event.target).checked)" />
                     Voltar a falar em conversa que ele já encerrou
                   </label>
-                  <span class="dica">Desligado, ele nunca ressuscita depois de entregar ao humano.</span>
+                  <span class="dica">Desligado, ele espera o prazo abaixo antes de voltar àquela conversa —
+                    e volta antes disso se um atendente encerrar o atendimento no meio.</span>
 
                   <div class="numeros">
+                    @if (!r().reabrirAposEncerrada) {
+                      <label class="campo curto">Silêncio após encerrar (horas)
+                        <input type="number" [min]="faixas.horasParaReabrir.min" [max]="faixas.horasParaReabrir.max"
+                               [value]="r().horasParaReabrir"
+                               (input)="mudar('horasParaReabrir', +$any($event.target).value)" />
+                        <span class="dica">Passado esse tempo, ele pode reabrir a conversa.</span>
+                      </label>
+                    }
                     <label class="campo curto">Validade da ausência (horas)
                       <input type="number" [min]="faixas.horasDesdeAusencia.min" [max]="faixas.horasDesdeAusencia.max"
                              [value]="r().horasDesdeAusencia"

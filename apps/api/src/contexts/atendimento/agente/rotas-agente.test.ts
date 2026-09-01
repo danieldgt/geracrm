@@ -88,13 +88,13 @@ describe('Configuração do agente', () => {
     expect((await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, {
       ativo: true, politicas: POLITICAS,
       soQuandoNinguemDisponivel: false, exigirAusenciaAntes: false, reabrirAposEncerrada: true,
-      horasDesdeAusencia: 24, minutosPresenca: 15, maxTurnos: 8,
+      horasDesdeAusencia: 24, horasParaReabrir: 48, minutosPresenca: 15, maxTurnos: 8,
       maxCaracteres: 500, falasDeContexto: 20,
     })).statusCode).toBe(200)
     const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { regras: RegrasDoAgente }
     expect(r.regras).toEqual({
       soQuandoNinguemDisponivel: false, exigirAusenciaAntes: false, reabrirAposEncerrada: true,
-      horasDesdeAusencia: 24, minutosPresenca: 15, maxTurnos: 8,
+      horasDesdeAusencia: 24, horasParaReabrir: 48, minutosPresenca: 15, maxTurnos: 8,
       maxCaracteres: 500, falasDeContexto: 20,
     })
   })
@@ -214,5 +214,29 @@ describe('⚠️ O gatilho depende da mensagem de ausência do canal', () => {
     await configurarCanal('No momento não há ninguém disponível — retornamos assim que possível.')
     const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { temMensagemAusencia: boolean }
     expect(r.temMensagemAusencia).toBe(true)
+  })
+})
+
+/** ⚠️ O prazo da trava é dado do canal (0079): a tela grava, o portão lê. */
+describe('Prazo para reabrir conversa encerrada', () => {
+  it('canal sem configuração nasce com o padrão de 24 h', async () => {
+    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { regras: RegrasDoAgente }
+    expect(r.regras.horasParaReabrir).toBe(REGRAS_AGENTE_PADRAO.horasParaReabrir)
+  })
+
+  it('salva e relê o prazo', async () => {
+    expect((await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, {
+      ativo: true, politicas: POLITICAS, ...REGRAS_AGENTE_PADRAO, horasParaReabrir: 72,
+    })).statusCode).toBe(200)
+    const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { regras: RegrasDoAgente }
+    expect(r.regras.horasParaReabrir).toBe(72)
+  })
+
+  it('fora da faixa é recusado com a frase corretiva, antes do CHECK', async () => {
+    const r = await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, {
+      ativo: true, politicas: POLITICAS, horasParaReabrir: 5000,
+    })
+    expect(r.statusCode).toBe(422)
+    expect(r.json().mensagem).toContain('entre 1 e 720')
   })
 })
