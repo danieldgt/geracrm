@@ -57,7 +57,7 @@ beforeAll(async () => {
              VALUES (${T}, ${CANAL}, 'whatsapp_nao_oficial', 'plugzapi', 'WA', 'conectado') ON CONFLICT DO NOTHING`
   await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${CONTATO}, 'Cliente Zé', 'teste', true) ON CONFLICT DO NOTHING`
   await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${CONVERSA}, ${CANAL}, ${CONTATO}, 0) ON CONFLICT DO NOTHING`
-  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${T}, ${U1}, 'sub-plt07', 'Ana', 'ana@t.local') ON CONFLICT (cognito_sub) DO NOTHING`
+  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${T}, ${U1}, 'sub-plt07', 'Ana', 'ana@t.local') ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
 })
 
 afterAll(async () => {
@@ -108,7 +108,7 @@ describe('PLT-07: notificação de mensagem entrante', () => {
     await dono`DELETE FROM atendimento WHERE tenant_id = ${T}`
     await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
                VALUES (${T}, ${U2}, 'sub-plt07-b', 'Bruno', 'bruno@t.local')
-               ON CONFLICT (cognito_sub) DO NOTHING`
+               ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
     await dono`DELETE FROM carteira_atribuicao WHERE tenant_id = ${T}`
     // ⚠️ A coluna é `de`, não `desde` — e `ate IS NULL` é o que marca a posse VIGENTE.
     await dono`INSERT INTO carteira_atribuicao (tenant_id, id, contato_id, usuario_id, de)

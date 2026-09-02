@@ -49,7 +49,7 @@ beforeAll(async () => {
   await donoA`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao)
               VALUES (${TA}, ${CONVERSAA}, ${CANALA}, ${CONTATOA}, 0) ON CONFLICT DO NOTHING`
   await donoA`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
-              VALUES (${TA}, ${UA}, 'sub-ausencia', 'Ana', 'ana@ausencia.local') ON CONFLICT (cognito_sub) DO NOTHING`
+              VALUES (${TA}, ${UA}, 'sub-ausencia', 'Ana', 'ana@ausencia.local') ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
   await donoA`INSERT INTO canal_configuracao (tenant_id, canal_id, horario_atendimento, mensagem_ausencia)
               VALUES (${TA}, ${CANALA}, ${donoA.json(SEMPRE_FECHADO)}, 'Estamos fechados.')
               ON CONFLICT (tenant_id, canal_id) DO UPDATE

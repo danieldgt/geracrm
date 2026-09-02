@@ -2,6 +2,7 @@ import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@ang
 import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { AuthServico } from '../../nucleo/auth.servico.js'
 
 interface Cliente {
   readonly id: string
@@ -157,11 +158,28 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         } @else {
           <ul class="lista">
             @for (c of itens(); track c.id) {
-              <li class="item">
-                <span class="c-nome encolhe">{{ c.nome }}</span>
-                <span class="c-plano">{{ c.plano }}</span>
-                <span class="c-data txt-dados">{{ c.criadoEm | date: 'dd/MM/yyyy' }}</span>
-                <span class="c-estado" [class.c-estado--off]="!c.ativo">{{ c.ativo ? 'Ativa' : 'Inativa' }}</span>
+              <li class="item" [class.item--aberto]="pedindoMotivo() === c.id">
+                <div class="linha">
+                  <span class="c-nome encolhe">{{ c.nome }}</span>
+                  <span class="c-plano">{{ c.plano }}</span>
+                  <span class="c-data txt-dados">{{ c.criadoEm | date: 'dd/MM/yyyy' }}</span>
+                  <span class="c-estado" [class.c-estado--off]="!c.ativo">{{ c.ativo ? 'Ativa' : 'Inativa' }}</span>
+                  <button class="btn btn--secundario btn--pequeno" (click)="pedirMotivo(c)"
+                          [disabled]="entrando() === c.id">
+                    {{ entrando() === c.id ? 'Entrando…' : 'Entrar' }}
+                  </button>
+                </div>
+                @if (pedindoMotivo() === c.id) {
+                  <div class="motivo-linha">
+                    <input class="motivo-in" [value]="motivo()" (input)="motivo.set(valor($event))"
+                           (keydown.enter)="entrar(c)" (keydown.escape)="cancelarMotivo()"
+                           placeholder="Por que precisa entrar? (fica na trilha do cliente)"
+                           aria-label="Motivo do acesso" />
+                    <button class="btn btn--primario btn--pequeno" (click)="entrar(c)"
+                            [disabled]="!motivo().trim()">Confirmar</button>
+                    <button class="btn btn--fantasma btn--pequeno" (click)="cancelarMotivo()">Cancelar</button>
+                  </div>
+                }
               </li>
             }
           </ul>
@@ -208,8 +226,14 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .aviso, .vazio { text-align: center; }
     .aviso p, .vazio p { color: var(--texto-secundario); font-size: 13px; }
     .lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--espacamento-2); }
-    .item { display: flex; align-items: center; gap: var(--espacamento-3); padding: var(--espacamento-3);
+    .item { display: flex; flex-direction: column; gap: var(--espacamento-2); padding: var(--espacamento-3);
       border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie-elevada); }
+    .item--aberto { border-color: var(--acao); }
+    .linha { display: flex; align-items: center; gap: var(--espacamento-3); width: 100%; }
+    .motivo-linha { display: flex; gap: var(--espacamento-2); width: 100%; }
+    .motivo-in { flex: 1; min-width: 0; padding: var(--espacamento-2) var(--espacamento-3);
+      border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
+      background: var(--superficie); color: var(--texto); font: inherit; font-size: 13px; }
     .c-nome { flex: 1; min-width: 0; color: var(--texto); font-size: 14px; }
     .c-plano { font-size: 12px; color: var(--texto-suave); }
     .c-data { font-size: 12px; color: var(--texto-secundario); }
@@ -227,6 +251,10 @@ export class ClientesPlataformaPagina implements OnInit {
   readonly criado = signal<Criado | null>(null)
   readonly salvando = signal(false)
   readonly erroForm = signal<string | null>(null)
+  readonly entrando = signal<string | null>(null)
+  readonly pedindoMotivo = signal<string | null>(null)
+  readonly motivo = signal('')
+  private readonly auth = inject(AuthServico)
 
   readonly nome = signal('')
   readonly plano = signal('')
@@ -259,6 +287,39 @@ export class ClientesPlataformaPagina implements OnInit {
       this.estado.set('pronto')
     } catch (e) {
       this.estado.set(e instanceof HttpErrorResponse && (e.status === 403 || e.status === 401) ? 'sem_permissao' : 'erro')
+    }
+  }
+
+  pedirMotivo(c: Cliente): void {
+    this.motivo.set('')
+    this.pedindoMotivo.set(c.id)
+    this.erroForm.set(null)
+  }
+
+  cancelarMotivo(): void {
+    this.pedindoMotivo.set(null)
+    this.motivo.set('')
+  }
+
+  /**
+   * Abre uma sessão de acesso e entra no cliente (PLT-05).
+   *
+   * ⚠️ O motivo é pedido antes e vai para a trilha do CLIENTE — acesso a dado de
+   * cliente sem justificativa registrada é o que uma auditoria externa cobra.
+   */
+  async entrar(c: Cliente): Promise<void> {
+    const motivo = this.motivo().trim()
+    if (!motivo) return
+    this.entrando.set(c.id)
+    try {
+      const r = await firstValueFrom(this.http.post<{ token: string }>('/v1/staff/acessos',
+        { tenantId: c.id, motivo }))
+      this.auth.entrarNoCliente(r.token, c.nome) // recarrega a aplicação
+    } catch (e) {
+      const corpo = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string }) : null
+      this.erroForm.set(corpo?.mensagem ?? 'Não foi possível entrar neste cliente.')
+      this.entrando.set(null)
+      this.pedindoMotivo.set(null)
     }
   }
 

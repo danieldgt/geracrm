@@ -17,6 +17,8 @@ const CHAVE_TOKEN = 'geracrm.idToken'
 const CHAVE_REFRESH = 'geracrm.refreshToken'
 const CHAVE_USUARIO = 'geracrm.usuario'
 const CHAVE_EXPIRA = 'geracrm.expiraEm'
+/** Sessão de acesso do staff a um cliente (PLT-05), sobreposta ao login. */
+const CHAVE_SESSAO_STAFF = 'geracrm.sessaoStaff'
 /** Renova ANTES de expirar, com esta folga (evita 401 por corrida de relógio). */
 const MARGEM_MS = 2 * 60 * 1000
 
@@ -24,6 +26,14 @@ const MARGEM_MS = 2 * 60 * 1000
 export function ehProducao(): boolean {
   const h = location.hostname
   return h !== 'localhost' && h !== '127.0.0.1' && h !== '[::1]'
+}
+
+/** Lê a sessão de acesso guardada; storage corrompido não derruba o boot. */
+function lerSessaoStaff(): { token: string; clienteNome: string } | null {
+  try {
+    const cru = localStorage.getItem(CHAVE_SESSAO_STAFF)
+    return cru ? (JSON.parse(cru) as { token: string; clienteNome: string }) : null
+  } catch { return null }
 }
 
 export type ResultadoLogin =
@@ -69,6 +79,50 @@ export class AuthServico {
     const grupos = p['cognito:groups']
     return Array.isArray(grupos) && grupos.includes('staff')
   })
+
+  /**
+   * Sessão de acesso a um cliente (PLT-05), SOBREPOSTA ao login — nunca no lugar
+   * dele. O idToken original continua guardado: é dele que saem nome, e-mail e
+   * grupos (o token de acesso é opaco e não se decodifica), e é para ele que a
+   * sessão volta ao sair.
+   */
+  readonly sessaoStaff = signal<{ token: string; clienteNome: string } | null>(lerSessaoStaff())
+
+  /**
+   * O token que vai na requisição. ⚠️ Use SEMPRE isto, nunca `idToken()` direto:
+   * há dois pontos de injeção (interceptor HTTP e SSE) e trocar só um deixaria o
+   * tempo real transmitindo o tenant errado.
+   */
+  readonly tokenAtual = computed<string | null>(() => this.sessaoStaff()?.token ?? this.idToken())
+
+  /**
+   * Entra num cliente: passa a usar o token de acesso, suspende o refresh e
+   * RECARREGA a aplicação.
+   *
+   * ⚠️ Suspender o timer é obrigatório: `refrescar()` reescreve o idToken pelo do
+   * Cognito e devolveria o staff ao tenant do drezz no meio da operação, sem
+   * aviso — o token de acesso continuaria válido, mas parado.
+   *
+   * ⚠️ E recarregar não é preguiça: trocar de tenant muda TODO o dado da tela, e
+   * o que sobra de estado aponta para a empresa anterior. O caso mais grave é o
+   * SSE — a conexão só lê o token ao abrir, então continuaria transmitindo
+   * eventos do tenant antigo, com um cursor (`ultimoId`) do outbox do antigo,
+   * para uma tela que já mostra o novo. Reiniciar limpa a classe inteira de
+   * bugs de estado residual em vez de caçá-los um a um.
+   */
+  entrarNoCliente(token: string, clienteNome: string): void {
+    if (this.timerRefresh) { clearTimeout(this.timerRefresh); this.timerRefresh = null }
+    localStorage.setItem(CHAVE_SESSAO_STAFF, JSON.stringify({ token, clienteNome }))
+    this.sessaoStaff.set({ token, clienteNome })
+    location.assign('/')
+  }
+
+  /** Sai do cliente e volta ao login original — recarregando, pelo mesmo motivo. */
+  sairDoCliente(): void {
+    localStorage.removeItem(CHAVE_SESSAO_STAFF)
+    this.sessaoStaff.set(null)
+    location.assign('/')
+  }
 
   private readonly claims = computed<Record<string, unknown> | null>(() => {
     const t = this.idToken()
@@ -131,8 +185,11 @@ export class AuthServico {
 
   sair(): void {
     if (this.timerRefresh) { clearTimeout(this.timerRefresh); this.timerRefresh = null }
-    for (const k of [CHAVE_TOKEN, CHAVE_REFRESH, CHAVE_USUARIO, CHAVE_EXPIRA]) localStorage.removeItem(k)
+    for (const k of [CHAVE_TOKEN, CHAVE_REFRESH, CHAVE_USUARIO, CHAVE_EXPIRA, CHAVE_SESSAO_STAFF]) {
+      localStorage.removeItem(k)
+    }
     this.idToken.set(null)
+    this.sessaoStaff.set(null)
   }
 
   /**
@@ -170,6 +227,9 @@ export class AuthServico {
   /** Agenda a renovação para MARGEM antes do vencimento (ou já, se perto/passou). */
   private agendarRefresh(): void {
     if (this.timerRefresh) { clearTimeout(this.timerRefresh); this.timerRefresh = null }
+    // ⚠️ Durante uma sessão de acesso o refresh fica suspenso: renovar
+    //    reescreveria o idToken e jogaria o staff de volta ao tenant dele.
+    if (this.sessaoStaff()) return
     const expira = Number(localStorage.getItem(CHAVE_EXPIRA) ?? 0)
     if (!expira || !localStorage.getItem(CHAVE_REFRESH)) return
     const atraso = expira - Date.now() - MARGEM_MS

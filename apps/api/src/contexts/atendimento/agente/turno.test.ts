@@ -230,7 +230,7 @@ describe('⚠️ Atendente presente cala o agente', () => {
   it('com humano na conversa, o robô não fala', async () => {
     await ligarAgente(true); await ausenciaHa(5)
     await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
-               VALUES (${T}, ${USUARIO}, 'sub-turno-agente', 'Ana', 'ana@turno.local') ON CONFLICT (cognito_sub) DO NOTHING`
+               VALUES (${T}, ${USUARIO}, 'sub-turno-agente', 'Ana', 'ana@turno.local') ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
     await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id, estado, assumido_em)
                VALUES (${T}, gen_random_uuid(), ${CONVERSA}, ${CANAL}, 1, ${USUARIO}, 'em_atendimento', now())`
     expect(await turno(llmFalso({}))).toEqual({ falou: false, motivo: 'atendente_presente' })
@@ -286,7 +286,7 @@ describe('⚠️ Regras de entrada configuradas mudam a decisão', () => {
   it('régua de presença menor deixa o robô voltar a falar antes', async () => {
     await ligarAgente(true); await ausenciaHa(5)
     await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
-               VALUES (${T}, ${USUARIO}, 'sub-turno-agente', 'Ana', 'ana@turno.local') ON CONFLICT (cognito_sub) DO NOTHING`
+               VALUES (${T}, ${USUARIO}, 'sub-turno-agente', 'Ana', 'ana@turno.local') ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
     // Atendente que assumiu há 20 minutos: dentro dos 60 de fábrica.
     await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id, estado, assumido_em)
                VALUES (${T}, gen_random_uuid(), ${CONVERSA}, ${CANAL}, 1, ${USUARIO}, 'em_atendimento',
@@ -395,7 +395,7 @@ describe('⚠️ Depois de encerrar, o agente volta quando faz sentido', () => {
     await jaEncerrouAqui()
     await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
                VALUES (${T}, ${USUARIO}, 'sub-turno-agente', 'Ana', 'ana@turno.local')
-               ON CONFLICT (cognito_sub) DO NOTHING`
+               ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
     await atendimentoHumanoEncerradoAgora()
     expect(await turno(llmFalso({}))).toMatchObject({ falou: true })
   })

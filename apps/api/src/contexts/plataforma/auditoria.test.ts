@@ -56,7 +56,7 @@ beforeAll(async () => {
       await tx`INSERT INTO perfil_vertical (tenant_id, id, modelo_id, nome) VALUES (${t}, ${pv}, ${MODELO}, 'Varejo') ON CONFLICT DO NOTHING`
     })
   }
-  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${T}, ${ATOR}, 'sub-audit', 'Ana', 'ana@t.local') ON CONFLICT (cognito_sub) DO NOTHING`
+  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${T}, ${ATOR}, 'sub-audit', 'Ana', 'ana@t.local') ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
   app = await criarApp()
   await app.ready()
 })

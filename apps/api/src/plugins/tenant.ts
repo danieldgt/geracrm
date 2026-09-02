@@ -4,6 +4,9 @@ import { sql, type Sql } from '../db/index.js'
 import {
   criarVerificadorCognito, exigirCognitoEmProducao, type VerificadorCognito,
 } from './cognito.js'
+import {
+  PREFIXO_SESSAO_STAFF, resolverSessaoStaff,
+} from '../contexts/plataforma/staff-sessao.js'
 
 /**
  * Tenant plugin — the single place where "which company is this?" is decided.
@@ -30,6 +33,14 @@ declare module 'fastify' {
     usuarioEmail?: string | undefined
     /** Grupos do Cognito (`cognito:groups`). Autoriza as rotas de plataforma. */
     usuarioGrupos?: readonly string[] | undefined
+    /**
+     * A requisição chegou por uma sessão de acesso do staff (PLT-05): quem age é
+     * alguém do drezz, dentro do tenant de um cliente. Vale para a trilha
+     * (`auditoria.ator_staff`) e para o log — nunca para autorizar.
+     */
+    atorStaff?: boolean | undefined
+    /** Id da sessão de acesso em uso, para encerrá-la. */
+    sessaoStaffId?: string | undefined
     /**
      * Runs a callback inside a transaction already scoped to this tenant.
      * Every domain query goes through here — RLS depends on it.
@@ -62,16 +73,44 @@ function extrairToken(req: FastifyRequest): string | undefined {
 /**
  * Descobre de qual empresa é o chamador.
  *
- * ⚠️ Ordem: Cognito PRIMEIRO. O `custom:tenant_id` do JWT assinado é a fonte
- * real (ADR-001). O header `x-tenant-id` é o bypass de dogfooding e só entra
- * quando NÃO há token e o modo dev está ligado — nunca por cima de um token.
+ * ⚠️ Ordem: sessão de staff PRIMEIRO (reconhecida pelo prefixo, sem custo),
+ * depois Cognito. O `custom:tenant_id` do JWT assinado continua sendo a fonte
+ * real (ADR-001); a sessão de acesso é a exceção que o contrato desenhou —
+ * muda **quem emitiu** o token, não o fato de o tenant vir de um token.
+ *
+ * ⚠️ O header `x-tenant-id` é o bypass de dogfooding e só entra quando NÃO há
+ * token e o modo dev está ligado — nunca por cima de um token.
+ *
+ * ⚠️ A sessão de staff é verificada mesmo quando o Cognito não está configurado
+ * (dev): o teste local do PLT-05 depende disso. O antigo `if (verificador &&
+ * token)` pulava o ramo inteiro sem Cognito.
  */
 async function lerTenant(
   req: FastifyRequest,
   verificador: VerificadorCognito | null,
   permiteHeader: boolean,
-): Promise<{ tenantId?: string; sub?: string; email?: string | undefined; grupos?: readonly string[] }> {
+): Promise<{
+  tenantId?: string; sub?: string; email?: string | undefined
+  grupos?: readonly string[]; atorStaff?: boolean; sessaoStaffId?: string
+}> {
   const token = extrairToken(req)
+
+  if (token?.startsWith(PREFIXO_SESSAO_STAFF)) {
+    const sessao = await resolverSessaoStaff(token)
+    if (sessao) {
+      // ⚠️ Sem `grupos`: dentro do cliente o staff opera como o cliente e NÃO
+      //    cadastra outras empresas. Para isso, sai da sessão primeiro.
+      return {
+        tenantId: sessao.tenant_id, sub: sessao.ator_sub, email: sessao.ator_email,
+        grupos: [], atorStaff: true, sessaoStaffId: sessao.sessao_id,
+      }
+    }
+    // Expirada, encerrada ou inexistente: fica sem tenant → 401. NÃO cai no
+    // Cognito nem no header de dev.
+    req.log.debug('sessao de staff nao resolve (expirada, encerrada ou inexistente)')
+    return {}
+  }
+
   if (verificador && token) {
     try {
       const id = await verificador.verificar(token)
@@ -135,11 +174,19 @@ export const pluginTenant: FastifyPluginAsync = fp(
     })
 
     app.addHook('onRequest', async (req) => {
-      const { tenantId, sub, email, grupos } = await lerTenant(req, verificador, permiteHeader)
-      req.tenantId = tenantId
-      req.usuarioSub = sub
-      req.usuarioEmail = email
-      req.usuarioGrupos = grupos ?? []
+      const id = await lerTenant(req, verificador, permiteHeader)
+      req.tenantId = id.tenantId
+      req.usuarioSub = id.sub
+      req.usuarioEmail = id.email
+      req.usuarioGrupos = id.grupos ?? []
+      req.atorStaff = id.atorStaff ?? false
+      req.sessaoStaffId = id.sessaoStaffId
+      // ⚠️ Toda ação do staff dentro de um cliente fica no log, não só na
+      //    trilha: é a pergunta "o que a Gera3 andou vendo?" respondida sem
+      //    depender de a rota ter lembrado de auditar.
+      if (id.atorStaff) {
+        req.log.info({ tenant: id.tenantId, staff: id.email }, 'requisicao por sessao de staff')
+      }
     })
   },
   { name: 'tenant' },

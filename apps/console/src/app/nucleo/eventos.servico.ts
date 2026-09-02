@@ -80,7 +80,7 @@ export class EventosServico {
 
   private cabecalhos(): Record<string, string> {
     if (ehProducao()) {
-      const t = this.auth.idToken()
+      const t = this.auth.tokenAtual()
       return t ? { authorization: `Bearer ${t}` } : {}
     }
     return { 'x-tenant-id': TENANT_DOGFOODING }

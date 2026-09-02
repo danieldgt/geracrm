@@ -65,8 +65,8 @@ beforeAll(async () => {
              VALUES (${A}, ${CANAL}, 'whatsapp_nao_oficial', 'plugzapi', 'WA', 'conectado') ON CONFLICT DO NOTHING`
   await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${A}, ${CONTATO}, 'Cliente', 'teste', true) ON CONFLICT DO NOTHING`
   await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${A}, ${CONVERSA}, ${CANAL}, ${CONTATO}, 0) ON CONFLICT DO NOTHING`
-  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${A}, ${U1}, 'sub-inb18-1', 'Ana', 'ana@t.local') ON CONFLICT (cognito_sub) DO NOTHING`
-  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${A}, ${U2}, 'sub-inb18-2', 'Bia', 'bia@t.local') ON CONFLICT (cognito_sub) DO NOTHING`
+  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${A}, ${U1}, 'sub-inb18-1', 'Ana', 'ana@t.local') ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
+  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${A}, ${U2}, 'sub-inb18-2', 'Bia', 'bia@t.local') ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
 })
 
 afterAll(async () => {

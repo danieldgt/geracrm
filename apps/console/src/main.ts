@@ -43,7 +43,9 @@ const injetarIdentidade: HttpInterceptorFn = (req, next) => {
   // inject() só vale no contexto síncrono do interceptor — captura aqui, usa no callback.
   const auth = inject(AuthServico)
   const router = inject(Router)
-  const token = auth.idToken()
+  // ⚠️ `tokenAtual()`, não `idToken()`: durante uma sessão de acesso do staff
+  //    (PLT-05) o token é outro, e o tenant vem dele.
+  const token = auth.tokenAtual()
   const autenticada = token
     ? req.clone({ setHeaders: { authorization: `Bearer ${token}` } })
     : req

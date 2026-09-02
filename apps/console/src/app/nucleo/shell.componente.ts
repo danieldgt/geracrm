@@ -113,6 +113,19 @@ import { AuthServico } from './auth.servico.js'
       </header>
 
       <div class="conteudo">
+        <!-- ⚠️ Sessão de acesso do staff (PLT-05). Fica no topo do conteúdo, e não
+             some: quem está dentro da casa de um cliente precisa LEMBRAR disso a
+             cada tela — é o que evita confundir o dado dele com o nosso. -->
+        @if (auth.sessaoStaff(); as s) {
+          <div class="faixa-staff" role="status">
+            <span class="fs-txt">
+              Você está em <b>{{ s.clienteNome }}</b> como staff do drezz — tudo o que fizer
+              fica registrado na trilha do cliente.
+            </span>
+            <button class="fs-sair" (click)="auth.sairDoCliente()">Sair do cliente</button>
+          </div>
+        }
+
         <!-- Alertas técnicos abertos (I-10): faixa visível, ação nomeada. -->
         @if (alertas.abertos().length) {
           <div class="alertas" role="alert">
@@ -201,6 +214,14 @@ import { AuthServico } from './auth.servico.js'
       .lateral { width: 60px; }
       .lateral .rotulo, .lateral .grupo { display: none; }
     }
+    .faixa-staff { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-3);
+      flex-wrap: wrap; margin-bottom: var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-4);
+      border: 1px solid var(--atencao); border-radius: var(--raio-controle);
+      background: var(--atencao-suave); color: var(--atencao); font-size: 13px; }
+    .fs-txt b { font-weight: 600; }
+    .fs-sair { border: 1px solid var(--atencao); border-radius: var(--raio-controle); background: transparent;
+      color: var(--atencao); font: inherit; font-size: 12px; padding: 3px 10px; cursor: pointer; }
+    .fs-sair:hover { background: var(--superficie); }
     .alertas { position: sticky; top: 0; z-index: 5; display: flex; flex-direction: column; }
     .alerta { padding: var(--espacamento-2) var(--espacamento-4); font-size: 13px; color: var(--texto);
       background: var(--atencao-suave); border-bottom: 1px solid var(--borda); }
@@ -215,7 +236,7 @@ export class ShellComponente implements OnInit {
   readonly alertas = inject(AlertasServico)
   readonly tema = inject(TemaServico)
   readonly inbox = inject(InboxServico)
-  private readonly auth = inject(AuthServico)
+  readonly auth = inject(AuthServico)
   private readonly router = inject(Router)
   private readonly http = inject(HttpClient)
 

@@ -43,6 +43,7 @@ import { rotasMercado } from './contexts/plataforma/rotas-mercado.js'
 import { rotasMapa } from './contexts/plataforma/rotas-mapa.js'
 import { rotasConfig } from './contexts/plataforma/rotas-config.js'
 import { rotasClientes } from './contexts/plataforma/rotas-clientes.js'
+import { rotasStaff } from './contexts/plataforma/rotas-staff.js'
 import { rotasEventos } from './contexts/atendimento/eventos/rotas-eventos.js'
 import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
 import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
@@ -65,6 +66,26 @@ export async function criarApp(): Promise<FastifyInstance> {
             // (geracrm-observabilidade). Redact at the source, not later.
             redact: ['req.headers.authorization', 'req.headers["x-tenant-id"]'],
           },
+  })
+
+  // ⚠️ ANTES de qualquer `register`. No Fastify cada register cria um contexto
+  //    encapsulado que herda o error handler NO MOMENTO do registro — definido
+  //    depois, ele não retroage, e ficava valendo só para as rotas declaradas
+  //    aqui no root (/saude, /pronto, /v1/eu). Todas as ~45 famílias de rota
+  //    respondiam no formato cru do Fastify, e a tela recebia `erro: undefined`
+  //    justamente quando precisava ramificar pelo código.
+  app.setErrorHandler((erro, req, reply) => {
+    const status = (erro as { statusCode?: number }).statusCode ?? 500
+    if (status >= 500) req.log.error({ erro }, 'falha nao tratada')
+    // Typed error, never the raw message — the screen needs a code it can branch on.
+    // ⚠️ 403 precisa do próprio código: `exigirStaff` LANÇA (não usa reply.send),
+    //    então cair no genérico fazia a tela receber status 403 com a mensagem
+    //    "Erro interno." — o estado certo com o texto errado.
+    const tipado: Record<number, { erro: string; mensagem: string }> = {
+      401: { erro: 'autenticacao.ausente', mensagem: 'Autenticação ausente ou inválida.' },
+      403: { erro: 'autorizacao.sem_permissao', mensagem: 'Você não tem acesso a esta área.' },
+    }
+    return reply.code(status).send(tipado[status] ?? { erro: 'erro.interno', mensagem: 'Erro interno.' })
   })
 
   await app.register(pluginTenant)
@@ -110,6 +131,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasMapa)
   await app.register(rotasConfig)
   await app.register(rotasClientes)
+  await app.register(rotasStaff)
   await app.register(rotasEventos)
   await app.register(rotasPedido)
   await app.register(rotasAquisicao)
@@ -157,16 +179,6 @@ export async function criarApp(): Promise<FastifyInstance> {
           JOIN plano  p ON p.id = t.plano_id
       `
       return { tenant: tenant ?? null }
-    })
-  })
-
-  app.setErrorHandler((erro, req, reply) => {
-    const status = (erro as { statusCode?: number }).statusCode ?? 500
-    if (status >= 500) req.log.error({ erro }, 'falha nao tratada')
-    // Typed error, never the raw message — the screen needs a code it can branch on.
-    return reply.code(status).send({
-      erro: status === 401 ? 'autenticacao.ausente' : 'erro.interno',
-      mensagem: status === 401 ? 'Autenticação ausente ou inválida.' : 'Erro interno.',
     })
   })
 
