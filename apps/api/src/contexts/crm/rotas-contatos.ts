@@ -107,8 +107,20 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /**
    * Importação de contatos por CSV (EP-02). ⚠️ Validação NO SERVIDOR pelo parser
-   * puro; dedup por telefone (chave_bloqueio, INV-50). Falha de linha é RETORNO
-   * tipificado — a tela mostra quantas entraram e quais linhas caíram e por quê.
+   * puro. Falha de linha é RETORNO tipificado — a tela mostra quantas entraram e
+   * quais linhas caíram e por quê.
+   *
+   * ⚠️ DEDUP: documento primeiro, telefone só quando não há documento.
+   *
+   * Era só por telefone, e numa carga B2B isso perde empresa. Medido numa
+   * importação real de 709 confecções: 47 telefones eram compartilhados e **67
+   * empresas não entraram**. Parte era acerto (a mesma empresa com dois CNPJs),
+   * parte era perda — cinco razões sociais distintas dividindo o telefone do
+   * grupo, e só a primeira entrava. Para pessoa jurídica a identidade é o CNPJ;
+   * o telefone é do escritório, do contador, da recepção.
+   *
+   * Quem importa sem documento (varejo, lista de telefone) continua exatamente
+   * como antes — o telefone segue sendo a chave de reconciliação (INV-50).
    */
   app.post<{ Body: { csv?: string } }>(
     '/v1/contatos/importar',
@@ -128,28 +140,52 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       await req.comTenant(async (tx) => {
         for (const l of linhas) {
           let contatoId: string | null = null
-          // Dedup por telefone quando há; sem telefone, sempre novo.
-          if (l.chaveBloqueio) {
+
+          if (l.documento) {
+            // Tem documento: ele MANDA. Mesmo CNPJ = mesma empresa, ainda que o
+            // telefone seja outro (mudou de linha, é o celular do dono).
+            const [existe] = await tx<{ contato_id: string }[]>`
+              SELECT contato_id FROM contato_documento
+               WHERE tenant_id = tenant_atual() AND numero = ${l.documento} LIMIT 1`
+            if (existe) { contatoId = existe.contato_id; atualizados++ }
+          } else if (l.chaveBloqueio) {
+            // Sem documento: o telefone volta a ser a chave (INV-50).
             const [existe] = await tx<{ contato_id: string }[]>`
               SELECT contato_id FROM contato_telefone
                WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${l.chaveBloqueio} AND principal LIMIT 1`
             if (existe) { contatoId = existe.contato_id; atualizados++ }
           }
+
           if (!contatoId) {
             contatoId = randomUUID()
             criados++
             await tx`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo)
                      VALUES (tenant_atual(), ${contatoId}, ${l.nome}, 'importacao', true)`
-            if (l.e164 && l.chaveBloqueio) {
-              await tx`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
-                       VALUES (tenant_atual(), ${contatoId}, 1, ${l.e164}, ${l.chaveBloqueio}, true, true, 'importacao')
-                       ON CONFLICT DO NOTHING`
-            }
+          }
+
+          // ⚠️ `principal` só na PRIMEIRA linha de telefone do contato: há índice
+          //    único parcial sobre o principal, e duas empresas do mesmo grupo
+          //    dividindo o número agora convivem como contatos distintos.
+          //    `seq` calculado, nunca fixo em 1 — fixo descartava em silêncio o
+          //    segundo telefone de quem já existia.
+          if (l.e164 && l.chaveBloqueio) {
+            await tx`
+              INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
+              SELECT tenant_atual(), ${contatoId},
+                     coalesce(max(seq), 0) + 1, ${l.e164}, ${l.chaveBloqueio},
+                     count(*) = 0, NULL, 'importacao'
+                FROM contato_telefone
+               WHERE tenant_id = tenant_atual() AND contato_id = ${contatoId}
+              ON CONFLICT DO NOTHING`
           }
           if (l.documento && l.tipoDocumento) {
-            await tx`INSERT INTO contato_documento (tenant_id, contato_id, seq, tipo, numero, fonte)
-                     VALUES (tenant_atual(), ${contatoId}, 1, ${l.tipoDocumento}, ${l.documento}, 'importacao')
-                     ON CONFLICT DO NOTHING`
+            await tx`
+              INSERT INTO contato_documento (tenant_id, contato_id, seq, tipo, numero, fonte)
+              SELECT tenant_atual(), ${contatoId}, coalesce(max(seq), 0) + 1,
+                     ${l.tipoDocumento}, ${l.documento}, 'importacao'
+                FROM contato_documento
+               WHERE tenant_id = tenant_atual() AND contato_id = ${contatoId}
+              ON CONFLICT DO NOTHING`
           }
         }
       })
