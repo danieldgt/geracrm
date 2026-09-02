@@ -25,6 +25,8 @@ import { garantirEtapasAtendimento } from './rotas-atendimento-kanban.js'
  * ~25 pontos que chamam esta função — praticamente toda escrita do produto.
  * A chave composta nasce na migration 0081; o único global sai na 0082.
  */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function garantirUsuarioId(tx: Sql, req: FastifyRequest): Promise<string> {
   // Dev (header x-tenant-id, sem Cognito): sub sintético por tenant, para duas
   // empresas locais não disputarem a mesma linha.
@@ -84,29 +86,45 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
     return reply.send(r)
   })
 
-  app.post<{ Params: { id: string } }>(
+  /**
+   * Assumir a conversa. `etapaId` (opcional) diz em QUAL etapa do painel o atendimento
+   * nasce — é o que o kanban manda quando o gestor solta o card numa coluna; sem ela,
+   * nasce na 1ª etapa de atendimento. ⚠️ Só etapa ATIVA do tipo 'atendimento': encerrar
+   * é mover DEPOIS de assumir (`/atendimento-kanban/:id/mover`), nunca nascer encerrado —
+   * um atendimento encerrado não tira a conversa da fila, e o card apareceria nas duas.
+   */
+  app.post<{ Params: { id: string }; Body: { etapaId?: string } | null }>(
     '/v1/conversas/:id/assumir',
     { preHandler: exigirTenant },
     async (req, reply) => {
       const conversaId = req.params.id
+      const etapaPedida = req.body?.etapaId
+      const ETAPA_INVALIDA = { erro: 'etapa.invalida', mensagem: 'Solte o card numa etapa de atendimento ativa.' }
+      if (etapaPedida !== undefined && !UUID.test(etapaPedida)) return reply.code(422).send(ETAPA_INVALIDA)
       const r = await req.comTenant(async (tx) => {
         const [conv] = await tx<{ canal_id: string }[]>`
           SELECT canal_id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
         if (!conv) return { tipo: 'nao_encontrada' as const }
 
         const usuarioId = await garantirUsuarioId(tx, req)
-        // O atendimento nasce já na 1ª etapa do kanban (tipo 'atendimento').
         await garantirEtapasAtendimento(tx)
+        const [etapa] = etapaPedida
+          ? await tx<{ id: string }[]>`
+              SELECT id FROM atendimento_etapa
+               WHERE tenant_id = tenant_atual() AND id = ${etapaPedida} AND ativo AND tipo = 'atendimento'`
+          : await tx<{ id: string }[]>`
+              SELECT id FROM atendimento_etapa
+               WHERE tenant_id = tenant_atual() AND ativo AND tipo = 'atendimento' ORDER BY ordem LIMIT 1`
+        if (etapaPedida && !etapa) return { tipo: 'etapa_invalida' as const }
         const atId = randomUUID()
 
         // ⚠️ Vencedor atômico: o índice parcial único recusa um 2º aberto.
         const [criado] = await tx<{ protocolo: string; etapa_id: string | null }[]>`
           INSERT INTO atendimento
             (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id, estado, assumido_em, etapa_id, entrou_etapa_em)
-          SELECT tenant_atual(), ${atId}, ${conversaId}, ${conv.canal_id},
-                 proximo_numero(tenant_atual(), 'protocolo'), ${usuarioId}, 'em_atendimento', now(),
-                 (SELECT id FROM atendimento_etapa WHERE tenant_id = tenant_atual() AND tipo = 'atendimento' AND ativo ORDER BY ordem LIMIT 1),
-                 now()
+          VALUES (tenant_atual(), ${atId}, ${conversaId}, ${conv.canal_id},
+                  proximo_numero(tenant_atual(), 'protocolo'), ${usuarioId}, 'em_atendimento', now(),
+                  ${etapa?.id ?? null}, now())
           ON CONFLICT (tenant_id, conversa_id) WHERE estado <> 'encerrado'
           DO NOTHING
           RETURNING protocolo, etapa_id`
@@ -121,7 +139,7 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
             atorId: usuarioId, acao: 'atendimento.assumido', entidade: 'conversa',
             entidadeId: conversaId, dados: { protocolo: Number(criado.protocolo) },
           })
-          return { tipo: 'assumido' as const, protocolo: Number(criado.protocolo), meu: true }
+          return { tipo: 'assumido' as const, protocolo: Number(criado.protocolo), meu: true, atendimentoId: atId }
         }
 
         // Já havia um atendimento aberto — quem tem?
@@ -139,7 +157,8 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
       })
 
       if (r.tipo === 'nao_encontrada') return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
-      if (r.tipo === 'assumido') return reply.code(201).send({ ok: true, protocolo: r.protocolo, meu: true })
+      if (r.tipo === 'etapa_invalida') return reply.code(422).send(ETAPA_INVALIDA)
+      if (r.tipo === 'assumido') return reply.code(201).send({ ok: true, protocolo: r.protocolo, meu: true, atendimentoId: r.atendimentoId })
       // Já aberto: se é meu, 200 ok; se é de outro, 409 tipificado.
       if (r.meu) return reply.code(200).send({ ok: true, protocolo: r.protocolo, meu: true })
       return reply.code(409).send({ erro: 'atendimento.ja_assumido', mensagem: `Em atendimento por ${r.por ?? 'outro atendente'}.`, por: r.por })

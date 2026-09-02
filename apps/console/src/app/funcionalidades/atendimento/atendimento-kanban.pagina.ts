@@ -44,6 +44,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                    (cdkDropListDropped)="soltou($event, col)">
                 @for (card of col.cards; track cardId(card)) {
                   <article class="card" [class.card--fila]="card.kind === 'fila'" cdkDrag [cdkDragData]="card"
+                           (cdkDragStarted)="arrastoComecou()" (cdkDragEnded)="arrastoTerminou()"
                            (click)="abrir(card)" tabindex="0" role="button">
                     <span class="card-nome encolhe">{{ card.contato }}</span>
                     @if (card.kind === 'atend') {
@@ -210,7 +211,18 @@ export class AtendimentoKanbanPagina implements OnInit {
     return !!iso && Date.now() - new Date(iso).getTime() > 24 * 3600_000
   }
 
-  abrir(card: Card): void { void this.inbox.abrir(card.conversaId) }
+  /**
+   * Clicar abre a conversa no rail — mas soltar um card também pode gerar um `click`
+   * no navegador, e aí cada drop abriria a conversa. O CDK não filtra isso; a flag
+   * vive até o próximo turno de macrotask, quando o click sintético já passou.
+   */
+  private arrastou = false
+  arrastoComecou(): void { this.arrastou = true }
+  arrastoTerminou(): void { setTimeout(() => { this.arrastou = false }) }
+  abrir(card: Card): void {
+    if (this.arrastou) return
+    void this.inbox.abrir(card.conversaId)
+  }
 
   async soltou(ev: CdkDragDrop<Coluna>, destino: Coluna): Promise<void> {
     const card = ev.item.data as Card
@@ -220,14 +232,16 @@ export class AtendimentoKanbanPagina implements OnInit {
       this.servico.colunas.set([...this.servico.colunas()])
       return // reordenar dentro da coluna não persiste (ordem é por tempo).
     }
-    // Move otimista entre listas.
+    // Move otimista entre listas; a recarga silenciosa confirma sem piscar o board.
+    this.servico.erroMove.set(null)
     transferArrayItem(origem.cards, destino.cards, ev.previousIndex, ev.currentIndex)
     this.servico.colunas.set([...this.servico.colunas()])
 
     // Não dá para "des-assumir": soltar na fila reverte.
-    if (destino.tipo === 'fila') { void this.servico.carregar(); return }
-    // Da fila para uma etapa = assumir (nasce na 1ª etapa de atendimento).
-    if (card.kind === 'fila') { await this.servico.assumir(card.conversaId); return }
+    if (destino.tipo === 'fila') { void this.servico.carregar({ silencioso: true }); return }
+    // Da fila para uma etapa = assumir, nascendo NA etapa onde o card foi solto
+    // (a API recusa etapa 'encerrado' com erro tipificado; a mensagem explica).
+    if (card.kind === 'fila') { await this.servico.assumir(card.conversaId, destino.etapa!.id); return }
     // Entre etapas = mover (encerrado fecha o atendimento).
     await this.servico.mover(card as CardAtend, destino.etapa!.id)
   }

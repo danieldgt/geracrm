@@ -28,8 +28,12 @@ export class AtendimentoKanbanServico {
   readonly colunas = signal<readonly Coluna[]>([])
   readonly erroMove = signal<string | null>(null)
 
-  async carregar(): Promise<void> {
-    this.estado.set('carregando')
+  /**
+   * `silencioso` = recarga depois de um drop: a tela já mostra o resultado otimista;
+   * trocar o board pelo esqueleto faria o painel inteiro piscar a cada card movido.
+   */
+  async carregar(opcoes: { silencioso?: boolean } = {}): Promise<void> {
+    if (!(opcoes.silencioso && this.estado() === 'pronto')) this.estado.set('carregando')
     try {
       const e = await firstValueFrom(this.http.get<{ aguardando: { total: number }; itens: EtapaK[] }>('/v1/atendimento-kanban/etapas'))
       const fila = await this.buscarFila(null)
@@ -67,24 +71,44 @@ export class AtendimentoKanbanServico {
     } catch { /* mantém */ } finally { alvo.carregandoMais = false; this.colunas.set([...this.colunas()]) }
   }
 
-  /** Assumir (da coluna Aguardando): cria o atendimento na 1ª etapa. */
-  async assumir(conversaId: string): Promise<boolean> {
-    try { await firstValueFrom(this.http.post(`/v1/conversas/${conversaId}/assumir`, {})); await this.carregar(); return true }
-    catch { await this.carregar(); return false }
+  /**
+   * Assumir (da coluna Aguardando): o atendimento nasce NA etapa onde o card foi
+   * solto — antes nascia sempre na 1ª, e o card "pulava" de coluna depois do drop.
+   */
+  async assumir(conversaId: string, etapaId: string): Promise<boolean> {
+    try {
+      await firstValueFrom(this.http.post(`/v1/conversas/${conversaId}/assumir`, { etapaId }))
+      await this.carregar({ silencioso: true })
+      return true
+    } catch (e) {
+      await this.carregar({ silencioso: true })
+      this.erroMove.set(this.mensagemDoErro(e, 'Não foi possível assumir.'))
+      return false
+    }
   }
 
   /** Mover um atendimento entre etapas (concorrência otimista). */
   async mover(card: CardAtend, paraEtapaId: string): Promise<boolean> {
     try {
       await firstValueFrom(this.http.post(`/v1/atendimento-kanban/${card.atendimentoId}/mover`, { etapaId: paraEtapaId, versao: card.versao }))
-      await this.carregar()
+      await this.carregar({ silencioso: true })
       return true
     } catch (e) {
-      const cod = e instanceof HttpErrorResponse ? (e.error as { erro?: string })?.erro ?? '' : ''
-      await this.carregar()
-      this.erroMove.set(cod === 'atendimento.conflito' ? 'Alguém moveu este atendimento antes — recarreguei.'
-        : cod === 'atendimento.ja_tem_aberto' ? 'A conversa já tem um atendimento aberto.' : 'Não foi possível mover.')
+      await this.carregar({ silencioso: true })
+      this.erroMove.set(this.mensagemDoErro(e, 'Não foi possível mover.'))
       return false
+    }
+  }
+
+  /** Erro tipificado da API → frase que diz o que houve e o que fazer. */
+  private mensagemDoErro(e: unknown, padrao: string): string {
+    const cod = e instanceof HttpErrorResponse ? (e.error as { erro?: string })?.erro ?? '' : ''
+    switch (cod) {
+      case 'atendimento.conflito': return 'Alguém moveu este atendimento antes — recarreguei.'
+      case 'atendimento.ja_tem_aberto': return 'A conversa já tem um atendimento aberto.'
+      case 'atendimento.ja_assumido': return 'Outro atendente assumiu esta conversa antes — recarreguei.'
+      case 'etapa.invalida': return 'Para encerrar, assuma primeiro: solte o card numa etapa de atendimento.'
+      default: return padrao
     }
   }
 

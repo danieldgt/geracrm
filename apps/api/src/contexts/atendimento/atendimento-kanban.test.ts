@@ -85,6 +85,34 @@ describe('Kanban de atendimentos', () => {
     expect((await etapas()).aguardando.total).toBe(0)
   })
 
+  it('assumir com etapaId (o gestor soltou o card numa coluna) nasce NAQUELA etapa, não na 1ª', async () => {
+    const e = await etapas()
+    const alvo = etapaId(e, 'aguardando_cliente')
+    const r = await chamar(T, 'POST', `/v1/conversas/${CONV}/assumir`, { etapaId: alvo })
+    expect(r.statusCode).toBe(201)
+    const { atendimentoId } = r.json() as { atendimentoId: string }
+    expect(atendimentoId).toBeTruthy()
+
+    const naAlvo = (await chamar(T, 'GET', `/v1/atendimento-kanban/coluna/${alvo}`)).json() as { itens: { atendimentoId: string }[] }
+    expect(naAlvo.itens.map((i) => i.atendimentoId)).toEqual([atendimentoId])
+    const naPrimeira = (await chamar(T, 'GET', `/v1/atendimento-kanban/coluna/${etapaId(e, 'em_atendimento')}`)).json() as { itens: unknown[] }
+    expect(naPrimeira.itens.length).toBe(0)
+    // Histórico: uma única estadia, na etapa pedida (aging correto desde o início).
+    const hist = await dono<{ etapa_id: string; saiu_em: Date | null }[]>`
+      SELECT etapa_id, saiu_em FROM atendimento_etapa_historico WHERE tenant_id = ${T} AND atendimento_id = ${atendimentoId}`
+    expect(hist).toEqual([{ etapa_id: alvo, saiu_em: null }])
+  })
+
+  it('assumir direto numa etapa "encerrado", inexistente ou inválida → 422 tipificado e a conversa segue na fila', async () => {
+    const e = await etapas()
+    for (const etapa of [etapaId(e, 'resolvido'), '00000000-0000-4000-8000-000000000000', 'nao-e-uuid']) {
+      const r = await chamar(T, 'POST', `/v1/conversas/${CONV}/assumir`, { etapaId: etapa })
+      expect(r.statusCode, etapa).toBe(422)
+      expect((r.json() as { erro: string }).erro).toBe('etapa.invalida')
+    }
+    expect((await etapas()).aguardando.total).toBe(1)
+  })
+
   it('mover para etapa "resolvido" (encerrado) fecha o atendimento; versão em conflito → 409', async () => {
     await chamar(T, 'POST', `/v1/conversas/${CONV}/assumir`)
     const e = await etapas()
