@@ -222,21 +222,43 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
   })
 
   // ---------------------------------------------------------------------------
-  // Clientes por valor.
+  // Contatos, ordenados por valor de compra.
   // ---------------------------------------------------------------------------
+  /**
+   * ⚠️ LEFT JOIN em `metricas_contato`, não INNER. Só há linha de métrica para
+   * quem já comprou, então o INNER JOIN escondia todo contato SEM venda — e a
+   * tela dizia "Nenhum cliente ainda. Conecte seu ERP e faça a primeira carga"
+   * com a base cheia.
+   *
+   * Apareceu com a carga de prospecção da Drezz Fábrica: 709 confecções
+   * importadas, a busca as encontrava, o kanban de leads contava as 709, e esta
+   * tela — a que se chama "Contatos" no menu — mostrava vazio. Quem prospecta
+   * começa por definição sem nenhuma venda; era o caso que mais precisava da
+   * lista e o único que não a via.
+   *
+   * Quem nunca comprou entra com zeros e vai para o fim da ordenação, que
+   * continua sendo por valor.
+   */
   app.get('/v1/contatos', { preHandler: exigirTenant }, async (req, reply) => {
     const q = (req.query ?? {}) as { cursor?: string; limite?: string }
     const limite = limiteDe(q.limite)
     const c = lerCursor(q.cursor)
 
     const linhas = await req.comTenant((tx) => tx<LinhaMetrica[]>`
-      SELECT c.id, c.nome, m.qtd_vendas::text, m.total_centavos::text,
+      SELECT c.id, c.nome,
+             coalesce(m.qtd_vendas, 0)::text     AS qtd_vendas,
+             coalesce(m.total_centavos, 0)::text AS total_centavos,
              m.dias_sem_comprar, m.atraso_relativo::text,
              m.media_entre_vendas_dias::text, m.ultima_venda_em,
-             m.confiavel, m.ticket_medio_centavos::text
-        FROM metricas_contato m JOIN contato c ON c.id = m.contato_id
-       WHERE ${c === null ? tx`true` : tx`(m.total_centavos, c.id) < (${Number(c[0])}, ${c[1]}::uuid)`}
-       ORDER BY m.total_centavos DESC, c.id DESC
+             coalesce(m.confiavel, false) AS confiavel,
+             m.ticket_medio_centavos::text
+        FROM contato c
+        LEFT JOIN metricas_contato m
+          ON m.tenant_id = c.tenant_id AND m.contato_id = c.id
+       WHERE c.tenant_id = tenant_atual() AND c.ativo
+         AND ${c === null ? tx`true`
+              : tx`(coalesce(m.total_centavos, 0), c.id) < (${Number(c[0])}, ${c[1]}::uuid)`}
+       ORDER BY coalesce(m.total_centavos, 0) DESC, c.id DESC
        LIMIT ${limite + 1}
     `)
 

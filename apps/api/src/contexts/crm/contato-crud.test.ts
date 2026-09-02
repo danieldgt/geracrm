@@ -110,3 +110,40 @@ describe('CRUD da ficha do contato', () => {
     expect(r.statusCode).toBe(404)
   })
 })
+
+describe('Lista de contatos: quem nunca comprou também aparece', () => {
+  /**
+   * ⚠️ O caso real: 709 confecções importadas para prospecção, a busca as
+   * encontrava, o kanban contava as 709, e a tela "Contatos" mostrava vazio —
+   * porque a consulta era INNER JOIN com `metricas_contato`, e só há métrica
+   * para quem já comprou. Quem prospecta começa sem venda nenhuma.
+   */
+  it('contato sem venda entra na lista, com zeros', async () => {
+    const id = randomUUID()
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo)
+               VALUES (${T}, ${id}, 'Confecção Sem Compra', 'importacao', true)`
+
+    const r = await chamar(T, 'GET', '/v1/contatos')
+    expect(r.statusCode).toBe(200)
+    const itens = r.json<{ itens: { id: string; nome: string; qtdVendas: number; totalCentavos: number }[] }>().itens
+    const achado = itens.find((c) => c.id === id)
+    expect(achado?.nome).toBe('Confecção Sem Compra')
+    expect(achado?.qtdVendas).toBe(0)
+    expect(achado?.totalCentavos).toBe(0)
+
+    await dono`DELETE FROM contato WHERE tenant_id = ${T} AND id = ${id}`
+  })
+
+  it('⚠️ não vaza contato de outro tenant', async () => {
+    const id = randomUUID()
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo)
+               VALUES (${OUTRO}, ${id}, 'Segredo do B', 'importacao', true)`
+
+    const itens = (await chamar(T, 'GET', '/v1/contatos'))
+      .json<{ itens: { nome: string }[] }>().itens
+    expect(itens.map((c) => c.nome)).not.toContain('Segredo do B')
+
+    await dono`DELETE FROM contato WHERE tenant_id = ${OUTRO} AND id = ${id}`
+  })
+})
+

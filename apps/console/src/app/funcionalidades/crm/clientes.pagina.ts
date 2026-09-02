@@ -23,7 +23,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     <header class="cabecalho">
       <div>
         <h1>Clientes</h1>
-        <p class="sub">Ordenados por quanto já compraram. A cor mostra onde cada um está no ciclo de recompra.</p>
+        <p class="sub">Todos os contatos, dos que mais compraram aos que ainda não compraram. A cor mostra onde cada um está no ciclo de recompra.</p>
       </div>
       <div class="acoes-topo">
         <button class="btn btn--secundario" type="button" (click)="mostrarImport.set(!mostrarImport())">
@@ -129,8 +129,8 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
       @case ('pronto') {
         @if (servico.vazio()) {
           <div class="bloco">
-            <h2>Nenhum cliente ainda</h2>
-            <p>Conecte seu ERP e faça a primeira carga — os clientes e o histórico de compras aparecem aqui.</p>
+            <h2>Nenhum contato ainda</h2>
+            <p>Importe um CSV aqui mesmo, conecte seu ERP, ou comece uma conversa — os contatos aparecem nesta lista.</p>
           </div>
         } @else {
           <!-- Legenda: a rampa nunca aparece sem explicar o que a cor diz. -->
