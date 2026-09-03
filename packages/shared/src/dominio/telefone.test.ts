@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizarTelefone, ehMovel } from './telefone.js'
+import { normalizarTelefone, ehMovel, formatarTelefoneBR } from './telefone.js'
 
 describe('Normalização de telefone', () => {
   // ⚠️ O caso que motiva a função existir: três grafias, uma chave.
@@ -46,5 +46,22 @@ describe('Normalização de telefone', () => {
   it('dado lixo de digitação, então limpa o que dá e recusa o que não dá', () => {
     expect(normalizarTelefone('  +55 (81) 9.9861-7049  ')?.e164).toBe('+5581998617049')
     expect(normalizarTelefone('não é telefone')).toBeNull()
+  })
+})
+
+describe('formatarTelefoneBR', () => {
+  it('formata celular e fixo para leitura', () => {
+    expect(formatarTelefoneBR('5585998617049')).toBe('+55 (85) 99861-7049')
+    expect(formatarTelefoneBR('558532224444')).toBe('+55 (85) 3222-4444')
+  })
+
+  it('⚠️ devolve INTACTO o que não é número brasileiro — não inventa formato', () => {
+    expect(formatarTelefoneBR('12025550123')).toBe('12025550123')
+    expect(formatarTelefoneBR('')).toBe('')
+    expect(formatarTelefoneBR('55')).toBe('55')
+  })
+
+  it('aceita entrada já pontuada sem duplicar a pontuação', () => {
+    expect(formatarTelefoneBR('+55 85 99861-7049')).toBe('+55 (85) 99861-7049')
   })
 })

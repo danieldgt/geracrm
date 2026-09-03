@@ -1,5 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
+import { formatarTelefoneBR } from '@geracrm/shared'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 
@@ -163,14 +164,9 @@ export class BloqueiosPagina implements OnInit {
     }
   }
 
-  /** 5581999990000 → +55 (81) 99999-0000 (aproximado, só para leitura). */
-  formatarChave(c: string): string {
-    const d = c.replace(/\D/g, '')
-    if (d.length < 12) return c
-    const ddd = d.slice(2, 4); const resto = d.slice(4)
-    const meio = resto.length > 8 ? resto.slice(0, resto.length - 4) : resto.slice(0, resto.length - 4)
-    return `+55 (${ddd}) ${meio}-${resto.slice(-4)}`
-  }
+  /** ⚠️ A formatação mora em @geracrm/shared: era uma cópia local, e a segunda
+   *  cópia (no card de leads) seria a divergência garantida em um mês. */
+  formatarChave(c: string): string { return formatarTelefoneBR(c) }
 
   rotuloMotivo(m: string): string {
     switch (m) {

@@ -138,7 +138,9 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .col-nome { color: var(--texto); }
     .col-total { font-size: 12px; color: var(--texto-suave); background: var(--superficie); padding: 1px 8px; border-radius: var(--raio-completo); font-variant-numeric: tabular-nums; }
     .col-cards { flex: 1; overflow-y: auto; padding: 0 var(--espacamento-3) var(--espacamento-3); display: flex; flex-direction: column; gap: var(--espacamento-2); min-height: 40px; }
-    .card { display: flex; flex-direction: column; gap: 3px; padding: var(--espacamento-3);
+    /* ⚠️ flex:none: sem ele o flex-shrink do .col-cards ESMAGA os cards até
+       caberem (10px cada) em vez de rolar. Ver cards-nao-esmagam.spec.ts. */
+    .card { flex: none; display: flex; flex-direction: column; gap: 3px; padding: var(--espacamento-3);
       background: var(--superficie-elevada); border: 1px solid var(--borda); border-left: 3px solid var(--acao);
       border-radius: var(--raio-controle); cursor: grab; box-shadow: var(--elevacao-nenhuma); }
     .card--fila { border-left-color: var(--atencao); }

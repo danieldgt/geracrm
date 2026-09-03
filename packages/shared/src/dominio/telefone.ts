@@ -70,3 +70,21 @@ export function normalizarTelefone(bruto: string): TelefoneNormalizado | null {
 export function ehMovel(t: TelefoneNormalizado): boolean {
   return t.assinante.length === 9 && t.assinante.startsWith('9')
 }
+
+/**
+ * E.164 → leitura humana: `5585998617049` vira `+55 (85) 99861-7049`.
+ *
+ * ⚠️ Formatting is for READING only — never store or compare the result. The
+ * keys stay `e164`/`chaveBloqueio`; a formatted string in a lookup is how the
+ * same person becomes two contacts again.
+ *
+ * ⚠️ Anything that is not a Brazilian number comes back UNCHANGED instead of
+ * being reshaped into something that looks Brazilian but is not.
+ */
+export function formatarTelefoneBR(e164: string): string {
+  const d = e164.replace(/\D/g, '')
+  if (!d.startsWith('55') || d.length < 12 || d.length > 13) return e164
+  const ddd = d.slice(2, 4)
+  const assinante = d.slice(4)
+  return `+55 (${ddd}) ${assinante.slice(0, assinante.length - 4)}-${assinante.slice(-4)}`
+}

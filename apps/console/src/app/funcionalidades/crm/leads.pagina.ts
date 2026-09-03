@@ -1,6 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, OnInit } from '@angular/core'
 import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, transferArrayItem } from '@angular/cdk/drag-drop'
 import { LeadsServico, type CardLead, type ChaveLead, type ColunaLead } from './leads.servico.js'
+import { formatarTelefoneBR } from '@geracrm/shared'
+import { idadeToque, semDonoImporta } from './leads.regras.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 
 /**
@@ -34,21 +36,39 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
             <section class="coluna" [class]="'coluna--' + col.chave">
               <header class="col-topo">
                 <span class="col-nome txt-secao">{{ col.nome }}</span>
-                <span class="col-total">{{ col.total }}</span>
+                <!-- ⚠️ A coluna mostra QUANTOS DELES estão na tela, não só o
+                     total: com 709 leads e página de 50, "709" sozinho faz a
+                     pessoa procurar um card que ainda não foi buscado. -->
+                <span class="col-total txt-dados" [title]="tituloContagem(col)">
+                  @if (col.proximoCursor) { {{ col.cards.length }}<span class="de">de</span> }
+                  {{ col.total }}
+                </span>
               </header>
-              <div class="col-cards" cdkDropList [cdkDropListData]="col" (cdkDropListDropped)="soltou($event, col)">
+              <!-- ⚠️ Carrega a próxima página ao CHEGAR PERTO DO FIM da coluna
+                   (o botão continua embaixo como saída explícita). Com 709
+                   leads, clicar 14 vezes é a mesma lista ilimitada, só que
+                   manual. -->
+              <div class="col-cards" cdkDropList [cdkDropListData]="col"
+                   (cdkDropListDropped)="soltou($event, col)" (scroll)="aoRolar($event, col)">
                 @for (card of col.cards; track card.contatoId) {
                   <article class="card" cdkDrag [cdkDragData]="card">
                     <button class="card-abrir" type="button" (click)="abrir(card)" [disabled]="!card.conversaId"
                             [title]="card.conversaId ? 'Abrir conversa' : 'Sem conversa ainda'">
-                      <span class="card-nome encolhe">{{ card.nome }}</span>
-                      <span class="card-linha">
-                        @if (card.telefone) { <span class="card-tel">{{ card.telefone }}</span> }
+                      <span class="card-topo">
+                        <span class="card-nome encolhe">{{ card.nome }}</span>
                         @if (card.uf) { <span class="card-uf">{{ card.uf }}</span> }
                       </span>
-                      <span class="card-linha">
-                        <span class="card-resp" [class.orfa]="!card.responsavel">{{ card.responsavel || 'sem responsável' }}</span>
+                      <span class="card-tel txt-dados">{{ telefone(card) }}</span>
+                      <!-- ⚠️ A terceira linha é a MESMA caixa das ações: elas
+                           trocam de lugar com o rodapé no hover, em vez de
+                           flutuar por cima dele. Card denso com botão flutuante
+                           esconde justamente o que a pessoa varre. -->
+                      <span class="card-rodape">
+                        <span class="card-resp" [class.orfa]="semDono(card, col.chave)">{{ card.responsavel || 'sem responsável' }}</span>
                         @if (card.qtdVendas > 0) { <span class="card-vendas">🛒 {{ card.qtdVendas }}</span> }
+                        <!-- ⚠️ A idade do último toque é o que deixa priorizar
+                             sem abrir card por card numa coluna de centenas. -->
+                        <span class="card-toque" [class.frio]="card.ultimoToqueEm === null">{{ toque(card) }}</span>
                       </span>
                     </button>
                     <div class="card-acoes">
@@ -58,6 +78,9 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                     </div>
                   </article>
                 }
+                @if (col.carregandoMais) {
+                  <p class="col-carregando" role="status">Carregando mais {{ nomeCurto(col.chave) }}…</p>
+                }
                 <!-- ⚠️ Vazio é convite para agir, não recado triste (skill de
                      layout). "Vazio" não diz o que fazer nem por que a coluna
                      está assim. -->
@@ -65,8 +88,10 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
               </div>
               @if (col.proximoCursor) {
                 <button class="mais" (click)="servico.carregarMais(col.chave)" [disabled]="col.carregandoMais">
-                  {{ col.carregandoMais ? 'Carregando…' : 'Carregar mais' }}
+                  {{ col.carregandoMais ? 'Carregando…' : rotuloCarregarMais(col) }}
                 </button>
+              } @else if (col.cards.length > 0) {
+                <p class="fim">Fim da lista · {{ col.cards.length }} de {{ col.total }}</p>
               }
             </section>
           }
@@ -113,30 +138,43 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
       padding: 10px var(--espacamento-4); border-bottom: 1px solid var(--borda); }
     .col-nome { color: var(--texto); }
     .col-total { font-size: 12px; color: var(--texto-suave); background: var(--fundo); padding: 1px 8px; border-radius: var(--raio-completo); font-variant-numeric: tabular-nums; }
+    .col-total .de { margin: 0 3px; opacity: .7; }
     .col-cards { flex: 1; overflow-y: auto; padding: var(--espacamento-2);
       display: flex; flex-direction: column; gap: var(--espacamento-1); min-height: 40px; }
-    /* ⚠️ Denso de propósito: quem usa isto 8h/dia VARRE a coluna, e o que se
-       varre é o nome. Antes o card gastava ~130px em três blocos e cabiam seis
-       na tela; agora cabem catorze, com a mesma informação. */
-    .card { position: relative; display: flex; flex-direction: column; background: var(--superficie-elevada);
+    /* ⚠️ flex:none NÃO é detalhe — é o defeito que fez esta tela virar um monte
+       de listras de 10px com 50 cards na coluna (03/set). O .col-cards é um flex
+       column com overflow-y auto; sem flex:none, o flex-shrink padrão ESMAGA os
+       filhos até caberem, e a rolagem nunca dispara porque nada transborda. É o
+       mesmo sintoma do incidente de altura (comentário do :host), por outra
+       causa — e por isso o teste leads-cards.spec.ts fixa a regra.
+       Denso, mas legível: quem usa isto 8h/dia varre o NOME. */
+    .card { position: relative; flex: none; display: flex; flex-direction: column; background: var(--superficie-elevada);
       border: 1px solid var(--borda); border-left: 3px solid var(--borda-forte); border-radius: var(--raio-controle);
       cursor: grab; box-shadow: var(--elevacao-nenhuma); overflow: hidden;
       transition: background var(--movimento-estado-duracao) var(--movimento-estado-curva); }
     .card:hover { background: var(--superficie); }
     .card:active { cursor: grabbing; }
-    .card-abrir { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 0; background: none; text-align: left; color: inherit; font: inherit; cursor: pointer; width: 100%; }
+    .card-abrir { display: flex; flex-direction: column; gap: 3px; padding: 9px 11px; border: 0; background: none; text-align: left; color: inherit; font: inherit; cursor: pointer; width: 100%; }
     .card-abrir:disabled { cursor: grab; }
-    .card-nome { font-size: 13px; font-weight: 600; color: var(--texto); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .card-linha { display: flex; align-items: center; gap: 6px; min-width: 0; }
-    .card-tel { font-size: 12px; color: var(--texto-secundario); font-variant-numeric: tabular-nums; }
-    .card-uf { font-size: 11px; color: var(--texto-suave); border: 1px solid var(--borda); border-radius: var(--raio-completo); padding: 0 6px; }
-    .card-resp { font-size: 11px; color: var(--texto-suave); }
+    .card-topo { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .card-nome { flex: 1; font-size: 13px; font-weight: 600; color: var(--texto); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card-tel { font-size: 12px; color: var(--texto-secundario); }
+    /* ⚠️ Rodapé com altura FIXA e as ações ocupando a mesma faixa: no hover uma
+       troca pela outra sem o card mudar de tamanho. Card que cresce no hover faz
+       a coluna inteira pular sob o cursor. */
+    .card-rodape { display: flex; align-items: center; gap: 6px; min-width: 0; height: 16px; }
+    .card-uf { flex: none; font-size: 11px; color: var(--texto-suave); border: 1px solid var(--borda); border-radius: var(--raio-completo); padding: 0 6px; }
+    .card-resp { font-size: 11px; color: var(--texto-suave); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .card-resp.orfa { color: var(--atencao); }
-    .card-vendas { font-size: 11px; color: var(--texto-suave); }
+    .card-vendas { flex: none; font-size: 11px; color: var(--texto-suave); }
+    .card-toque { flex: none; margin-left: auto; font-size: 11px; color: var(--texto-suave); }
+    .card-toque.frio { color: var(--texto-suave); opacity: .75; font-style: italic; }
     /* ⚠️ Ações aparecem no hover E no foco. Só no hover, elas sumiriam para quem
        navega por teclado — a coluna ficaria sem nenhuma forma de qualificar. */
-    .card-acoes { position: absolute; right: 8px; bottom: 6px; display: none; gap: 4px; }
+    .card-acoes { position: absolute; right: 9px; bottom: 7px; display: none; gap: 4px;
+      padding-left: var(--espacamento-4); background: linear-gradient(90deg, transparent, var(--superficie-elevada) 24px); }
     .card:hover .card-acoes, .card:focus-within .card-acoes { display: flex; }
+    .card:hover .card-rodape, .card:focus-within .card-rodape { opacity: 0; }
     .card-acoes button { padding: 2px 8px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
       background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 10px; cursor: pointer; }
     .a-qualificar:hover { background: var(--sucesso-suave); color: var(--sucesso); border-color: var(--sucesso); }
@@ -144,8 +182,12 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .a-reabrir:hover { background: var(--acao-suave); color: var(--acao); border-color: var(--acao); }
     .col-vazia { margin: auto; padding: var(--espacamento-6) var(--espacamento-3);
       color: var(--texto-suave); font-size: 12px; text-align: center; line-height: 1.5; }
+    .col-carregando { margin: var(--espacamento-2) 0; text-align: center; font-size: 11px; color: var(--texto-suave); }
     .mais { margin: 0 var(--espacamento-3) var(--espacamento-3); padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
       border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 12px; cursor: pointer; }
+    .mais:not(:disabled):hover { background: var(--superficie-hover); border-color: var(--borda-forte); }
+    .fim { margin: 0 var(--espacamento-3) var(--espacamento-3); padding-top: var(--espacamento-1);
+      text-align: center; font-size: 11px; color: var(--texto-suave); border-top: 1px solid var(--borda); }
     button { cursor: pointer; }
     .cdk-drag-preview { box-shadow: var(--elevacao-modal); border-radius: var(--raio-controle); }
     .cdk-drag-placeholder { opacity: .4; }
@@ -161,6 +203,18 @@ export class LeadsPagina implements OnInit {
 
   abrir(card: CardLead): void { if (card.conversaId) void this.inbox.abrir(card.conversaId) }
 
+  /** ⚠️ Formatação vem de @geracrm/shared: 13 dígitos crus são ilegíveis numa
+   *  varredura, e cada tela inventando o próprio formato diverge em um mês. */
+  telefone(card: CardLead): string {
+    return card.telefone ? formatarTelefoneBR(card.telefone) : 'sem telefone'
+  }
+
+  /** Idade do último toque — regra pura em leads.regras.ts. */
+  toque(card: CardLead): string { return idadeToque(card.ultimoToqueEm, new Date()) }
+
+  /** ⚠️ Laranja de "sem dono" só onde ele significa trabalho parado. */
+  semDono(card: CardLead, coluna: string): boolean { return semDonoImporta(card.responsavel, coluna) }
+
   mover(card: CardLead, estado: ChaveLead): void { void this.servico.qualificar(card.contatoId, estado) }
 
   async soltou(ev: CdkDragDrop<ColunaLead>, destino: ColunaLead): Promise<void> {
@@ -170,6 +224,39 @@ export class LeadsPagina implements OnInit {
     transferArrayItem(origem.cards, destino.cards, ev.previousIndex, ev.currentIndex)
     this.servico.colunas.set([...this.servico.colunas()])
     await this.servico.qualificar(card.contatoId, destino.chave)
+  }
+
+  /**
+   * Puxa a próxima página ao chegar perto do fim da coluna.
+   *
+   * ⚠️ A margem é de UMA tela (`clientHeight`), não de alguns pixels: com a
+   * página chegando só quando o fim já está visível, a rolagem trava e a pessoa
+   * vê o vazio antes dos cards. O serviço ignora chamada repetida enquanto uma
+   * busca está em voo, então rolar rápido não dispara duas.
+   */
+  aoRolar(ev: Event, col: ColunaLead): void {
+    if (!col.proximoCursor || col.carregandoMais) return
+    const el = ev.target as HTMLElement
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - el.clientHeight) {
+      void this.servico.carregarMais(col.chave)
+    }
+  }
+
+  /** ⚠️ O botão diz QUANTOS faltam: "Carregar mais" sozinho não deixa a pessoa
+   *  decidir entre clicar 1 vez ou 13. */
+  rotuloCarregarMais(col: ColunaLead): string {
+    const faltam = Math.max(col.total - col.cards.length, 0)
+    return faltam > 0 ? `Carregar mais (${faltam} restantes)` : 'Carregar mais'
+  }
+
+  tituloContagem(col: ColunaLead): string {
+    return col.proximoCursor
+      ? `${col.cards.length} carregados de ${col.total} nesta coluna`
+      : `${col.total} nesta coluna`
+  }
+
+  nomeCurto(chave: string): string {
+    return chave === 'qualificado' ? 'qualificados' : chave === 'descartado' ? 'descartados' : 'leads'
   }
 
   /** O que a coluna vazia diz — cada uma tem uma razão diferente de estar assim. */
