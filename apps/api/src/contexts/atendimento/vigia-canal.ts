@@ -54,7 +54,10 @@ export async function vigiarConexaoCanais(
       SELECT tenant_id, id, provedor, nome_amigavel, estado, credenciais_cifradas
         FROM canal_conectado
        WHERE estado IN ('conectado', 'degradado', 'desconectado')
-         AND provedor IS NOT NULL AND credenciais_cifradas IS NOT NULL`
+         AND provedor IS NOT NULL AND credenciais_cifradas IS NOT NULL
+         -- ⚠️ Canal arquivado saiu da frota (0083): vigiar um número que
+         --    ninguém mais vê só produziria alerta sobre o que foi removido.
+         AND arquivado_em IS NULL`
 
     let verificados = 0, caiu = 0, voltou = 0
 

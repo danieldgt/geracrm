@@ -17,7 +17,7 @@ import { enviarPeloGateway, type ContextoEnvio } from './canais/gateway.js'
 interface Preparo {
   mensagemId: string; destino: string; provedor: string | null; cred: Uint8Array | null
   tipoCanal: string; estadoCanal: string; ultimaEntranteEm: Date | null; destinoBloqueado: boolean
-  disparoPausado: boolean
+  disparoPausado: boolean; canalArquivado: boolean
 }
 
 function comCabecalho(nome: string | null, texto: string): string {
@@ -67,6 +67,7 @@ export async function enviarTextoNaConversa(
   const preparo = await comTenantServico(tenantId, async (tx: Sql) => {
     const [ctx] = await tx<Preparo[]>`
       SELECT cc.provedor, cc.credenciais_cifradas AS cred, cc.tipo AS "tipoCanal", cc.estado AS "estadoCanal",
+             (cc.arquivado_em IS NOT NULL) AS "canalArquivado",
              ct.e164 AS destino, c.ultima_entrante_em AS "ultimaEntranteEm",
              coalesce(cfg.disparo_pausado, false) AS "disparoPausado",
              EXISTS (SELECT 1 FROM lista_bloqueio lb
@@ -97,6 +98,7 @@ export async function enviarTextoNaConversa(
   // Fase 2: gateway único revalida e só então despacha.
   const ctxEnvio: ContextoEnvio = {
     tipoCanal: preparo.tipoCanal, estadoCanal: preparo.estadoCanal, provedor: preparo.provedor,
+    canalArquivado: preparo.canalArquivado,
     temCredencial: !!preparo.cred, destinoBloqueado: preparo.destinoBloqueado,
     ehTemplate: false, ultimaEntranteEm: preparo.ultimaEntranteEm,
     // ⚠️ Este módulo é o caminho PROGRAMÁTICO (resumo de pedido, automação,
@@ -152,7 +154,8 @@ export async function enviarTextoParaContato(
   const preparo = await comTenantServico(tenantId, async (tx: Sql) => {
     const [ctx] = await tx<(Preparo & { conversaId: string })[]>`
       SELECT cc.provedor, cc.credenciais_cifradas AS cred, cc.tipo AS "tipoCanal",
-             cc.estado AS "estadoCanal", ct.e164 AS destino,
+             cc.estado AS "estadoCanal", (cc.arquivado_em IS NOT NULL) AS "canalArquivado",
+             ct.e164 AS destino,
              coalesce(cfg.disparo_pausado, false) AS "disparoPausado",
              EXISTS (SELECT 1 FROM lista_bloqueio lb
                       WHERE lb.tenant_id = ct.tenant_id AND lb.chave_bloqueio = ct.chave_bloqueio) AS "destinoBloqueado",
@@ -193,6 +196,7 @@ export async function enviarTextoParaContato(
 
   const ctxEnvio: ContextoEnvio = {
     tipoCanal: preparo.tipoCanal, estadoCanal: preparo.estadoCanal, provedor: preparo.provedor,
+    canalArquivado: preparo.canalArquivado,
     temCredencial: !!preparo.cred, destinoBloqueado: preparo.destinoBloqueado,
     ehTemplate: false, ultimaEntranteEm: preparo.ultimaEntranteEm,
     ehDisparo: true, disparoPausado: preparo.disparoPausado,

@@ -57,9 +57,12 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
         if (!contato) return { erro: 'contato_nao_encontrado' as const }
 
         const [canal] = req.body?.canalId
-          ? await tx<{ id: string }[]>`SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${req.body.canalId}`
+          // ⚠️ Canal arquivado (0083) não abre conversa nova: ele saiu da
+          //    frota, e a conversa nasceria num número que não aparece na tela.
+          ? await tx<{ id: string }[]>`SELECT id FROM canal_conectado
+              WHERE tenant_id = tenant_atual() AND id = ${req.body.canalId} AND arquivado_em IS NULL`
           : await tx<{ id: string }[]>`
-              SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual()
+              SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND arquivado_em IS NULL
                ORDER BY (estado = 'conectado') DESC, criado_em ASC LIMIT 1`
         if (!canal) return { erro: 'sem_canal' as const }
 

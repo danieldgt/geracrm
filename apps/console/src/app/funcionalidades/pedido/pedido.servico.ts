@@ -202,6 +202,7 @@ export class PedidoServico {
       : m === 'bloqueado' ? 'O cliente pediu para não receber (opt-out).'
       : m === 'canal_sem_credencial' ? 'O canal ainda não está configurado para enviar.'
       : m === 'canal_indisponivel' ? 'O canal está suspenso ou desconectado.'
+      : m === 'canal_arquivado' ? 'Este número foi removido da frota. Use outro número.'
       : 'Não foi possível enviar o resumo agora.'
   }
 }

@@ -87,6 +87,45 @@ export class CanaisServico {
     }
   }
 
+  /**
+   * Editar nome e/ou credencial.
+   *
+   * ⚠️ Campo de credencial em branco NÃO é apagar: o servidor mescla com o que
+   * já está guardado. É o que permite corrigir só o token errado sem redigitar
+   * (nem ter à mão) os outros — que é como o canal quebrado costuma chegar aqui.
+   */
+  async editar(id: string, dados: { nomeAmigavel?: string; credencial?: Record<string, string> }):
+    Promise<{ ok: true; credencialTrocada: boolean } | { ok: false; erro: ErroApi }> {
+    try {
+      const r = await firstValueFrom(
+        this.http.put<{ credencialTrocada: boolean }>(`/v1/canais/${id}`, dados))
+      await this.carregar()
+      return { ok: true, credencialTrocada: r.credencialTrocada }
+    } catch (e) {
+      return { ok: false, erro: erroApiDe(e) }
+    }
+  }
+
+  /**
+   * Tirar o número da frota.
+   *
+   * ⚠️ Dois desfechos, decididos pelo servidor: número que nunca conversou é
+   * REMOVIDO; número com histórico é ARQUIVADO (some da tela, conversas
+   * preservadas). A tela precisa dizer qual dos dois aconteceu — são promessas
+   * diferentes para quem clicou.
+   */
+  async remover(id: string):
+    Promise<{ ok: true; estado: 'removido' | 'arquivado'; conversas: number } | { ok: false; erro: ErroApi }> {
+    try {
+      const r = await firstValueFrom(
+        this.http.delete<{ estado: 'removido' | 'arquivado'; conversas: number }>(`/v1/canais/${id}`))
+      await this.carregar()
+      return { ok: true, estado: r.estado, conversas: r.conversas }
+    } catch (e) {
+      return { ok: false, erro: erroApiDe(e) }
+    }
+  }
+
   async testar(id: string): Promise<{ conectado: boolean; detalhe?: string }> {
     this.testando.update((s) => new Set(s).add(id))
     try {

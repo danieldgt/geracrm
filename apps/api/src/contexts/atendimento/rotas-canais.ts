@@ -3,7 +3,9 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { validarCredencial, type Credencial } from '@geracrm/conectores'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { cifrar, decifrar, resumir } from '../integracao/cofre.js'
+import { auditar } from '../plataforma/auditoria.js'
 import { registrarMetrica } from '../plataforma/metricas.js'
+import { garantirUsuarioId } from './rotas-fila.js'
 import { statusAquecimento } from './aquecimento.js'
 import { CANAIS, provedorPorCodigo } from './canais/catalogo.js'
 import { criarCanal } from './canais/fabrica.js'
@@ -51,6 +53,9 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
           FROM canal_conectado c
           LEFT JOIN canal_configuracao cfg
                  ON cfg.tenant_id = c.tenant_id AND cfg.canal_id = c.id
+         -- ⚠️ Arquivado saiu da frota (0083): não aparece na tela, não é
+         --    vigiado e não recebe envio. O histórico dele continua no banco.
+         WHERE c.arquivado_em IS NULL
          ORDER BY c.criado_em
       `
       return {
@@ -146,6 +151,158 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
   })
 
   /**
+   * EDITAR o número: nome e/ou credencial.
+   *
+   * ⚠️ Nasceu de um caso real: um PlugZapi cadastrado com a URL do endpoint no
+   * campo do Client-Token ficava desconectado e não havia como corrigir — só o
+   * cadastro existia. Credencial que ENTRA e nunca sai (§5.8) não pode
+   * significar credencial que nunca muda.
+   *
+   * ⚠️ A credencial é MESCLADA com a atual: campo em branco mantém o que está
+   * lá. Sem isso, trocar um token exigiria redigitar todos os outros — e quem
+   * não tem os outros à mão acaba deixando o canal quebrado do jeito que está.
+   *
+   * ⚠️ O provedor NÃO muda aqui. Trocar de provedor é outro número: os campos
+   * são outros, o webhook aponta para outro lugar e o histórico ficaria dizendo
+   * que a conversa aconteceu por um caminho que nunca existiu.
+   */
+  app.put<{ Params: { id: string }; Body: CorpoCanal }>(
+    '/v1/canais/:id', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const corpo = (req.body ?? {}) as CorpoCanal
+      const nome = corpo.nomeAmigavel?.trim()
+      // Só os campos preenchidos entram na mescla — em branco é "mantém".
+      const informados = Object.entries((corpo.credencial ?? {}) as Record<string, unknown>)
+        .filter(([, v]) => typeof v === 'string' && v.trim() !== '')
+      if (nome === undefined && informados.length === 0) {
+        return falha(reply, 422, 'canal.nada_para_mudar', 'Mude o nome ou informe pelo menos um campo da credencial.')
+      }
+      if (nome !== undefined && nome === '') {
+        return falha(reply, 422, 'canal.nome_obrigatorio', 'Dê um nome para este número.', { campo: 'nomeAmigavel' })
+      }
+
+      const atual = await req.comTenant(async (tx) => {
+        const [l] = await tx<{ provedor: string | null; credenciais_cifradas: Buffer | null }[]>`
+          SELECT provedor, credenciais_cifradas FROM canal_conectado
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND arquivado_em IS NULL`
+        return l ?? null
+      })
+      if (!atual) return falha(reply, 404, 'canal.nao_encontrado', 'Canal não encontrado.')
+
+      let cifrada: Buffer | null = null
+      let identificadorExterno: string | undefined
+      if (informados.length > 0) {
+        const provedor = atual.provedor ? provedorPorCodigo(atual.provedor) : undefined
+        if (!provedor) {
+          return falha(reply, 422, 'canal.provedor_desconhecido', 'Provedor de canal não reconhecido.')
+        }
+        // ⚠️ Mescla sobre a credencial guardada; a validação roda sobre o
+        //    RESULTADO, não sobre o que veio no corpo — é o resultado que passa
+        //    a valer para o fornecedor.
+        const anterior = atual.credenciais_cifradas ? decifrar(atual.credenciais_cifradas) : {}
+        const mesclada = { ...anterior, ...Object.fromEntries(informados) } as Credencial
+        const validacao = validarCredencial(provedor.esquemaCredencial, mesclada)
+        if (!validacao.ok) {
+          return falha(reply, 422, 'canal.credencial_invalida', 'Confira os campos destacados.', { campos: validacao.erros })
+        }
+        cifrada = cifrar(mesclada)
+        const cred = mesclada as Record<string, string | undefined>
+        identificadorExterno = provedor.codigo === 'meta_oficial' ? cred['phoneNumberId']
+          : provedor.codigo === 'instagram_meta' ? cred['paginaId'] : undefined
+      }
+
+      try {
+        await req.comTenant(async (tx) => {
+          if (nome !== undefined) {
+            await tx`
+              UPDATE canal_conectado SET nome_amigavel = ${nome}
+               WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+          }
+          if (cifrada) {
+            // ⚠️ Credencial nova invalida o que sabíamos da conexão: volta para
+            //    'conectando' e LIMPA o carimbo. Manter "conectado" com uma
+            //    credencial que ninguém testou é a mentira confortável que o
+            //    `verificado_em` (0069) existe para desfazer.
+            await tx`
+              UPDATE canal_conectado
+                 SET credenciais_cifradas = ${cifrada},
+                     estado = 'conectando', verificado_em = NULL, ultimo_erro = NULL,
+                     identificador_externo = coalesce(${identificadorExterno ?? null}, identificador_externo)
+               WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+          }
+          const atorId = await garantirUsuarioId(tx, req)
+          // ⚠️ Auditoria SEM valor de credencial — só quais campos mudaram.
+          await auditar(tx, {
+            atorId, acao: 'canal.editado', entidade: 'canal_conectado', entidadeId: req.params.id,
+            dados: { nomeAlterado: nome !== undefined, camposCredencial: informados.map(([k]) => k) },
+          })
+        })
+      } catch (e) {
+        if ((e as { code?: string }).code === '23505') {
+          return falha(reply, 409, 'canal.numero_ja_conectado', 'Este número/conta já está conectado em outro canal.')
+        }
+        throw e
+      }
+      return reply.send({ ok: true, credencialTrocada: cifrada !== null })
+    },
+  )
+
+  /**
+   * REMOVER o número da frota.
+   *
+   * ⚠️ Dois desfechos, e a diferença é o histórico: canal que nunca conversou é
+   * APAGADO (as tabelas satélites caem por cascade); canal com conversa,
+   * atendimento ou campanha é ARQUIVADO. As três FKs não têm `ON DELETE
+   * CASCADE` de propósito — apagar um número não pode apagar a conversa que ele
+   * atendeu, e o banco recusaria o DELETE de qualquer forma.
+   *
+   * A tela precisa saber qual dos dois aconteceu: "arquivado" com o histórico
+   * preservado é uma promessa diferente de "removido".
+   */
+  app.delete<{ Params: { id: string } }>(
+    '/v1/canais/:id', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const r = await req.comTenant(async (tx) => {
+        const [canal] = await tx<{ nome_amigavel: string }[]>`
+          SELECT nome_amigavel FROM canal_conectado
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND arquivado_em IS NULL`
+        if (!canal) return { estado: 'nao_encontrado' as const }
+
+        const [uso] = await tx<{ conversas: number; atendimentos: number; campanhas: number }[]>`
+          SELECT
+            (SELECT count(*) FROM conversa
+              WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id})::int    AS conversas,
+            (SELECT count(*) FROM atendimento
+              WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id})::int    AS atendimentos,
+            (SELECT count(*) FROM campanha
+              WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id})::int    AS campanhas`
+        const conversas = uso?.conversas ?? 0
+        const temHistorico = conversas > 0 || (uso?.atendimentos ?? 0) > 0 || (uso?.campanhas ?? 0) > 0
+
+        const atorId = await garantirUsuarioId(tx, req)
+        if (temHistorico) {
+          await tx`
+            UPDATE canal_conectado SET arquivado_em = now()
+             WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+          await auditar(tx, {
+            atorId, acao: 'canal.arquivado', entidade: 'canal_conectado', entidadeId: req.params.id,
+            dados: { nome: canal.nome_amigavel, conversas },
+          })
+          return { estado: 'arquivado' as const, conversas }
+        }
+        await auditar(tx, {
+          atorId, acao: 'canal.removido', entidade: 'canal_conectado', entidadeId: req.params.id,
+          dados: { nome: canal.nome_amigavel },
+        })
+        await tx`DELETE FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        return { estado: 'removido' as const, conversas: 0 }
+      })
+      if (r.estado === 'nao_encontrado') return falha(reply, 404, 'canal.nao_encontrado', 'Canal não encontrado.')
+      return reply.send({ ok: true, estado: r.estado, conversas: r.conversas })
+    },
+  )
+
+  /**
    * Testa o canal — status da instância / conexão, via adaptador.
    *
    * ⚠️ Como no ERP: 200 mesmo quando o canal está fora, com o resultado no
@@ -166,7 +323,8 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const canalDb = await req.comTenant(async (tx) => {
         const [l] = await tx<{ provedor: string | null; credenciais_cifradas: Buffer | null }[]>`
-          SELECT provedor, credenciais_cifradas FROM canal_conectado WHERE id = ${req.params.id}`
+          SELECT provedor, credenciais_cifradas FROM canal_conectado
+           WHERE id = ${req.params.id} AND arquivado_em IS NULL`
         return l ?? null
       })
       if (!canalDb) return falha(reply, 404, 'canal.nao_encontrado', 'Canal não encontrado.')
@@ -189,7 +347,8 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const canalDb = await req.comTenant(async (tx) => {
         const [l] = await tx<{ provedor: string | null; credenciais_cifradas: Buffer | null }[]>`
-          SELECT provedor, credenciais_cifradas FROM canal_conectado WHERE id = ${req.params.id}`
+          SELECT provedor, credenciais_cifradas FROM canal_conectado
+           WHERE id = ${req.params.id} AND arquivado_em IS NULL`
         return l ?? null
       })
       if (!canalDb) return falha(reply, 404, 'canal.nao_encontrado', 'Canal não encontrado.')

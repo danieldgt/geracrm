@@ -29,12 +29,23 @@ export async function rotasWebhook(app: FastifyInstance): Promise<void> {
       // ⚠️ Descobre o tenant pela função SECURITY DEFINER — a única porta
       //    autorizada, porque canal_conectado tem RLS FORCE e o webhook não tem
       //    tenant setado. Devolve só tenant/provedor/estado, nada mais.
-      const [canal] = await sql<{ tenant_id: string; provedor: string | null; estado: string }[]>`
-        SELECT tenant_id, provedor, estado FROM tenant_do_canal(${canalId}::uuid)
+      const [canal] = await sql<{
+        tenant_id: string; provedor: string | null; estado: string; arquivado_em: Date | null
+      }[]>`
+        SELECT tenant_id, provedor, estado, arquivado_em FROM tenant_do_canal(${canalId}::uuid)
       `
       if (!canal) {
         // 404 e não 200: canal inexistente não é evento a ignorar, é URL errada.
         return reply.code(404).send({ erro: 'canal.nao_encontrado' })
+      }
+      // ⚠️ Número arquivado (0083): 200 e descarta. A instância pode continuar
+      //    viva no fornecedor depois que o número saiu da frota — ingerir criaria
+      //    conversa num canal que sumiu da tela, invisível para quem atende. E é
+      //    200, não erro: falha PERMANENTE que devolve erro trava a fila de
+      //    TODOS os clientes na entrega sequencial.
+      if (canal.arquivado_em) {
+        req.log.warn({ canalId }, 'webhook de canal arquivado descartado')
+        return reply.code(200).send({ ok: true, descartado: 'canal_arquivado' })
       }
 
       const evento = parseWebhookPlugZapi(req.body)

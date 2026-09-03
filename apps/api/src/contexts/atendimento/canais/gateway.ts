@@ -30,6 +30,8 @@ export type MotivoRecusa =
   | 'bloqueado'
   /** Canal suspenso ou desconectado — não dá para enviar agora. */
   | 'canal_indisponivel'
+  /** Número arquivado: saiu da frota (0083) e não envia mais por nenhum caminho. */
+  | 'canal_arquivado'
   /** Sem provedor/credencial configurada para este canal. */
   | 'canal_sem_credencial'
   /** Oficial, fora da janela de 24h e sem template aprovado. */
@@ -49,6 +51,13 @@ export interface ContextoEnvio {
   readonly disparoPausado?: boolean
   readonly tipoCanal: string
   readonly estadoCanal: string
+  /**
+   * `canal_conectado.arquivado_em IS NOT NULL` — o número foi tirado da frota.
+   * ⚠️ Diferente de desconectado: desconectado volta, arquivado foi decisão de
+   * quem opera. Some da tela, mas as conversas dele continuam abertas no inbox
+   * — e sem esta checagem alguém responderia por um número já removido.
+   */
+  readonly canalArquivado?: boolean
   readonly provedor: string | null
   readonly temCredencial: boolean
   readonly destinoBloqueado: boolean
@@ -76,6 +85,9 @@ export function avaliarEnvio(
   //    decisão NOSSA de proteção, e quem for ver o motivo precisa ler "disparo
   //    pausado", não "canal indisponível".
   if (ctx.ehDisparo && ctx.disparoPausado) return { libera: false, motivo: 'disparo_pausado' }
+  // ⚠️ Antes do estado: arquivado tem motivo PRÓPRIO. Quem lê a recusa precisa
+  //    ver "número removido", e não sair tentando reconectar o que foi tirado.
+  if (ctx.canalArquivado) return { libera: false, motivo: 'canal_arquivado' }
   if (ctx.estadoCanal === 'suspenso' || ctx.estadoCanal === 'desconectado') {
     return { libera: false, motivo: 'canal_indisponivel' }
   }

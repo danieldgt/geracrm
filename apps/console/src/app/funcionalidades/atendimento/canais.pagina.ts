@@ -9,7 +9,7 @@ import { firstValueFrom } from 'rxjs'
 import { CanaisServico, type Canal } from './canais.servico.js'
 import { RouterLink } from '@angular/router'
 import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
-import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.regras.js'
+import { abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, verificacaoAtrasada } from './canais.regras.js'
 
 /**
  * Cadastro de celular / canal — Meta (oficial) e não-oficiais (PlugZapi + futuros).
@@ -39,6 +39,11 @@ import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.r
       @case ('erro') { <div class="bloco aviso"><h2>Não foi possível carregar</h2>
         <p>{{ servico.erro() }}</p><button class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
+        <!-- O desfecho da remoção é DIFERENTE por número (apagado × arquivado),
+             e quem clicou precisa saber qual dos dois aconteceu. -->
+        @if (avisoRemocao(); as m) {
+          <p class="aviso-remocao" role="status">{{ m }}</p>
+        }
         @if (servico.vazio()) {
           <div class="bloco vazio">
             <h2>Nenhum número conectado</h2>
@@ -112,6 +117,13 @@ import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.r
                       <button class="btn btn--secundario" (click)="servico.iniciarAquecimento(c.id)">Iniciar aquecimento</button>
                     }
                   }
+                  <!-- ⚠️ Editar e Remover existem porque cadastro errado era
+                       PERMANENTE: um Client-Token colado errado deixava o número
+                       desconectado para sempre, sem rota nem botão que
+                       corrigisse. Detectar sem oferecer o conserto é meio
+                       caminho — a mesma lição do QR de reconexão. -->
+                  <button class="btn btn--secundario" (click)="abrirEdicao(c)">Editar</button>
+                  <button class="btn btn--perigo" (click)="pedirRemocao(c)">Remover</button>
                 </div>
                 @if (resultado()[c.id]; as r) {
                   <p class="resultado" [class.ok]="r.conectado" role="status">
@@ -176,17 +188,25 @@ import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.r
            página e o botão parecia não fazer nada. Ver modal-de-verdade.spec.ts. -->
       <div class="fundo" (click)="fechar()"></div>
       <div class="painel" role="dialog" aria-modal="true" aria-labelledby="tp" tabindex="-1">
-        <h2 id="tp">Conectar número</h2>
+        <h2 id="tp">{{ ed.id ? 'Editar número' : 'Conectar número' }}</h2>
 
-        <label class="campo">
-          <span class="rotulo">Tipo de número</span>
-          <select [value]="ed.provedor" (change)="trocarProvedor($event)">
-            @for (p of servico.provedores(); track p.codigo) {
-              <option [value]="p.codigo">{{ p.nome }}</option>
-            }
-          </select>
-          <span class="ajuda">{{ provedorAtual()?.descricao }}</span>
-        </label>
+        @if (ed.id) {
+          <!-- ⚠️ O tipo NÃO muda na edição: trocar de provedor é outro número —
+               campos diferentes, webhook em outro endereço, e o histórico
+               passaria a dizer que a conversa aconteceu por um caminho que nunca
+               existiu. Para trocar, conecte outro número e remova este. -->
+          <p class="tipo-fixo">{{ provedorAtual()?.nome }} · o tipo do número não muda na edição.</p>
+        } @else {
+          <label class="campo">
+            <span class="rotulo">Tipo de número</span>
+            <select [value]="ed.provedor" (change)="trocarProvedor($event)">
+              @for (p of servico.provedores(); track p.codigo) {
+                <option [value]="p.codigo">{{ p.nome }}</option>
+              }
+            </select>
+            <span class="ajuda">{{ provedorAtual()?.descricao }}</span>
+          </label>
+        }
 
         <!-- ⚠️ Aviso de risco do não-oficial em DESTAQUE (ADR-021). -->
         @if (provedorAtual()?.aviso; as aviso) {
@@ -198,6 +218,18 @@ import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.r
           <input [value]="ed.nome" (input)="nomeMudou($event)" placeholder="Ex.: WhatsApp da loja" />
           <span class="ajuda">{{ erros()['nomeAmigavel'] ?? 'Aparece nas telas e mensagens do sistema.' }}</span>
         </label>
+
+        <!-- ⚠️ Em branco NÃO apaga: o servidor mescla com o que já está
+             guardado. É o que permite corrigir só o campo errado — quem chega
+             aqui com o canal quebrado raramente tem os outros valores à mão. -->
+        @if (ed.id) {
+          <p class="nota-credencial">
+            @if (camposConfigurados().length) {
+              Credencial configurada: {{ camposConfigurados().join(', ') }}.
+            }
+            Preencha só o que vai mudar — campo em branco mantém o valor atual.
+          </p>
+        }
 
         @if (provedorAtual(); as p) {
           @if (p.oficial) {
@@ -237,7 +269,32 @@ import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.r
         <div class="acoes">
           <button class="btn btn--secundario" (click)="fechar()">Cancelar</button>
           <button class="btn btn--primario" (click)="salvar()" [disabled]="salvando()">
-            {{ salvando() ? 'Salvando…' : 'Salvar e testar' }}
+            {{ salvando() ? 'Salvando…' : ed.id ? 'Salvar alterações' : 'Salvar e testar' }}
+          </button>
+        </div>
+      </div>
+    }
+
+    <!-- ⚠️ Confirmação em modal PRÓPRIO, nunca o confirm() do navegador: é aqui
+         que cabe explicar o desfecho — apagar de vez × arquivar com o histórico
+         de pé. Um confirm() só pergunta "tem certeza?" sobre o quê. -->
+    @if (confirmandoRemocao(); as alvo) {
+      <div class="fundo" (click)="cancelarRemocao()"></div>
+      <div class="painel" role="dialog" aria-modal="true" aria-labelledby="tr" tabindex="-1">
+        <h2 id="tr">Remover {{ alvo.nomeAmigavel }}?</h2>
+        <p class="explica">
+          O número sai da frota: some desta tela, para de ser verificado e não envia mais
+          por nenhum caminho — nem campanha, nem resposta em conversa aberta.
+        </p>
+        <p class="explica">
+          Se ele já conversou, o histórico é preservado: o número fica <strong>arquivado</strong>
+          em vez de apagado. Nenhuma conversa ou mensagem é perdida.
+        </p>
+        @if (erroRemocao(); as m) { <p class="erro-geral" role="alert">{{ m }}</p> }
+        <div class="acoes">
+          <button class="btn btn--secundario" (click)="cancelarRemocao()">Cancelar</button>
+          <button class="btn btn--perigo" (click)="remover(alvo)" [disabled]="removendo()">
+            {{ removendo() ? 'Removendo…' : 'Remover número' }}
           </button>
         </div>
       </div>
@@ -321,11 +378,25 @@ import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.r
     .avancado > app-formulario-credencial { display: block; margin-bottom: var(--espacamento-3); }
     .aviso-credencial { margin: var(--espacamento-3) 0; font-size: 12px; color: var(--texto-suave); line-height: 1.5; }
     .erro-geral { color: var(--erro); font-size: 13px; }
+    .tipo-fixo { margin: 0 0 var(--espacamento-4); font-size: 13px; color: var(--texto-secundario); }
+    .nota-credencial { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3);
+      border-left: 3px solid var(--acao); background: var(--superficie);
+      border-radius: var(--raio-controle); color: var(--texto-secundario); font-size: 13px; line-height: 1.5; }
+    .explica { margin: 0 0 var(--espacamento-3); font-size: 13px; color: var(--texto-secundario); line-height: 1.5; }
+    .aviso-remocao { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3);
+      border: 1px solid var(--borda); border-left: 3px solid var(--sucesso);
+      border-radius: var(--raio-controle); background: var(--superficie);
+      color: var(--texto-secundario); font-size: 13px; }
   `,
 })
 export class CanaisPagina implements OnInit, OnDestroy {
   readonly servico = inject(CanaisServico)
-  readonly editando = signal<{ provedor: string; nome: string } | null>(null)
+  /** `id` presente = EDITANDO um número que existe; ausente = conectando um novo. */
+  readonly editando = signal<{ id?: string; provedor: string; nome: string } | null>(null)
+  readonly confirmandoRemocao = signal<Canal | null>(null)
+  readonly removendo = signal(false)
+  readonly erroRemocao = signal<string | null>(null)
+  readonly avisoRemocao = signal<string | null>(null)
   readonly credencial = signal<Record<string, string>>({})
   readonly erros = signal<Record<string, string>>({})
   readonly erroGeral = signal<string | null>(null)
@@ -373,6 +444,26 @@ export class CanaisPagina implements OnInit, OnDestroy {
       this.buscandoQr.set(null)
     }
   }
+
+  /** O canal que está sendo editado — para saber o nome original e o que já tem credencial. */
+  readonly canalEditado = computed(() => {
+    const ed = this.editando()
+    return ed?.id ? (this.servico.canais().find((c) => c.id === ed.id) ?? null) : null
+  })
+  /**
+   * Quais campos já têm valor guardado.
+   *
+   * ⚠️ Só os NOMES chegam da API — valor de credencial não volta (§5.8) — e a
+   * tela traduz para o RÓTULO do formulário: "clientToken" é o nome interno,
+   * mas o que está escrito no campo logo abaixo é "Token de segurança
+   * (Client-Token)". Listar o nome interno obriga a pessoa a adivinhar a
+   * correspondência.
+   */
+  readonly camposConfigurados = computed(() => {
+    const campos = this.provedorAtual()?.esquemaCredencial.campos ?? []
+    return (this.canalEditado()?.credencial.camposPreenchidos ?? [])
+      .map((nome) => campos.find((c) => c.nome === nome)?.rotulo ?? nome)
+  })
 
   readonly provedorAtual = computed(() => {
     const ed = this.editando()
@@ -425,6 +516,33 @@ export class CanaisPagina implements OnInit, OnDestroy {
     this.limpar()
     this.editando.set({ provedor: this.servico.provedores()[0]?.codigo ?? '', nome: '' })
   }
+  abrirEdicao(c: Canal): void {
+    this.limpar()
+    this.avisoRemocao.set(null)
+    this.editando.set({ id: c.id, provedor: c.provedor ?? '', nome: c.nomeAmigavel })
+  }
+
+  pedirRemocao(c: Canal): void {
+    this.erroRemocao.set(null)
+    this.avisoRemocao.set(null)
+    this.confirmandoRemocao.set(c)
+  }
+  cancelarRemocao(): void { this.confirmandoRemocao.set(null); this.erroRemocao.set(null) }
+
+  async remover(c: Canal): Promise<void> {
+    this.removendo.set(true)
+    this.erroRemocao.set(null)
+    try {
+      const r = await this.servico.remover(c.id)
+      if (!r.ok) { this.erroRemocao.set(r.erro.mensagem); return }
+      this.confirmandoRemocao.set(null)
+      // O texto do desfecho é regra pura (e testada) em `canais.regras.ts`.
+      this.avisoRemocao.set(avisoDeRemocao(c.nomeAmigavel, r.estado, r.conversas))
+    } finally {
+      this.removendo.set(false)
+    }
+  }
+
   fechar(): void { this.editando.set(null); this.limpar() }
   private limpar(): void {
     this.credencial.set({}); this.erros.set({}); this.erroGeral.set(null)
@@ -446,6 +564,7 @@ export class CanaisPagina implements OnInit, OnDestroy {
     if (!ed) return
     this.salvando.set(true); this.erros.set({}); this.erroGeral.set(null)
     try {
+      if (ed.id) { await this.#salvarEdicao(ed.id, ed.nome); return }
       const r = await this.servico.criar({ provedor: ed.provedor, nomeAmigavel: ed.nome, credencial: this.credencial() })
       if (!r.ok) {
         this.erros.set(r.erro.detalhe?.campos ?? (r.erro.detalhe?.campo ? { [r.erro.detalhe.campo]: r.erro.mensagem } : {}))
@@ -458,6 +577,26 @@ export class CanaisPagina implements OnInit, OnDestroy {
     } finally {
       this.salvando.set(false)
     }
+  }
+
+  /**
+   * ⚠️ Só o que MUDOU viaja: campo de credencial em branco significa "mantém",
+   * e o nome só vai se foi editado — senão toda abertura do modal gravaria uma
+   * alteração na auditoria sem nada ter mudado.
+   */
+  async #salvarEdicao(id: string, nome: string): Promise<void> {
+    const r = await this.servico.editar(
+      id, mudancasDaEdicao(nome, this.canalEditado()?.nomeAmigavel ?? '', this.credencial()))
+    if (!r.ok) {
+      this.erros.set(r.erro.detalhe?.campos ?? (r.erro.detalhe?.campo ? { [r.erro.detalhe.campo]: r.erro.mensagem } : {}))
+      if (!r.erro.detalhe?.campos && !r.erro.detalhe?.campo) this.erroGeral.set(r.erro.mensagem)
+      return
+    }
+    this.editando.set(null); this.limpar()
+    // ⚠️ Credencial trocada devolve o canal para 'conectando' no servidor:
+    //    testar no mesmo gesto evita deixar a tela afirmando um estado que
+    //    ninguém conferiu — o mesmo motivo do "salvar e testar" do cadastro.
+    if (r.credencialTrocada) await this.testar({ id } as Canal)
   }
 
   /**

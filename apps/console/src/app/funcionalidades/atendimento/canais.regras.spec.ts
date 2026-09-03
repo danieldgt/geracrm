@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { abrirAvancado, idadeVerificacao, verificacaoAtrasada } from './canais.regras.js'
+import {
+  abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, verificacaoAtrasada,
+} from './canais.regras.js'
 
 /**
  * ⚠️ O que importa aqui não é o DOM: é a decisão de QUANDO a área da equipe
@@ -90,5 +92,46 @@ describe('Quando o carimbo vira aviso', () => {
   it('⚠️ três passadas sem notícia é atrasado — a vigilância parou', () => {
     expect(verificacaoAtrasada(atras(16), AGORA)).toBe(true)
     expect(verificacaoAtrasada(atras(180), AGORA)).toBe(true)
+  })
+})
+
+describe('Editar número: só o que mudou viaja', () => {
+  const VAZIA = { instancia: '', token: '', clientToken: '' }
+
+  it('dado só o Client-Token preenchido, então envia SÓ ele — em branco é "mantém"', () => {
+    // O caso real: Client-Token com a URL do endpoint colada. Quem vem
+    // corrigir isso não tem o token da instância à mão.
+    const r = mudancasDaEdicao('Wpp Drezz', 'Wpp Drezz', { ...VAZIA, clientToken: 'CLIENT-CERTO' })
+
+    expect(r).toEqual({ credencial: { clientToken: 'CLIENT-CERTO' } })
+  })
+
+  it('dado nome inalterado e credencial vazia, então não envia nada', () => {
+    // ⚠️ Abrir o modal e fechar não pode virar alteração na auditoria.
+    expect(mudancasDaEdicao('Wpp Drezz', 'Wpp Drezz', VAZIA)).toEqual({})
+  })
+
+  it('dado nome novo, então envia o nome sem tocar na credencial', () => {
+    expect(mudancasDaEdicao('  Wpp da loja  ', 'Wpp Drezz', VAZIA)).toEqual({ nomeAmigavel: 'Wpp da loja' })
+  })
+
+  it('dado campo só com espaços, então não conta como preenchido', () => {
+    expect(mudancasDaEdicao('Wpp', 'Wpp', { ...VAZIA, token: '   ' })).toEqual({})
+  })
+})
+
+describe('Desfecho da remoção', () => {
+  it('dado canal sem histórico, então diz removido', () => {
+    expect(avisoDeRemocao('Wpp teste', 'removido', 0)).toBe('Wpp teste foi removido.')
+  })
+
+  it('dado canal com histórico, então diz ARQUIVADO e quantas conversas ficaram', () => {
+    // ⚠️ São promessas diferentes, e a pessoa não tem como conferir qual valeu.
+    expect(avisoDeRemocao('Wpp Drezz', 'arquivado', 12))
+      .toBe('Wpp Drezz foi arquivado e saiu da frota. 12 conversas preservadas no histórico.')
+  })
+
+  it('dada uma conversa só, então o plural não escorrega', () => {
+    expect(avisoDeRemocao('Wpp', 'arquivado', 1)).toContain('1 conversa preservada')
   })
 })

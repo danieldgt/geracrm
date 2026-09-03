@@ -23,6 +23,7 @@ const MSG_MIDIA: Record<string, string> = {
 const MENSAGEM_RECUSA: Record<string, string> = {
   bloqueado: 'Este contato optou por não receber mensagens (opt-out).',
   canal_indisponivel: 'O canal está suspenso ou desconectado. Reconecte o número para enviar.',
+  canal_arquivado: 'Este número foi removido da frota. Envie por outro número conectado.',
   canal_sem_credencial: 'O canal desta conversa ainda não está configurado para envio.',
   janela_fechada: 'A janela de 24h fechou. Só um template aprovado reabre a conversa.',
 }
@@ -49,6 +50,7 @@ interface Preparo {
   cred: Uint8Array | null
   tipoCanal: string
   estadoCanal: string
+  canalArquivado: boolean
   ultimaEntranteEm: Date | null
   destinoBloqueado: boolean
   remetenteNome: string | null
@@ -122,6 +124,7 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
                  cc.credenciais_cifradas AS cred,
                  cc.tipo                 AS "tipoCanal",
                  cc.estado               AS "estadoCanal",
+                 (cc.arquivado_em IS NOT NULL) AS "canalArquivado",
                  ct.e164                 AS destino,
                  c.ultima_entrante_em    AS "ultimaEntranteEm",
                  EXISTS (
@@ -166,6 +169,7 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
       const ctxEnvio: ContextoEnvio = {
         tipoCanal: preparo.tipoCanal,
         estadoCanal: preparo.estadoCanal,
+        canalArquivado: preparo.canalArquivado,
         provedor: preparo.provedor,
         temCredencial: !!preparo.cred,
         destinoBloqueado: preparo.destinoBloqueado,

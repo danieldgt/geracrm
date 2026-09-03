@@ -144,6 +144,22 @@ describe('Webhook → Inbox (INV-12/38)', () => {
     const r = await webhook(recebida(), 'a7e00000-9999-4000-8000-000000000009')
     expect(r.statusCode).toBe(404)
   })
+
+  it('⚠️ canal ARQUIVADO descarta com 200 — e não cria conversa invisível', async () => {
+    // A instância pode continuar viva no fornecedor depois que o número saiu da
+    // frota (0083). Ingerir criaria conversa num canal que sumiu da tela; e o
+    // código tem de ser 200, senão a falha permanente trava a fila de TODOS.
+    await dono`UPDATE canal_conectado SET arquivado_em = now() WHERE id = ${CANAL}`
+    try {
+      const r = await webhook(recebida({ messageId: 'MSG-ARQUIVADO' }))
+      expect(r.statusCode).toBe(200)
+      expect(r.json()).toMatchObject({ descartado: 'canal_arquivado' })
+      const [c] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM conversa WHERE tenant_id = ${T}`
+      expect(c!.n).toBe(0)
+    } finally {
+      await dono`UPDATE canal_conectado SET arquivado_em = NULL WHERE id = ${CANAL}`
+    }
+  })
 })
 
 // E5-14: a ingestão SINALIZA a mídia de entrada a copiar (a cópia em si é

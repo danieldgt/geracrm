@@ -68,3 +68,49 @@ export function verificacaoAtrasada(verificadoEm: string | null | undefined, ago
   if (Number.isNaN(ms)) return true
   return ms > MINUTOS_ATE_SUSPEITAR * 60_000
 }
+
+/** O que a edição envia ao servidor. Vazio = nada mudou. */
+export interface MudancasDaEdicao {
+  nomeAmigavel?: string
+  credencial?: Record<string, string>
+}
+
+/**
+ * O que efetivamente MUDOU numa edição de número.
+ *
+ * ⚠️ Campo de credencial em branco não é "apagar", é "mantém" — o servidor
+ * mescla com o que já está guardado. Sem isso, corrigir um token errado exigiria
+ * redigitar os outros, que quem chega com o canal quebrado raramente tem à mão.
+ *
+ * ⚠️ E o nome só viaja se foi editado: mandar sempre faria toda abertura do
+ * modal virar uma alteração na trilha de auditoria sem nada ter mudado.
+ */
+export function mudancasDaEdicao(
+  nome: string,
+  nomeOriginal: string,
+  credencial: Readonly<Record<string, string>>,
+): MudancasDaEdicao {
+  const preenchidos = Object.entries(credencial).filter(([, v]) => v.trim() !== '')
+  return {
+    ...(nome.trim() !== nomeOriginal ? { nomeAmigavel: nome.trim() } : {}),
+    ...(preenchidos.length ? { credencial: Object.fromEntries(preenchidos) } : {}),
+  }
+}
+
+/**
+ * O texto do desfecho da remoção.
+ *
+ * ⚠️ "Removido" (apagado de vez) e "arquivado" (histórico de pé) são promessas
+ * DIFERENTES, e a pessoa não tem como conferir qual das duas aconteceu. Juntar
+ * as duas num "pronto!" apaga a única informação que ela não pode verificar
+ * sozinha.
+ */
+export function avisoDeRemocao(
+  nome: string,
+  estado: 'removido' | 'arquivado',
+  conversas: number,
+): string {
+  if (estado === 'removido') return `${nome} foi removido.`
+  const preservadas = conversas === 1 ? '1 conversa preservada' : `${conversas} conversas preservadas`
+  return `${nome} foi arquivado e saiu da frota. ${preservadas} no histórico.`
+}

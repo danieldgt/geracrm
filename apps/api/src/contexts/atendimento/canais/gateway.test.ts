@@ -40,6 +40,19 @@ describe('avaliarEnvio: ordem e política dos guardrails', () => {
     expect(avaliarEnvio({ ...base, estadoCanal: 'degradado' }, AGORA)).toEqual({ libera: true })
   })
 
+  it('número arquivado não envia, e o motivo é PRÓPRIO (não "indisponível")', () => {
+    // ⚠️ Arquivado ≠ desconectado: desconectado volta, arquivado foi decisão de
+    //    quem opera. Com o motivo errado, a pessoa sai tentando reconectar um
+    //    número que ela mesma tirou da frota.
+    const r = avaliarEnvio({ ...base, canalArquivado: true }, AGORA)
+    expect(r).toEqual({ libera: false, motivo: 'canal_arquivado' })
+  })
+
+  it('opt-out ainda vence o arquivamento (a ordem não mudou)', () => {
+    const r = avaliarEnvio({ ...base, canalArquivado: true, destinoBloqueado: true }, AGORA)
+    expect(r).toEqual({ libera: false, motivo: 'bloqueado' })
+  })
+
   it('sem provedor ou sem credencial → canal_sem_credencial', () => {
     expect(avaliarEnvio({ ...base, provedor: null }, AGORA)).toEqual({ libera: false, motivo: 'canal_sem_credencial' })
     expect(avaliarEnvio({ ...base, temCredencial: false }, AGORA)).toEqual({ libera: false, motivo: 'canal_sem_credencial' })
