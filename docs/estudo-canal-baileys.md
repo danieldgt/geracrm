@@ -23,8 +23,15 @@ de sessão mutável por tenant. O que o ADR-008/021 nos dá de graça é a *fach
 conexão, que hoje é problema do fornecedor.
 
 Recomendo construir **em fases, mantendo o PlugZapi**, e só promover a padrão
-depois que um número real sobreviver 30 dias. Recomendo **não** ligar campanha
-por este caminho na primeira fase — a razão está em "Riscos".
+depois que um número real sobreviver 30 dias.
+
+> **Atualização de 2026-09-07 — as três decisões do dono estão em §12.**
+> O custo do PlugZapi é **R$ 250 por número/mês**, o que muda a conta: a economia
+> é recorrente e por número, contra um custo de construção que se paga uma vez.
+> **Campanha ENTRA** por este caminho (eu havia recomendado o contrário) — e isso
+> tem um pré-requisito que já estava especificado e nunca foi ligado: o `INV-23`.
+> E a **prioridade oficial × não-oficial passa a ser por cliente**, o que é uma
+> lacuna do produto **hoje**, mesmo sem Baileys.
 
 ---
 
@@ -313,3 +320,146 @@ fracasso.
 - Baileys (MIT) · <https://github.com/WhiskeySockets/Baileys>
 - Nosso lado: `contexts/atendimento/canais/{porta,fabrica,plugzapi}.ts`,
   `vigia-canal.ts`, `integracao/cofre.ts`, `apps/api/docker-start.sh`, ADR-008/021
+
+---
+
+## 12. As três decisões do dono (2026-09-07)
+
+### 12.1 A economia: R$ 250 por número/mês
+
+Isto muda a natureza da conta. O custo do fornecedor é **recorrente e por
+número**; o custo de construir é **uma vez**. São curvas diferentes, e a segunda
+não cresce com a base de clientes.
+
+| Números na frota | Por mês | Por ano |
+|---:|---:|---:|
+| 1 | R$ 250 | R$ 3.000 |
+| 5 | R$ 1.250 | R$ 15.000 |
+| 10 | R$ 2.500 | R$ 30.000 |
+| 20 | R$ 5.000 | R$ 60.000 |
+
+⚠️ **O número de hoje está artificialmente baixo, e por um defeito.** Os dois
+canais PlugZapi em produção (Drezz Fábrica e Gera3 dogfooding) apontam para a
+**mesma instância** — um número servindo dois tenants. Corrigir isso, que é o
+certo, já dobra a fatura antes de qualquer cliente novo. A economia real começa
+em R$ 500/mês, não em R$ 250.
+
+Contra isso, o custo recorrente do Baileys é **um serviço a mais no Railway** —
+ordem de grandeza de dezenas de reais, não centenas — mais o tempo de operação,
+que é o custo verdadeiro e não aparece em fatura.
+
+**Leitura:** a partir de ~5 números a construção se paga no primeiro ano; a
+partir de ~10 ela se paga em meses. Como cada cliente novo é pelo menos um
+número, isto deixa de ser otimização e vira **estrutura de custo do produto**.
+O que a economia **não** compra é tempo de operação — e é por isso que as fases
+continuam existindo.
+
+### 12.2 Campanha entra — e o pré-requisito já estava escrito
+
+Registro que eu havia recomendado o contrário e que a decisão é sua; sigo com
+ela. Mas o levantamento achou uma coisa que muda o que "campanha por Baileys"
+significa na prática:
+
+⚠️ **O `INV-23` foi especificado, tem tabela criada e NUNCA foi ligado.**
+
+```
+numero_throttle           → 0 arquivos de produção
+numero_quota_hora         → 0 arquivos de produção
+numero_conversa_iniciada  → 0 arquivos de produção
+```
+
+As três tabelas existem desde a `0011`, com comentário explicando a reserva
+atômica por `UPDATE … RETURNING`, e **nenhuma linha de produção as consulta**. O
+que existe hoje de verdade é só o **teto diário** do aquecimento (`0037`).
+
+Na prática, o ritmo atual de disparo é:
+
+- despachante a cada **30 s**, `LOTE = 10` por campanha, por passada;
+- os 10 saem **em sequência, sem espaçamento nenhum** entre si;
+- o único freio é o teto do dia (rampa de 20 → 1000 em ~9 dias).
+
+Com o PlugZapi, uma rajada de 10 chega ao fornecedor e a infra dele absorve o
+ritmo. **Com Baileys, somos nós emitindo 10 mensagens seguidas de um socket
+cru** — que é exatamente o padrão que derruba número, e exatamente o que o
+`INV-23` existe para impedir.
+
+Portanto, campanha por Baileys tem um pré-requisito, e ele vem antes:
+
+1. **Ligar o `INV-23`**: intervalo mínimo randômico entre dois envios do mesmo
+   número, com reserva atômica em `numero_throttle`. É trabalho que vale por si,
+   **independente do Baileys** — o PlugZapi também agradece.
+2. **Ritmo por socket, não por lote**: com espaçamento real, `LOTE = 10` a cada
+   30 s deixa de fazer sentido; o despachante passa a pedir "quantos couberem
+   até agora" ao throttle.
+3. **Teto próprio do Baileys**, mais conservador que o do PlugZapi na largada —
+   a rampa de aquecimento é a mesma máquina, só com outro parâmetro.
+
+⚠️ E o aviso do README do Baileys continua de pé (§9). A decisão de disparar em
+lote por ali é uma decisão de risco consciente: se um número for banido, a causa
+mais provável é esta, e não a biblioteca.
+
+### 12.3 Prioridade por cliente — uma lacuna que já existe hoje
+
+O ADR-021 diz "o oficial é a **prioridade**", como regra global do produto. Vira
+preferência **por tenant**. Duas descobertas ao levantar o impacto:
+
+**A escolha de canal hoje não olha para oficial × não-oficial.** Em
+`rotas-conversas.ts`, quando ninguém passa `canalId`:
+
+```sql
+SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND arquivado_em IS NULL
+ ORDER BY (estado = 'conectado') DESC, criado_em ASC LIMIT 1
+```
+
+O critério é *"conectado primeiro, depois o mais antigo"*. Um cliente com número
+oficial **e** não-oficial pode ter a conversa saindo pelo não-oficial só porque
+ele foi cadastrado antes. Isto é um defeito de hoje, sem relação com Baileys.
+
+**Onde a preferência mora.** `tenant` já tem uma coluna `config jsonb` — **sem
+nenhum uso em produção**. Mesmo assim, recomendo **coluna explícita**, não chave
+em jsonb: isto decide por qual número a mensagem de um cliente sai, e chave de
+jsonb com erro de digitação falha em silêncio.
+
+```sql
+ALTER TABLE tenant ADD COLUMN caminho_preferido text NOT NULL DEFAULT 'oficial';
+ALTER TABLE tenant ADD CONSTRAINT tenant_caminho_preferido_valido
+  CHECK (caminho_preferido IN ('oficial', 'nao_oficial'));
+```
+
+Aditiva, um deploy. O `DEFAULT 'oficial'` mantém o ADR-021 como comportamento
+padrão — quem não escolher nada continua no caminho recomendado.
+
+A ordenação passa a ser:
+
+```sql
+ORDER BY (estado = 'conectado') DESC,
+         (tipo = 'whatsapp_oficial') = (SELECT caminho_preferido = 'oficial' FROM tenant …) DESC,
+         criado_em ASC
+```
+
+⚠️ **Preferência não é permissão.** Se o preferido estiver desconectado, cair no
+outro caminho é o comportamento certo — mas a tela precisa **dizer** que caiu,
+porque os dois caminhos têm risco e custo diferentes. Degradação silenciosa aqui
+é pior que nas outras: o cliente do nosso cliente recebe por um número que a
+empresa não escolheu.
+
+E a preferência aparece em três lugares, não um: abertura de conversa,
+sugestão de canal na campanha, e a tela de Números (marcando qual é o caminho
+padrão daquele cliente).
+
+### 12.4 O plano, revisado
+
+As decisões movem duas coisas: campanha deixa de ser adiada e ganha um
+pré-requisito próprio, e a preferência por tenant sai na frente porque **vale
+sozinha**.
+
+| Fase | O que | Porta |
+|---|---|---|
+| **A — Agora, sem Baileys** | `INV-23` ligado (throttle real por número) + `caminho_preferido` por tenant + aviso de queda para o outro caminho | Campanha com espaçamento medido no PlugZapi; preferência respeitada nos três lugares |
+| **0 — Spike** | Um socket, número descartável, fora do produto | Sessão sobrevive a 3 deploys e 48 h sem QR novo |
+| **1 — Serviço** | `SERVICE_ROLE=whatsapp`, sessão cifrada no Postgres, RPC interno, `CanalBaileys` no catálogo. **Só conversa 1:1** | 30 dias com número real, sem queda não explicada |
+| **2 — Campanha** | Disparo por Baileys com teto próprio e ritmo do `INV-23` | Uma campanha real completa sem alerta de qualidade |
+| **3 — Frota** | N tenants, reconexão com jitter, alerta por socket, watchdog de dois sinais | Dois tenants convivendo, queda detectada em < 1 min |
+
+⚠️ A **fase A não depende da decisão do Baileys**. Se o estudo parar na fase 1,
+ela continua valendo — e é a que protege os números que já estão no ar hoje.
