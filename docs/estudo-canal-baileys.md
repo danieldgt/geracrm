@@ -463,3 +463,141 @@ sozinha**.
 
 ⚠️ A **fase A não depende da decisão do Baileys**. Se o estudo parar na fase 1,
 ela continua valendo — e é a que protege os números que já estão no ar hoje.
+
+---
+
+## 13. O fluxo de provisionamento — "um serviço por número" é o desenho errado
+
+A pergunta veio assim: *cada WhatsApp novo é uma instância do Baileys, então
+subimos mais um serviço e configuramos o cliente para apontar para ele*. É a
+leitura natural — e é justamente ela que tornaria a operação pior que o
+PlugZapi. **Não é um serviço por número.**
+
+Uma instância do Baileys é um **objeto de socket dentro de um processo**, não um
+processo. Um mesmo processo segura N sockets:
+
+```ts
+// no host, não um por número:
+const sockets = new Map<canalId, WASocket>()
+```
+
+Adicionar um número é **uma linha no banco + um QR**. Nenhum serviço novo,
+nenhum valor para configurar, nenhum passo no Railway.
+
+### 13.1 O fluxo, lado a lado
+
+**PlugZapi, hoje** — 3 campos, e dois passos fora do produto:
+
+1. Alguém da **equipe Drezz** entra no painel do PlugZapi e cria a instância
+   (é aqui que os R$ 250/mês começam a contar);
+2. copia **ID da instância**, **Token da instância** e **Token de segurança**;
+3. no CRM: Conectar número → PlugZapi → nome → cola os três valores;
+4. QR pela nossa tela → o dono do número escaneia;
+5. testar.
+
+⚠️ O passo 2 é onde nasceu o defeito que encontramos em produção: a **URL do
+endpoint colada no campo do Client-Token**. Campo que existe é campo que alguém
+preenche errado.
+
+**Baileys, proposto** — 0 campos, nenhum passo fora do produto:
+
+1. no CRM: Conectar número → *WhatsApp direto* → dá um nome;
+2. salvar → o QR aparece na hora;
+3. o dono do número escaneia → conectado.
+
+⚠️ **Isto já funciona sem código novo na tela.** Confirmei os dois pontos:
+`validarCredencial` com `campos: []` devolve `ok` (não há obrigatório para
+faltar), e o formulário desenhado pelo catálogo simplesmente não renderiza campo
+nenhum. A sessão de pareamento da tela — QR renovando a cada 20 s e detecção
+automática da conexão — é a mesma, porque `qrCode()` já é contrato da porta.
+
+E há um ganho que não é de custo: **some a dependência da equipe Drezz no
+onboarding**. Hoje o texto da tela diz, com razão, *"quem conecta este número é a
+equipe Drezz: a instância é criada por nós"* — porque a instância pertence ao
+nosso contrato com o fornecedor. Sem fornecedor, o cliente se conecta sozinho.
+
+### 13.2 Quando um host não bastar: ele RECLAMA, ninguém configura
+
+O medo por trás da pergunta é real, só que ele aparece **um nível acima**: em
+algum momento um processo não segura a frota inteira. A saída não é configurar
+cliente por cliente — é o host **reivindicar** número livre, e a API descobrir
+quem é o dono.
+
+```sql
+CREATE TABLE canal_host (
+    tenant_id  uuid NOT NULL,
+    canal_id   uuid NOT NULL,
+    host       text NOT NULL,   -- 'geracrm-whatsapp-2.railway.internal'
+    visto_em   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, canal_id),
+    FOREIGN KEY (tenant_id, canal_id) REFERENCES canal_conectado (tenant_id, id) ON DELETE CASCADE
+);
+```
+
+O ciclo de um host:
+
+1. no boot, varre canais `baileys` sem dono vivo, até o seu teto (`MAX_SOCKETS`);
+2. para cada um, tenta `pg_try_advisory_lock(hashtext('canal:'||id))` numa
+   **conexão dedicada e longa**;
+3. conseguiu: grava `canal_host.host` com o próprio nome interno e abre o socket;
+4. bate `visto_em` periodicamente.
+
+⚠️ **A trava é a posse, e não a linha da tabela.** Advisory lock morre junto com
+a conexão: se o host cair, o lock some sozinho e outro host pode assumir. Sem
+isso, precisaríamos de expiração por relógio — e relógio errado significaria
+**dois hosts abrindo a mesma sessão**, que no WhatsApp não é concorrência: é um
+derrubando o outro. A tabela é só a **dica de roteamento** para a API.
+
+Do lado da API, o adaptador ganha uma linha e nada mais:
+
+```ts
+// CanalBaileys.enviarTexto → POST http://{canal_host.host}/interno/canais/{id}/enviar-texto
+```
+
+Se o host responder *"não sou o dono"*, isso é falha **tipificada**
+(`canal_desconectado`), a tela nomeia, e o vigia percebe na passada seguinte.
+
+**Somar capacidade passa a ser: subir mais um serviço com
+`SERVICE_ROLE=whatsapp` e não tocar em cliente nenhum.** Ele acorda, reivindica
+o que estiver sobrando e entra na frota. É o oposto de "configurar o cliente
+para apontar para o serviço novo".
+
+### 13.3 O que precisa ser medido antes (e não estimado)
+
+Duas grandezas decidem quando o host 2 existe, e **nenhuma das duas eu vou
+chutar**:
+
+- **memória por socket** — com 1, 5 e 20 sockets abertos, em regime;
+- **escrita de sessão por mensagem** — quanto o *signal key store* grava, com e
+  sem cache na frente.
+
+Com esses dois números, `MAX_SOCKETS` deixa de ser palpite. Até lá, **um host**.
+
+⚠️ E o custo escondido do modelo: todo deploy reinicia os sockets daquele host.
+Com sessão persistida isso é uma **reabertura**, não um novo QR — mas é
+exatamente o que a porta da fase 0 mede ("sobrevive a 3 deploys"). Se não
+sobreviver, o modelo inteiro cai, porque re-parear a frota a cada deploy é
+inaceitável.
+
+### 13.4 O catálogo
+
+O provedor novo entra como os outros — e é o mais curto do catálogo:
+
+```ts
+{
+  codigo: 'baileys',
+  nome: 'WhatsApp direto (Drezz)',        // ⚠️ nome de tela: decidir com o dono
+  tipo: 'whatsapp_nao_oficial',
+  oficial: false,
+  descricao: 'Conecta um WhatsApp comum lendo o QR, sem fornecedor no meio.',
+  capacidades: CAPACIDADES_BAILEYS,
+  aviso: /* o MESMO aviso de banimento do PlugZapi — ADR-021 */,
+  esquemaCredencial: {
+    preRequisito: 'Tenha o celular do número em mãos para ler o QR.',
+    campos: [],                            // ⚠️ nenhum. É o ponto.
+  },
+}
+```
+
+⚠️ `campos: []` é o resumo do capítulo. Toda a diferença de operação entre os
+dois caminhos cabe nessa lista vazia.
