@@ -192,6 +192,23 @@ export const pluginTenant: FastifyPluginAsync = fp(
   { name: 'tenant' },
 )
 
+/**
+ * QUEM É ESTA PESSOA, para o banco — `cognito_sub`, com o mesmo fallback de dev
+ * que `garantirUsuarioId` usa.
+ *
+ * ⚠️ Mora aqui porque quatro lugares precisavam dela e cada um resolvia à sua
+ * maneira: uns caíam no `dev-<tenant>`, outros devolviam 422 quando não havia
+ * token. O efeito era um estado de presença que se gravava por um caminho e não
+ * se lia pelo outro — em dev, ninguém nunca estava "logado" e o agente assumia
+ * sempre, sem que nada na tela explicasse.
+ *
+ * ⚠️ O `dev-` é por TENANT: duas empresas locais não podem disputar a mesma
+ * linha de usuário.
+ */
+export function subDoUsuario(req: FastifyRequest): string {
+  return req.usuarioSub ?? `dev-${req.tenantId ?? 'sem-tenant'}`
+}
+
 /** Guard for routes that require an authenticated tenant. */
 export async function exigirTenant(req: FastifyRequest): Promise<void> {
   if (!req.tenantId) {

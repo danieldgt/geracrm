@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Sql } from '../../db/index.js'
-import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { auditar } from '../plataforma/auditoria.js'
+import { operadorAusente, RECUSA_OPERADOR_AUSENTE } from './presenca-operador.js'
 import { garantirEtapasAtendimento } from './rotas-atendimento-kanban.js'
 
 /**
@@ -29,8 +30,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export async function garantirUsuarioId(tx: Sql, req: FastifyRequest): Promise<string> {
   // Dev (header x-tenant-id, sem Cognito): sub sintético por tenant, para duas
-  // empresas locais não disputarem a mesma linha.
-  const sub = req.usuarioSub ?? `dev-${req.tenantId ?? 'sem-tenant'}`
+  // empresas locais não disputarem a mesma linha. ⚠️ A regra do `sub` é UMA só
+  // (`subDoUsuario`) — presença, ausência e autoria têm de casar a mesma linha.
+  const sub = subDoUsuario(req)
   const email = req.usuarioEmail ?? 'dogfooding@geracrm.local'
   const nome = (email.split('@')[0] ?? 'Atendente') || 'Atendente'
   const [u] = await tx<{ id: string }[]>`
@@ -106,6 +108,14 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
           SELECT canal_id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
         if (!conv) return { tipo: 'nao_encontrada' as const }
 
+        // ⚠️ AUSENTE NÃO ASSUME, e aqui o motivo é mais grave que a simetria com
+        //    o envio: assumir CALA o agente naquela conversa por uma hora
+        //    (`atendente_presente` no portão). Quem está ausente assumindo um
+        //    card desligaria o robô sem colocar ninguém no lugar — o cliente
+        //    escreve e não recebe nada de ninguém. É a mesma família da assunção
+        //    esquecida que silenciou a resposta de ausência em 26/08.
+        if (await operadorAusente(tx, req)) return { tipo: 'operador_ausente' as const }
+
         const usuarioId = await garantirUsuarioId(tx, req)
         await garantirEtapasAtendimento(tx)
         const [etapa] = etapaPedida
@@ -157,6 +167,7 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
       })
 
       if (r.tipo === 'nao_encontrada') return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
+      if (r.tipo === 'operador_ausente') return reply.code(409).send(RECUSA_OPERADOR_AUSENTE)
       if (r.tipo === 'etapa_invalida') return reply.code(422).send(ETAPA_INVALIDA)
       if (r.tipo === 'assumido') return reply.code(201).send({ ok: true, protocolo: r.protocolo, meu: true, atendimentoId: r.atendimentoId })
       // Já aberto: se é meu, 200 ok; se é de outro, 409 tipificado.

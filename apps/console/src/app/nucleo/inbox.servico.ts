@@ -2,6 +2,7 @@ import { Injectable, inject, signal, computed } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import type { TipoCanal } from '@geracrm/shared'
+import { PresencaServico } from './presenca.servico.js'
 
 /** Estado da janela de 24h — vem do domínio (calcularJanela), não daqui. */
 export interface Janela {
@@ -67,6 +68,24 @@ export type EstadoThread = 'nenhuma' | 'carregando' | 'pronto' | 'erro'
 @Injectable({ providedIn: 'root' })
 export class InboxServico {
   private readonly http = inject(HttpClient)
+  private readonly presenca = inject(PresencaServico)
+
+  /**
+   * A recusa do servidor vira texto na tela — e, quando é presença, CORRIGE a
+   * tela.
+   *
+   * ⚠️ O caso que exige isto: a aba que já estava aberta quando a pessoa se
+   * marcou ausente em outro lugar (outro dispositivo, o menu numa segunda aba).
+   * Lá o campo de digitação continua desenhado, porque nada avisou esta aba.
+   * O 409 é esse aviso: sem esta linha, a pessoa apanharia da mesma recusa a
+   * cada tentativa, com a tela insistindo que dá para enviar.
+   */
+  private recusa(e: unknown, padrao: string): void {
+    const corpo = e instanceof HttpErrorResponse
+      ? (e.error as { mensagem?: string; motivo?: string; erro?: string } | null) : null
+    if (corpo?.erro === 'operador_ausente') this.presenca.ausente.set(true)
+    this.erroEnvio.set(corpo?.mensagem ?? corpo?.motivo ?? padrao)
+  }
 
   // Lista
   readonly estado = signal<EstadoLista>('ocioso')
@@ -300,8 +319,7 @@ export class InboxServico {
       this.rascunho.set('')
       await this.atualizarThread(conversaId)
     } catch (e) {
-      const corpo = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string; motivo?: string } | null) : null
-      this.erroEnvio.set(corpo?.mensagem ?? corpo?.motivo ?? 'Não foi possível enviar a imagem.')
+      this.recusa(e, 'Não foi possível enviar a imagem.')
     } finally {
       this.enviando.set(false)
     }
@@ -316,8 +334,7 @@ export class InboxServico {
       await firstValueFrom(this.http.post(`/v1/conversas/${conversaId}/mensagens`, { tipo: 'audio', audio }))
       await this.atualizarThread(conversaId)
     } catch (e) {
-      const corpo = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string; motivo?: string } | null) : null
-      this.erroEnvio.set(corpo?.mensagem ?? corpo?.motivo ?? 'Não foi possível enviar o áudio.')
+      this.recusa(e, 'Não foi possível enviar o áudio.')
     } finally {
       this.enviando.set(false)
     }
@@ -329,8 +346,7 @@ export class InboxServico {
       await firstValueFrom(this.http.post(`/v1/conversas/${conversaId}/assumir`, {}))
       await this.atualizarThread(conversaId)
     } catch (e) {
-      const c = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string } | null) : null
-      this.erroEnvio.set(c?.mensagem ?? 'Não foi possível assumir o atendimento.')
+      this.recusa(e, 'Não foi possível assumir o atendimento.')
       // Alguém assumiu antes: reflete o estado real na hora.
       await this.atualizarThread(conversaId)
     }
@@ -400,8 +416,7 @@ export class InboxServico {
       this.rascunho.set('')
       await this.atualizarThread(id)
     } catch (e) {
-      const corpo = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string; motivo?: string } | null) : null
-      this.erroEnvio.set(corpo?.mensagem ?? corpo?.motivo ?? 'Não foi possível enviar a mensagem.')
+      this.recusa(e, 'Não foi possível enviar a mensagem.')
     } finally {
       this.enviando.set(false)
     }

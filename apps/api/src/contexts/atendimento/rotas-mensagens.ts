@@ -7,6 +7,7 @@ import { decifrar } from '../integracao/cofre.js'
 import { criarCanal } from './canais/fabrica.js'
 import { enviarPeloGateway, type ContextoEnvio } from './canais/gateway.js'
 import { garantirUsuarioId } from './rotas-fila.js'
+import { operadorAusente, RECUSA_OPERADOR_AUSENTE } from './presenca-operador.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { midiaHabilitada, subirMidia, urlAssinada } from './midia/armazenamento.js'
 import { ehDataUrl, decodificarMidia } from './midia/dataurl.js'
@@ -102,6 +103,18 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
       const entrada = parsed.data
       const conversaId = req.params.id
       const tenantId = req.tenantId!
+
+      // ⚠️ AUSENTE NÃO RESPONDE — antes de qualquer coisa, e de propósito. Vem
+      //    na frente da subida de mídia e da gravação da mensagem: recusar
+      //    depois deixaria um arquivo no bucket e uma linha 'pendente' no
+      //    histórico de uma mensagem que nunca existiu para o cliente.
+      //
+      //    ⚠️ 409, não 403: não é falta de permissão (a pessoa tem), é um
+      //    estado que ela mesma ligou e desfaz num clique. Ver
+      //    `presenca-operador.ts` para por que a trava não pode viver só na tela.
+      if (await req.comTenant((tx) => operadorAusente(tx, req))) {
+        return reply.code(409).send({ ok: false, ...RECUSA_OPERADOR_AUSENTE })
+      }
 
       // Fase 0 (E5-14): mídia sobe para o bucket ANTES da transação (S3 é rede);
       // o banco guarda só a CHAVE, nunca o base64. Sem bucket configurado,

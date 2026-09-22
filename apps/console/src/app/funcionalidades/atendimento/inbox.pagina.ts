@@ -6,6 +6,7 @@ import { firstValueFrom } from 'rxjs'
 import { formatarProtocolo, parsearProtocolo } from '@geracrm/shared'
 import { InboxServico, type ItemConversa, type Mensagem, type Thread } from '../../nucleo/inbox.servico.js'
 import { EventosServico } from '../../nucleo/eventos.servico.js'
+import { PresencaServico } from '../../nucleo/presenca.servico.js'
 import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.componente.js'
 
 /**
@@ -157,7 +158,16 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
                       👤 {{ t.atendimento.atendenteNome || 'Em atendimento' }}
                     </span>
                   } @else {
-                    <button class="assumir-btn" type="button" (click)="servico.assumir(t.id)">Assumir</button>
+                    <!-- ⚠️ Ausente não assume: assumir CALA o agente naquela
+                         conversa por uma hora, e quem está fora da mesa
+                         desligaria o robô sem colocar ninguém no lugar. O botão
+                         fica visível e explicado, não some — sumir deixaria a
+                         pessoa procurando o que ela sabe que existia. -->
+                    <button class="assumir-btn" type="button" (click)="servico.assumir(t.id)"
+                            [disabled]="presenca.ausente()"
+                            [title]="presenca.ausente()
+                              ? 'Você está marcado como ausente — marque-se disponível para assumir'
+                              : 'Assumir este atendimento'">Assumir</button>
                   }
                 </div>
               </header>
@@ -252,9 +262,25 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
               </div>
 
               <footer class="composer">
-                <!-- ⚠️ Só o WhatsApp Oficial (Meta) tem janela/template. No
-                     não-oficial o composer fica sempre livre. -->
-                @if (!t.exigeJanela24h || janelaAberta(t.janela.estado)) {
+                <!-- ⚠️ AUSENTE VÊ, NÃO RESPONDE — e vem ANTES da janela de 24h
+                     de propósito: é o estado mais forte dos dois. De nada
+                     adianta a janela estar aberta se quem olha a tela avisou que
+                     saiu da mesa.
+                     ⚠️ A faixa diz o estado, a consequência e o caminho de
+                     volta, no lugar exato onde a pessoa ia digitar. Um campo
+                     desabilitado sem explicação seria lido como bug. -->
+                @if (presenca.ausente()) {
+                  <div class="so-acompanhando" role="status">
+                    <span class="sa-txt">
+                      <strong>Você está marcado como ausente.</strong>
+                      Só acompanhando — o agente responde por este número enquanto isso.
+                    </span>
+                    <button class="sa-btn" type="button" (click)="voltarADisponivel()"
+                            [disabled]="presenca.mexendo()">
+                      {{ presenca.mexendo() ? 'Voltando…' : 'Estou disponível' }}
+                    </button>
+                  </div>
+                } @else if (!t.exigeJanela24h || janelaAberta(t.janela.estado)) {
                   @if (mostrarEmojis()) {
                     <div class="emoji-panel" (click)="$event.stopPropagation()">
                       @for (e of EMOJIS; track e) {
@@ -486,6 +512,18 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
     .enviar { flex: none; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--wa-green); color: #04231d; font-size: 16px; cursor: pointer; display: grid; place-items: center; }
     .enviar:disabled { background: var(--wa-hover); color: var(--wa-sec); cursor: default; }
     .fechada { flex: 1; font-size: 13px; color: #e0b341; text-align: center; }
+    /* ⚠️ Faixa de LEITURA, não de erro: âmbar como a ausência do menu, nunca o
+       vermelho de falha. Quem se marcou ausente não errou nada. */
+    .so-acompanhando { flex: 1; display: flex; align-items: center; justify-content: center;
+      flex-wrap: wrap; gap: 10px; padding: 6px 4px; font-size: 13px; color: #e0b341; text-align: center; }
+    .so-acompanhando strong { font-weight: 600; }
+    .sa-txt { min-width: 0; }
+    .sa-btn { flex: none; border: 1px solid #e0b341; background: transparent; color: #e0b341;
+      font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer; }
+    .sa-btn:hover:not(:disabled) { background: #e0b34122; }
+    .sa-btn:disabled { opacity: .6; cursor: default; }
+    .sa-btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+    .assumir-btn:disabled { opacity: .5; cursor: default; }
     .erro-envio { width: 100%; margin: 0; font-size: 12px; color: #ff6b5e; }
 
     /* Rail estreito: uma coluna só. Sem conversa aberta → lista; com conversa →
@@ -504,6 +542,13 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
 export class InboxPagina implements OnDestroy {
   readonly servico = inject(InboxServico)
   readonly eventos = inject(EventosServico)
+  /**
+   * ⚠️ O MESMO estado de presença do menu do usuário, não uma cópia. Quem se
+   * marca ausente está dizendo ao produto que saiu da mesa: o agente assume o
+   * número e esta tela vira leitura. Deixar o campo aberto aqui produziria os
+   * dois falando com o mesmo cliente, cada um sem saber do outro.
+   */
+  readonly presenca = inject(PresencaServico)
 
   readonly busca = signal('')
   // Busca por protocolo (E5-08): "#000318" | "318" → número.
@@ -640,6 +685,15 @@ export class InboxPagina implements OnDestroy {
     return estado === 'aberta' ? 'aberta' : estado === 'terminando' ? 'terminando' : 'fechada'
   }
   janelaAberta(estado: string): boolean { return estado === 'aberta' || estado === 'terminando' }
+
+  /**
+   * Volta a atender sem sair do inbox.
+   *
+   * ⚠️ O atalho existe aqui porque é AQUI que a pessoa descobre que está
+   * ausente — com o cliente escrevendo na frente dela. Mandá-la procurar o
+   * menu do avatar no canto da tela nesse momento é atrito puro.
+   */
+  async voltarADisponivel(): Promise<void> { await this.presenca.definir(false) }
 
   protocoloFmt(n: number | null): string { return n ? formatarProtocolo(n) : '' }
 

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 
 /**
  * Configurações Gerais — a empresa (nome, fuso, plano) e a equipe com os papéis.
@@ -71,6 +71,27 @@ export async function rotasConfig(app: FastifyInstance): Promise<void> {
   })
 
   /**
+   * EU — o meu próprio estado de presença.
+   *
+   * ⚠️ Existe porque a tela casava o próprio usuário por E-MAIL dentro da lista
+   * da equipe (`/v1/config/equipe`), o que é errado em dois sentidos: traz até
+   * 200 linhas de gente para ler um booleano meu, e erra quando o e-mail do
+   * token não bate exatamente com o gravado. Aqui o servidor responde sobre
+   * quem o TOKEN identifica, que é a única resposta que não depende de sorte.
+   *
+   * ⚠️ Sem linha é DISPONÍVEL — quem nunca abriu o menu atende normalmente.
+   */
+  app.get('/v1/config/eu', { preHandler: exigirTenant }, async (req, reply) => {
+    const sub = subDoUsuario(req)
+    const [u] = await req.comTenant((tx) => tx<{ nome: string; email: string | null; ausente: boolean }[]>`
+      SELECT nome, email, ausente FROM usuario
+       WHERE tenant_id = tenant_atual() AND cognito_sub = ${sub}`)
+    return reply.send({
+      nome: u?.nome ?? null, email: u?.email ?? null, ausente: u?.ausente === true,
+    })
+  })
+
+  /**
    * BATIMENTO — o console avisa que a pessoa está ali.
    *
    * ⚠️ É o que separa "ninguém logado" de "todo mundo logado": fechar o
@@ -81,8 +102,7 @@ export async function rotasConfig(app: FastifyInstance): Promise<void> {
   app.post('/v1/config/presenca', { preHandler: exigirTenant }, async (req, reply) => {
     // ⚠️ Casa por `cognito_sub`: é quem o token identifica. Aceitar um id vindo
     //    do corpo deixaria um usuário marcar presença por outro.
-    const sub = req.usuarioSub
-    if (!sub) return reply.send({ ok: false, motivo: 'sem_usuario' })
+    const sub = subDoUsuario(req)
     await req.comTenant((tx) => tx`
       UPDATE usuario SET visto_em = now()
        WHERE tenant_id = tenant_atual() AND cognito_sub = ${sub}`)
@@ -99,8 +119,10 @@ export async function rotasConfig(app: FastifyInstance): Promise<void> {
     '/v1/config/ausencia', { preHandler: exigirTenant },
     async (req, reply) => {
       const ausente = req.body?.ausente === true
-      const sub = req.usuarioSub
-      if (!sub) return reply.code(422).send({ erro: 'sem_usuario', mensagem: 'Sessão sem usuário identificado.' })
+      // ⚠️ Mesmo `sub` que o envio e o assumir consultam. Quando isto exigia
+      //    token, o dev local gravava por um caminho e lia por outro: o botão
+      //    voltava sozinho ao estado anterior e ninguém entendia por quê.
+      const sub = subDoUsuario(req)
       // ⚠️ Voltar de ausente também é sinal de vida: quem clicou está ali.
       await req.comTenant((tx) => tx`
         UPDATE usuario
