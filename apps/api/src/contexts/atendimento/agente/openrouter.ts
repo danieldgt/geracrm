@@ -30,21 +30,42 @@ const URL_COMPLETIONS = 'https://openrouter.ai/api/v1/chat/completions'
  * ⚠️ Medido em 22/09 com o prompt real: 2 de 3 tentativas estouravam em 700
  * (raciocínio de 277 a 511 tokens numa resposta de WhatsApp de duas linhas).
  *
+ * ⚠️ **3000, e não 2000, porque o raciocínio VARIA muito no mesmo modelo.** O
+ * `nemotron-3-super` gastou 351 e 893 tokens pensando em duas chamadas, e 1839
+ * e 1876 em outras duas — mesma pergunta, mesmo prompt. Com 2000 ele falhava
+ * metade das vezes; com 3000, nenhuma. Um teto justo transforma variação do
+ * fornecedor em falha nossa.
+ *
+ * ⚠️ Teto alto não custa tokens: o modelo para quando termina. Só cabe quem ia
+ * estourar.
+ *
  * ⚠️ Isto NÃO afrouxa o tamanho da resposta: quem corta o texto é o domínio,
  * pelo `maxCaracteres` do canal. O teto aqui existe para o modelo caber, não
  * para o cliente ler.
  */
-const MAX_TOKENS_SAIDA = 2000
+const MAX_TOKENS_SAIDA = 3000
 /**
- * ⚠️ Limite do OpenRouter: o array `models` aceita no MÁXIMO 3 itens. Medido em
- * produção (26/08) com uma lista de 7 — a resposta foi
+ * ⚠️ Limite do OpenRouter: o array `models` aceita no MÁXIMO 3 itens POR
+ * CHAMADA. Medido em produção (26/08) com uma lista de 7 — a resposta foi
  * "'models' array must have 3 items or fewer".
- *
- * ⚠️ Cortar em silêncio seria pior: quem configurou sete acha que tem sete de
- * reserva. Por isso a ordem importa e está documentada — vale o que vier
- * PRIMEIRO em IA_MODELO, e o resto é ignorado pelo fornecedor, não por nós.
  */
-const MAX_MODELOS = 3
+const MODELOS_POR_CHAMADA = 3
+
+/**
+ * Quantas CHAMADAS nossas por turno. Duas janelas de três = seis modelos úteis.
+ *
+ * ⚠️ Antes o excedente era simplesmente CORTADO: quem configurava seis tinha
+ * três: os outros sumiam sem uma linha de log. O limite de três é por chamada,
+ * não por turno — e a segunda chamada já existia aqui para outro fim, então o
+ * que faltava era só levar os modelos certos nela.
+ *
+ * ⚠️ Para em DOIS de propósito. Cada janela custa um timeout inteiro no pior
+ * caso, e o lead está esperando: seis modelos em duas chamadas é rede de
+ * segurança, doze em quatro seria uma conversa que chega depois da desistência.
+ */
+const MAX_TENTATIVAS = 2
+
+const MAX_MODELOS = MODELOS_POR_CHAMADA * MAX_TENTATIVAS
 
 export interface CredencialOpenRouter {
   readonly apiKey: string
@@ -65,12 +86,15 @@ export class LlmOpenRouter implements PortaLlm {
   readonly #modelo: string
   /** ⚠️ Cadeia de fallback: se o primeiro não atender, o OpenRouter tenta o próximo. */
   readonly #modelos: readonly string[]
+  /** As fatias de até três que cabem numa chamada, na ordem em que serão tentadas. */
+  readonly #janelas: readonly (readonly string[])[]
   readonly #buscar: typeof fetch
   readonly #timeoutMs: number
 
   constructor(cred: CredencialOpenRouter, opcoes: { buscar?: typeof fetch; timeoutMs?: number } = {}) {
     this.#apiKey = cred.apiKey
     this.#modelos = listaDeModelos(cred.modelo)
+    this.#janelas = janelasDeTentativa(this.#modelos)
     this.#modelo = this.#modelos[0] ?? cred.modelo.trim()
     this.#buscar = opcoes.buscar ?? fetch
     // ⚠️ 45s, e não os 20s do adaptador direto: aqui há DOIS saltos (OpenRouter
@@ -97,16 +121,20 @@ export class LlmOpenRouter implements PortaLlm {
    * para todos os tenants que dividem a chave.
    */
   async conversar(pedido: PedidoDeTurno): Promise<ResultadoLlm<PropostaDeTurno>> {
-    const primeira = await this.#tentar(pedido, this.#modelos)
-    if (primeira.ok || primeira.motivo !== 'resposta_inesperada') return primeira
+    let primeiraFalha: ResultadoLlm<PropostaDeTurno> | null = null
 
-    const reserva = this.#modelos.slice(1)
-    if (reserva.length === 0) return primeira
+    for (const janela of this.#janelas) {
+      const r = await this.#tentar(pedido, janela)
+      if (r.ok) return r
+      primeiraFalha ??= r
+      // Só "resposta inútil" melhora com outro modelo. Credencial, crédito e
+      // limite de taxa saem na hora — ver a nota do método.
+      if (r.motivo !== 'resposta_inesperada') return r
+    }
 
-    const segunda = await this.#tentar(pedido, reserva)
-    // ⚠️ Falhou de novo? Devolve a falha da PRIMEIRA: é a do modelo que você
-    //    escolheu como principal, e é a que diz o que tirar da lista.
-    return segunda.ok ? segunda : primeira
+    // ⚠️ Devolve a falha da PRIMEIRA janela: é a do modelo que você escolheu
+    //    como principal, e é a que diz o que tirar da lista.
+    return primeiraFalha!
   }
 
   async #tentar(pedido: PedidoDeTurno, modelos: readonly string[]): Promise<ResultadoLlm<PropostaDeTurno>> {
@@ -288,6 +316,31 @@ function jsonDoTexto(texto: string): Record<string, unknown> | undefined {
 
 function listaDeModelos(bruto: string): readonly string[] {
   return bruto.split(',').map((m) => m.trim()).filter(Boolean).slice(0, MAX_MODELOS)
+}
+
+/**
+ * Divide a lista nas CHAMADAS que serão feitas — no máximo `MAX_TENTATIVAS`, de
+ * até `MODELOS_POR_CHAMADA` cada.
+ *
+ * ⚠️ Com quatro ou mais modelos, a segunda chamada leva os que SOBRARAM: é o
+ * ponto de ter configurado seis. Com três ou menos, ela repete a lista SEM O
+ * PRINCIPAL — que era o comportamento antigo e continua sendo o certo ali: não
+ * havendo modelo novo para tentar, o que resta é tirar da frente justamente o
+ * que acabou de responder mal.
+ *
+ * ⚠️ Com um modelo só não há segunda chamada. Repetir a mesma lista inteira
+ * seria pedir de novo exatamente o que acabou de falhar, pagando outro timeout
+ * pelo mesmo resultado.
+ */
+export function janelasDeTentativa(modelos: readonly string[]): readonly (readonly string[])[] {
+  const primeira = modelos.slice(0, MODELOS_POR_CHAMADA)
+  if (primeira.length === 0) return []
+
+  const sobra = modelos.slice(MODELOS_POR_CHAMADA)
+  if (sobra.length > 0) return [primeira, sobra]
+
+  const semPrincipal = primeira.slice(1)
+  return semPrincipal.length > 0 ? [primeira, semPrincipal] : [primeira]
 }
 
 function extrairCusto(dados: Record<string, unknown> | null, modelo: string): CustoDoTurno {

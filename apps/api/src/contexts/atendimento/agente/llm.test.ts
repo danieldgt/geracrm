@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { LlmClaude } from './claude.js'
-import { LlmOpenRouter } from './openrouter.js'
+import { LlmOpenRouter, janelasDeTentativa } from './openrouter.js'
 import { criarLlm, configLlmDoAmbiente, faltaParaLlm, llmDoAmbiente } from './fabrica.js'
 import type { PedidoDeTurno } from './porta.js'
 
@@ -256,6 +256,24 @@ const RESPOSTA_OR = {
   usage: { prompt_tokens: 900, completion_tokens: 40 },
 }
 
+/**
+ * Fornecedor falso que responde DIFERENTE a cada chamada e guarda todas.
+ *
+ * ⚠️ `respostaFalsa` guarda só a última: com duas chamadas por turno, ela não
+ * consegue distinguir "tentou de novo com os modelos certos" de "tentou de novo
+ * com os mesmos" — que é exatamente o que precisa ser provado aqui.
+ */
+function orSequencia(corpos: readonly unknown[], status = 200) {
+  const vistas: { model: string; models?: string[] }[] = []
+  const f = (async (_url: string, init?: RequestInit) => {
+    const enviado = JSON.parse(String(init?.body ?? '{}'))
+    vistas.push(enviado)
+    const corpo = corpos[Math.min(vistas.length - 1, corpos.length - 1)]
+    return { ok: status >= 200 && status < 300, status, json: async () => corpo } as Response
+  }) as unknown as typeof fetch
+  return { fetch: f, chamadas: () => vistas }
+}
+
 const orFalso = (corpo: unknown, status = 200) => {
   const { fetch, corpoEnviado } = respostaFalsa(corpo, status)
   return { llm: new LlmOpenRouter({ apiKey: 'k', modelo: 'anthropic/claude-sonnet-4.5' }, { buscar: fetch }), corpoEnviado }
@@ -418,20 +436,102 @@ describe('⚠️ IA_MODELO com vários modelos = cadeia de fallback', () => {
   })
 })
 
-describe('⚠️ O fornecedor aceita no máximo 3 modelos', () => {
+describe('⚠️ Três modelos por CHAMADA, seis por turno', () => {
   /**
-   * Medido em produção: lista de 7 devolveu "'models' array must have 3 items or
-   * fewer". Cortamos no cliente para o erro não chegar ao cliente final — e a
-   * ORDEM de IA_MODELO passa a decidir quem fica.
+   * ⚠️ Medido em produção: lista de 7 devolveu "'models' array must have 3 items
+   * or fewer". O limite é do FORNECEDOR e é por chamada — nunca foi um limite
+   * de quantos modelos de reserva se pode ter.
    */
-  it('lista longa é cortada nos três primeiros, na ordem escrita', async () => {
+  it('a primeira chamada leva três, na ordem escrita', async () => {
     const { fetch, corpoEnviado } = respostaFalsa(RESPOSTA_OR)
     await new LlmOpenRouter(
-      { apiKey: 'k', modelo: 'a/1,b/2,c/3,d/4,e/5,f/6,g/7' }, { buscar: fetch },
+      { apiKey: 'k', modelo: 'a/1,b/2,c/3,d/4,e/5,f/6' }, { buscar: fetch },
     ).conversar(PEDIDO)
     const c = corpoEnviado() as { model: string; models: string[] }
     expect(c.models).toEqual(['a/1', 'b/2', 'c/3'])
     expect(c.model).toBe('a/1')
+  })
+
+  /**
+   * ⚠️ **O que mudou em 22/09.** Antes, do quarto modelo em diante tudo era
+   * cortado e sumia sem uma linha de log: quem configurava seis tinha três. A
+   * segunda chamada já existia para o caso "resposta inútil" — só estava
+   * levando os modelos errados.
+   */
+  it('a segunda chamada leva os que SOBRARAM, não os mesmos de novo', async () => {
+    expect(janelasDeTentativa(['a/1', 'b/2', 'c/3', 'd/4', 'e/5', 'f/6'])).toEqual([
+      ['a/1', 'b/2', 'c/3'],
+      ['d/4', 'e/5', 'f/6'],
+    ])
+  })
+
+  /**
+   * ⚠️ Com três ou menos não há modelo novo para tentar: o que resta é tirar da
+   * frente justamente quem acabou de responder mal. Era o comportamento antigo,
+   * e continua certo aqui.
+   */
+  it('com três ou menos, a segunda chamada repete a lista SEM o principal', () => {
+    expect(janelasDeTentativa(['a/1', 'b/2', 'c/3'])).toEqual([
+      ['a/1', 'b/2', 'c/3'],
+      ['b/2', 'c/3'],
+    ])
+  })
+
+  /**
+   * ⚠️ Com um modelo só, repetir seria pedir de novo exatamente o que falhou —
+   * pagando outro timeout inteiro pelo mesmo resultado, com o lead esperando.
+   */
+  it('com um modelo só, não há segunda chamada', () => {
+    expect(janelasDeTentativa(['a/1'])).toEqual([['a/1']])
+    expect(janelasDeTentativa([])).toEqual([])
+  })
+
+  /** Além de seis, o sétimo nunca chega ao fornecedor: duas chamadas de três. */
+  it('acima de seis, o excedente é cortado', async () => {
+    const { fetch, chamadas } = orSequencia([
+      { model: 'a/1', choices: [{ finish_reason: 'stop', message: { content: 'oi!' } }] },
+    ])
+    await new LlmOpenRouter(
+      { apiKey: 'k', modelo: 'a/1,b/2,c/3,d/4,e/5,f/6,g/7' }, { buscar: fetch },
+    ).conversar(PEDIDO)
+
+    expect(chamadas()).toHaveLength(2)
+    expect(chamadas()[1]!.models).toEqual(['d/4', 'e/5', 'f/6'])
+    expect(JSON.stringify(chamadas())).not.toContain('g/7')
+  })
+
+  /**
+   * ⚠️ O teste que prova que a reserva SERVE para alguma coisa: o principal
+   * responde fora do formato e um modelo da segunda janela salva o turno. Sem
+   * ele, "temos seis modelos" seria uma frase no README.
+   */
+  it('principal fora do formato: um modelo da segunda janela salva o turno', async () => {
+    const { fetch, chamadas } = orSequencia([
+      { model: 'a/1', choices: [{ finish_reason: 'stop', message: { content: 'oi!' } }] },
+      { ...RESPOSTA_OR, model: 'd/4' },
+    ])
+    const r = await new LlmOpenRouter(
+      { apiKey: 'k', modelo: 'a/1,b/2,c/3,d/4,e/5,f/6' }, { buscar: fetch },
+    ).conversar(PEDIDO)
+
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.custo.modelo).toBe('d/4')
+    expect(chamadas()).toHaveLength(2)
+    expect(chamadas()[1]!.models).toEqual(['d/4', 'e/5', 'f/6'])
+  })
+
+  /**
+   * ⚠️ Falha que outro modelo NÃO conserta sai na primeira: insistir no limite
+   * de taxa piora para todos os tenants que dividem a chave.
+   */
+  it('limite de taxa não gasta a segunda chamada', async () => {
+    const { fetch, chamadas } = orSequencia([{ error: { message: 'rate limited' } }], 429)
+    const r = await new LlmOpenRouter(
+      { apiKey: 'k', modelo: 'a/1,b/2,c/3,d/4,e/5,f/6' }, { buscar: fetch },
+    ).conversar(PEDIDO)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.motivo).toBe('limite_de_taxa')
+    expect(chamadas()).toHaveLength(1)
   })
 })
 
