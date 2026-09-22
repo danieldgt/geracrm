@@ -91,17 +91,31 @@ export class LlmClaude implements PortaLlm {
     const dados = await resposta.json().catch(() => null) as Record<string, unknown> | null
     if (!resposta.ok) return { ok: false, ...traduzirErro(resposta.status, dados) }
 
+    // ⚠️ 2xx com corpo que não é JSON é CONEXÃO, não formato — resposta cortada
+    //    no meio, proxy que devolveu página. Sem este ramo o código seguia com
+    //    `null` e acusava o modelo de não usar a ferramenta, que é o diagnóstico
+    //    errado e a ação corretiva errada (ver o mesmo ramo em `openrouter.ts`).
+    if (!dados) {
+      return { ok: false, motivo: 'indisponivel', detalhe: 'resposta 2xx sem corpo JSON (conexão cortada)' }
+    }
+
     // ⚠️ `stop_reason: 'refusal'` é recusa de conteúdo, não erro de rede: repetir
     //    não resolve, e o cliente continua esperando alguém.
     if (dados?.['stop_reason'] === 'refusal') {
       return { ok: false, motivo: 'conteudo_recusado', detalhe: 'o modelo recusou responder' }
     }
 
-    const blocos = Array.isArray(dados?.['content']) ? dados['content'] as Record<string, unknown>[] : []
+    const blocos = Array.isArray(dados['content']) ? dados['content'] as Record<string, unknown>[] : []
     const uso = blocos.find((b) => b['type'] === 'tool_use')
     const proposta = propostaDoRetorno(uso?.['input'] as Record<string, unknown> | undefined)
     if (!proposta) {
-      return { ok: false, motivo: 'resposta_inesperada', detalhe: 'sem bloco de ferramenta na resposta' }
+      // ⚠️ Teto de tokens estourado ≠ modelo que ignorou a ferramenta. A ação é
+      //    outra (subir o teto, não trocar o modelo), então o motivo tem de
+      //    dizer qual dos dois foi.
+      const detalhe = dados['stop_reason'] === 'max_tokens'
+        ? `estourou o teto de ${MAX_TOKENS_SAIDA} tokens antes de responder`
+        : 'sem bloco de ferramenta na resposta'
+      return { ok: false, motivo: 'resposta_inesperada', detalhe }
     }
     return { ok: true, dados: proposta, custo: extrairCusto(dados, this.#modelo) }
   }

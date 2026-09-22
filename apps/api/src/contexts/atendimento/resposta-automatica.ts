@@ -37,6 +37,14 @@ export interface ResumoAutomatico {
    */
   readonly agenteMotivo: string | null
   /**
+   * ⚠️ A falha do fornecedor de IA por extenso, quando houve uma. `agenteMotivo`
+   * diz `modelo_falhou`; este campo diz QUAL falha — "estourou o teto de tokens
+   * antes de responder", "sem crédito no OpenRouter", "corpo vazio". Sem ele, a
+   * linha de log registra que a IA falhou e nada mais, e o próximo passo vira
+   * adivinhação sobre chave, modelo e cota ao mesmo tempo.
+   */
+  readonly agenteDetalhe: string | null
+  /**
    * ⚠️ O estado da EQUIPE em português, na mesma linha de log. `agenteMotivo`
    * diz que a decisão foi "tem quem atenda"; este campo diz quem era — "2 de 5
    * disponíveis" ou "todos os 3 logados estão marcados como ausentes". Sem ele,
@@ -62,7 +70,7 @@ export async function responderAutomaticamente(
   if (ausencia === 'enviada') {
     return {
       ausencia, agenteFalou: false, agenteEncerrouPor: null,
-      agenteMotivo: 'ausencia_recem_enviada', disponibilidade,
+      agenteMotivo: 'ausencia_recem_enviada', agenteDetalhe: null, disponibilidade,
     }
   }
 
@@ -72,6 +80,7 @@ export async function responderAutomaticamente(
     agenteFalou: t.falou,
     agenteEncerrouPor: t.falou ? t.encerrouPor : null,
     agenteMotivo: t.falou ? null : t.motivo,
+    agenteDetalhe: t.falou ? null : (t.detalhe ?? null),
     disponibilidade,
   }
 }

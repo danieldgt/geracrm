@@ -18,6 +18,21 @@ function respostaFalsa(corpo: unknown, status = 200): { fetch: typeof fetch; cor
   return { fetch: f, corpoEnviado: () => enviado }
 }
 
+/**
+ * Resposta 2xx cujo CORPO não é JSON — o `json()` rejeita, como no runtime.
+ *
+ * ⚠️ Não é hipótese de laboratório: o OpenRouter manda espaços para segurar a
+ * conexão enquanto o provedor de baixo pensa, e quando o upstream morre no meio
+ * o que chega é só esse enchimento. Medido em 22/09: 2 de 5 chamadas.
+ */
+function respostaSemJson(status = 200): typeof fetch {
+  return (async () => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => { throw new SyntaxError('Unexpected end of JSON input') },
+  })) as unknown as typeof fetch
+}
+
 const RESPOSTA_BOA = {
   stop_reason: 'tool_use',
   usage: { input_tokens: 1200, output_tokens: 80 },
@@ -137,6 +152,29 @@ describe('⚠️ Falha do fornecedor é resultado tipificado, nunca exceção', 
     const r = await new LlmClaude({ apiKey: 'k' }, { buscar: fetch }).conversar(PEDIDO)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.motivo).toBe('resposta_inesperada')
+  })
+
+  /**
+   * ⚠️ 2xx com corpo que não é JSON é CONEXÃO, não formato. Antes o `null` do
+   * `catch` seguia adiante e o produto acusava o modelo de não usar a
+   * ferramenta — diagnóstico errado, e a ação corretiva errada junto (trocar o
+   * modelo em vez de tentar de novo).
+   */
+  it('2xx sem corpo JSON é indisponibilidade, não modelo fora do formato', async () => {
+    const r = await new LlmClaude({ apiKey: 'k' }, { buscar: respostaSemJson() }).conversar(PEDIDO)
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.motivo).toBe('indisponivel')
+      expect(r.detalhe).toContain('sem corpo JSON')
+    }
+  })
+
+  /** ⚠️ Teto estourado ≠ modelo que ignora ferramenta: uma sobe o teto, a outra troca o modelo. */
+  it('teto de tokens estourado é nomeado como teto, não como formato', async () => {
+    const { fetch } = respostaFalsa({ stop_reason: 'max_tokens', content: [] })
+    const r = await new LlmClaude({ apiKey: 'k' }, { buscar: fetch }).conversar(PEDIDO)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.detalhe).toContain('estourou o teto')
   })
 })
 
@@ -290,6 +328,52 @@ describe('Adaptador OpenRouter', () => {
     const r = await orFalso({ choices: [{ finish_reason: 'content_filter', message: {} }] }).llm.conversar(PEDIDO)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.motivo).toBe('conteudo_recusado')
+  })
+
+  /**
+   * ⚠️ **A falha que derrubou o agente em produção.** O modelo de raciocínio
+   * queima o teto pensando e nunca chega a chamar a ferramenta: `finish_reason:
+   * "length"` e nenhuma `tool_call`. É a MESMA resposta do fio que um modelo
+   * incapaz de usar ferramenta produz — e a ação corretiva é oposta. Dizer
+   * "respondeu sem usar a ferramenta" mandava tirar da lista justamente o
+   * modelo que estava funcionando.
+   */
+  it('estouro do teto de tokens não é confundido com modelo que ignora a ferramenta', async () => {
+    const r = await orFalso({
+      model: 'x/pensador',
+      choices: [{ finish_reason: 'length', message: { content: '' } }],
+      usage: { completion_tokens: 700, completion_tokens_details: { reasoning_tokens: 511 } },
+    }).llm.conversar(PEDIDO)
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.motivo).toBe('resposta_inesperada')
+      expect(r.detalhe).toContain('estourou o teto')
+      expect(r.detalhe).toContain('511')              // a prova: gastou tudo raciocinando
+      expect(r.detalhe).not.toContain('sem usar a ferramenta')
+    }
+  })
+
+  /** ⚠️ 200 com corpo vazio é o provedor de baixo caindo no meio, não formato. */
+  it('200 com corpo vazio vira indisponibilidade, com o motivo por extenso', async () => {
+    const llm = new LlmOpenRouter({ apiKey: 'k', modelo: 'a/um' }, { buscar: respostaSemJson() })
+    const r = await llm.conversar(PEDIDO)
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.motivo).toBe('indisponivel')
+      expect(r.detalhe).toContain('corpo vazio')
+    }
+  })
+
+  /**
+   * ⚠️ O teto precisa caber o RACIOCÍNIO, não só a resposta: o texto que vai ao
+   * cliente é cortado pelo domínio (`maxCaracteres`), não por este número. Com
+   * 700, medido em 22/09, 2 de 3 turnos morriam antes de escrever a primeira
+   * palavra.
+   */
+  it('o teto de saída cabe o raciocínio de um modelo que pensa antes de responder', async () => {
+    const { llm, corpoEnviado } = orFalso(RESPOSTA_OR)
+    await llm.conversar(PEDIDO)
+    expect((corpoEnviado() as { max_tokens: number }).max_tokens).toBeGreaterThanOrEqual(1500)
   })
 })
 

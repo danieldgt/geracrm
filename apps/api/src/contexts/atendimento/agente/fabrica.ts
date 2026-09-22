@@ -106,10 +106,22 @@ export function criarLlm(
   }
 }
 
-/** Atalho para o caminho comum: ambiente → adaptador. */
+/**
+ * Atalho para o caminho comum: ambiente → adaptador.
+ *
+ * ⚠️ `IA_TIMEOUT_MS` existe para ajustar a paciência SEM DEPLOY. O tempo de
+ * resposta é do modelo escolhido, não nosso: trocar um modelo rápido por um de
+ * raciocínio triplica a espera, e esse é exatamente o tipo de ajuste que
+ * ninguém quer descobrir que precisa de um build. Fora do intervalo (ou lixo)
+ * cai no padrão do adaptador em vez de valer zero — um timeout de 0 derrubaria
+ * toda chamada de IA do produto.
+ */
 export function llmDoAmbiente(
   env: NodeJS.ProcessEnv = process.env,
   opcoes: { buscar?: typeof fetch; timeoutMs?: number } = {},
 ): PortaLlm {
-  return criarLlm(configLlmDoAmbiente(env), opcoes)
+  const bruto = Number(env.IA_TIMEOUT_MS)
+  const doAmbiente = Number.isFinite(bruto) && bruto >= 1_000 && bruto <= 120_000 ? bruto : undefined
+  const timeout = opcoes.timeoutMs ?? doAmbiente
+  return criarLlm(configLlmDoAmbiente(env), { ...opcoes, ...(timeout ? { timeoutMs: timeout } : {}) })
 }

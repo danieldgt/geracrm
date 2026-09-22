@@ -20,7 +20,21 @@ import type {
  */
 
 const URL_COMPLETIONS = 'https://openrouter.ai/api/v1/chat/completions'
-const MAX_TOKENS_SAIDA = 700
+/**
+ * ⚠️ **O teto é do TOTAL de saída, e o RACIOCÍNIO conta.** Foi o que quebrou o
+ * agente em produção: os modelos configurados são de raciocínio, queimam 300–500
+ * tokens pensando e só então emitem a chamada de ferramenta. Com 700, o teto
+ * acabava no meio do pensamento — `finish_reason: "length"`, nenhuma
+ * `tool_call`, e o produto traduzia isso como "respondeu sem usar a ferramenta".
+ *
+ * ⚠️ Medido em 22/09 com o prompt real: 2 de 3 tentativas estouravam em 700
+ * (raciocínio de 277 a 511 tokens numa resposta de WhatsApp de duas linhas).
+ *
+ * ⚠️ Isto NÃO afrouxa o tamanho da resposta: quem corta o texto é o domínio,
+ * pelo `maxCaracteres` do canal. O teto aqui existe para o modelo caber, não
+ * para o cliente ler.
+ */
+const MAX_TOKENS_SAIDA = 2000
 /**
  * ⚠️ Limite do OpenRouter: o array `models` aceita no MÁXIMO 3 itens. Medido em
  * produção (26/08) com uma lista de 7 — a resposta foi
@@ -59,7 +73,16 @@ export class LlmOpenRouter implements PortaLlm {
     this.#modelos = listaDeModelos(cred.modelo)
     this.#modelo = this.#modelos[0] ?? cred.modelo.trim()
     this.#buscar = opcoes.buscar ?? fetch
-    this.#timeoutMs = opcoes.timeoutMs ?? 20_000
+    // ⚠️ 45s, e não os 20s do adaptador direto: aqui há DOIS saltos (OpenRouter
+    //    e o provedor de baixo) e a cadeia de fallback pode trocar de provedor
+    //    no meio. Medido em 22/09 com o modelo configurado: 8s, 13s, 23s e 50s
+    //    na mesma pergunta — com 20s, duas em cinco viravam "IA fora do ar" sem
+    //    que nada estivesse fora do ar.
+    //
+    // ⚠️ O turno roda PÓS-COMMIT, fora do caminho do 2xx do webhook: esperar
+    //    aqui não segura o provedor nem a fila de ninguém. O que se perde é a
+    //    resposta chegar mais tarde — melhor que não chegar.
+    this.#timeoutMs = opcoes.timeoutMs ?? 45_000
   }
 
   /**
@@ -134,6 +157,19 @@ export class LlmOpenRouter implements PortaLlm {
     const dados = await resposta.json().catch(() => null) as Record<string, unknown> | null
     if (!resposta.ok) return { ok: false, ...traduzirErro(resposta.status, dados) }
 
+    // ⚠️ HTTP 200 com corpo que NÃO é JSON. Acontece de verdade: enquanto o
+    //    provedor de baixo pensa, o OpenRouter manda espaços para segurar a
+    //    conexão — e quando o upstream morre no meio, o que chega é só esse
+    //    enchimento. Medido em 22/09: 2 de 5 chamadas.
+    //
+    //    ⚠️ Sem este ramo, `dados` era `null`, o código seguia adiante e saía
+    //    pelo ramo de baixo dizendo "respondeu sem usar a ferramenta" — uma
+    //    frase que manda trocar o modelo quando o problema é a conexão. É
+    //    indisponibilidade, e a ação é outra: esperar e tentar de novo.
+    if (!dados) {
+      return { ok: false, motivo: 'indisponivel', detalhe: 'o OpenRouter respondeu 200 com corpo vazio (provedor caiu no meio)' }
+    }
+
     // ⚠️ O OpenRouter devolve HTTP 200 com um `error` dentro quando o roteamento
     //    falha (nenhum provedor disponível para o modelo). Ler só o status daria
     //    "resposta_inesperada" para algo que é indisponibilidade, e o log
@@ -164,6 +200,23 @@ export class LlmOpenRouter implements PortaLlm {
     //    mensagem só para os dois casos manda a pessoa consertar o que não está
     //    quebrado.
     if (!chamada) {
+      // ⚠️ ESTOUROU O TETO antes de chamar a ferramenta — não é "modelo que não
+      //    sabe usar ferramenta". É a MESMA resposta do fio (sem `tool_calls`) e
+      //    a ação corretiva é oposta: aqui o modelo sabe e ia usar, só não
+      //    coube. Dizer "respondeu sem usar a ferramenta" mandava tirar da lista
+      //    justamente o modelo que estava funcionando.
+      if (escolha?.['finish_reason'] === 'length') {
+        const pensou = Number(
+          ((dados['usage'] as Record<string, unknown> | undefined)?.['completion_tokens_details'] as
+            Record<string, unknown> | undefined)?.['reasoning_tokens'] ?? 0,
+        )
+        return {
+          ok: false, motivo: 'resposta_inesperada',
+          detalhe: `${quem} estourou o teto de ${MAX_TOKENS_SAIDA} tokens antes de responder`
+            + (pensou > 0 ? ` (gastou ${pensou} raciocinando)` : ''),
+        }
+      }
+
       const conteudo = typeof mensagem['content'] === 'string' ? mensagem['content'] : ''
       // ⚠️ TOLERÂNCIA DELIBERADA, medida em produção (26/08): modelos com suporte
       //    fraco a ferramenta produzem o JSON CERTO e erram só o envelope — vem

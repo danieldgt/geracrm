@@ -23,12 +23,12 @@ const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () =>
 /** ⚠️ Todos os dias fechados: o teste vale a qualquer hora que a suíte rode. */
 const SEMPRE_FECHADO = { seg: null, ter: null, qua: null, qui: null, sex: null, sab: null, dom: null }
 
-function llmFalso(proposta: Partial<PropostaDeTurno>, falha?: string): PortaLlm {
+function llmFalso(proposta: Partial<PropostaDeTurno>, falha?: string, detalhe?: string): PortaLlm {
   return {
     nome: 'falso',
     capacidades: { saidaEstruturada: true, instrucaoDeSistema: true },
     async conversar(): Promise<ResultadoLlm<PropostaDeTurno>> {
-      if (falha) return { ok: false, motivo: falha as never }
+      if (falha) return { ok: false, motivo: falha as never, ...(detalhe ? { detalhe } : {}) }
       return {
         ok: true,
         dados: {
@@ -208,9 +208,28 @@ describe('⚠️ Saídas: sempre com motivo registrado', () => {
   it('modelo fora do ar não fala e encerra com o motivo do fornecedor', async () => {
     await turno(llmFalso({}))                        // abre a sessão
     const r = await turno(llmFalso({}, 'indisponivel'))
-    expect(r).toEqual({ falou: false, motivo: 'modelo_falhou' })
-    expect(await sessao()).toMatchObject({ estado: 'entregue', motivo_saida: 'modelo falhou: indisponivel' })
+    expect(r).toMatchObject({ falou: false, motivo: 'modelo_falhou' })
+    expect(await sessao()).toMatchObject({ estado: 'entregue', motivo_saida: 'IA fora do ar' })
     expect(enviados).toHaveLength(1)                 // nada saiu no turno que falhou
+  })
+
+  /**
+   * ⚠️ O DETALHE do fornecedor tem de chegar à tela. Antes só o nome interno do
+   * motivo era gravado, e o inbox do cliente mostrava "modelo falhou:
+   * resposta_inesperada" — que não diz qual modelo, nem o que houve, nem o que
+   * fazer. A informação existia e morria aqui.
+   */
+  it('o motivo na tela traz o detalhe do fornecedor, não o nome interno do erro', async () => {
+    await turno(llmFalso({}))                        // abre a sessão
+    const r = await turno(llmFalso({}, 'resposta_inesperada', 'modelo-x estourou o teto de 2000 tokens antes de responder'))
+    expect(r).toEqual({
+      falou: false, motivo: 'modelo_falhou',
+      detalhe: 'a IA respondeu fora do formato — modelo-x estourou o teto de 2000 tokens antes de responder',
+    })
+    const s = await sessao()
+    expect(s?.motivo_saida).toContain('a IA respondeu fora do formato')
+    expect(s?.motivo_saida).toContain('estourou o teto')
+    expect(s?.motivo_saida).not.toContain('resposta_inesperada')
   })
 
   /**

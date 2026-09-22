@@ -10,7 +10,7 @@ import { carregarContextoDoLead } from './contexto-lead.js'
 import { validarExtracao } from './extracao.js'
 import { llmDoAmbiente } from './fabrica.js'
 import { portaoDoAgente, type MotivoNaoEntra } from './portao.js'
-import type { Fala, PortaLlm } from './porta.js'
+import { recadoDaFalha, type Fala, type PortaLlm } from './porta.js'
 
 /**
  * UM TURNO DO AGENTE — a ligação entre a mensagem que chegou e o que sai.
@@ -34,7 +34,17 @@ import type { Fala, PortaLlm } from './porta.js'
 
 export type ResultadoTurno =
   | { readonly falou: true; readonly encerrouPor: string | null }
-  | { readonly falou: false; readonly motivo: MotivoNaoEntra | 'sem_lead' | 'modelo_falhou' | 'envio_recusado' }
+  | {
+      readonly falou: false
+      readonly motivo: MotivoNaoEntra | 'sem_lead' | 'modelo_falhou' | 'envio_recusado'
+      /**
+       * ⚠️ O que o fornecedor disse, em uma frase. Sobe para o log da resposta
+       * automática. Sem ele, "modelo_falhou" é indistinguível de outro
+       * "modelo_falhou": um é chave vencida, outro é modelo que não coube no
+       * teto de tokens — e a ação corretiva é oposta.
+       */
+      readonly detalhe?: string
+    }
 
 interface Reuniao {
   readonly ausencia_ja_enviada: boolean
@@ -128,11 +138,18 @@ export async function conduzirTurno(
   if (!r.ok) {
     // ⚠️ Encerra com o motivo do fornecedor. A conversa fica para o humano de
     //    manhã, e o cliente já recebeu a ausência — ninguém ficou no vácuo.
+    //
+    // ⚠️ **Com o DETALHE junto.** Gravar só o motivo escrevia na tela "Saiu
+    //    porque: modelo falhou: resposta_inesperada" — uma frase que não diz o
+    //    que houve nem o que fazer, e que joga fora a única informação
+    //    acionável que o adaptador tinha montado (qual dos modelos da cadeia
+    //    respondeu, e o quê). O texto vai truncado em 200 por `encerrarSessao`.
+    const recado = recadoDaFalha(r.motivo, r.detalhe)
     if (reuniao.sessao_id) {
       await comTenantServico(tenantId, (tx) =>
-        encerrarSessao(tx, reuniao.sessao_id!, `modelo falhou: ${r.motivo}`, agora))
+        encerrarSessao(tx, reuniao.sessao_id!, recado, agora))
     }
-    return { falou: false, motivo: 'modelo_falhou' }
+    return { falou: false, motivo: 'modelo_falhou', detalhe: recado }
   }
 
   const extraido = validarExtracao(r.dados.extraidoBruto)

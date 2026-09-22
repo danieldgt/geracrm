@@ -56,6 +56,33 @@ export type ResultadoLlm<T> =
   | { readonly ok: true; readonly dados: T; readonly custo: CustoDoTurno }
   | { readonly ok: false; readonly motivo: MotivoFalhaLlm; readonly detalhe?: string | undefined }
 
+/**
+ * A falha do modelo em LINGUAGEM DE QUEM OPERA, para a tela e para o log.
+ *
+ * ⚠️ Existe porque `motivo_saida` é lido por gente: a tela do agente mostrava
+ * "Saiu porque: modelo falhou: resposta_inesperada", que não diz nem o que houve
+ * nem o que fazer. O nome interno do motivo é para o código; quem abre a tela
+ * precisa da frase.
+ *
+ * ⚠️ **O `detalhe` é a parte que vale.** É ele que diz QUAL dos três modelos da
+ * cadeia respondeu e o que veio — sem isso, "fora do formato" manda a pessoa
+ * trocar modelo no escuro. Ele era montado pelos adaptadores e descartado aqui
+ * no meio do caminho.
+ */
+const RECADO_DA_FALHA: Record<MotivoFalhaLlm, string> = {
+  credencial_invalida: 'IA sem credencial válida',
+  limite_de_taxa: 'IA no limite de uso do fornecedor',
+  indisponivel: 'IA fora do ar',
+  conteudo_recusado: 'a IA recusou responder',
+  resposta_inesperada: 'a IA respondeu fora do formato',
+  limite_de_custo: 'sem crédito para a IA',
+}
+
+export function recadoDaFalha(motivo: MotivoFalhaLlm, detalhe?: string | undefined): string {
+  const base = RECADO_DA_FALHA[motivo] ?? `IA falhou (${motivo})`
+  return detalhe ? `${base} — ${detalhe}` : base
+}
+
 /** ⚠️ Medido por turno para dar preço ao plano e detectar abuso (skill `geracrm-ia`). */
 export interface CustoDoTurno {
   readonly tokensEntrada: number
