@@ -11,6 +11,7 @@ import { LlmSimulado } from '../llm-simulado.js'
 import { ligacoesPadrao } from '../ferramentas/ligacoes.js'
 import { llmFerramentasDoAmbiente } from '../fabrica-ferramentas.js'
 import type { PortaLlmFerramentas } from '../porta-llm.js'
+import { julgar, type NotaDoJuiz } from './juiz.js'
 
 /**
  * CONVERSAS DOURADAS — o laço inteiro, de ponta a ponta, com CATÁLOGO REAL
@@ -44,6 +45,7 @@ const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () =>
 const SEMPRE_FECHADO = { seg: null, ter: null, qua: null, qui: null, sex: null, sab: null, dom: null }
 const real = !!process.env.IA_E2E
 const llm: PortaLlmFerramentas = real ? llmFerramentasDoAmbiente() : new LlmSimulado()
+const notas: { id: string; nota: NotaDoJuiz }[] = []
 
 beforeAll(async () => {
   await dono`INSERT INTO plano (id, codigo, nome) VALUES (${PLANO}, 'plano-evals-agente', 'Pro') ON CONFLICT DO NOTHING`
@@ -68,6 +70,10 @@ afterAll(async () => {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`DELETE FROM tenant WHERE id = ${T}`
+  if (notas.length) {
+    const media = notas.reduce((a, n) => a + n.nota.nota, 0) / notas.length
+    console.log(`juiz: média ${media.toFixed(1)}/10 em ${notas.length} cenário(s)`, notas.map((n) => `${n.id}=${n.nota.nota}`).join(' '))
+  }
   await encerrarBanco(); await dono.end()
 })
 
@@ -90,6 +96,8 @@ describe(`Conversas douradas (${real ? 'modelo REAL' : 'modelo simulado'})`, () 
     it(`${c.id} — ${c.titulo}`, async () => {
       const { conversa } = await prepararCenario(c, n)
       const enviadas: string[] = []
+      const falasDoCenario: { de: 'cliente' | 'agente'; texto: string }[] = []
+      const ferramentasDoCenario: { nome: string; saida: unknown }[] = []
       const enviar = (async (_t: string, _c: string, texto: string) => {
         enviadas.push(texto)
         const id = crypto.randomUUID()
@@ -124,7 +132,16 @@ describe(`Conversas douradas (${real ? 'modelo REAL' : 'modelo simulado'})`, () 
         const [d] = await dono<{ numeros_bloqueados: number[]; enviada: boolean }[]>`
           SELECT numeros_bloqueados, enviada FROM agente_decisao WHERE tenant_id = ${T} AND conversa_id = ${conversa} ORDER BY criado_em DESC LIMIT 1`
         if (d && d.numeros_bloqueados.length > 0) expect(texto, contexto).not.toMatch(/R\$\s?\d/)
+        falasDoCenario.push({ de: 'cliente', texto: turno.cliente }, ...(r.mensagens ?? []).map((m) => ({ de: 'agente' as const, texto: m })))
+        ferramentasDoCenario.push(...(r.rastro?.chamadas ?? []).map((ch) => ({ nome: ch.nome, saida: ch.saida })))
       }
-    }, real ? 120_000 : 20_000)
+      // ⚠️ O juiz só com o modelo real: avalia o que o determinístico não vê (se vende bem).
+      if (real && falasDoCenario.some((f) => f.de === 'agente')) {
+        const nota: NotaDoJuiz = await julgar({ cenario: c.titulo, politicas: douradas.politicas, falas: falasDoCenario, ferramentas: ferramentasDoCenario })
+        notas.push({ id: c.id, nota })
+        expect(nota.naoInventou, `[${c.id}] juiz: ${nota.problemas.join('; ')}`).toBe(true)
+        expect(nota.nota, `[${c.id}] juiz: ${nota.problemas.join('; ')}`).toBeGreaterThanOrEqual(6)
+      }
+    }, real ? 180_000 : 20_000)
   })
 })
