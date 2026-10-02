@@ -1,15 +1,15 @@
-import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { perfilDeCotacao } from '@geracrm/shared'
+import { itemPedidoEntrada, perfilDeCotacao, ehPerfilPreco } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
-import { marcarResumoEnviado } from './confirmacao-pedido.js'
 import { efetivarPedido } from './efetivacao.js'
 import { conectorDoTenant } from '../integracao/conector-do-tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
-import { enviarTextoNaConversa } from '../atendimento/envio-conversa.js'
-import { resumoPedidoTexto, codigoReferencia } from './resumo-pedido.js'
 import { ETAPAS_POS_CONFIRMACAO, etapaPos } from './proximas-etapas.js'
 import { fragmentoPrecoDeVenda } from './preco-de-venda.js'
+import {
+  adicionarItemPorSku, alterarQuantidade, obterOuCriarRascunho, recalcularTotais, removerItem,
+} from './montagem.js'
+import { proporPedido } from './proposta.js'
 
 /**
  * Pedido assistido — o tira-pedido que nasce na conversa (ADR-005).
@@ -169,34 +169,12 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
   // ou `nome`, cria SEMPRE um novo (a tela robusta gerencia N rascunhos).
   app.post('/v1/pedidos', { preHandler: exigirTenant }, async (req, reply) => {
     const corpo = (req.body ?? {}) as { contatoId?: string; conversaId?: string; nome?: string; novo?: boolean }
-    const id = randomUUID()
-    const forcarNovo = corpo.novo === true || !!corpo.nome?.trim()
-
-    const pedido = await req.comTenant(async (tx) => {
-      if (corpo.conversaId && !forcarNovo) {
-        const [existente] = await tx<{ id: string }[]>`
-          SELECT id FROM pedido WHERE conversa_id = ${corpo.conversaId} AND estado = 'rascunho'
-           ORDER BY atualizado_em DESC LIMIT 1`
-        if (existente) return existente
-      }
-      // ⚠️ Vincula ao contato SEMPRE que der: se veio só a conversa (nasceu no
-      //    chat), resolve o contato_id pela própria conversa. Sem isso o pedido
-      //    fica "sem cliente" na lista mesmo depois de confirmado, e não aparece
-      //    em /v1/contatos/:id/pedidos (INV-52 / pedido nasce na conversa).
-      const [novo] = await tx<{ id: string }[]>`
-        INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, nome, estado)
-        VALUES (
-          tenant_atual(), ${id},
-          COALESCE(
-            ${corpo.contatoId ?? null}::uuid,
-            (SELECT cv.contato_id FROM conversa cv
-              WHERE cv.tenant_id = tenant_atual() AND cv.id = ${corpo.conversaId ?? null}::uuid)
-          ),
-          ${corpo.conversaId ?? null}, ${corpo.nome?.trim() || null}, 'rascunho')
-        RETURNING id`
-      return novo!
-    })
-
+    // ⚠️ A rota só cria por gente: `origem` é 'humano' aqui. O agente cria pelo
+    //    mesmo caso de uso com origem 'agente' (ADR-027), nunca por esta rota.
+    const pedido = await req.comTenant((tx) => obterOuCriarRascunho(tx, {
+      contatoId: corpo.contatoId ?? null, conversaId: corpo.conversaId ?? null,
+      nome: corpo.nome ?? null, novo: corpo.novo === true, origem: 'humano',
+    }))
     return reply.code(201).send({ id: pedido.id })
   })
 
@@ -221,15 +199,46 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     },
   )
 
-  // Adiciona um item ao rascunho, com o preço-snapshot entrado na tela.
+  /**
+   * Adiciona um item ao rascunho.
+   *
+   * ⚠️ Com `skuId`, o corpo é `{ skuId, quantidade }` e o PREÇO É RESOLVIDO NO
+   *    SERVIDOR (ADR-025) pelo perfil do contato — `valorUnitarioCentavos` que
+   *    venha no corpo é IGNORADO. `perfil` opcional é transitório: o botão
+   *    varejo/atacado do console ainda não grava no contato; some na raia R7.
+   *
+   * ⚠️ SEM `skuId` é item de TEXTO LIVRE (fora do catálogo): descrição + preço
+   *    entrados na tela. Mantido só para isso; o console passa a mandar `skuId`
+   *    em tudo que vem do catálogo na raia R7.
+   */
   app.post<{ Params: { id: string } }>(
     '/v1/pedidos/:id/itens',
     { preHandler: exigirTenant },
     async (req, reply) => {
       const corpo = (req.body ?? {}) as {
-        skuId?: string; skuSnapshot?: string; descricaoSnapshot?: string
+        skuId?: string; skuSnapshot?: string; descricaoSnapshot?: string; perfil?: string
         grade?: Record<string, string>; quantidade?: number; valorUnitarioCentavos?: number
       }
+
+      if (corpo.skuId !== undefined) {
+        const entrada = itemPedidoEntrada.safeParse({ skuId: corpo.skuId, quantidade: corpo.quantidade })
+        if (!entrada.success) {
+          return reply.code(422).send({ erro: 'pedido.item_invalido', mensagem: 'Informe o SKU e uma quantidade maior que zero.' })
+        }
+        const opcoes = ehPerfilPreco(corpo.perfil) ? { perfil: perfilDeCotacao(corpo.perfil) } : {}
+        const r = await req.comTenant((tx) => adicionarItemPorSku(tx, req.params.id, entrada.data, opcoes))
+        switch (r.tipo) {
+          case 'ok': return reply.send({ ok: true, seq: r.seq, quantidade: r.quantidade, valorUnitarioCentavos: r.valorUnitarioCentavos, totalCentavos: r.totalCentavos })
+          case 'pedido_nao_encontrado': return reply.code(404).send({ erro: 'pedido.nao_encontrado', mensagem: 'Rascunho não encontrado.' })
+          case 'pedido_imutavel': return reply.code(409).send({ erro: 'pedido.imutavel', mensagem: 'Este pedido não é mais um rascunho.' })
+          case 'sku_desconhecido': return reply.code(422).send({ erro: 'pedido.sku_desconhecido', mensagem: 'Este produto não está no catálogo.' })
+          case 'sem_preco': return reply.code(422).send({ erro: 'pedido.sem_preco', mensagem: 'Este produto não tem preço na tabela do perfil. Configure a tabela no ERP.' })
+          case 'quantidade_invalida': return reply.code(422).send({ erro: 'pedido.quantidade_invalida', regra: r.regra, mensagem: 'Quantidade deve ser maior que zero.' })
+          case 'estoque_insuficiente': return reply.code(409).send({ erro: 'pedido.estoque_insuficiente', disponivel: r.disponivel, skuSnapshot: r.skuSnapshot, mensagem: `Estoque insuficiente de ${r.skuSnapshot} (disponível: ${r.disponivel}). Ajuste a quantidade.` })
+        }
+      }
+
+      // Item de texto livre (sem SKU): preço entrado na tela.
       if (!corpo.quantidade || corpo.quantidade <= 0) {
         return reply.code(422).send({ erro: 'pedido.quantidade_invalida', mensagem: 'Quantidade deve ser maior que zero.' })
       }
@@ -252,7 +261,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
                                    descricao_snapshot, grade_snapshot, quantidade, valor_unitario_centavos)
           VALUES (tenant_atual(), ${req.params.id},
                   (SELECT coalesce(max(seq), 0) + 1 FROM pedido_item WHERE pedido_id = ${req.params.id}),
-                  ${corpo.skuId ?? null}, ${corpo.skuSnapshot ?? '—'}, ${corpo.descricaoSnapshot ?? '—'},
+                  NULL, ${corpo.skuSnapshot ?? '—'}, ${corpo.descricaoSnapshot ?? '—'},
                   ${JSON.stringify(corpo.grade ?? {})}::text::jsonb,
                   ${quantidade}, ${valorUnitario})
         `
@@ -279,10 +288,10 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
           id: string; estado: string; total_centavos: string; total_pecas: string; contato_id: string | null
           ultimo_erro: unknown; forma_pagamento: string | null; observacao: string | null; nome: string | null
           contato: string | null; numero_externo: string | null; criado_em: Date; confirmado_em: Date | null
-          cancelado_em: Date | null; cancelado_motivo: string | null
+          cancelado_em: Date | null; cancelado_motivo: string | null; origem: string; desconto_pct: string
         }[]>`SELECT p.id, p.estado, p.total_centavos::text, p.total_pecas::text, p.contato_id, p.ultimo_erro,
                     p.forma_pagamento, p.observacao, p.nome, p.numero_externo, p.criado_em, p.confirmado_em,
-                    p.cancelado_em, p.cancelado_motivo,
+                    p.cancelado_em, p.cancelado_motivo, p.origem, p.desconto_pct::text,
                     c.nome AS contato
                FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
               WHERE p.id = ${req.params.id}`
@@ -301,6 +310,9 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       return reply.send({
         id: dados.pedido.id,
         estado: dados.pedido.estado,
+        // Quem montou (humano/agente) e o desconto — a alçada (ADR-027) lê os dois.
+        origem: dados.pedido.origem,
+        descontoPct: Number(dados.pedido.desconto_pct),
         contatoId: dados.pedido.contato_id,
         contato: dados.pedido.contato,
         nome: dados.pedido.nome,
@@ -378,6 +390,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         case 'nao_encontrado': return reply.code(404).send({ erro: 'pedido.nao_encontrado' })
         case 'nao_rascunho':   return reply.code(409).send({ erro: 'pedido.nao_rascunho', mensagem: 'Só um rascunho pode ser efetivado.' })
         case 'vazio':          return reply.code(422).send({ erro: 'pedido.vazio', mensagem: 'Adicione itens antes de efetivar.' })
+        // Regra comercial (PED-05): o que falta, nomeado; o rascunho não mudou.
+        case 'regras':         return reply.code(422).send({ erro: 'pedido.regras', violacao: r.violacao, mensagem: r.mensagem })
         case 'degradado':      return reply.send({ ok: false, degradado: true, mensagem: 'Seu ERP não recebe pedido automático. Exporte e registre no ERP.' })
         case 'aguardando_conferencia': return reply.code(202).send({ ok: false, estado: 'aguardando_conferencia', mensagem: 'A resposta do ERP se perdeu. Estamos conferindo se o pedido entrou — não reenvie.' })
         case 'falha':          return reply.code(409).send({ ok: false, estado: 'falhou', falha: r.falha, mensagem: mensagemFalha(r.falha) })
@@ -410,10 +424,10 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       const linhas = await req.comTenant((tx) => tx<{
         id: string; estado: string; total_centavos: string; total_pecas: string
         contato_id: string | null; contato: string | null; rotulo: string | null
-        numero_externo: string | null; criado_em: Date; itens: number
+        numero_externo: string | null; criado_em: Date; itens: number; origem: string; desconto_pct: string
       }[]>`
         SELECT p.id, p.estado, p.total_centavos::text, p.total_pecas::text, p.contato_id,
-               c.nome AS contato, p.nome AS rotulo, p.numero_externo, p.criado_em,
+               c.nome AS contato, p.nome AS rotulo, p.numero_externo, p.criado_em, p.origem, p.desconto_pct::text,
                (SELECT count(*)::int FROM pedido_item i WHERE i.tenant_id = p.tenant_id AND i.pedido_id = p.id) AS itens
           FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
          WHERE p.tenant_id = tenant_atual()
@@ -427,6 +441,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
       return reply.send({
         itens: pagina.map((l) => ({
           id: l.id, estado: l.estado, contatoId: l.contato_id, contato: l.contato, rotulo: l.rotulo,
+          origem: l.origem, descontoPct: Number(l.desconto_pct),
           totalCentavos: Number(l.total_centavos), totalPecas: Number(l.total_pecas), itens: l.itens,
           numeroExterno: l.numero_externo, criadoEm: l.criado_em,
         })),
@@ -442,18 +457,15 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const qtd = Number(req.body?.quantidade)
       if (!Number.isFinite(qtd) || qtd <= 0) return reply.code(422).send({ erro: 'item.quantidade_invalida', mensagem: 'Quantidade deve ser maior que zero.' })
-      const r = await req.comTenant(async (tx) => {
-        const [p] = await tx<{ estado: string }[]>`SELECT estado FROM pedido WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
-        if (!p) return { erro: 404 as const }
-        if (p.estado !== 'rascunho') return { erro: 409 as const }
-        const [item] = await tx`UPDATE pedido_item SET quantidade = ${qtd}
-                  WHERE tenant_id = tenant_atual() AND pedido_id = ${req.params.id} AND seq = ${Number(req.params.seq)} RETURNING seq`
-        if (!item) return { erro: 404 as const }
-        await recalcularTotais(tx, req.params.id)
-        return { ok: true }
-      })
-      if ('erro' in r) return reply.code(r.erro).send({ erro: r.erro === 409 ? 'pedido.imutavel' : 'item.nao_encontrado' })
-      return reply.send({ ok: true })
+      const r = await req.comTenant((tx) => alterarQuantidade(tx, req.params.id, Number(req.params.seq), qtd))
+      switch (r.tipo) {
+        case 'ok': return reply.send({ ok: true, totalCentavos: r.totalCentavos })
+        case 'pedido_nao_encontrado': return reply.code(404).send({ erro: 'pedido.nao_encontrado' })
+        case 'item_nao_encontrado': return reply.code(404).send({ erro: 'item.nao_encontrado' })
+        case 'pedido_imutavel': return reply.code(409).send({ erro: 'pedido.imutavel' })
+        case 'quantidade_invalida': return reply.code(422).send({ erro: 'item.quantidade_invalida', regra: r.regra, mensagem: 'Quantidade deve ser maior que zero.' })
+        case 'estoque_insuficiente': return reply.code(409).send({ erro: 'pedido.estoque_insuficiente', disponivel: r.disponivel, skuSnapshot: r.skuSnapshot, mensagem: `Estoque insuficiente de ${r.skuSnapshot} (disponível: ${r.disponivel}). Ajuste a quantidade.` })
+      }
     },
   )
 
@@ -461,16 +473,13 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { id: string; seq: string } }>(
     '/v1/pedidos/:id/itens/:seq', { preHandler: exigirTenant },
     async (req, reply) => {
-      const r = await req.comTenant(async (tx) => {
-        const [p] = await tx<{ estado: string }[]>`SELECT estado FROM pedido WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
-        if (!p) return { erro: 404 as const }
-        if (p.estado !== 'rascunho') return { erro: 409 as const }
-        await tx`DELETE FROM pedido_item WHERE tenant_id = tenant_atual() AND pedido_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`
-        await recalcularTotais(tx, req.params.id)
-        return { ok: true }
-      })
-      if ('erro' in r) return reply.code(r.erro).send({ erro: r.erro === 409 ? 'pedido.imutavel' : 'pedido.nao_encontrado' })
-      return reply.send({ ok: true })
+      const r = await req.comTenant((tx) => removerItem(tx, req.params.id, Number(req.params.seq)))
+      switch (r.tipo) {
+        case 'ok': return reply.send({ ok: true, totalCentavos: r.totalCentavos })
+        case 'pedido_nao_encontrado': return reply.code(404).send({ erro: 'pedido.nao_encontrado' })
+        case 'item_nao_encontrado': return reply.code(404).send({ erro: 'item.nao_encontrado' })
+        case 'pedido_imutavel': return reply.code(409).send({ erro: 'pedido.imutavel' })
+      }
     },
   )
 
@@ -552,53 +561,33 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
    * pelo gateway único (opt-out, janela de 24h, canal). ⚠️ Só para pedido que
    * nasceu numa conversa. Falha de envio volta TIPIFICADA (janela_fechada,
    * bloqueado, …) para a tela dar a ação corretiva.
+   *
+   * ⚠️ É o MESMO caso de uso do agente (`proporPedido`, ADR-027): grava a
+   *    proposta com a versão do conteúdo, e o "sim" só confirma essa versão.
+   *    Regra comercial violada (PED-05) volta 422 com o que falta.
    */
   app.post<{ Params: { id: string } }>(
     '/v1/pedidos/:id/enviar-resumo', { preHandler: exigirTenant },
     async (req, reply) => {
-      const dados = await req.comTenant(async (tx) => {
-        const [p] = await tx<{ conversa_id: string | null; total_centavos: string; forma_pagamento: string | null; observacao: string | null; contato: string | null }[]>`
-          SELECT p.conversa_id, p.total_centavos::text, p.forma_pagamento, p.observacao, c.nome AS contato
-            FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
-           WHERE p.tenant_id = tenant_atual() AND p.id = ${req.params.id}`
-        if (!p) return { erro: 'nao_encontrado' as const }
-        if (!p.conversa_id) return { erro: 'sem_conversa' as const }
-        const itens = await tx<{ descricao_snapshot: string; grade_snapshot: Record<string, string>; quantidade: string; valor_unitario_centavos: string }[]>`
-          SELECT descricao_snapshot, grade_snapshot, quantidade::text, valor_unitario_centavos::text
-            FROM pedido_item WHERE tenant_id = tenant_atual() AND pedido_id = ${req.params.id} ORDER BY seq ASC`
-        if (itens.length === 0) return { erro: 'vazio' as const }
+      const nome = await req.comTenant(async (tx) => {
         const eu = await garantirUsuarioId(tx, req)
         const [u] = await tx<{ nome: string }[]>`SELECT nome FROM usuario WHERE tenant_id = tenant_atual() AND id = ${eu}`
-        return {
-          conversaId: p.conversa_id, total: Number(p.total_centavos), nome: u?.nome ?? null,
-          ctx: {
-            contatoNome: p.contato, formaPagamento: p.forma_pagamento, observacao: p.observacao,
-            // Códigos curtos do pedido e do chat, para situar o registro.
-            pedidoCodigo: codigoReferencia(req.params.id),
-            chatCodigo: codigoReferencia(p.conversa_id),
-          },
-          itens: itens.map((i) => ({
-            descricao: i.descricao_snapshot,
-            // Cor · tamanho · … na ordem cor→tamanho→resto (o que o cliente escolheu).
-            variacao: variacaoDaGrade(i.grade_snapshot),
-            quantidade: Number(i.quantidade), valorUnitarioCentavos: Number(i.valor_unitario_centavos),
-          })),
-        }
+        return u?.nome ?? null
       })
-      if ('erro' in dados) {
-        if (dados.erro === 'nao_encontrado') return reply.code(404).send({ erro: 'pedido.nao_encontrado' })
-        if (dados.erro === 'sem_conversa') return reply.code(422).send({ erro: 'pedido.sem_conversa', mensagem: 'Este pedido não nasceu numa conversa; não há para quem enviar.' })
-        return reply.code(422).send({ erro: 'pedido.vazio', mensagem: 'Adicione itens antes de enviar o resumo.' })
+      const r = await proporPedido(req.tenantId!, req.params.id, new Date(), { remetenteNome: nome })
+      switch (r.tipo) {
+        case 'nao_encontrado': return reply.code(404).send({ erro: 'pedido.nao_encontrado' })
+        case 'sem_conversa': return reply.code(422).send({ erro: 'pedido.sem_conversa', mensagem: 'Este pedido não nasceu numa conversa; não há para quem enviar.' })
+        case 'vazio': return reply.code(422).send({ erro: 'pedido.vazio', mensagem: 'Adicione itens antes de enviar o resumo.' })
+        case 'nao_rascunho': return reply.code(409).send({ erro: 'pedido.nao_rascunho', mensagem: 'Só um rascunho (ou um pedido aguardando o sim) pode ter o resumo enviado.' })
+        case 'regras': return reply.code(422).send({ erro: 'pedido.regras', violacao: r.violacao, mensagem: r.mensagem })
+        case 'envio_recusado':
+          if (r.motivo === 'conversa_nao_encontrada') return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
+          // Devolve o conversaId para o front abrir o chat onde a mensagem caiu.
+          return reply.send({ ok: false, motivo: r.motivo, conversaId: r.conversaId })
+        case 'ok':
+          return reply.send({ ok: true, conversaId: r.conversaId, propostaId: r.propostaId, expiraEm: r.expiraEm })
       }
-      const texto = resumoPedidoTexto(dados.itens, dados.total, dados.ctx)
-      const r = await enviarTextoNaConversa(req.tenantId!, dados.conversaId, texto, dados.nome)
-      if (!r.ok && r.motivo === 'conversa_nao_encontrada') return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
-      // Enviou → fica aguardando o SIM do cliente (só a partir de rascunho).
-      if (r.ok) {
-        await req.comTenant((tx) => marcarResumoEnviado(tx, req.params.id, dados.conversaId))
-      }
-      // Devolve o conversaId para o front abrir o chat onde a mensagem caiu.
-      return reply.send({ ok: r.ok, motivo: r.ok ? undefined : r.motivo, conversaId: dados.conversaId })
     },
   )
 }
@@ -613,33 +602,4 @@ function mensagemFalha(f: { tipo: string; skuExterno?: string; disponivel?: numb
     case 'nao_chegou':           return 'O ERP não respondeu. Tente de novo em instantes.'
     default:                     return 'Não foi possível efetivar o pedido.'
   }
-}
-
-/** Recalcula totais na MESMA transação da mutação — nunca defasa da linha. */
-async function recalcularTotais(tx: import('../../db/index.js').Sql, pedidoId: string): Promise<void> {
-  await tx`
-    UPDATE pedido SET
-      total_centavos = coalesce((SELECT sum(quantidade * valor_unitario_centavos)::bigint
-                                   FROM pedido_item WHERE pedido_id = ${pedidoId}), 0),
-      total_pecas    = coalesce((SELECT sum(quantidade) FROM pedido_item WHERE pedido_id = ${pedidoId}), 0),
-      versao_conteudo = versao_conteudo + 1,
-      atualizado_em  = now()
-     WHERE id = ${pedidoId}
-  `
-}
-
-/** Variação escolhida a partir do grade_snapshot: cor · tamanho · resto. */
-function variacaoDaGrade(grade: Record<string, string> | null | undefined): string | null {
-  if (!grade) return null
-  const ordem = ['cor', 'tamanho', 'subTamanho', 'sub_tamanho']
-  const vistos = new Set<string>()
-  const partes: string[] = []
-  for (const k of ordem) {
-    const v = grade[k]
-    if (v) { partes.push(String(v)); vistos.add(k) }
-  }
-  for (const [k, v] of Object.entries(grade)) {
-    if (!vistos.has(k) && v) partes.push(String(v))
-  }
-  return partes.length ? partes.join(' · ') : null
 }

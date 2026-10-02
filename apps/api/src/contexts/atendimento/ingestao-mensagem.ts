@@ -198,7 +198,9 @@ export async function ingerirMensagemEntrante(
       //    da pilha. Não respondemos ao cliente de propósito: pode ser que ele
       //    queira MESMO um segundo pedido, e um robô dizendo "já confirmado"
       //    encerraria a venda. Quem fala aqui é gente.
-      if (r.tipo === 'sem_pendente' || r.tipo === 'fora_da_janela') {
+      //    `proposta_desatualizada` (ADR-027) é o mesmo caso: o "sim" chegou
+      //    para um resumo que já não descreve o pedido.
+      if (r.tipo === 'sem_pendente' || r.tipo === 'fora_da_janela' || r.tipo === 'proposta_desatualizada') {
         await emSavepoint(tx, (sp) => notificarConfirmacaoSemPedido(sp, conversaId))
       }
     } catch { /* não bloqueia a mensagem */ }

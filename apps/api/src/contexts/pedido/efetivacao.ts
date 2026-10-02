@@ -1,5 +1,7 @@
 import type { ConectorErp, FalhaEfetivacao } from '@geracrm/conectores'
 import type { Sql } from '../../db/index.js'
+import { regrasPedidoDoTenant } from './montagem.js'
+import { mensagemViolacao, validarRegrasPedido, type ViolacaoRegras } from './regras-pedido.js'
 
 /**
  * Efetivação do pedido no ERP (ADR-005). ⚠️ As três coisas onde produtos deste
@@ -22,6 +24,8 @@ export type ResultadoEfetivacao =
   | { tipo: 'vazio' }
   | { tipo: 'nao_rascunho' }
   | { tipo: 'nao_encontrado' }
+  /** Regras comerciais do perfil vertical violadas (PED-05/INV-27); nada mudou. */
+  | { tipo: 'regras'; violacao: ViolacaoRegras; mensagem: string }
 
 export async function efetivarPedido(
   sql: Sql,
@@ -30,8 +34,8 @@ export async function efetivarPedido(
   pedidoId: string,
   agora: Date,
 ): Promise<ResultadoEfetivacao> {
-  const [pedido] = await sql<{ estado: string; contato_id: string | null; versao: number }[]>`
-    SELECT estado, contato_id, versao_conteudo AS versao
+  const [pedido] = await sql<{ estado: string; contato_id: string | null; versao: number; total_centavos: string; total_pecas: string }[]>`
+    SELECT estado, contato_id, versao_conteudo AS versao, total_centavos::text, total_pecas::text
       FROM pedido WHERE tenant_id = tenant_atual() AND id = ${pedidoId}`
   if (!pedido) return { tipo: 'nao_encontrado' }
   // ⚠️ Quem pode efetivar:
@@ -46,10 +50,19 @@ export async function efetivarPedido(
   const PODEM_EFETIVAR = ['rascunho', 'confirmado', 'falhou']
   if (!PODEM_EFETIVAR.includes(pedido.estado)) return { tipo: 'nao_rascunho' }
 
-  const itens = await sql<{ sku_snapshot: string; quantidade: string; valor_unitario_centavos: string }[]>`
-    SELECT sku_snapshot, quantidade::text, valor_unitario_centavos::text
+  const itens = await sql<{ sku_snapshot: string; descricao_snapshot: string; quantidade: string; valor_unitario_centavos: string }[]>`
+    SELECT sku_snapshot, descricao_snapshot, quantidade::text, valor_unitario_centavos::text
       FROM pedido_item WHERE tenant_id = tenant_atual() AND pedido_id = ${pedidoId} ORDER BY seq`
   if (itens.length === 0) return { tipo: 'vazio' }
+
+  // ⚠️ Revalidação na efetivação (INV-27/INV-28): a proposta já validou, mas a
+  //    regra pode ter mudado — e o fluxo humano chega aqui sem proposta.
+  //    Violação é resultado NOMEADO com o que falta; o rascunho fica intacto.
+  const validacao = validarRegrasPedido(await regrasPedidoDoTenant(sql), {
+    totalCentavos: Number(pedido.total_centavos), totalPecas: Number(pedido.total_pecas),
+    itens: itens.map((i) => ({ sku: i.descricao_snapshot, quantidade: Number(i.quantidade) })),
+  })
+  if (validacao.tipo !== 'ok') return { tipo: 'regras', violacao: validacao, mensagem: mensagemViolacao(validacao) }
 
   // ⚠️ Degradação: sem escrita no ERP, o rascunho fica como está (exportável).
   if (!conector?.efetivarPedido) return { tipo: 'degradado' }
