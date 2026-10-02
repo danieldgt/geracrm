@@ -179,7 +179,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   if (!lead) return { desfecho: 'silencio', motivo: 'sem_lead' }
 
   const sessaoId = reuniao.sessao_id ?? randomUUID()
-  const ctxFerr: ContextoFerramenta = { tenantId, conversaId, contatoId: conv.contato_id, canalId, perfil, sessaoId: reuniao.sessao_id, modo, agora }
+  const ctxFerr: ContextoFerramenta = { tenantId, conversaId, contatoId: conv.contato_id, canalId, perfil, sessaoId: reuniao.sessao_id, modo, agora, enviar: deps.enviar }
   const ligacoesBase = await deps.ligacoes({ tenantId, politicas: cfg.politicas })
   const ligacoes: Ligacoes = { ...ligacoesBase, conhecimento: ligacoesBase.conhecimento ?? conhecimentoDasPoliticas(cfg.politicas) }
   const { ferramentas, capacidades } = montarFerramentas(ligacoes)

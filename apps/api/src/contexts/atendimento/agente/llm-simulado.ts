@@ -39,8 +39,8 @@ export class LlmSimulado implements PortaLlmFerramentas {
     const brl = (c: number) => `R$ ${(c / 100).toFixed(2).replace('.', ',')}`
 
     // 1. Pedido de humano / reclamação → transfere.
-    if (/\b(humano|atendente|pessoa|alguem|reclama|problema com|cobranca|nota fiscal|troca)\b/.test(t) && tem('atendimento_transferir')) {
-      const motivo = /reclama|problema|cobranca|nota fiscal|troca/.test(t) ? 'reclamacao' : 'pedido_de_humano'
+    if (/\b(humano|atendente|pessoa|alguem|reclama\w*|problema|defeito|cobranca|nota fiscal|troca\w*|devolu\w*)\b/.test(t) && tem('atendimento_transferir')) {
+      const motivo = /reclama|problema|defeito|cobranca|nota fiscal|troca|devolu/.test(t) ? 'reclamacao' : 'pedido_de_humano'
       await chamar('atendimento_transferir', { motivo, resumo: `Cliente escreveu: "${texto.slice(0, 120)}"` })
       return fim({ mensagens: ['Claro, vou chamar uma pessoa da equipe para continuar com você. Já aviso aqui.'], confianca: 0.95, fase: 'handoff', handoff: { motivo, resumo: `Cliente pediu: ${texto.slice(0, 200)}` } })
     }
@@ -48,11 +48,17 @@ export class LlmSimulado implements PortaLlmFerramentas {
     // 2. Confirmação / fechar → propõe.
     if (/\b(fecha|fechar|finaliza|pode mandar|manda o resumo|proposta|resumo do pedido|fechado)\b/.test(t) && tem('pedido_propor')) {
       const r = await chamar('pedido_propor', {})
-      if (r.ok) {
-        const s = r.saida as { totalCentavos?: number; resumo?: string }
+      const s = r.ok ? (r.saida as { situacao?: string; totalCentavos?: number; detalhe?: string | null }) : { situacao: 'indisponivel' }
+      if (s.situacao === 'ok') {
         return fim({ mensagens: [`Acabei de te enviar o resumo do pedido${typeof s.totalCentavos === 'number' ? ` (total ${brl(s.totalCentavos)})` : ''}. Me confirma com um "sim" que eu encaminho.`], confianca: 0.9, fase: 'proposta' })
       }
-      return fim({ mensagens: ['Ainda não temos itens no pedido. Me diz o que você quer levar que eu monto para você.'], confianca: 0.8, fase: 'recomendacao' })
+      if (s.situacao === 'vazio') return fim({ mensagens: ['Ainda não temos itens no pedido. Me diz o que você quer levar que eu monto para você.'], confianca: 0.8, fase: 'recomendacao' })
+      if (s.situacao === 'regras') return fim({ mensagens: [`Antes de fechar: ${s.detalhe ?? 'o pedido não atende às regras da loja'}.`], confianca: 0.8, fase: 'recomendacao' })
+      if (tem('atendimento_transferir')) {
+        await chamar('atendimento_transferir', { motivo: 'incerteza', resumo: `Não consegui enviar a proposta (${s.situacao}${s.detalhe ? `: ${s.detalhe}` : ''}).` })
+        return fim({ mensagens: ['Não consegui enviar o resumo agora. Vou pedir para uma pessoa da equipe fechar com você.'], confianca: 0.5, fase: 'handoff', handoff: { motivo: 'incerteza', resumo: `Proposta não enviada: ${s.situacao}` } })
+      }
+      return fim({ mensagens: ['Não consegui enviar o resumo agora; tento de novo em instantes.'], confianca: 0.5, fase: 'recomendacao' })
     }
 
     // 3. "quero 2 camiseta verde g" → busca + adiciona.
@@ -60,8 +66,12 @@ export class LlmSimulado implements PortaLlmFerramentas {
     if (m && tem('catalogo_buscar') && tem('pedido_itens')) {
       const qtd = Number(m[1])
       const busca = await chamar('catalogo_buscar', { consulta: m[2]!.trim(), limite: null })
-      const itens = (busca.ok ? (busca.saida as { itens?: { produto: string; skus: { skuId: string; atributos: Record<string, string>; precoCentavos: number | null }[] }[] }).itens : []) ?? []
-      const sku = itens[0]?.skus.find((s) => s.precoCentavos !== null) ?? itens[0]?.skus[0]
+      const itens = (busca.ok ? (busca.saida as { itens?: { produto: string; skus: { skuId: string; atributos: Record<string, string>; precoCentavos: number | null; saldo: number | null | 'desconhecido' }[] }[] }).itens : []) ?? []
+      // Escolhe a variação que o cliente nomeou ("verde", "G", "mensal"); senão a primeira com preço e saldo.
+      const skus = itens[0]?.skus ?? []
+      const comPreco = skus.filter((s) => s.precoCentavos !== null)
+      const casa = (s: { atributos: Record<string, string> }) => Object.values(s.atributos).filter((v) => t.includes(normalizar(String(v)))).length
+      const sku = [...comPreco].sort((a, b) => casa(b) - casa(a) || Number(b.saldo !== 0) - Number(a.saldo !== 0))[0] ?? skus[0]
       if (!sku) return fim({ mensagens: [`Não encontrei "${m[2]!.trim()}" no catálogo. Pode me dizer de outro jeito, ou me conta o que você procura?`], confianca: 0.7, fase: 'descoberta' })
       const add = await chamar('pedido_itens', { acao: 'adicionar', skuId: sku.skuId, seq: null, quantidade: qtd })
       if (!add.ok) return fim({ mensagens: [`Não consegui incluir esse item: ${add.erro}. Quer tentar outro?`], confianca: 0.6, fase: 'recomendacao' })

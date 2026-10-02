@@ -131,7 +131,7 @@ export const pedidoReal: PedidoPorta = {
         expiraEm: new Date(ctx.agora.getTime() + HORAS_VALIDADE_PROPOSTA * 3_600_000).toISOString(),
       }
     }
-    const r = await proporPedido(ctx.tenantId, id, ctx.agora, { remetenteNome: null })
+    const r = await proporPedido(ctx.tenantId, id, ctx.agora, { remetenteNome: null, ...(ctx.enviar ? { enviar: ctx.enviar } : {}) })
     if (r.tipo === 'ok') return { situacao: 'ok', resumo: r.resumo, totalCentavos: r.totalCentavos, expiraEm: r.expiraEm.toISOString() }
     if (r.tipo === 'regras') return { situacao: 'regras', detalhe: r.mensagem }
     if (r.tipo === 'envio_recusado') return { situacao: 'envio_recusado', detalhe: r.motivo }

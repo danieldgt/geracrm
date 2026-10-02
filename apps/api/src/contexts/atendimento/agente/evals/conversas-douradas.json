@@ -1,0 +1,46 @@
+{
+  "catalogo": [
+    { "referencia": "PLANO-ESS", "descricao": "GeraCRM Essencial", "categoria": "Planos SaaS", "descricaoLonga": "CRM de WhatsApp com inbox, contatos e funil. Até 3 usuários.",
+      "skus": [{ "atributos": { "ciclo": "mensal" }, "precos": { "varejo": 29900, "atacado": 29900 }, "saldo": null }, { "atributos": { "ciclo": "anual" }, "precos": { "varejo": 299000, "atacado": 299000 }, "saldo": null }] },
+    { "referencia": "PLANO-PRO", "descricao": "GeraCRM Pro", "categoria": "Planos SaaS", "descricaoLonga": "Tudo do Essencial + campanhas com ROI, agente vendedor e integração com ERP. Até 10 usuários.",
+      "skus": [{ "atributos": { "ciclo": "mensal" }, "precos": { "varejo": 59900, "atacado": 59900 }, "saldo": null }] },
+    { "referencia": "CAM-001", "descricao": "Camiseta básica algodão", "categoria": "Camisetas", "descricaoLonga": "Camiseta 100% algodão, gola redonda.",
+      "skus": [{ "atributos": { "cor": "verde", "tamanho": "G" }, "precos": { "varejo": 5990, "atacado": 3990 }, "saldo": 20 }, { "atributos": { "cor": "azul", "tamanho": "M" }, "precos": { "varejo": 5990, "atacado": 3990 }, "saldo": 0 }] },
+    { "referencia": "CAL-010", "descricao": "Calça jeans skinny", "categoria": "Calças",
+      "skus": [{ "atributos": { "cor": "azul escuro", "tamanho": "40" }, "precos": { "varejo": 15990, "atacado": 9990 }, "saldo": 5 }] }
+  ],
+  "politicas": "SOBRE A LOJA\nSomos a Loja Dourada, em Fortaleza/CE. Vendemos roupas e o sistema GeraCRM.\n\nPAGAMENTO\nAceitamos PIX e cartão de crédito.\n\nENTREGA\nEnviamos para todo o Brasil. Separação em até 2 dias úteis após a confirmação do pagamento.\n\nTROCA E DEVOLUÇÃO\nTrocas em até 7 dias corridos após o recebimento, com etiqueta.\n\nO QUE NÃO RESPONDEMOS POR AQUI\nReclamação, nota fiscal e cobrança: sempre com uma pessoa.",
+  "cenarios": [
+    { "id": "saas-plano-mensal", "titulo": "Lead quer o plano Pro mensal e fecha",
+      "turnos": [
+        { "cliente": "oi, quero 1 geracrm pro", "esperado": { "ferramentas": ["catalogo_buscar", "pedido_itens"], "contem": ["599,00"], "desfecho": "respondeu" } },
+        { "cliente": "pode fechar", "esperado": { "ferramentas": ["pedido_propor"], "desfecho": "respondeu", "pedidoEstado": "aguardando_confirmacao" } }
+      ] },
+    { "id": "roupa-atacado-estoque", "titulo": "Cliente de atacado pede camiseta; preço de atacado, sem número inventado",
+      "perfil": "atacado",
+      "turnos": [
+        { "cliente": "quero 3 camiseta verde", "esperado": { "ferramentas": ["catalogo_buscar", "pedido_itens"], "contem": ["119,70"], "naoContem": ["59,90"], "desfecho": "respondeu" } }
+      ] },
+    { "id": "politica-prazo", "titulo": "Pergunta de prazo responde pela base, com a fonte",
+      "turnos": [
+        { "cliente": "qual o prazo de entrega?", "esperado": { "ferramentas": ["conhecimento_buscar"], "contem": ["2 dias"], "desfecho": "respondeu" } }
+      ] },
+    { "id": "pede-humano", "titulo": "Pedido de humano transfere com atendimento na fila",
+      "turnos": [
+        { "cliente": "quero falar com um atendente", "esperado": { "desfecho": "handoff", "handoff": "pedido_de_humano" } }
+      ] },
+    { "id": "reclamacao", "titulo": "Reclamação sai do escopo e vai para pessoa",
+      "turnos": [
+        { "cliente": "minha calça chegou com problema, quero reclamar", "esperado": { "desfecho": "handoff", "handoff": "reclamacao" } }
+      ] },
+    { "id": "nao-encontrado", "titulo": "Produto inexistente: diz que não achou, não inventa",
+      "turnos": [
+        { "cliente": "vocês têm tênis de corrida?", "esperado": { "ferramentas": ["catalogo_buscar"], "naoContem": ["R$"], "desfecho": "respondeu" } }
+      ] },
+    { "id": "sombra-nao-envia", "titulo": "Em sombra, decide e registra sem enviar",
+      "modo": "sombra",
+      "turnos": [
+        { "cliente": "tem calça jeans?", "esperado": { "ferramentas": ["catalogo_buscar"], "desfecho": "sugeriu", "enviadas": 0 } }
+      ] }
+  ]
+}

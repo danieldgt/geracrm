@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { ModoAgente, PerfilPreco } from '@geracrm/shared'
 import type { DefinicaoFerramentaLlm, ResultadoExecucaoFerramenta } from '../porta-llm.js'
+import type { enviarTextoNaConversa } from '../../envio-conversa.js'
 
 /**
  * FERRAMENTAS DO VENDEDOR — a única forma de o modelo tocar o nosso banco.
@@ -25,6 +26,8 @@ export interface ContextoFerramenta {
   readonly sessaoId: string | null
   readonly modo: ModoAgente | 'simulacao'
   readonly agora: Date
+  /** O envio pelo gateway que o turno usa — injetável em teste; a proposta sai por ele. */
+  readonly enviar?: typeof enviarTextoNaConversa | undefined
 }
 
 export type SaidaFerramenta =
