@@ -46,6 +46,7 @@ import { rotasClientes } from './contexts/plataforma/rotas-clientes.js'
 import { rotasStaff } from './contexts/plataforma/rotas-staff.js'
 import { rotasEventos } from './contexts/atendimento/eventos/rotas-eventos.js'
 import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
+import { rotasCatalogoManual } from './contexts/catalogo/rotas-catalogo-manual.js'
 import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
 import { rotasLpPublica } from './contexts/aquisicao/rotas-lp-publica.js'
 import { rotasPush } from './contexts/plataforma/rotas-push.js'
@@ -134,6 +135,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasStaff)
   await app.register(rotasEventos)
   await app.register(rotasPedido)
+  await app.register(rotasCatalogoManual)
   await app.register(rotasAquisicao)
   // ⚠️ Superfície PÚBLICA (sem token): a landing page do anúncio. O tenant é
   //    RESOLVIDO pela chave da URL (0062), como o webhook resolve pelo
