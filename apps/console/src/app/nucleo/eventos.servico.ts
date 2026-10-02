@@ -14,7 +14,12 @@ import { AuthServico, ehProducao } from './auth.servico.js'
  * silêncio é pior que aviso).
  */
 
-const TENANT_DOGFOODING = '6e7a0d00-0000-4000-8000-000000000001'
+const TENANT_DOGFOODING = (() => {
+  // ⚠️ Só em desenvolvimento: `localStorage.setItem('geracrm.dev.tenant', '<uuid>')`
+  //    troca o tenant que o console usa sem token (ex.: a "Loja Demo" do seed).
+  try { return localStorage.getItem('geracrm.dev.tenant') || '6e7a0d00-0000-4000-8000-000000000001' }
+  catch { return '6e7a0d00-0000-4000-8000-000000000001' }
+})()
 
 export type EstadoConexao = 'ocioso' | 'conectando' | 'conectado' | 'reconectando' | 'offline'
 

@@ -31,7 +31,12 @@ export class Raiz {}
  *  - DEV (localhost): `x-tenant-id` de dogfooding, que a API só aceita fora de
  *    produção. Sem login, para não atrapalhar o desenvolvimento.
  */
-const TENANT_DOGFOODING = '6e7a0d00-0000-4000-8000-000000000001'
+const TENANT_DOGFOODING = (() => {
+  // ⚠️ Só em desenvolvimento: `localStorage.setItem('geracrm.dev.tenant', '<uuid>')`
+  //    troca o tenant que o console usa sem token (ex.: a "Loja Demo" do seed).
+  try { return localStorage.getItem('geracrm.dev.tenant') || '6e7a0d00-0000-4000-8000-000000000001' }
+  catch { return '6e7a0d00-0000-4000-8000-000000000001' }
+})()
 const injetarIdentidade: HttpInterceptorFn = (req, next) => {
   // Só anexa nas chamadas à nossa API; requests ao IDP do Cognito passam limpas.
   if (!req.url.startsWith('/v1')) return next(req)
