@@ -15,7 +15,13 @@ import { conduzirTurnoVendedor, type DepsTurno, type ResultadoTurnoVendedor } fr
  */
 export const INTERVALO_WORKER_MS = 1_000
 /** Quantas tarefas uma passada processa, no máximo, antes de devolver o laço. */
-const LOTE = 5
+const LOTE = 8
+/**
+ * ⚠️ Turnos de conversas DIFERENTES correm em paralelo (até este teto). Serial
+ * é por conversa (índice + SKIP LOCKED), não global: com 10 conversas e turnos
+ * de 8 s, a décima esperaria 80 s num laço sequencial.
+ */
+export const CONCORRENCIA = 4
 
 export interface RelatorioPassada {
   processadas: number
@@ -30,15 +36,20 @@ export async function processarTarefasDoAgente(
 ): Promise<RelatorioPassada> {
   const r: RelatorioPassada = { processadas: 0, respondidas: 0, handoffs: 0, falhas: 0, recuperadas: 0 }
   r.recuperadas = await recuperarTravadas(dono, agora)
-  for (let i = 0; i < LOTE; i++) {
-    const tarefa = await pegarProximaTarefa(dono, agora)
-    if (!tarefa) break
-    r.processadas += 1
-    const desfecho = await executarUma(dono, tarefa, deps, agora)
+  const contar = (desfecho: ResultadoTurnoVendedor['desfecho'] | 'erro') => {
     if (desfecho === 'respondeu' || desfecho === 'sugeriu') r.respondidas += 1
     else if (desfecho === 'handoff') r.handoffs += 1
-    else if (desfecho === 'falha') r.falhas += 1
+    else if (desfecho === 'falha' || desfecho === 'erro') r.falhas += 1
   }
+  const trabalhadores = Array.from({ length: CONCORRENCIA }, async () => {
+    while (r.processadas < LOTE) {
+      const tarefa = await pegarProximaTarefa(dono, agora)
+      if (!tarefa) return
+      r.processadas += 1
+      contar(await executarUma(dono, tarefa, deps, agora))
+    }
+  })
+  await Promise.all(trabalhadores)
   return r
 }
 
@@ -53,10 +64,13 @@ async function executarUma(dono: Sql, tarefa: Tarefa, deps: DepsTurno, agora: Da
     await falharTarefa(dono, tarefa, e instanceof Error ? e.message : String(e), agora)
     return 'erro'
   }
-  if (resultado.desfecho === 'superada') {
-    await reagendarTarefa(dono, tarefa, agora)
-    return resultado.desfecho
+  // ⚠️ O pós-turno também não pode derrubar a passada: uma falha aqui deixaria
+  //    a tarefa em `executando` até a recuperação e pararia as outras conversas.
+  try {
+    if (resultado.desfecho === 'superada') await reagendarTarefa(dono, tarefa, agora)
+    else await concluirTarefa(dono, tarefa, agora)
+  } catch (e) {
+    await falharTarefa(dono, tarefa, e instanceof Error ? e.message : String(e), agora).catch(() => undefined)
   }
-  await concluirTarefa(dono, tarefa, agora)
   return resultado.desfecho
 }

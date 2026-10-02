@@ -17,6 +17,14 @@ describe('Guardrail numérico do agente', () => {
   })
   it('ignora número que não é dinheiro (quantidade, tamanho)', () => {
     expect(verificarNumerosNaResposta('Temos 12 peças no tamanho 42', new Set())).toEqual([])
+    expect(verificarNumerosNaResposta('Entrega em 2 dias, 10 unidades', new Set())).toEqual([])
+  })
+  it('pega dinheiro sem R$: "custa 1299", "fica 39,90", "59 cada", "1.299,00 por mês"', () => {
+    expect(verificarNumerosNaResposta('custa 1299 cada', new Set())).toEqual([129900])
+    expect(verificarNumerosNaResposta('fica 39,90 a unidade', new Set([3990]))).toEqual([])
+    expect(verificarNumerosNaResposta('fica 39,90 a unidade', new Set())).toEqual([3990])
+    expect(verificarNumerosNaResposta('o plano sai por 599 mensais', new Set([59900]))).toEqual([])
+    expect(verificarNumerosNaResposta('são 1.299,00 por mês', new Set())).toEqual([129900])
   })
 })
 

@@ -2,8 +2,12 @@ import { randomUUID } from 'node:crypto'
 import { comTenantServico, type Sql } from '../../../../db/index.js'
 import { buscarCatalogo, detalharProduto, precoEEstoque, type ProdutoDetalhe } from '../../../catalogo/busca.js'
 import {
-  obterOuCriarRascunho, adicionarItemPorSku, alterarQuantidade, removerItem, lerRascunho,
+  obterOuCriarRascunho, adicionarItemPorSku, alterarQuantidade, removerItem, lerRascunho, voltarARascunho,
 } from '../../../pedido/montagem.js'
+import { precosDeVenda } from '../../../pedido/preco-de-venda.js'
+import { embutirConsulta } from '../../../catalogo/busca.js'
+import { embeddingDoAmbiente } from '../../../catalogo/porta-embedding.js'
+import { alterarCarrinhoEnsaio, lerCarrinhoEnsaio } from './carrinho-ensaio.js'
 import { proporPedido, HORAS_VALIDADE_PROPOSTA } from '../../../pedido/proposta.js'
 import type { CatalogoPorta, Ligacoes, PedidoParaLlm, PedidoPorta, ProdutoParaLlm, SituacaoItem } from './ligacoes-porta.js'
 import type { ContextoFerramenta } from './porta.js'
@@ -18,17 +22,22 @@ import { conhecimentoDasPoliticas } from './conhecimento-politicas.js'
  * índice, a ferramenta não existe e o prompt diz que não há catálogo neste
  * canal — degradação visível (ADR-008), não busca vazia fingindo que procurou.
  */
-export async function ligacoesPadrao(cfg: { tenantId: string; politicas: string }): Promise<Ligacoes> {
+export async function ligacoesPadrao(cfg: { tenantId: string; politicas: string; modo?: string | undefined }): Promise<Ligacoes> {
   const temCatalogo = await comTenantServico(cfg.tenantId, async (tx) => {
     const [r] = await tx<{ tem: boolean }[]>`SELECT EXISTS (SELECT 1 FROM produto_indice WHERE tenant_id = tenant_atual()) AS tem`
     return r?.tem ?? false
   })
+  // ⚠️ Só o modo AUTÔNOMO toca o pedido real. Sombra, assistido e simulação
+  //    ensaiam num carrinho em memória — nunca no rascunho da vendedora.
+  const pedido = cfg.modo === 'autonomo' ? pedidoReal : pedidoEnsaio
   return {
     catalogo: temCatalogo ? catalogoReal : undefined,
-    pedido: pedidoReal,
+    pedido,
     conhecimento: conhecimentoDasPoliticas(cfg.politicas),
   }
 }
+
+const embedding = embeddingDoAmbiente()
 
 function paraLlm(p: ProdutoDetalhe): ProdutoParaLlm {
   return {
@@ -42,7 +51,12 @@ function paraLlm(p: ProdutoDetalhe): ProdutoParaLlm {
 
 export const catalogoReal: CatalogoPorta = {
   async buscar(ctx, p) {
-    const r = await comTenantServico(ctx.tenantId, (tx) => buscarCatalogo(tx, { consulta: p.consulta, perfil: ctx.perfil, limite: p.limite }))
+    // A perna semântica só entra se houver embedding configurado — e o vetor é
+    // calculado ANTES da transação (rede fora da tx).
+    const emb = await embutirConsulta(embedding, p.consulta)
+    const r = await comTenantServico(ctx.tenantId, (tx) => buscarCatalogo(tx, {
+      consulta: p.consulta, perfil: ctx.perfil, limite: p.limite, ...(emb.vetor ? { vetorConsulta: emb.vetor } : {}),
+    }))
     return { itens: r.itens.map(paraLlm) }
   },
   async detalhar(ctx, produtoId) {
@@ -91,11 +105,7 @@ const SITUACAO: Record<string, SituacaoItem> = {
   pedido_nao_encontrado: 'item_nao_encontrado',
 }
 
-/**
- * ⚠️ Em modo SOMBRA/ASSISTIDO e na SIMULAÇÃO, propor é ensaio: devolve o resumo
- * sem mandar nada ao cliente e sem mudar o estado do pedido. Só em AUTÔNOMO a
- * proposta vai pelo gateway e abre a janela de confirmação (ADR-027).
- */
+/** O pedido REAL — só o modo autônomo chega aqui (ver `ligacoesPadrao`). */
 export const pedidoReal: PedidoPorta = {
   async ver(ctx) {
     return comTenantServico(ctx.tenantId, async (tx) => {
@@ -105,7 +115,14 @@ export const pedidoReal: PedidoPorta = {
   },
   async itens(ctx, p) {
     return comTenantServico(ctx.tenantId, async (tx) => {
-      const { id } = await obterOuCriarRascunho(tx, { conversaId: ctx.conversaId, contatoId: ctx.contatoId, origem: 'agente' })
+      // ⚠️ Pedido esperando o "sim" volta a rascunho ANTES de mudar: a proposta
+      //    vigente é invalidada e o "sim" antigo não confirma o conteúdo velho
+      //    (ADR-027; é o incidente de 27/08 com outra roupa).
+      const aberto = await pedidoAbertoDaConversa(tx, ctx.conversaId)
+      if (aberto) await voltarARascunho(tx, aberto)
+      const { id } = aberto
+        ? { id: aberto }
+        : await obterOuCriarRascunho(tx, { conversaId: ctx.conversaId, contatoId: ctx.contatoId, origem: 'agente' })
       const r = p.acao === 'adicionar'
         ? await adicionarItemPorSku(tx, id, { skuId: p.skuId, quantidade: p.quantidade })
         : p.acao === 'alterar'
@@ -121,19 +138,12 @@ export const pedidoReal: PedidoPorta = {
   async propor(ctx) {
     const id = await comTenantServico(ctx.tenantId, (tx) => pedidoAbertoDaConversa(tx, ctx.conversaId))
     if (!id) return { situacao: 'vazio' }
-    if (ctx.modo !== 'autonomo') {
-      const p = await comTenantServico(ctx.tenantId, (tx) => lerParaLlm(tx, id))
-      if (!p || p.itens.length === 0) return { situacao: 'vazio' }
-      const linhas = p.itens.map((i) => `${i.quantidade}x ${i.descricao}${Object.values(i.atributos).length ? ` (${Object.values(i.atributos).join(' ')})` : ''} — R$ ${(i.subtotalCentavos / 100).toFixed(2)}`)
-      return {
-        situacao: 'ok', totalCentavos: p.totalCentavos,
-        resumo: `(ensaio — nada enviado) ${linhas.join('; ')}. Total R$ ${(p.totalCentavos / 100).toFixed(2)}`,
-        expiraEm: new Date(ctx.agora.getTime() + HORAS_VALIDADE_PROPOSTA * 3_600_000).toISOString(),
-      }
-    }
     const r = await proporPedido(ctx.tenantId, id, ctx.agora, { remetenteNome: null, ...(ctx.enviar ? { enviar: ctx.enviar } : {}) })
     if (r.tipo === 'ok') return { situacao: 'ok', resumo: r.resumo, totalCentavos: r.totalCentavos, expiraEm: r.expiraEm.toISOString() }
-    if (r.tipo === 'regras') return { situacao: 'regras', detalhe: r.mensagem }
+    if (r.tipo === 'regras') {
+      const v = r.violacao as { tipo: string; faltam?: { centavos?: number } }
+      return { situacao: 'regras', detalhe: r.mensagem, centavos: v.faltam?.centavos ? [v.faltam.centavos] : [] }
+    }
     if (r.tipo === 'envio_recusado') return { situacao: 'envio_recusado', detalhe: r.motivo }
     if (r.tipo === 'nao_rascunho') return { situacao: 'nao_rascunho', detalhe: r.estado }
     if (r.tipo === 'vazio') return { situacao: 'vazio' }
@@ -149,6 +159,50 @@ export const pedidoReal: PedidoPorta = {
       return linhas.map((l) => ({ pedidoId: l.id, estado: l.estado, totalCentavos: Number(l.total_centavos), criadoEm: l.criado_em.toISOString(), itens: l.itens }))
     })
   },
+}
+
+/**
+ * O pedido de ENSAIO: lê o catálogo de verdade (preço do perfil do cliente,
+ * saldo), mas guarda o carrinho em memória. `propor` devolve o resumo sem
+ * enviar nada. Nenhuma linha em `pedido`.
+ */
+export const pedidoEnsaio: PedidoPorta = {
+  async ver(ctx) { return lerCarrinhoEnsaio(ctx.tenantId, ctx.conversaId, ctx.agora.getTime()) },
+  async itens(ctx, p) {
+    if (p.acao !== 'adicionar') {
+      const r = alterarCarrinhoEnsaio(ctx.tenantId, ctx.conversaId, p, ctx.agora.getTime())
+      return { situacao: r.situacao, pedido: r.pedido }
+    }
+    const sku = await comTenantServico(ctx.tenantId, async (tx) => {
+      const [l] = await tx<{ atributos: Record<string, string>; descricao: string; saldo: string | null }[]>`
+        SELECT s.atributos, p.descricao,
+               (SELECT ss.quantidade::text FROM sku_saldo ss WHERE ss.tenant_id = s.tenant_id AND ss.sku_id = s.id) AS saldo
+          FROM sku s JOIN produto p ON p.tenant_id = s.tenant_id AND p.id = s.produto_id
+         WHERE s.tenant_id = tenant_atual() AND s.id = ${p.skuId} AND s.ativo AND p.ativo`
+      if (!l) return null
+      const preco = (await precosDeVenda(tx, [p.skuId], ctx.perfil)).get(p.skuId)
+      return { ...l, preco }
+    })
+    if (!sku) return { situacao: 'sku_desconhecido' }
+    if (!sku.preco || sku.preco.situacao !== 'cotado') return { situacao: 'sem_preco' }
+    if (sku.saldo !== null && Number(sku.saldo) < p.quantidade) return { situacao: 'estoque_insuficiente', detalhe: `disponível: ${Number(sku.saldo)}` }
+    const r = alterarCarrinhoEnsaio(ctx.tenantId, ctx.conversaId, {
+      acao: 'adicionar',
+      item: { skuId: p.skuId, descricao: sku.descricao, atributos: sku.atributos, quantidade: p.quantidade, valorUnitarioCentavos: sku.preco.centavos },
+    }, ctx.agora.getTime())
+    return { situacao: r.situacao, pedido: r.pedido }
+  },
+  async propor(ctx) {
+    const p = lerCarrinhoEnsaio(ctx.tenantId, ctx.conversaId, ctx.agora.getTime())
+    if (!p || p.itens.length === 0) return { situacao: 'vazio' }
+    const linhas = p.itens.map((i) => `${i.quantidade}x ${i.descricao}${Object.values(i.atributos).length ? ` (${Object.values(i.atributos).join(' ')})` : ''} — R$ ${(i.subtotalCentavos / 100).toFixed(2)}`)
+    return {
+      situacao: 'ok', totalCentavos: p.totalCentavos,
+      resumo: `(ensaio — nada enviado) ${linhas.join('; ')}. Total R$ ${(p.totalCentavos / 100).toFixed(2)}`,
+      expiraEm: new Date(ctx.agora.getTime() + HORAS_VALIDADE_PROPOSTA * 3_600_000).toISOString(),
+    }
+  },
+  async recentes(ctx) { return pedidoReal.recentes(ctx) },
 }
 
 // Mantém a assinatura estável para quem precisar injetar o contexto em testes.

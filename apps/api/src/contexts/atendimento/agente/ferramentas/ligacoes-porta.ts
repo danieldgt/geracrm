@@ -64,7 +64,7 @@ export interface PedidoPorta {
   ): Promise<{ situacao: SituacaoItem; detalhe?: string; pedido?: PedidoParaLlm }>
   propor(ctx: ContextoFerramenta): Promise<
     | { situacao: 'ok'; resumo: string; totalCentavos: number; expiraEm: string }
-    | { situacao: 'vazio' | 'nao_rascunho' | 'regras' | 'envio_recusado' | 'indisponivel'; detalhe?: string }>
+    | { situacao: 'vazio' | 'nao_rascunho' | 'regras' | 'envio_recusado' | 'indisponivel'; detalhe?: string; centavos?: readonly number[] }>
   recentes(ctx: ContextoFerramenta): Promise<readonly { pedidoId: string; estado: string; totalCentavos: number; criadoEm: string; itens: number }[]>
 }
 

@@ -65,7 +65,7 @@ interface ConfigVendedor {
 
 export interface DepsTurno {
   readonly llm?: PortaLlmFerramentas | undefined
-  readonly ligacoes: (cfg: { tenantId: string; politicas: string }) => Promise<Ligacoes> | Ligacoes
+  readonly ligacoes: (cfg: { tenantId: string; politicas: string; modo: ModoAgente | 'simulacao' }) => Promise<Ligacoes> | Ligacoes
   readonly enviar?: typeof enviarTextoNaConversa | undefined
   readonly equipe?: QuemAtende | undefined
   readonly agora?: Date | undefined
@@ -105,7 +105,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
                                             AND m.id = ANY(${[...tarefa.mensagens_ids]}::uuid[])), ${agora}::timestamptz)) AS recem`
     const [fusoLinha] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
     const equipe = deps.equipe ?? await quemAtende(tx, canalId, agora)
-    const custoHoje = cfg.orcamentoDiaCentavos === null ? 0 : await custoDoDia(tx, canalId, agora)
+    const custoHoje = cfg.orcamentoDiaCentavos === null ? 0 : await custoDoDia(tx, canalId, agora, fusoLinha?.fuso ?? 'America/Sao_Paulo')
     return {
       tipo: 'ok' as const, cfg, conv, reuniao, equipe, custoHoje,
       perfil: perfilDeCotacao(perfilLinha?.perfil_preco ?? PERFIL_PRECO_PADRAO),
@@ -138,11 +138,8 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     })
     if (!decisao.entra) {
       if (decisao.motivo === 'teto_de_turnos' && reuniao.sessao_id) {
-        await comTenantServico(tenantId, (tx) => entregarParaHumano(tx, {
-          conversaId, canalId, sessaoId: reuniao.sessao_id, motivo: 'limite_de_turnos',
-          resumo: reuniao.resumo ?? 'Teto de idas e vindas atingido sem fechar.', agora,
-        }))
-        return { desfecho: 'handoff', motivo: 'limite_de_turnos', handoff: { motivo: 'limite_de_turnos', resumo: '' } }
+        return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'limite_de_turnos',
+          reuniao.resumo ?? 'Teto de idas e vindas atingido sem fechar.', modo, agora)
       }
       return silencio(tenantId, tarefa, decisao.motivo, modo, agora)
     }
@@ -156,6 +153,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   //    decide o que acontece depois: dentro da alçada o domínio efetiva; fora,
   //    nasce um atendimento na fila com o resumo. Nunca o modelo.
   let avisoDoPedido: string | null = null
+  const centavosDoPedidoConfirmado: number[] = []
   if (!deps.simulacao) {
     const confirmado = await comTenantServico(tenantId, async (tx) => {
       const [p] = await tx<{ id: string; total_centavos: string }[]>`
@@ -178,9 +176,20 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       }
       if (r.decisao.acao === 'efetivar' && r.efetivacao) {
         const e = r.efetivacao
+        centavosDoPedidoConfirmado.push(Number(confirmado.total_centavos))
         if (e.tipo === 'efetivado') avisoDoPedido = `O pedido confirmado pelo cliente (total ${total}) foi EFETIVADO com o número ${e.numeroExterno}. Agradeça e diga que a equipe retorna sobre pagamento e entrega.`
-        else if (e.tipo === 'degradado') avisoDoPedido = `O pedido confirmado pelo cliente (total ${total}) foi registrado; a equipe fatura manualmente. Agradeça e diga que a equipe retorna sobre pagamento e entrega.`
-        else {
+        else if (e.tipo === 'degradado') {
+          // ⚠️ O ERP não recebe pedido: alguém precisa faturar à mão. Sem dono,
+          //    o pedido ficaria `confirmado` para sempre e o agente agradeceria
+          //    de novo a cada mensagem. Vira entrega à fila, com o cliente avisado.
+          if (modo === 'autonomo') {
+            await (deps.enviar ?? enviarTextoNaConversa)(tenantId, conversaId,
+              'Perfeito, pedido confirmado! Nossa equipe vai finalizar e te retorna em breve com os próximos passos.',
+              null, agora, { ehDisparo: false, marcador: 'agente' })
+          }
+          return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'acima_da_alcada',
+            `Pedido confirmado pelo cliente (total ${total}) aguarda faturamento manual: o sistema da loja não recebe pedido automático.`, modo, agora)
+        } else {
           return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'acima_da_alcada',
             `Pedido confirmado pelo cliente (total ${total}) não pôde ser efetivado: ${e.tipo}${e.tipo === 'falha' ? ` (${e.falha.tipo})` : ''}.`, modo, agora)
         }
@@ -197,7 +206,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
 
   const sessaoId = reuniao.sessao_id ?? randomUUID()
   const ctxFerr: ContextoFerramenta = { tenantId, conversaId, contatoId: conv.contato_id, canalId, perfil, sessaoId: reuniao.sessao_id, modo, agora, enviar: deps.enviar }
-  const ligacoesBase = await deps.ligacoes({ tenantId, politicas: cfg.politicas })
+  const ligacoesBase = await deps.ligacoes({ tenantId, politicas: cfg.politicas, modo })
   const ligacoes: Ligacoes = { ...ligacoesBase, conhecimento: ligacoesBase.conhecimento ?? conhecimentoDasPoliticas(cfg.politicas) }
   const { ferramentas, capacidades } = montarFerramentas(ligacoes)
   const registro = registroDeFerramentas(ctxFerr, ferramentas)
@@ -216,6 +225,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     },
   ]
   if (pedidoAberto) for (const c of [pedidoAberto.totalCentavos, ...pedidoAberto.itens.flatMap((i) => [i.valorUnitarioCentavos, i.subtotalCentavos])]) registro.centavosVistos.add(c)
+  for (const c of centavosDoPedidoConfirmado) registro.centavosVistos.add(c)
 
   // ── 4. O laço ───────────────────────────────────────────────────────────
   const llm = deps.llm ?? llmFerramentasDoAmbiente()
@@ -231,13 +241,15 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     const recado = recadoDaFalha(r.motivo, r.detalhe)
     const decisaoId = await comTenantServico(tenantId, async (tx) => {
       const id = await registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, agora, latenciaMs: Date.now() - inicio })
-      if (!deps.simulacao) {
-        await garantirSessao(tx, { sessaoId, existente: !!reuniao.sessao_id, conversaId, canalId, modo: cfg.modo, agora, porQue: motivoDisponibilidade(equipe) })
-        await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: 'modelo_indisponivel', resumo: recado, agora })
-      }
+      if (!deps.simulacao) await garantirSessao(tx, { sessaoId, existente: !!reuniao.sessao_id, conversaId, canalId, modo: cfg.modo, agora, porQue: motivoDisponibilidade(equipe) })
+      // ⚠️ Só em AUTÔNOMO a falha vira entrega real: em sombra/assistido o robô
+      //    não estava falando com o cliente, então não há vácuo a cobrir — e
+      //    criar atendimento poluiria a fila e calaria a própria coleta.
+      if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: 'modelo_indisponivel', resumo: recado, agora })
+      else if (!deps.simulacao) await encerrarSessaoSemEntrega(tx, sessaoId, recado, agora)
       return id
     })
-    return { desfecho: deps.simulacao ? 'falha' : 'handoff', motivo: 'modelo_indisponivel', detalhe: recado, decisaoId, rastro: r.rastro }
+    return { desfecho: modo === 'autonomo' ? 'handoff' : 'falha', motivo: 'modelo_indisponivel', detalhe: recado, decisaoId, rastro: r.rastro }
   }
 
   // ── 5. Validação + guardrail ────────────────────────────────────────────
@@ -305,8 +317,9 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       if (envia) await tx`UPDATE conversa SET conduzida_por = 'ia' WHERE tenant_id = tenant_atual() AND id = ${conversaId} AND conduzida_por <> 'ia'`
     }
     const id = await registrarDecisao(tx, { tarefa, sessaoId: deps.simulacao ? null : sessaoId, modo, desfecho, rastro: r.rastro, custo, resposta, bloqueados, enviada: envia, idsSaida, handoff, agora, latenciaMs: Date.now() - inicio })
-    if (handoff && !deps.simulacao) {
-      await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: handoff.motivo as MotivoHandoff, resumo: handoff.resumo, agora })
+    if (handoff) {
+      if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: handoff.motivo as MotivoHandoff, resumo: handoff.resumo, agora })
+      else if (!deps.simulacao) await encerrarSessaoSemEntrega(tx, sessaoId, `${handoff.motivo}: ${handoff.resumo}`, agora)
     }
     if (desfecho === 'sugeriu' && !deps.simulacao) {
       await tx`
@@ -331,7 +344,8 @@ async function handoffSemModelo(
 ): Promise<ResultadoTurnoVendedor> {
   const id = await comTenantServico(tenantId, async (tx) => {
     const d = decisaoId ?? await registrarDecisao(tx, { tarefa, sessaoId, modo, desfecho: 'handoff', handoff: { motivo, resumo }, agora, latenciaMs: 0 })
-    await entregarParaHumano(tx, { conversaId: tarefa.conversa_id, canalId: tarefa.canal_id, sessaoId, motivo, resumo, agora })
+    if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId: tarefa.conversa_id, canalId: tarefa.canal_id, sessaoId, motivo, resumo, agora })
+    else await encerrarSessaoSemEntrega(tx, sessaoId, `${motivo}: ${resumo}`, agora)
     return d
   })
   return { desfecho: 'handoff', motivo, handoff: { motivo, resumo }, decisaoId: id }
@@ -442,11 +456,24 @@ export function textoDaMensagem(tipo: string, c: Record<string, unknown>): strin
   return texto || `[${tipo}]`
 }
 
-async function custoDoDia(tx: Sql, canalId: string, agora: Date): Promise<number> {
+async function custoDoDia(tx: Sql, canalId: string, agora: Date, fuso: string): Promise<number> {
+  // "Hoje" no fuso do TENANT: o teto diário vira à meia-noite da loja, não do servidor.
   const [r] = await tx<{ total: string }[]>`
     SELECT coalesce(sum(custo_centavos), 0)::text AS total FROM agente_decisao
-     WHERE tenant_id = tenant_atual() AND canal_id = ${canalId} AND criado_em >= date_trunc('day', ${agora}::timestamptz)`
+     WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}
+       AND criado_em >= (date_trunc('day', ${agora}::timestamptz AT TIME ZONE ${fuso}) AT TIME ZONE ${fuso})`
   return Number(r?.total ?? 0)
+}
+
+/**
+ * Em sombra/assistido o handoff é só registro: a sessão fecha com o motivo
+ * (como fecharia na entrega real) mas NÃO nasce atendimento nem notificação.
+ */
+async function encerrarSessaoSemEntrega(tx: Sql, sessaoId: string | null, motivo: string, agora: Date): Promise<void> {
+  if (!sessaoId) return
+  await tx`
+    UPDATE agente_sessao SET estado = 'entregue', fase = 'handoff', motivo_saida = ${motivo.slice(0, 200)}, encerrada_em = ${agora}
+     WHERE tenant_id = tenant_atual() AND id = ${sessaoId} AND estado = 'ativa'`
 }
 
 async function garantirSessao(tx: Sql, p: { sessaoId: string; existente: boolean; conversaId: string; canalId: string; modo: string; agora: Date; porQue: string }): Promise<void> {

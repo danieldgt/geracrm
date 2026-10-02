@@ -16,6 +16,8 @@ import type { Sql } from '../../../db/index.js'
 
 /** Quanto esperar por mais mensagens antes de responder. */
 export const DEBOUNCE_MS = 3_000
+/** Teto do debounce: depois disto a tarefa vence mesmo com mensagens chegando. */
+export const TETO_DEBOUNCE_MS = 15_000
 /** Executando há mais que isto = processo morreu no meio; volta para a fila. */
 export const PRAZO_EXECUCAO_MS = 120_000
 export const MAX_TENTATIVAS = 3
@@ -45,7 +47,10 @@ export async function agendarTurno(
     INSERT INTO agente_tarefa (tenant_id, id, conversa_id, canal_id, mensagens_ids, estado, executar_em)
     VALUES (tenant_atual(), ${novoId}, ${p.conversaId}, ${p.canalId}, ${ids}::uuid[], 'pendente', ${executarEm})
     ON CONFLICT (tenant_id, conversa_id) WHERE estado = 'pendente'
-    DO UPDATE SET executar_em = EXCLUDED.executar_em,
+    -- ⚠️ Debounce COM TETO: cliente mandando uma bolha a cada 2 s empurraria a
+    --    execução para sempre. A tarefa vence no máximo TETO_DEBOUNCE depois de nascer.
+    DO UPDATE SET executar_em = LEAST(EXCLUDED.executar_em,
+                                      agente_tarefa.criado_em + make_interval(secs => ${TETO_DEBOUNCE_MS / 1000})),
                   mensagens_ids = agente_tarefa.mensagens_ids || EXCLUDED.mensagens_ids
     RETURNING id, (xmax <> 0) AS reagendada`
   return { tarefaId: linha!.id, reagendada: linha!.reagendada }
@@ -94,18 +99,39 @@ export async function falharTarefa(
     return 'desistiu'
   }
   const atraso = 5_000 * 2 ** (t.tentativas - 1)
-  await dono`
-    UPDATE agente_tarefa SET estado = 'pendente', executar_em = ${new Date(agora.getTime() + atraso)},
-           ultimo_erro = ${erro.slice(0, 500)}
-     WHERE tenant_id = ${t.tenant_id} AND id = ${t.id}`
+  await voltarParaFila(dono, t, new Date(agora.getTime() + atraso), erro.slice(0, 500))
   return 'reagendada'
 }
 
-/** Reagenda a tarefa para já: chegou mensagem nova enquanto o turno rodava. */
-export async function reagendarTarefa(dono: Sql, t: Pick<Tarefa, 'tenant_id' | 'id'>, agora: Date): Promise<void> {
-  await dono`
-    UPDATE agente_tarefa SET estado = 'pendente', executar_em = ${new Date(agora.getTime() + DEBOUNCE_MS)}
-     WHERE tenant_id = ${t.tenant_id} AND id = ${t.id}`
+/**
+ * Devolve a tarefa à fila — ou a CANCELA se, enquanto ela rodava, nasceu outra
+ * pendente da mesma conversa (a nova já cobre as mensagens).
+ *
+ * ⚠️ Sem isto o UPDATE viola o índice "uma pendente por conversa": a antiga
+ * ficava presa em `executando`, a nova não era pega (serialização) e a conversa
+ * só destravava 120 s depois. Achado da revisão adversarial, reproduzido.
+ */
+async function voltarParaFila(dono: Sql, t: Pick<Tarefa, 'tenant_id' | 'id'>, executarEm: Date, erro: string | null): Promise<'pendente' | 'cancelada'> {
+  const [r] = await dono<{ estado: string }[]>`
+    UPDATE agente_tarefa a
+       SET estado = CASE WHEN EXISTS (SELECT 1 FROM agente_tarefa p
+                                       WHERE p.tenant_id = a.tenant_id AND p.conversa_id = a.conversa_id
+                                         AND p.estado = 'pendente' AND p.id <> a.id)
+                         THEN 'cancelada' ELSE 'pendente' END,
+           executar_em = ${executarEm},
+           concluida_em = CASE WHEN EXISTS (SELECT 1 FROM agente_tarefa p
+                                             WHERE p.tenant_id = a.tenant_id AND p.conversa_id = a.conversa_id
+                                               AND p.estado = 'pendente' AND p.id <> a.id)
+                               THEN ${executarEm} ELSE NULL END,
+           ultimo_erro = coalesce(${erro}, a.ultimo_erro)
+     WHERE a.tenant_id = ${t.tenant_id} AND a.id = ${t.id}
+     RETURNING estado`
+  return r?.estado === 'cancelada' ? 'cancelada' : 'pendente'
+}
+
+/** Reagenda a tarefa: chegou mensagem nova enquanto o turno rodava (ou cancela, se a nova já tem tarefa). */
+export async function reagendarTarefa(dono: Sql, t: Pick<Tarefa, 'tenant_id' | 'id'>, agora: Date): Promise<'pendente' | 'cancelada'> {
+  return voltarParaFila(dono, t, new Date(agora.getTime() + DEBOUNCE_MS), null)
 }
 
 /**
@@ -115,17 +141,12 @@ export async function reagendarTarefa(dono: Sql, t: Pick<Tarefa, 'tenant_id' | '
  */
 export async function recuperarTravadas(dono: Sql, agora: Date): Promise<number> {
   const limite = new Date(agora.getTime() - PRAZO_EXECUCAO_MS)
-  const presas = await dono<{ tenant_id: string; id: string; conversa_id: string }[]>`
-    SELECT tenant_id, id, conversa_id FROM agente_tarefa
+  const presas = await dono<{ tenant_id: string; id: string }[]>`
+    SELECT tenant_id, id FROM agente_tarefa
      WHERE estado = 'executando' AND iniciada_em < ${limite}`
   for (const p of presas) {
-    const [outra] = await dono<{ id: string }[]>`
-      SELECT id FROM agente_tarefa WHERE tenant_id = ${p.tenant_id} AND conversa_id = ${p.conversa_id} AND estado = 'pendente'`
-    await dono`
-      UPDATE agente_tarefa
-         SET estado = ${outra ? 'cancelada' : 'pendente'}, executar_em = ${agora},
-             ultimo_erro = 'execução interrompida (processo reiniciou?)'
-       WHERE tenant_id = ${p.tenant_id} AND id = ${p.id}`
+    // Um UPDATE atômico decide entre pendente e cancelada — sem corrida com agendarTurno.
+    await voltarParaFila(dono, p, agora, 'execução interrompida (processo reiniciou?)')
   }
   return presas.length
 }

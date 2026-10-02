@@ -198,6 +198,17 @@ describe('Modos sombra e assistido — nunca enviam', () => {
     expect(d).toMatchObject({ desfecho: 'sugeriu', enviada: false, modo: 'sombra' })
     expect(r.mensagens?.[0]).toMatch(/Camiseta básica/)
   })
+  it('sombra: handoff é só registro — sem atendimento na fila, sessão encerrada com o motivo', async () => {
+    await configurar('sombra')
+    const r = await turno([await mensagemDoCliente('quero falar com um atendente')])
+    expect(r.desfecho).toBe('handoff')
+    const [a] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM atendimento WHERE tenant_id = ${T}`
+    expect(a!.n).toBe(0)
+    const [s] = await dono<{ estado: string; motivo_saida: string }[]>`SELECT estado, motivo_saida FROM agente_sessao WHERE tenant_id = ${T}`
+    expect(s!.estado).toBe('entregue')
+    expect(s!.motivo_saida).toMatch(/pedido_de_humano/)
+    expect(enviados).toEqual([])
+  })
   it('assistido: idem, e emite o evento de sugestão para a tela', async () => {
     await configurar('assistido')
     await turno([await mensagemDoCliente('tem camiseta?')])
@@ -285,17 +296,27 @@ describe('Alçada depois do "sim"', () => {
 })
 
 describe('Sequência e worker', () => {
-  it('dado mensagem nova chegando durante o turno, então a resposta é descartada (superada) e a tarefa volta para a fila', async () => {
+  it('dado mensagem nova chegando durante o turno (com tarefa nova agendada), então a resposta é descartada, a tarefa antiga é cancelada e o worker segue sem erro', async () => {
     await configurar('autonomo')
     const m1 = await mensagemDoCliente('quero 1 camiseta verde')
+    await comTenantServico(T, (tx) => agendarTurno(tx, { conversaId: CONVERSA, canalId: CANAL, mensagemId: m1, agora: new Date(), atrasoMs: 0 }))
+    let primeira = true
     const lento: PortaLlmFerramentas = { nome: 'lento', capacidades: { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false },
       async rodar() {
-        await mensagemDoCliente('na verdade quero azul')
+        if (primeira) {
+          primeira = false
+          // Mensagem nova + tarefa nova nascem enquanto o modelo "pensa" — como na ingestão real.
+          const m2 = await mensagemDoCliente('na verdade quero azul')
+          await comTenantServico(T, (tx) => agendarTurno(tx, { conversaId: CONVERSA, canalId: CANAL, mensagemId: m2, agora: new Date(Date.now() - 1000), atrasoMs: 0 }))
+        }
         return { ok: true, saida: { mensagens: ['Incluí a verde.'], confianca: 0.9 }, rastro: { chamadas: [], rodadas: 1, uso: { entrada: 0, saida: 0, cacheLeitura: 0, cacheEscrita: 0 }, modelo: 'lento', latenciaMs: 1, parouPor: 'fim' } }
       } }
-    const r = await turno([m1], lento)
-    expect(r.desfecho).toBe('superada')
-    expect(enviados).toEqual([])
+    const r = await processarTarefasDoAgente(dono as never, { llm: lento, ligacoes, enviar: enviarFalso }, new Date(Date.now() + 10))
+    // A antiga foi superada e CANCELADA (a nova já cobria); a nova rodou na mesma passada e respondeu.
+    expect(r.processadas).toBe(2)
+    expect(enviados).toEqual(['Incluí a verde.'])
+    const estados = await dono<{ estado: string }[]>`SELECT estado FROM agente_tarefa WHERE tenant_id = ${T} ORDER BY criado_em`
+    expect(estados.map((e) => e.estado)).toEqual(['cancelada', 'concluida'])
   })
 
   it('o worker drena a fila: agenda → vence → processa → conclui', async () => {

@@ -94,12 +94,23 @@ export type RespostaDoAgente = z.infer<typeof respostaDoAgente>
 export function verificarNumerosNaResposta(texto: string, permitidosCentavos: ReadonlySet<number>): number[] {
   const achados = new Set<number>()
   const numero = String.raw`(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)`
-  const re = new RegExp(String.raw`(?:R\$\s?)${numero}|${numero}\s?(?:reais|real)\b`, 'gi')
-  for (const m of texto.matchAll(re)) {
-    const bruto = (m[1] ?? m[2] ?? '').trim()
-    if (!bruto) continue
-    const cents = paraCentavos(bruto)
-    if (cents !== null && !permitidosCentavos.has(cents)) achados.add(cents)
+  const padroes = [
+    // "R$ 49,90" · "49,90 reais"
+    new RegExp(String.raw`(?:R\$\s?)${numero}|${numero}\s?(?:reais|real)\b`, 'gi'),
+    // "custa 1299" · "fica 39,90" · "sai por 120" · "preço 89" · "a partir de 59"
+    new RegExp(String.raw`\b(?:custa|custam|fica|ficam|sai por|saem por|sai a|preço|preco|valor|a partir de|por apenas)\s*(?:de\s*)?(?:R\$\s?)?${numero}`, 'gi'),
+    // "39,90 cada" · "1299 a unidade" · "59 por peça"
+    new RegExp(String.raw`${numero}\s?(?:cada|a unidade|por unidade|a peça|por peça|o par|por mês|/mês|mensais)\b`, 'gi'),
+    // decimal com vírgula e dois dígitos é dinheiro em pt-BR ("39,90"), mesmo sem R$
+    /\b(\d{1,3}(?:\.\d{3})*,\d{2})\b/g,
+  ]
+  for (const re of padroes) {
+    for (const m of texto.matchAll(re)) {
+      const bruto = (m[1] ?? m[2] ?? '').trim()
+      if (!bruto) continue
+      const cents = paraCentavos(bruto)
+      if (cents !== null && cents > 0 && !permitidosCentavos.has(cents)) achados.add(cents)
+    }
   }
   return [...achados]
 }

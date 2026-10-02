@@ -52,7 +52,8 @@ export function ferramentasDePedido(ped: PedidoPorta): Ferramenta<never>[] {
     entrada: z.object({}),
     async executar(ctx) {
       const r = await ped.propor(ctx)
-      if (r.situacao !== 'ok') return { ok: true, saida: { situacao: r.situacao, detalhe: r.detalhe ?? null } }
+      // ⚠️ "faltam R$ 500,00" da regra comercial é número que o modelo PODE repetir (PED-08).
+      if (r.situacao !== 'ok') return { ok: true, saida: { situacao: r.situacao, detalhe: r.detalhe ?? null }, centavos: r.centavos ?? [] }
       return { ok: true, efeito: 'proposta_enviada', saida: { situacao: 'ok', resumo: r.resumo, totalCentavos: r.totalCentavos, expiraEm: r.expiraEm }, centavos: [r.totalCentavos] }
     },
   }

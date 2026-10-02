@@ -43,9 +43,11 @@ ALTER TABLE agente_config
     ADD CONSTRAINT agente_autonomo_exige_politicas CHECK (
         modo <> 'autonomo' OR (politicas IS NOT NULL AND length(btrim(politicas)) > 0));
 
--- Quem já estava ligado no SDR segue ligado — em AUTÔNOMO, porque era isso que
--- `ativo = true` significava: respondia sozinho. Ninguém perde comportamento.
-UPDATE agente_config SET modo = 'autonomo' WHERE ativo AND modo = 'desligado';
+-- ⚠️ Quem tinha o SDR ligado entra em SOMBRA, não em autônomo (ADR-023 §4: todo
+--    canal nasce em sombra). O SDR só qualificava; o vendedor monta pedido e
+--    propõe — ligar isso num cliente por migration seria decidir por ele. A
+--    tela avisa e o dono religa em autônomo quando quiser.
+UPDATE agente_config SET modo = 'sombra' WHERE ativo AND modo = 'desligado';
 
 COMMENT ON COLUMN agente_config.modo IS
     'desligado | sombra (decide e registra, não envia) | assistido (sugere ao vendedor) | '

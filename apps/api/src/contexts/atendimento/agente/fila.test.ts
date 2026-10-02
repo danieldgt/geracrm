@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import postgres from 'postgres'
 import { encerrarBanco, comTenantServico } from '../../../db/index.js'
 import {
-  agendarTurno, pegarProximaTarefa, concluirTarefa, falharTarefa, recuperarTravadas, chegouMensagemNova,
-  DEBOUNCE_MS, MAX_TENTATIVAS,
+  agendarTurno, pegarProximaTarefa, concluirTarefa, falharTarefa, recuperarTravadas, chegouMensagemNova, reagendarTarefa,
+  DEBOUNCE_MS, MAX_TENTATIVAS, TETO_DEBOUNCE_MS,
 } from './fila.js'
 
 /**
@@ -65,6 +65,14 @@ describe('Debounce — uma pendente por conversa', () => {
     expect(t!.executar_em.getTime()).toBeGreaterThan(Date.now() + DEBOUNCE_MS - 500)
   })
 
+  it('o debounce tem teto: mensagens sem parar não adiam a execução para sempre', async () => {
+    await dono`INSERT INTO agente_tarefa (tenant_id, id, conversa_id, canal_id, estado, executar_em, criado_em)
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, ${CANAL}, 'pendente', now() + interval '3 seconds', now() - make_interval(secs => ${TETO_DEBOUNCE_MS / 1000 + 5}))`
+    await agendar(CONVERSA)
+    const [t] = await dono<{ atrasada: boolean }[]>`SELECT executar_em <= now() AS atrasada FROM agente_tarefa WHERE tenant_id = ${T} AND estado = 'pendente'`
+    expect(t!.atrasada).toBe(true)
+  })
+
   it('a tarefa só vence depois do debounce', async () => {
     await agendar(CONVERSA)
     expect(await pegarProximaTarefa(dono as never, agora())).toBeNull()
@@ -84,6 +92,27 @@ describe('Serialização por conversa', () => {
     await concluirTarefa(dono as never, primeira!, agora())
     const segunda = await pegarProximaTarefa(dono as never, new Date(Date.now() + 10))
     expect(segunda?.conversa_id).toBe(CONVERSA)
+  })
+
+  it('⚠️ reagendar/falhar quando já nasceu outra pendente CANCELA a antiga em vez de violar o índice', async () => {
+    await agendar(CONVERSA, undefined, 0)
+    const antiga = (await pegarProximaTarefa(dono as never, new Date(Date.now() + 10)))!
+    const nova = await agendar(CONVERSA, undefined, 0) // chegou mensagem durante o turno
+    expect(nova.tarefaId).not.toBe(antiga.id)
+    expect(await reagendarTarefa(dono as never, antiga, agora())).toBe('cancelada')
+    const [l] = await dono<{ estado: string }[]>`SELECT estado FROM agente_tarefa WHERE id = ${antiga.id}`
+    expect(l!.estado).toBe('cancelada')
+    // A nova é pega normalmente: nada ficou executando.
+    const proxima = await pegarProximaTarefa(dono as never, new Date(Date.now() + 10))
+    expect(proxima?.id).toBe(nova.tarefaId)
+    await concluirTarefa(dono as never, proxima!, agora())
+    // E o mesmo vale para falhar.
+    await agendar(CONVERSA, undefined, 0)
+    const t2 = (await pegarProximaTarefa(dono as never, new Date(Date.now() + 10)))!
+    await agendar(CONVERSA, undefined, 0)
+    await expect(falharTarefa(dono as never, t2, 'boom', agora())).resolves.toBe('reagendada')
+    const [l2] = await dono<{ estado: string }[]>`SELECT estado FROM agente_tarefa WHERE id = ${t2.id}`
+    expect(l2!.estado).toBe('cancelada')
   })
 
   it('outra conversa não espera', async () => {
