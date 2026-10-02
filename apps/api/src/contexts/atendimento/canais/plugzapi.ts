@@ -114,6 +114,11 @@ export const CAPACIDADES_PLUGZAPI: CapacidadesCanal = {
   riscoBanimento: true,
   sessaoPodeCair: true,    // ⚠️ o alerta que a tela mostra
   textoLivreSempre: true,
+  // ⚠️ Sem endpoint de "digitando" documentado de forma estável no Z-API, e os
+  //    botões interativos no WhatsApp Web vêm e vão a cada versão. Declarado
+  //    FALSE: o agente responde sem indicador e a proposta sai como texto.
+  indicaDigitacao: false,
+  mensagensInterativas: false,
 }
 
 export class CanalPlugZapi implements PortaCanal {

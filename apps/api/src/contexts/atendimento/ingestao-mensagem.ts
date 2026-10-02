@@ -6,6 +6,7 @@ import { consumirCodigoOrigem } from '../aquisicao/consumo-codigo.js'
 import { emSavepoint, type Sql } from '../../db/index.js'
 import { notificarMensagemEntrante, notificarConfirmacaoSemPedido } from './notificacao.js'
 import { agendarTurno } from './agente/fila.js'
+import { cancelarRetornosDaConversa } from './agente/retorno.js'
 
 /**
  * Ingestão de mensagem ENTRANTE — o nosso fluxo (INV-12), não o do ERP.
@@ -18,7 +19,11 @@ import { agendarTurno } from './agente/fila.js'
  * webhook, e a mesma mensagem não pode aparecer duas vezes na thread.
  */
 
-/** Mídia de ENTRADA que ainda aponta para a URL do provedor (a copiar). */
+/**
+ * Mídia de ENTRADA que ainda aponta para o provedor (a copiar). `url` é uma URL
+ * http(s) (não-oficial) OU o placeholder `meta:media:<id>` (oficial — a Meta
+ * não dá URL no webhook; baixar é outro passo com o token).
+ */
 export interface MidiaExterna {
   readonly mensagemId: string
   readonly mensagemCriadoEm: Date
@@ -227,6 +232,12 @@ export async function ingerirMensagemEntrante(
     })
   } catch { /* agendar é acessório; a mensagem não pode se perder por ele */ }
 
+  // 6.8 O cliente escreveu: os retornos agendados (R5) perdem o motivo — quem
+  //     responde agora é o turno do agente, não a cutucada programada.
+  try {
+    await emSavepoint(tx, (sp) => cancelarRetornosDaConversa(sp, conversaId))
+  } catch { /* cancelar retorno é acessório; a mensagem não pode se perder por ele */ }
+
   // 7. Notifica o atendente que assumiu esta conversa (PLT-07), no mesmo commit.
   //    Só entrante NOVA chega aqui — a duplicada já retornou lá em cima.
   await notificarMensagemEntrante(tx, { conversaId })
@@ -234,7 +245,7 @@ export async function ingerirMensagemEntrante(
   // 8. Mídia externa a copiar (E5-14): imagem/áudio que ainda aponta para a URL
   //    do provedor. A cópia é PÓS-COMMIT (fetch é rede, não pode segurar a tx).
   const midiaExterna: MidiaExterna | undefined =
-    (msg.tipo === 'imagem' || msg.tipo === 'audio') && msg.midiaUrl && /^https?:\/\//i.test(msg.midiaUrl)
+    (msg.tipo === 'imagem' || msg.tipo === 'audio') && msg.midiaUrl && /^(https?:\/\/|meta:media:)/i.test(msg.midiaUrl)
       ? { mensagemId, mensagemCriadoEm: msg.recebidaEm, tipo: msg.tipo, url: msg.midiaUrl, mime: msg.mime ?? null }
       : undefined
 

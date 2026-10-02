@@ -20,9 +20,24 @@ export function verificarAssinaturaMeta(corpoCru: Buffer, cabecalho: string | un
   return timingSafeEqual(a, b)
 }
 
+/**
+ * O conteúdo de uma mensagem entrante, já no NOSSO vocabulário:
+ * - `texto`: corpo (inclui resposta de botão — o título vira texto, e o `id`
+ *   do botão viaja em `botaoId` para quem quiser decidir por ele);
+ * - `imagem`/`audio`: a Meta NÃO manda URL, manda `media id`; baixar é outro
+ *   passo, com o token, fora do webhook (`PortaCanal.baixarMidia`);
+ * - outro: tipo cru da Meta (video, document, sticker, location…), ainda não
+ *   ingerido — reconhecido e logado, nunca jogado fora em silêncio.
+ */
+export type ConteudoMeta =
+  | { tipo: 'texto'; texto: string; botaoId?: string }
+  | { tipo: 'imagem'; midiaId: string; mime: string | null; legenda: string | null }
+  | { tipo: 'audio'; midiaId: string; mime: string | null }
+  | { tipo: 'outro'; tipoCru: string }
+
 export type EventoMeta =
   | { tipo: 'mensagem'; phoneNumberId: string; de: string; idExterno: string; timestamp: number
-      conteudo: { tipo: string; texto?: string }; nomePerfil: string | null }
+      conteudo: ConteudoMeta; nomePerfil: string | null }
   | { tipo: 'status'; phoneNumberId: string; idExterno: string; status: string; timestamp: number }
   | { tipo: 'template_status'; wabaId: string; nome: string; idioma: string | null; status: string; motivo: string | null }
   | { tipo: 'qualidade'; phoneNumberId: string | null; evento: string; detalhe: string | null }
@@ -55,12 +70,12 @@ export function parseWebhookMeta(corpo: unknown): EventoMeta[] {
       if (ch.field === 'messages') {
         const nome = ((v.contacts as { profile?: { name?: string } }[] | undefined)?.[0]?.profile?.name) ?? null
         for (const mRaw of (v.messages as unknown[] | undefined) ?? []) {
-          const m = mRaw as { from?: string; id?: string; timestamp?: string; type?: string; text?: { body?: string } }
+          const m = mRaw as { from?: string; id?: string; timestamp?: string; type?: string }
           if (!m.from || !m.id || !phoneNumberId) { eventos.push({ tipo: 'ignorado', motivo: 'mensagem_incompleta' }); continue }
           eventos.push({
             tipo: 'mensagem', phoneNumberId, de: m.from, idExterno: m.id,
             timestamp: Number(m.timestamp ?? 0),
-            conteudo: m.type === 'text' ? { tipo: 'texto', texto: m.text?.body ?? '' } : { tipo: m.type ?? 'desconhecido' },
+            conteudo: conteudoDaMensagemMeta(mRaw),
             nomePerfil: nome,
           })
         }
@@ -95,4 +110,38 @@ export function parseWebhookMeta(corpo: unknown): EventoMeta[] {
     }
   }
   return eventos.length ? eventos : [{ tipo: 'ignorado', motivo: 'sem_changes' }]
+}
+
+/** Traduz o `messages[i]` cru da Meta para o nosso conteúdo. Puro. */
+export function conteudoDaMensagemMeta(mRaw: unknown): ConteudoMeta {
+  const m = mRaw as {
+    type?: string
+    text?: { body?: string }
+    image?: { id?: string; mime_type?: string; caption?: string }
+    audio?: { id?: string; mime_type?: string; voice?: boolean }
+    interactive?: { type?: string; button_reply?: { id?: string; title?: string }; list_reply?: { id?: string; title?: string } }
+    button?: { payload?: string; text?: string }
+  }
+  switch (m.type) {
+    case 'text':
+      return { tipo: 'texto', texto: m.text?.body ?? '' }
+    case 'image':
+      if (!m.image?.id) return { tipo: 'outro', tipoCru: 'image_sem_id' }
+      return { tipo: 'imagem', midiaId: m.image.id, mime: m.image.mime_type ?? null, legenda: m.image.caption ?? null }
+    case 'audio':
+      if (!m.audio?.id) return { tipo: 'outro', tipoCru: 'audio_sem_id' }
+      return { tipo: 'audio', midiaId: m.audio.id, mime: m.audio.mime_type ?? null }
+    case 'interactive': {
+      // Resposta a botão/lista NOSSA: o título é o que o cliente "disse".
+      const r = m.interactive?.button_reply ?? m.interactive?.list_reply
+      if (!r?.title) return { tipo: 'outro', tipoCru: 'interactive_sem_resposta' }
+      return { tipo: 'texto', texto: r.title, ...(r.id ? { botaoId: r.id } : {}) }
+    }
+    case 'button':
+      // Botão de TEMPLATE (quick reply): `button.text` é o rótulo clicado.
+      if (!m.button?.text) return { tipo: 'outro', tipoCru: 'button_sem_texto' }
+      return { tipo: 'texto', texto: m.button.text, ...(m.button.payload ? { botaoId: m.button.payload } : {}) }
+    default:
+      return { tipo: 'outro', tipoCru: m.type ?? 'desconhecido' }
+  }
 }

@@ -3,6 +3,7 @@ import {
   pegarProximaTarefa, concluirTarefa, falharTarefa, reagendarTarefa, recuperarTravadas, type Tarefa,
 } from '../contexts/atendimento/agente/fila.js'
 import { conduzirTurnoVendedor, type DepsTurno, type ResultadoTurnoVendedor } from '../contexts/atendimento/agente/vendedor.js'
+import { indicarDigitacaoDaTarefa } from '../contexts/atendimento/agente/digitacao.js'
 
 /**
  * O WORKER DO AGENTE (ADR-024) — drena `agente_tarefa`, uma tarefa por vez por
@@ -34,6 +35,9 @@ export async function processarTarefasDoAgente(
     const tarefa = await pegarProximaTarefa(dono, agora)
     if (!tarefa) break
     r.processadas += 1
+    // "Digitando…" (R5): best-effort, nunca segura o turno — só onde o canal
+    // declara a capacidade e o agente está em modo autônomo.
+    void indicarDigitacaoDaTarefa(tarefa)
     const desfecho = await executarUma(dono, tarefa, deps, agora)
     if (desfecho === 'respondeu' || desfecho === 'sugeriu') r.respondidas += 1
     else if (desfecho === 'handoff') r.handoffs += 1

@@ -42,7 +42,7 @@ export async function copiarMidiaEntrante(tenantId: string, m: MidiaExterna): Pr
   await comTenantServico(tenantId, async (tx) => {
     await tx`
       UPDATE mensagem
-         SET conteudo = conteudo || ${JSON.stringify({ [m.tipo]: chave })}::jsonb
+         SET conteudo = conteudo || ${JSON.stringify({ [m.tipo]: chave })}::text::jsonb
        WHERE tenant_id = tenant_atual() AND id = ${m.mensagemId} AND criado_em = ${m.mensagemCriadoEm}`
   })
   return true
