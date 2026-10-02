@@ -314,3 +314,23 @@ Integração: uma raia por vez na `main`, suíte completa a cada integração, r
 4. **`vector` indisponível no Railway** → fase 1 é lexical; a semântica é capacidade declarada.
 5. **Conflito agente × humano na mesma conversa** → agente cala ao detectar presença (já existe) e ao ser assumido; sessão encerra com motivo.
 6. **LGPD** → PII mínima, mascaramento, retenção configurável, exclusão do titular alcança `agente_decisao` e `cliente_memoria`.
+
+---
+
+## 8. Estado da execução (atualizado em 2026-10-02)
+
+| Raia | Estado | Entregue |
+|---|---|---|
+| R1 Núcleo | ✅ integrada | `agente_tarefa` (0085) com debounce/serialização, worker em `workers/agente.ts`, `PortaLlmFerramentas` + adaptadores Claude (SDK, strict, cache) / OpenRouter (tool_calls) / simulado, registro de ferramentas com `centavos` e guardrail numérico, modos, handoff com atendimento+sistema+notificação, `agente_decisao` (0086), config com modo/persona/alçada (0084), rotas de decisões, playground (`simular`) e métricas |
+| R2 Catálogo | ✅ integrada | origem manual (0087), `produto_indice` híbrido (0088), CRUD `/v1/catalogo/produtos`, indexador, porta de embedding (Voyage), seed demo |
+| R4 Pedido | ✅ integrada | `montagem.ts` (preço no servidor, perfil do contato), `proposta.ts` + `pedido_proposta` (0091), `alcada.ts`, regras do perfil vertical, "sim" só confirma a versão vigente |
+| R3 Conhecimento/memória | 🔨 em execução | documentos versionados + trechos (0089), `cliente_memoria` (0090), resumo de sessão |
+| R5 Canal | 🔨 em execução | digitação, mídia Meta, transcrição em worker, `agente_retorno` (0092) |
+| R6 Console agente | 🔨 em execução | config/persona/alçada, playground, decisões, sessões |
+| R7 Console CRM | 🔨 em execução | confirmações, toasts, becos, cursor, catálogo manual, item de pedido |
+| R8 Evals | ✅ parcial | `evals/conversas-douradas.json` + runner (simulado no CI, `IA_E2E=1` real); métricas `/v1/agente/metricas`; falta juiz com rubrica e painel |
+| R9 Skills/padrões | ✅ | `geracrm-agente-vendas`, `geracrm-catalogo`, ADR-023…027, workflows `revisar-raia` e `rodada-raias` |
+| R10 Plataforma | ⏳ próxima rodada | white-label, módulos por plano, onboarding guiado, LGPD |
+
+Pendências conhecidas: embeddings dos pendentes (worker) sem pgvector local; juiz LLM das douradas;
+INV-23 (throttle) antes de autônomo no não-oficial; console em dev aponta para o tenant dogfooding.
