@@ -56,3 +56,4 @@ service-account*.json
 
 # Gerado no build do console (scripts/gerar-versao.mjs).
 apps/console/src/app/nucleo/versao.ts
+.claude/worktrees/
