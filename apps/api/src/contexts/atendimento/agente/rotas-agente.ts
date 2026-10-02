@@ -377,4 +377,78 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
       return reply.send({ ok: true, mensagensApagadas: apagadas })
     },
   )
+
+  /**
+   * MÉTRICAS do agente (§6 do plano): o que diz se ele ajuda ou atrapalha.
+   * Janela em dias (padrão 7, máx. 90), por canal opcional. Agregados do
+   * banco — nunca uma lista crua.
+   */
+  app.get<{ Querystring: { dias?: string; canalId?: string } }>(
+    '/v1/agente/metricas', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const dias = Math.min(Math.max(Number(req.query.dias) || 7, 1), 90)
+      const canalId = req.query.canalId && UUID.test(req.query.canalId) ? req.query.canalId : null
+      const m = await req.comTenant(async (tx) => {
+        const filtroCanal = canalId ? tx`AND d.canal_id = ${canalId}` : tx``
+        const [d] = await tx<{
+          turnos: number; respondidos: number; sugeridos: number; handoffs: number; falhas: number; superadas: number
+          conversas: number; custo_centavos: string; latencia_p95_ms: number | null; numeros_bloqueados: number
+          cache_leitura: string; entrada: string
+        }[]>`
+          SELECT count(*)::int AS turnos,
+                 count(*) FILTER (WHERE d.desfecho = 'respondeu')::int AS respondidos,
+                 count(*) FILTER (WHERE d.desfecho = 'sugeriu')::int AS sugeridos,
+                 count(*) FILTER (WHERE d.desfecho = 'handoff')::int AS handoffs,
+                 count(*) FILTER (WHERE d.desfecho = 'falha')::int AS falhas,
+                 count(*) FILTER (WHERE d.desfecho = 'superada')::int AS superadas,
+                 count(DISTINCT d.conversa_id)::int AS conversas,
+                 coalesce(sum(d.custo_centavos), 0)::text AS custo_centavos,
+                 percentile_cont(0.95) WITHIN GROUP (ORDER BY d.latencia_ms)::int AS latencia_p95_ms,
+                 count(*) FILTER (WHERE jsonb_array_length(d.numeros_bloqueados) > 0)::int AS numeros_bloqueados,
+                 coalesce(sum((d.uso->>'cacheLeitura')::bigint), 0)::text AS cache_leitura,
+                 coalesce(sum((d.uso->>'entrada')::bigint), 0)::text AS entrada
+            FROM agente_decisao d
+           WHERE d.tenant_id = tenant_atual() AND d.modo <> 'simulacao'
+             AND d.criado_em >= now() - make_interval(days => ${dias}) ${filtroCanal}`
+        const handoffPorMotivo = await tx<{ motivo: string; n: number }[]>`
+          SELECT coalesce(d.handoff_motivo, 'sem_motivo') AS motivo, count(*)::int AS n
+            FROM agente_decisao d
+           WHERE d.tenant_id = tenant_atual() AND d.modo <> 'simulacao' AND d.desfecho = 'handoff'
+             AND d.criado_em >= now() - make_interval(days => ${dias}) ${filtroCanal}
+           GROUP BY 1 ORDER BY 2 DESC`
+        const [p] = await tx<{ propostos: number; confirmados: number; efetivados: number; valor_efetivado: string }[]>`
+          SELECT count(*) FILTER (WHERE EXISTS (SELECT 1 FROM pedido_proposta pp WHERE pp.tenant_id = pe.tenant_id AND pp.pedido_id = pe.id))::int AS propostos,
+                 count(*) FILTER (WHERE pe.confirmado_em IS NOT NULL)::int AS confirmados,
+                 count(*) FILTER (WHERE pe.estado = 'efetivado')::int AS efetivados,
+                 coalesce(sum(pe.total_centavos) FILTER (WHERE pe.estado = 'efetivado'), 0)::text AS valor_efetivado
+            FROM pedido pe
+           WHERE pe.tenant_id = tenant_atual() AND pe.origem = 'agente'
+             AND pe.criado_em >= now() - make_interval(days => ${dias})
+             ${canalId ? tx`AND EXISTS (SELECT 1 FROM conversa c WHERE c.tenant_id = pe.tenant_id AND c.id = pe.conversa_id AND c.canal_id = ${canalId})` : tx``}`
+        const [h] = await tx<{ corrigidas: number }[]>`
+          -- "Corrigidas por humano": conversas em que o agente falou e, depois, uma pessoa assumiu.
+          SELECT count(DISTINCT d.conversa_id)::int AS corrigidas
+            FROM agente_decisao d
+            JOIN atendimento a ON a.tenant_id = d.tenant_id AND a.conversa_id = d.conversa_id
+                              AND a.atendente_id IS NOT NULL AND a.assumido_em > d.criado_em
+           WHERE d.tenant_id = tenant_atual() AND d.enviada
+             AND d.criado_em >= now() - make_interval(days => ${dias}) ${filtroCanal}`
+        return { d: d!, handoffPorMotivo, p: p!, corrigidas: h?.corrigidas ?? 0 }
+      })
+      const entrada = Number(m.d.entrada), cache = Number(m.d.cache_leitura)
+      return reply.send({
+        dias, canalId,
+        turnos: m.d.turnos, respondidos: m.d.respondidos, sugeridos: m.d.sugeridos, handoffs: m.d.handoffs,
+        falhas: m.d.falhas, superadas: m.d.superadas, conversas: m.d.conversas,
+        custoCentavos: Number(m.d.custo_centavos),
+        custoPorConversaCentavos: m.d.conversas ? Math.round(Number(m.d.custo_centavos) / m.d.conversas) : 0,
+        latenciaP95Ms: m.d.latencia_p95_ms,
+        turnosComNumeroBloqueado: m.d.numeros_bloqueados,
+        taxaCache: entrada + cache > 0 ? Number((cache / (entrada + cache)).toFixed(3)) : null,
+        handoffPorMotivo: m.handoffPorMotivo,
+        pedidos: { propostos: m.p.propostos, confirmados: m.p.confirmados, efetivados: m.p.efetivados, valorEfetivadoCentavos: Number(m.p.valor_efetivado) },
+        conversasCorrigidasPorHumano: m.corrigidas,
+      })
+    },
+  )
 }

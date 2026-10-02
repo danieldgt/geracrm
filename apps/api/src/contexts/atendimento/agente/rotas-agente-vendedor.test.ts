@@ -116,6 +116,25 @@ describe('Playground (simular)', () => {
   })
 })
 
+describe('Métricas', () => {
+  it('agrega decisões (sem simulação), handoffs por motivo e pedidos do agente', async () => {
+    const r = await chamar(T, 'GET', '/v1/agente/metricas?dias=7')
+    expect(r.statusCode).toBe(200)
+    const m = r.json() as Record<string, unknown>
+    expect(m['dias']).toBe(7)
+    expect(typeof m['turnos']).toBe('number')
+    expect(m['pedidos']).toMatchObject({ propostos: 0, confirmados: 0, efetivados: 0 })
+    expect(Array.isArray(m['handoffPorMotivo'])).toBe(true)
+    // As decisões do playground (modo simulacao) não contam.
+    expect(m['turnos']).toBe(0)
+  })
+  it('dias fora da faixa é saneado; canalId inválido é ignorado', async () => {
+    const m = (await chamar(T, 'GET', '/v1/agente/metricas?dias=999&canalId=xx')).json() as { dias: number; canalId: string | null }
+    expect(m.dias).toBe(90)
+    expect(m.canalId).toBeNull()
+  })
+})
+
 describe('Decisões', () => {
   it('outro tenant não enxerga as decisões; cursor inválido → 422', async () => {
     const d = (await chamar(OUTRO, 'GET', '/v1/agente/decisoes')).json() as { itens: unknown[] }
