@@ -115,8 +115,15 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
       }
       const corpo = parse.data
       const politicas = corpo.politicas?.trim() ?? ''
-      // ⚠️ `modo` manda; sem ele, `ativo` decide pelo significado antigo.
-      const modo: ModoAgente = corpo.modo ?? (corpo.ativo === true ? 'autonomo' : 'desligado')
+      // ⚠️ `modo` manda; sem ele, `ativo` decide pelo significado antigo; sem os
+      //    dois, o modo ATUAL fica — salvar só as políticas não pode desligar o
+      //    agente (nem ligar: canal sem linha continua desligado).
+      const atual = await req.comTenant(async (tx) => {
+        const [l] = await tx<{ modo: ModoAgente }[]>`SELECT modo FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
+        return l?.modo ?? null
+      })
+      const modo: ModoAgente = corpo.modo
+        ?? (corpo.ativo !== undefined ? (corpo.ativo ? 'autonomo' : 'desligado') : (atual ?? 'desligado'))
       const ativo = modo !== 'desligado'
 
       const v = validarRegrasAgente({ ...corpo, maxTurnos: corpo['maxTurnos'] })

@@ -11,7 +11,7 @@ import { alterarCarrinhoEnsaio, lerCarrinhoEnsaio } from './carrinho-ensaio.js'
 import { proporPedido, HORAS_VALIDADE_PROPOSTA } from '../../../pedido/proposta.js'
 import type { CatalogoPorta, Ligacoes, PedidoParaLlm, PedidoPorta, ProdutoParaLlm, SituacaoItem } from './ligacoes-porta.js'
 import type { ContextoFerramenta } from './porta.js'
-import { conhecimentoDasPoliticas } from './conhecimento-politicas.js'
+import { conhecimentoReal } from '../conhecimento/conhecimento-real.js'
 
 /**
  * As LIGAÇÕES padrão do agente com os outros contextos — implementadas sobre
@@ -33,7 +33,7 @@ export async function ligacoesPadrao(cfg: { tenantId: string; politicas: string;
   return {
     catalogo: temCatalogo ? catalogoReal : undefined,
     pedido,
-    conhecimento: conhecimentoDasPoliticas(cfg.politicas),
+    conhecimento: conhecimentoReal,
   }
 }
 

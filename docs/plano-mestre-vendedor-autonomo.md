@@ -324,13 +324,20 @@ Integração: uma raia por vez na `main`, suíte completa a cada integração, r
 | R1 Núcleo | ✅ integrada | `agente_tarefa` (0085) com debounce/serialização, worker em `workers/agente.ts`, `PortaLlmFerramentas` + adaptadores Claude (SDK, strict, cache) / OpenRouter (tool_calls) / simulado, registro de ferramentas com `centavos` e guardrail numérico, modos, handoff com atendimento+sistema+notificação, `agente_decisao` (0086), config com modo/persona/alçada (0084), rotas de decisões, playground (`simular`) e métricas |
 | R2 Catálogo | ✅ integrada | origem manual (0087), `produto_indice` híbrido (0088), CRUD `/v1/catalogo/produtos`, indexador, porta de embedding (Voyage), seed demo |
 | R4 Pedido | ✅ integrada | `montagem.ts` (preço no servidor, perfil do contato), `proposta.ts` + `pedido_proposta` (0091), `alcada.ts`, regras do perfil vertical, "sim" só confirma a versão vigente |
-| R3 Conhecimento/memória | 🔨 em execução | documentos versionados + trechos (0089), `cliente_memoria` (0090), resumo de sessão |
-| R5 Canal | 🔨 em execução | digitação, mídia Meta, transcrição em worker, `agente_retorno` (0092) |
+| R3 Conhecimento/memória | ✅ integrada | `conhecimento_documento/trecho` (0089) com FTS+trgm+RRF e sincronismo das políticas da tela, `cliente_memoria` (0090) com rejeição de PII, ferramenta `memoria_anotar`, resumo extrativo a cada 10 turnos, rotas de conhecimento e memória |
+| R5 Canal | ✅ integrada | capacidades `indicaDigitacao`/`mensagensInterativas`, digitação e botões na Meta, ingestão de imagem/áudio da Meta, transcrição (Groq Whisper) em worker que reagenda o turno, `agente_retorno` (0092) com cadência 1h/24h/72h pelo gateway |
 | R6 Console agente | ✅ integrada e testada no Chrome | `funcionalidades/atendimento/agente/*`: config com modo/persona/alçada/regras, playground com bastidores, decisões por cursor, sessões; toasts montados no shell |
 | R7 Console CRM | ✅ integrada e testada no Chrome | `ui-confirmar` em toda ação destrutiva (inclusive disparo de campanha), toasts, becos fechados (conversa↔ficha↔pedido↔tarefas, `/pedido/:id`, `/perfil`), cursor em conversas/tarefas/campanhas/sequências/automações/webhooks, cadastro manual de produtos, item de pedido por `skuId` com falhas tipificadas e remoção, `/saude` no proxy, indicador SSE, saída do staff encerra sessão; `base href` corrigido (deep link abria em branco) |
 | R8 Evals | ✅ parcial | `evals/conversas-douradas.json` + runner (simulado no CI, `IA_E2E=1` real); métricas `/v1/agente/metricas`; falta juiz com rubrica e painel |
 | R9 Skills/padrões | ✅ | `geracrm-agente-vendas`, `geracrm-catalogo`, ADR-023…027, workflows `revisar-raia` e `rodada-raias` |
 | R10 Plataforma | ⏳ próxima rodada | white-label, módulos por plano, onboarding guiado, LGPD |
 
-Pendências conhecidas: embeddings dos pendentes (worker) sem pgvector local; juiz LLM das douradas;
-INV-23 (throttle) antes de autônomo no não-oficial; console em dev aponta para o tenant dogfooding.
+Revisão adversarial do núcleo (2026-10-02): 4 achados graves e 5 médios corrigidos no mesmo dia
+(fila/cancelamento, proposta invalidada ao editar, carrinho de ensaio fora do autônomo, ERP degradado
+com dono, guardrail sem R$, migração em sombra, concorrência do worker, teto do debounce, handoff só
+em autônomo).
+
+Pendências conhecidas (próxima rodada): worker que embute trechos/produtos pendentes (exige pgvector
+no Railway); proposta com botões Confirmar/Alterar no oficial (adaptador pronto, falta o caminho no
+gateway); `enviarLista`; INV-23 (throttle) antes de autônomo no não-oficial; exibir as capacidades
+novas do canal na tela de Números; juiz LLM só com `IA_E2E`; R10 (plataforma).

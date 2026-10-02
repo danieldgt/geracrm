@@ -9,6 +9,7 @@ import { reindexarTenant } from '../../../catalogo/indexador.js'
 import { conduzirTurnoVendedor } from '../vendedor.js'
 import { LlmSimulado } from '../llm-simulado.js'
 import { ligacoesPadrao } from '../ferramentas/ligacoes.js'
+import { sincronizarPoliticas } from '../conhecimento/indexador.js'
 import { llmFerramentasDoAmbiente } from '../fabrica-ferramentas.js'
 import type { PortaLlmFerramentas } from '../porta-llm.js'
 import { julgar, type NotaDoJuiz } from './juiz.js'
@@ -66,7 +67,7 @@ beforeAll(async () => {
   })
 })
 afterAll(async () => {
-  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_config', 'notificacao', 'atendimento', 'pedido_proposta', 'pedido_item', 'pedido', 'mensagem', 'conversa', 'contato_telefone', 'contato', 'produto_indice', 'sku_preco', 'sku_saldo', 'sku', 'produto', 'tabela_preco', 'canal_configuracao', 'canal_conectado', 'outbox']) {
+  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_retorno', 'conhecimento_trecho', 'conhecimento_documento', 'cliente_memoria', 'agente_config', 'notificacao', 'atendimento', 'pedido_proposta', 'pedido_item', 'pedido', 'mensagem', 'conversa', 'contato_telefone', 'contato', 'produto_indice', 'sku_preco', 'sku_saldo', 'sku', 'produto', 'tabela_preco', 'canal_configuracao', 'canal_conectado', 'outbox']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`DELETE FROM tenant WHERE id = ${T}`
@@ -88,6 +89,8 @@ async function prepararCenario(c: Cenario, n: number) {
     INSERT INTO agente_config (tenant_id, canal_id, ativo, modo, politicas, so_quando_ninguem_disponivel, exigir_ausencia_antes, persona)
     VALUES (${T}, ${CANAL}, true, ${c.modo ?? 'autonomo'}, ${douradas.politicas}, false, false, '{"nome":"Dora","loja":"Loja Dourada"}'::jsonb)
     ON CONFLICT (tenant_id, canal_id) DO UPDATE SET modo = EXCLUDED.modo, ativo = EXCLUDED.ativo`
+  // As políticas viram documento da base de conhecimento (como o PUT da tela faz).
+  await comTenantServico(T, (tx) => sincronizarPoliticas(tx, CANAL, douradas.politicas))
   return { contato, conversa }
 }
 

@@ -75,6 +75,12 @@ describe('Configuração do vendedor', () => {
     expect(g.persona.nome).toBe('Lia')
     expect(g.alcada.valorMaxAutonomoCentavos).toBe(123)
   })
+  it('salvar só as políticas NÃO muda o modo', async () => {
+    await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, { modo: 'sombra', politicas: 'Entrega em 2 dias.' })
+    await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, { politicas: 'Entrega em 3 dias.' })
+    const g = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { modo: string; politicas: string }
+    expect(g).toMatchObject({ modo: 'sombra', politicas: 'Entrega em 3 dias.' })
+  })
   it('campo fora do contrato é recusado com o nome do campo', async () => {
     const r = await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, { modo: 'voando' })
     expect(r.statusCode).toBe(422)

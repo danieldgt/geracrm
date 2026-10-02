@@ -15,7 +15,8 @@ import { recadoDaFalha, type Fala } from './porta.js'
 import { custoEstimadoCentavos, type PortaLlmFerramentas, type MensagemLlm, type RastroDoLaco } from './porta-llm.js'
 import { registroDeFerramentas, type ContextoFerramenta } from './ferramentas/porta.js'
 import { montarFerramentas } from './ferramentas/montar.js'
-import { conhecimentoDasPoliticas } from './ferramentas/conhecimento-politicas.js'
+import { lerMemoria } from './memoria/memoria.js'
+import { resumirSessao } from './memoria/resumo.js'
 import type { Ligacoes } from './ferramentas/ligacoes-porta.js'
 import { montarSistema, instrucaoDoTurno, esquemaDaResposta } from './instrucao-vendedor.js'
 import { entregarParaHumano } from './handoff.js'
@@ -198,16 +199,18 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   }
 
   // ── 3. Lead, histórico, ferramentas ─────────────────────────────────────
-  const [lead, historico] = await comTenantServico(tenantId, async (tx) => [
+  const [lead, historico, memoria] = await comTenantServico(tenantId, async (tx) => [
     await carregarContextoDoLead(tx, conversaId),
     await carregarHistorico(tx, conversaId, cfg.regras.falasDeContexto),
+    // Memória de longo prazo do cliente (R3): preferências, objeções, restrições — nunca PII.
+    await lerMemoria(tx, conv.contato_id).catch(() => [] as string[]),
   ] as const)
   if (!lead) return { desfecho: 'silencio', motivo: 'sem_lead' }
 
   const sessaoId = reuniao.sessao_id ?? randomUUID()
   const ctxFerr: ContextoFerramenta = { tenantId, conversaId, contatoId: conv.contato_id, canalId, perfil, sessaoId: reuniao.sessao_id, modo, agora, enviar: deps.enviar }
   const ligacoesBase = await deps.ligacoes({ tenantId, politicas: cfg.politicas, modo })
-  const ligacoes: Ligacoes = { ...ligacoesBase, conhecimento: ligacoesBase.conhecimento ?? conhecimentoDasPoliticas(cfg.politicas) }
+  const ligacoes: Ligacoes = ligacoesBase
   const { ferramentas, capacidades } = montarFerramentas(ligacoes)
   const registro = registroDeFerramentas(ctxFerr, ferramentas)
   const pedidoAberto = ligacoes.pedido ? await ligacoes.pedido.ver(ctxFerr).catch(() => null) : null
@@ -218,7 +221,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     {
       papel: 'operador',
       texto: instrucaoDoTurno({
-        lead, slots: reuniao.slots, resumo: reuniao.resumo, memoria: [],
+        lead, slots: reuniao.slots, resumo: reuniao.resumo, memoria,
         pedido: pedidoAberto ? { itens: pedidoAberto.itens.length, totalCentavos: pedidoAberto.totalCentavos, estado: pedidoAberto.estado } : null,
         horaLocal: horaLocalDe(agora, fuso), primeiraResposta: !historico.some((h) => h.de === 'nos'),
       }) + (avisoDoPedido ? `\n${avisoDoPedido}` : ''),
@@ -315,6 +318,9 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
                pedido_id = coalesce(${pedidoAberto?.pedidoId ?? null}::uuid, pedido_id)
          WHERE tenant_id = tenant_atual() AND id = ${sessaoId}`
       if (envia) await tx`UPDATE conversa SET conduzida_por = 'ia' WHERE tenant_id = tenant_atual() AND id = ${conversaId} AND conduzida_por <> 'ia'`
+      // Resumo extrativo a cada 10 turnos: é o que deixa retomar amanhã sem reler tudo (R3).
+      const [sessao] = await tx<{ turnos: number }[]>`SELECT turnos FROM agente_sessao WHERE tenant_id = tenant_atual() AND id = ${sessaoId}`
+      if (sessao && sessao.turnos % 10 === 0) await resumirSessao(tx, sessaoId).catch(() => undefined)
     }
     const id = await registrarDecisao(tx, { tarefa, sessaoId: deps.simulacao ? null : sessaoId, modo, desfecho, rastro: r.rastro, custo, resposta, bloqueados, enviada: envia, idsSaida, handoff, agora, latenciaMs: Date.now() - inicio })
     if (handoff) {

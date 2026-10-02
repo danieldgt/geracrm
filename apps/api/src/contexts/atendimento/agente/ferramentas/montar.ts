@@ -3,6 +3,7 @@ import type { Ligacoes } from './ligacoes-porta.js'
 import { ferramentasDeCatalogo } from './catalogo.js'
 import { ferramentasDePedido, ferramentaDeTransferencia } from './pedido.js'
 import { ferramentaClientePerfil, ferramentaConhecimento } from './cliente.js'
+import { ferramentaMemoriaAnotar } from '../memoria/ferramenta-memoria.js'
 
 /**
  * O MENU DE FERRAMENTAS de um turno, montado pelas CAPACIDADES disponíveis.
@@ -18,5 +19,6 @@ export function montarFerramentas(l: Ligacoes): { ferramentas: Ferramenta<never>
   else ferramentas.push(ferramentaDeTransferencia())
   ferramentas.push(ferramentaClientePerfil(l.pedido))
   ferramentas.push(ferramentaConhecimento(l.conhecimento))
+  ferramentas.push(ferramentaMemoriaAnotar())
   return { ferramentas, capacidades: { catalogo: !!l.catalogo, pedido: !!l.pedido, conhecimento: true } }
 }
