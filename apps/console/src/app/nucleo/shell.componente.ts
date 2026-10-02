@@ -7,6 +7,7 @@ import { MENU } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
 import { MenuUsuarioComponente } from './menu-usuario.componente.js'
 import { MarcaComponente } from '../compartilhado/ui/marca.componente.js'
+import { ToastsComponente } from '../compartilhado/ui/toast.js'
 import { ChatRailComponente } from '../funcionalidades/atendimento/chat-rail.componente.js'
 import { InboxServico } from './inbox.servico.js'
 import { EventosServico } from './eventos.servico.js'
@@ -28,7 +29,7 @@ import { AuthServico } from './auth.servico.js'
 @Component({
   selector: 'app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente, MarcaComponente, ChatRailComponente],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente, MarcaComponente, ChatRailComponente, ToastsComponente],
   template: `
     <div class="grade">
       <aside class="lateral" [class.recolhida]="recolhida()">
@@ -139,6 +140,8 @@ import { AuthServico } from './auth.servico.js'
         <router-outlet />
       </div>
     </div>
+    <!-- Toasts globais (ToastServico): montados UMA vez, aqui. -->
+    <ui-toasts />
   `,
   styles: `
     :host { display: block; height: 100vh; }
