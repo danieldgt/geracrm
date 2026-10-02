@@ -241,6 +241,19 @@ describe('Portão', () => {
     expect(r.desfecho).toBe('silencio')
     expect(r.motivo).toBe('humano_assumiu')
   })
+  it('com "esperar o cliente insistir", a ausência que acabou de responder estas mensagens cala o agente; na próxima ele entra', async () => {
+    await configurar('autonomo')
+    await dono`UPDATE agente_config SET exigir_ausencia_antes = true WHERE tenant_id = ${T}`
+    const m1 = await mensagemDoCliente('oi')
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', '{"texto":"Ninguém disponível agora.","automatica":"ausencia"}', now())`
+    const r1 = await turno([m1])
+    expect(r1.desfecho).toBe('silencio')
+    expect(r1.motivo).toBe('ausencia_recem_enviada')
+    const r2 = await turno([await mensagemDoCliente('tem camiseta?')])
+    expect(r2.desfecho).toBe('respondeu')
+    await dono`UPDATE agente_config SET exigir_ausencia_antes = false WHERE tenant_id = ${T}`
+  })
   it('orçamento do dia estourado → handoff limite_de_custo', async () => {
     await configurar('autonomo', { orcamento: 1 })
     await dono`INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, modo, desfecho, custo_centavos)

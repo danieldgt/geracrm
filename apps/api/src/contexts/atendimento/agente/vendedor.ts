@@ -95,18 +95,35 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       SELECT (to_jsonb(ct)->>'perfil_preco') AS perfil_preco FROM contato ct
        WHERE ct.tenant_id = tenant_atual() AND ct.id = ${conv.contato_id}`
     const reuniao = await reunirContexto(tx, conversaId, agora, cfg.regras)
+    const [ausenciaAgora] = await tx<{ recem: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM mensagem a
+         WHERE a.tenant_id = tenant_atual() AND a.conversa_id = ${conversaId}
+           AND a.direcao = 'saliente' AND a.conteudo->>'automatica' = 'ausencia'
+           AND a.criado_em >= coalesce((SELECT max(m.criado_em) FROM mensagem m
+                                          WHERE m.tenant_id = tenant_atual() AND m.conversa_id = ${conversaId}
+                                            AND m.id = ANY(${[...tarefa.mensagens_ids]}::uuid[])), ${agora}::timestamptz)) AS recem`
+    const [fusoLinha] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
     const equipe = deps.equipe ?? await quemAtende(tx, canalId, agora)
     const custoHoje = cfg.orcamentoDiaCentavos === null ? 0 : await custoDoDia(tx, canalId, agora)
-    return { tipo: 'ok' as const, cfg, conv, reuniao, equipe, custoHoje, perfil: perfilDeCotacao(perfilLinha?.perfil_preco ?? PERFIL_PRECO_PADRAO) }
+    return {
+      tipo: 'ok' as const, cfg, conv, reuniao, equipe, custoHoje,
+      perfil: perfilDeCotacao(perfilLinha?.perfil_preco ?? PERFIL_PRECO_PADRAO),
+      ausenciaRecemEnviada: ausenciaAgora?.recem ?? false, fuso: fusoLinha?.fuso ?? 'America/Sao_Paulo',
+    }
   })
   if (dados.tipo === 'desligado') return silencio(tenantId, tarefa, 'agente_desligado', 'desligado', agora)
   if (dados.tipo === 'sem_conversa') return { desfecho: 'silencio', motivo: 'conversa_inexistente' }
-  const { cfg, conv, reuniao, equipe, custoHoje, perfil } = dados
+  const { cfg, conv, reuniao, equipe, custoHoje, perfil, ausenciaRecemEnviada, fuso } = dados
   const modo: ModoAgente | 'simulacao' = deps.simulacao ? 'simulacao' : cfg.modo
 
   // ── 2. Portão ───────────────────────────────────────────────────────────
   if (!deps.simulacao) {
     if (conv.humano_assumiu) return silencio(tenantId, tarefa, 'humano_assumiu', modo, agora)
+    // ⚠️ A ausência acabou de responder ESTAS mensagens: com "esperar o cliente
+    //    insistir" ligado, o agente fica para a próxima — duas automáticas
+    //    seguidas, a primeira dizendo "não há ninguém", é a contradição do §4.3.1.
+    if (cfg.regras.exigirAusenciaAntes && ausenciaRecemEnviada) return silencio(tenantId, tarefa, 'ausencia_recem_enviada', modo, agora)
     const decisao = portaoDoAgente({
       agenteAtivo: cfg.modo !== 'desligado',
       ninguemDisponivel: ninguemDisponivel(equipe),
@@ -194,7 +211,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       texto: instrucaoDoTurno({
         lead, slots: reuniao.slots, resumo: reuniao.resumo, memoria: [],
         pedido: pedidoAberto ? { itens: pedidoAberto.itens.length, totalCentavos: pedidoAberto.totalCentavos, estado: pedidoAberto.estado } : null,
-        horaLocal: agora.toISOString(), primeiraResposta: !historico.some((h) => h.de === 'nos'),
+        horaLocal: horaLocalDe(agora, fuso), primeiraResposta: !historico.some((h) => h.de === 'nos'),
       }) + (avisoDoPedido ? `\n${avisoDoPedido}` : ''),
     },
   ]
@@ -407,6 +424,14 @@ async function carregarHistorico(tx: Sql, conversaId: string, falas: number): Pr
      ORDER BY criado_em DESC LIMIT ${falas}`
   return linhas.reverse().map((l) => ({ de: l.direcao === 'entrante' ? 'cliente' : 'nos', texto: textoDaMensagem(l.tipo, l.conteudo) } as const))
     .filter((f) => f.texto)
+}
+
+function horaLocalDe(agora: Date, fuso: string): string {
+  try {
+    return new Intl.DateTimeFormat('pt-BR', { timeZone: fuso, weekday: 'long', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }).format(agora)
+  } catch {
+    return agora.toISOString()
+  }
 }
 
 export function textoDaMensagem(tipo: string, c: Record<string, unknown>): string {
