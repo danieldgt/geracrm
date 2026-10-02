@@ -345,3 +345,10 @@ produto inteiro fica sem preço por cliente, o que já afeta o pedido assistido,
 
 É uma investigação na API do GeraCloud (`/tabela-preco/todas` existe; falta descobrir qual tabela
 pertence a qual cliente), e vale por si — independe do agente ser construído.
+
+---
+
+> **⚠️ Substituído em 2026-10-02.** A decisão de produto mudou: o agente passa a **vender**
+> (ADR-023). O escopo vigente é `plano-mestre-vendedor-autonomo.md`. Os invariantes da §2 continuam
+> valendo e foram incorporados lá; o que esta página diz sobre "não é vendedor", "não fala preço" e
+> "não monta pedido" **não vale mais**. Mantida como histórico das decisões da fatia 1.

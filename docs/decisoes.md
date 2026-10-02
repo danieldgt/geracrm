@@ -559,3 +559,91 @@ explícita — nunca por categoria inteira sem olhar o que ela traz.
   literal fora dos tokens, crase dentro de template literal) que nenhum linter genérico conhece.
   Rodam em `pnpm test` e são complementares, não substituíveis.
 - Se um dia o `typescript-eslint` suportar TS 7, reabrir a discussão é opcional — não obrigatório.
+
+## ADR-023 — O agente é VENDEDOR: laço de ferramentas sob RLS, agente único, três modos
+
+**Data:** 2026-10-02. **Substitui** a premissa de `agente-sdr-escopo.md` §1 ("o agente NÃO é vendedor").
+
+**Contexto.** O SDR de uma chamada só (prompt + envelope JSON) não lê catálogo, preço nem pedido,
+roda síncrono dentro do webhook e não entrega handoff real. O mercado de 2026 (Meta Business Agent,
+Zenvia, Kommo, Weni) vende com catálogo e fecha no chat. O que ninguém faz é vender com **tabela de
+preço e crédito por cliente** — o que o GeraCRM já tem pelo ERP (ADR-005/019).
+
+**Decisão.**
+1. O agente passa a **vender**: entende a demanda, recomenda do catálogo do tenant, monta o rascunho
+   no servidor, propõe e, confirmado pelo cliente e dentro da alçada, o **domínio** efetiva.
+2. O turno é um **laço de ferramentas** (`@anthropic-ai/sdk`, `tool_choice: auto`, `strict: true`,
+   saída estruturada) com ferramentas que rodam **sob RLS** no nosso Postgres: catálogo, preço/estoque,
+   cliente, conhecimento, pedido, transferência, memória. Preço, estoque, prazo e desconto só existem
+   na resposta se vieram de ferramenta **neste turno** — verificado em código.
+3. **Agente único** com seções de prompt e ferramentas. Multiagente no turno multiplica latência e
+   quebra o contexto da venda; o que roda fora do turno (resumo, memória, juiz) é workflow, não agente.
+4. **Três modos por canal**: `sombra` (decide e grava, não envia), `assistido` (sugere; o vendedor
+   aprova), `autonomo` (envia). Todo canal nasce em sombra. `desligado` continua existindo e tem
+   efeito na próxima mensagem.
+5. Modelo padrão `claude-opus-5-5` com `effort: low` no turno de chat; `IA_MODELO` troca sem deploy;
+   OpenRouter é reserva de **disponibilidade**, nunca de custo (o prefixo de cache não migra).
+
+**Consequências.** Nova tabela `agente_decisao` por turno (auditoria), `agente_config.modo/persona/
+alcada`, ferramentas registradas por capacidade do canal e do conector. O prompt perde toda regra de
+negócio (continua a regra da skill `geracrm-ia`). A fatia "não fala preço" do SDR deixa de existir:
+preço vem de `preco-de-venda.ts`, pelo perfil do contato.
+
+## ADR-024 — Fila do agente em Postgres, com debounce e serialização por conversa
+
+**Contexto.** O turno rodava dentro do webhook (até 90 s antes do 200) e duas mensagens rápidas
+geravam dois turnos em paralelo. Avaliados `graphile-worker` e `pg-boss` (ambos bons; ambos trazem
+schema próprio fora do nosso runner de migrations) e LISTEN/NOTIFY puro (notificação sem ouvinte
+some — já documentado em `0019_outbox.sql`).
+
+**Decisão.** Tabela própria `agente_tarefa` (uma pendente por conversa, `executar_em` reagendado a
+cada mensagem nova — debounce de 3 s), agendada **na mesma transação** da ingestão. Worker no padrão
+que o `server.ts` já usa (dono, advisory lock, intervalo curto) acordado também pelo NOTIFY do outbox.
+`FOR UPDATE SKIP LOCKED` garante um turno por conversa por vez. Antes de enviar, o worker confere se
+chegou mensagem nova; se chegou, descarta o rascunho e reagenda.
+
+**Consequências.** Webhook volta a ser "grava + agenda + 200". Coerente com ADR-007 (sem broker) e
+ADR-006 (migration à mão). Se um dia a fila precisar de prioridades e DLQ ricos, trocar por pg-boss
+é trocar o adaptador da fila, não o agente.
+
+## ADR-025 — Catálogo com origem múltipla (ERP e manual); preço resolvido sempre no servidor
+
+**Contexto.** O catálogo só existia por sincronismo de ERP; a Gera3 precisa vender os próprios planos
+SaaS e o produto precisa servir a loja de roupas sem ERP. `POST /pedidos/:id/itens` aceitava o preço
+no corpo e o contato não guardava perfil de preço.
+
+**Decisão.** `produto/sku/tabela_preco/sku_preco/sku_saldo` aceitam `sistema = 'manual'` e `origem`
+por registro; o integrador **não sobrescreve** o que é manual (ADR-008, origem por campo). Nasce o
+contexto `catalogo` com CRUD sob RLS e indexação. `contato.perfil_preco` passa a existir; adicionar
+item **resolve o preço no servidor** por `preco-de-venda.ts` — o corpo da requisição leva `skuId` e
+`quantidade`, nunca preço. Regras de `perfil_vertical.regras_pedido` passam a ser validadas.
+
+**Consequências.** Uma tela de catálogo com escrita; seed de demonstração (planos SaaS + roupas);
+o agente e a tela de pedido passam pelo mesmo resolvedor de preço.
+
+## ADR-026 — Retrieval híbrido em Postgres; semântica como capacidade opcional
+
+**Decisão.** `produto_indice` e `conhecimento_trecho` com `tsvector` (`portuguese` + `unaccent`),
+`pg_trgm` e fusão por RRF — fase 1, sem dependência nova. `pgvector` (HNSW, cosseno, `voyage-4`
+1024 dims atrás de `PortaEmbedding`) entra como fase 2, **somente se a extensão existir** no
+ambiente; a migration cria a coluna/índice dentro de um bloco guardado e o produto declara a
+capacidade `buscaSemantica` — degradação visível, nunca quebra.
+
+**Consequências.** Nenhum serviço externo de busca; tudo sob RLS; o custo de embedding é
+desprezível (≈ US$0,09 por 10 mil produtos). Reranker só se a medição pedir.
+
+## ADR-027 — Propor-e-confirmar com alçada: o modelo propõe, o domínio efetiva
+
+**Contexto.** Incidente de 27/08: um "sim" confirmou o pedido errado. O fluxo `enviar-resumo →
+aguardando_confirmacao → sim → confirmado → efetivar` já existe e é conservador; o agente precisa
+reusá-lo, não contorná-lo.
+
+**Decisão.** A ferramenta `pedido_propor` grava `pedido_proposta` (versão do conteúdo, resumo,
+expiração) e envia o resumo pelo gateway (botões no oficial, texto no não-oficial). O "sim" é
+interpretado pelo domínio e só confirma a proposta **cuja versão ainda é a atual**. Efetivar obedece
+à alçada do canal (`valor_max_autonomo`, `desconto_max = 0`, `efetiva_sozinho`): dentro, o conector
+efetiva (ou degrada visível, ADR-008); fora, nasce um atendimento na fila com resumo e motivo.
+`pedido_efetivar` **não é ferramenta do modelo**.
+
+**Consequências.** Rascunho nunca se perde (ADR-005). Desconto exige humano até existir política
+declarada por tenant. Toda proposta e confirmação é auditável por `agente_decisao` + `pedido_proposta`.

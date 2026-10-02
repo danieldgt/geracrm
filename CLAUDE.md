@@ -45,5 +45,14 @@ para venda B2B recorrente. Monorepo pnpm+Turborepo: `apps/api` (Fastify), `apps/
 - Idioma: prosa em pt-BR; código/comentários em inglês; domínio em português (`Conversa`, `Pedido`,
   `Campanha`, `Numero`). Dinheiro em centavos inteiros; IDs UUID v7; sem `enum` do TypeScript.
 - Não commitar em `main` sem os checks (`pnpm lint typecheck test`) verdes.
-- **Estado atual: fase de planejamento**, sem código de produção. O caminho crítico é o registro na
-  Meta (semanas, fora do nosso controle) — ver `docs/prontidao-para-inicio.md`.
+- **Estado atual (2026-10-02): produto em operação (dogfooding) e rodada "vendedor autônomo".**
+  Stack no Railway com chat bidirecional, pedido assistido, campanhas e agente. O plano vigente é
+  `docs/plano-mestre-vendedor-autonomo.md` (raias R1–R10) com ADR-023…027. O agente é VENDEDOR:
+  laço de ferramentas sob RLS, fila própria com debounce (`agente_tarefa`), modos
+  sombra/assistido/autônomo, propor-e-confirmar com alçada. Skills da área: `geracrm-agente-vendas`,
+  `geracrm-catalogo`.
+- **O modelo nunca inventa número.** Preço, estoque, prazo e desconto só entram na resposta se vieram
+  de ferramenta no mesmo turno — verificado em código (`verificarNumerosNaResposta`). `pedido_efetivar`
+  não é ferramenta do modelo (ADR-027).
+- **Catálogo tem origem múltipla** (ERP e manual) e o preço é resolvido SEMPRE no servidor pelo perfil
+  do contato (ADR-025). Corpo de requisição nunca carrega preço.
