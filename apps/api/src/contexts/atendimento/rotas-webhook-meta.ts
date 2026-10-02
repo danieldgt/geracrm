@@ -1,8 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import { sql, comTenantServico } from '../../db/index.js'
-import { parseWebhookMeta, verificarAssinaturaMeta } from './canais/meta.js'
+import { parseWebhookMeta, verificarAssinaturaMeta, type EventoMeta } from './canais/meta.js'
 import { ingerirMensagemEntrante, registrarStatusMensagem } from './ingestao-mensagem.js'
 import { responderAutomaticamente } from './resposta-automatica.js'
+import { PREFIXO_MIDIA_META } from './canais/meta-oficial.js'
+import { midiaHabilitada } from './midia/armazenamento.js'
+import { resolverMidiaMeta } from './midia/resolver-midia-meta.js'
+import type { MensagemEntrante } from './canais/porta.js'
 
 /**
  * Webhook da Meta (WhatsApp Cloud API / Instagram Direct).
@@ -73,17 +77,14 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
 
       try {
         if (ev.tipo === 'mensagem') {
-          // Fase 3: texto completo. Mídia (imagem/áudio) exige baixar pelo media
-          // id + token — entra depois; por ora reconhece e segue (200).
-          if (ev.conteudo.tipo !== 'texto') {
-            req.log.info({ tipo: ev.conteudo.tipo }, 'webhook meta: mídia adiada')
+          // Texto, resposta de botão, imagem e áudio. Vídeo/documento/figurinha
+          // ainda não entram — reconhecidos e logados (200).
+          const entrante = mensagemEntranteMeta(ev)
+          if (!entrante) {
+            req.log.info({ tipo: ev.conteudo.tipo === 'outro' ? ev.conteudo.tipoCru : ev.conteudo.tipo }, 'webhook meta: tipo ainda não ingerido')
             continue
           }
-          const r = await comTenantServico(canal.tenant_id, (tx) =>
-            ingerirMensagemEntrante(tx, canal.canal_id, {
-              deE164: ev.de, idExterno: ev.idExterno, tipo: 'texto', texto: ev.conteudo.texto,
-              nomeRemetente: ev.nomePerfil ?? undefined, recebidaEm: new Date(ev.timestamp * 1000),
-            }))
+          const r = await comTenantServico(canal.tenant_id, (tx) => ingerirMensagemEntrante(tx, canal.canal_id, entrante))
 
           // ⚠️ Ausência e agente valem no canal OFICIAL igual: quem escreve às
           //    23h merece a mesma resposta, venha por onde vier. Faltava aqui —
@@ -107,6 +108,19 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
               req.log.warn({ erro, canalId: canal.canal_id }, 'resposta automática falhou (mensagem já está salva)')
             }
           }
+
+          // ⚠️ Mídia da Meta vem como `media id`, não URL: baixar exige o token
+          //    e dois GETs. PÓS-COMMIT e best-effort, como a cópia do não-oficial:
+          //    a mensagem já está salva com o placeholder `meta:media:<id>`; se
+          //    isto falhar, o worker de transcrição ainda sabe baixar pelo id.
+          if (r.ok && !r.duplicada && r.midiaExterna && midiaHabilitada()) {
+            try {
+              const ok = await resolverMidiaMeta(canal.tenant_id, canal.canal_id, r.midiaExterna)
+              if (!ok) req.log.warn({ canalId: canal.canal_id, conversaId: r.conversaId }, 'mídia da Meta mantida como media id (download falhou)')
+            } catch (erro) {
+              req.log.warn({ erro, canalId: canal.canal_id }, 'falha ao baixar mídia da Meta (mensagem já está salva)')
+            }
+          }
         } else if (ev.status === 'enviada' || ev.status === 'entregue' || ev.status === 'lida') {
           await comTenantServico(canal.tenant_id, (tx) => registrarStatusMensagem(tx, ev.idExterno, ev.status as 'enviada' | 'entregue' | 'lida'))
         }
@@ -119,4 +133,20 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
     }
     return reply.code(200).send({ ok: true, eventos: eventos.length })
   })
+}
+
+/**
+ * Do evento já parseado para a `MensagemEntrante` da porta. `null` = tipo que
+ * ainda não ingerimos. A mídia entra com o placeholder `meta:media:<id>` em
+ * `midiaUrl`: o download é outro passo, fora do caminho da requisição.
+ */
+export function mensagemEntranteMeta(ev: Extract<EventoMeta, { tipo: 'mensagem' }>): MensagemEntrante | null {
+  const base = { deE164: ev.de, idExterno: ev.idExterno, nomeRemetente: ev.nomePerfil ?? undefined, recebidaEm: new Date(ev.timestamp * 1000) }
+  const c = ev.conteudo
+  if (c.tipo === 'texto') return { ...base, tipo: 'texto', texto: c.texto }
+  if (c.tipo === 'imagem') {
+    return { ...base, tipo: 'imagem', midiaUrl: `${PREFIXO_MIDIA_META}${c.midiaId}`, mime: c.mime ?? undefined, texto: c.legenda ?? undefined }
+  }
+  if (c.tipo === 'audio') return { ...base, tipo: 'audio', midiaUrl: `${PREFIXO_MIDIA_META}${c.midiaId}`, mime: c.mime ?? undefined }
+  return null
 }

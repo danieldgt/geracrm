@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { comTenantServico, type Sql } from '../../db/index.js'
 import { enviarTextoNaConversa, type ClasseFalha, type ResultadoEnvioTexto } from '../atendimento/envio-conversa.js'
+import { agendarRetorno, CADENCIA_RETORNO_MS } from '../atendimento/agente/retorno.js'
 import { marcarResumoEnviado } from './confirmacao-pedido.js'
 import { regrasPedidoDoTenant } from './montagem.js'
 import { mensagemViolacao, validarRegrasPedido, type ViolacaoRegras } from './regras-pedido.js'
@@ -101,6 +102,8 @@ export async function proporPedido(
                                    enviada_em, expira_em, mensagem_id, vigente)
       VALUES (tenant_atual(), ${propostaId}, ${pedidoId}, ${p.versao_conteudo}, ${preparo.texto},
               ${preparo.totalCentavos}, ${agora}, ${expiraEm}, ${envio.mensagemId}, true)`
+    // Retorno (R5): se o cliente sumir, o agente cutuca em 1h → 24h → 72h.
+    await agendarRetorno(tx, { conversaId: preparo.conversaId, motivo: 'proposta_sem_resposta', executarEm: new Date(agora.getTime() + CADENCIA_RETORNO_MS[0]!) })
     return {
       tipo: 'ok' as const, propostaId, resumo: preparo.texto, totalCentavos: preparo.totalCentavos,
       expiraEm, conversaId: preparo.conversaId, mensagemId: envio.mensagemId,

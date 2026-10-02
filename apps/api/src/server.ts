@@ -14,6 +14,9 @@ import { despacharPush, configVapid, envioReal } from './contexts/plataforma/pus
 import { despacharCampanhas } from './contexts/crm/despachante-campanha.js'
 import { vigiarConexaoCanais } from './contexts/atendimento/vigia-canal.js'
 import { processarTarefasDoAgente, INTERVALO_WORKER_MS } from './workers/agente.js'
+import { processarTranscricoes, INTERVALO_TRANSCRICAO_MS } from './workers/transcricao.js'
+import { transcricaoDoAmbiente } from './contexts/atendimento/midia/transcricao/fabrica.js'
+import { processarRetornos, INTERVALO_RETORNOS_MS } from './contexts/atendimento/agente/retorno.js'
 import { ligacoesPadrao } from './contexts/atendimento/agente/ferramentas/ligacoes.js'
 
 const porta = Number(process.env.PORT ?? 3000)
@@ -204,6 +207,42 @@ if (process.env.DATABASE_ADMIN_URL) {
       .finally(() => { processandoAgente = false })
   }, INTERVALO_WORKER_MS)
   intervalosAquisicao.push(agenteIntervalo)
+
+  // ⚠️ TRANSCRIÇÃO DE ÁUDIO (IA-03, R5): em worker, nunca na requisição. Só
+  //    liga com provedor configurado (GROQ_API_KEY); sem ele, avisa UMA vez e o
+  //    áudio continua tocável sem texto — degrada, não quebra.
+  const transcricao = transcricaoDoAmbiente()
+  if (transcricao.capacidades.transcreve) {
+    let transcrevendo = false
+    const transcricaoIntervalo = setInterval(() => {
+      if (transcrevendo) return
+      transcrevendo = true
+      void processarTranscricoes(donoAquisicao as never, { porta: transcricao }, new Date())
+        .then((r) => {
+          if (r.candidatas > 0) app.log.info(r, 'transcrição de áudio')
+        })
+        .catch((e) => app.log.warn({ erro: e }, 'worker de transcrição falhou'))
+        .finally(() => { transcrevendo = false })
+    }, INTERVALO_TRANSCRICAO_MS)
+    intervalosAquisicao.push(transcricaoIntervalo)
+  } else {
+    app.log.info('transcrição de áudio desligada (sem GROQ_API_KEY)')
+  }
+
+  // RETORNO DO AGENTE (follow-up, R5): proposta sem resposta e carrinho
+  // abandonado — 1h/24h/72h pelo gateway único, só em modo autônomo.
+  let retornando = false
+  const retornoIntervalo = setInterval(() => {
+    if (retornando) return
+    retornando = true
+    void processarRetornos(donoAquisicao as never, {}, new Date())
+      .then((r) => {
+        if (r.vencidos > 0) app.log.info(r, 'retornos do agente')
+      })
+      .catch((e) => app.log.warn({ erro: e }, 'worker de retorno falhou'))
+      .finally(() => { retornando = false })
+  }, INTERVALO_RETORNOS_MS)
+  intervalosAquisicao.push(retornoIntervalo)
 
   // Push nativo (PLT-07) — a notificação que chega com o navegador fechado.
   // ⚠️ 20s: é a mesma ordem de grandeza do despachante de webhooks. Push de

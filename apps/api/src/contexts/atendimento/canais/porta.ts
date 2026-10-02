@@ -38,7 +38,29 @@ export interface CapacidadesCanal {
    * `riscoBanimento`: são riscos diferentes, e só este pede vigilância periódica.
    */
   readonly sessaoPodeCair: boolean
+  /**
+   * Mostra "digitando…" ao cliente antes de responder (ritmo humano, R5).
+   * Oficial: `typing_indicator` da Cloud API. Onde é falso, o agente responde
+   * sem aviso — degrada, não quebra.
+   */
+  readonly indicaDigitacao: boolean
+  /**
+   * Botões de resposta / listas (mensagem interativa). Onde é falso, a proposta
+   * sai como texto e o "sim" é interpretado pelo domínio do mesmo jeito.
+   */
+  readonly mensagensInterativas: boolean
 }
+
+/** Um botão de resposta rápida: `id` volta no webhook, `titulo` é o que o cliente vê. */
+export interface BotaoResposta {
+  readonly id: string
+  readonly titulo: string
+}
+
+/** Mídia baixada do provedor (entrada): bytes + mime, ou falha tipificada. */
+export type ResultadoMidiaBaixada =
+  | { ok: true; bytes: Buffer; mime: string }
+  | { ok: false; motivo: MotivoFalhaEnvio | 'muito_grande' | 'nao_encontrada'; detalhe?: string | undefined }
 
 /**
  * Resultado de um envio — retorno TIPIFICADO, nunca exceção (falha de negócio é
@@ -138,6 +160,30 @@ export interface PortaCanal {
    * demanda e nunca guardado. Persistir um QR seria servir um código morto.
    */
   qrCode(): Promise<{ ok: true; imagemDataUrl: string } | { ok: false; motivo: string }>
+
+  /**
+   * Mostra "digitando…" para o destino. OPCIONAL — só existe onde
+   * `capacidades.indicaDigitacao` é verdadeira. Best-effort por contrato: nunca
+   * lança, e quem chama não espera resultado (o turno segue de qualquer jeito).
+   *
+   * `mensagemIdExterno` é o id da última mensagem do cliente — a Cloud API
+   * exige (marca como lida + digitando numa chamada só).
+   */
+  indicarDigitacao?(paraE164: string, mensagemIdExterno?: string): Promise<void>
+
+  /**
+   * Envia texto com até 3 botões de resposta rápida. OPCIONAL — só onde
+   * `capacidades.mensagensInterativas` é verdadeira. Quem chama degrada para
+   * `enviarTexto` quando o método não existe.
+   */
+  enviarBotoes?(paraE164: string, texto: string, botoes: readonly BotaoResposta[]): Promise<ResultadoEnvio>
+
+  /**
+   * Baixa uma mídia de ENTRADA pelo id que o provedor deu no webhook. OPCIONAL —
+   * só onde a mídia não vem por URL pública (Meta: `GET /{media_id}` → URL
+   * assinada → bytes, tudo com o token). Fora do caminho da requisição.
+   */
+  baixarMidia?(idMidia: string): Promise<ResultadoMidiaBaixada>
 }
 
 export type ResultadoAcaoMensagem =

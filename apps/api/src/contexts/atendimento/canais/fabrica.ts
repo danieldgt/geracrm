@@ -39,7 +39,7 @@ export function criarCanal(provedor: string, cred: Credencial): PortaCanal {
 class CanalNaoImplementado implements PortaCanal {
   readonly capacidades = {
     janela24h: false, aceitaTemplate: false, riscoBanimento: false, textoLivreSempre: false,
-    sessaoPodeCair: false,
+    sessaoPodeCair: false, indicaDigitacao: false, mensagensInterativas: false,
   }
   constructor(readonly tipo: TipoCanal) {}
   async enviarTexto(): Promise<ResultadoEnvio> {

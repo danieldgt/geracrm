@@ -31,6 +31,7 @@ const CAP_OFICIAL: CapacidadesCanal = {
   janela24h: true, aceitaTemplate: true, riscoBanimento: false, textoLivreSempre: false,
   // ⚠️ Token, não sessão: não cai sozinho. O vigia de conexão nem pergunta.
   sessaoPodeCair: false,
+  indicaDigitacao: true, mensagensInterativas: true,
 }
 
 // Instagram Direct (Graph API): janela de 24h SEM template e SEM reabertura, e SEM
@@ -38,6 +39,8 @@ const CAP_OFICIAL: CapacidadesCanal = {
 const CAP_INSTAGRAM: CapacidadesCanal = {
   janela24h: true, aceitaTemplate: false, riscoBanimento: false, textoLivreSempre: false,
   sessaoPodeCair: false,
+  // Adaptador em desenvolvimento: nada além do básico até ele entrar.
+  indicaDigitacao: false, mensagensInterativas: false,
 }
 
 // TikTok Business Messaging: janela de sessão, sem template e sem disparo em massa.
@@ -45,6 +48,7 @@ const CAP_INSTAGRAM: CapacidadesCanal = {
 const CAP_TIKTOK: CapacidadesCanal = {
   janela24h: true, aceitaTemplate: false, riscoBanimento: false, textoLivreSempre: false,
   sessaoPodeCair: false,
+  indicaDigitacao: false, mensagensInterativas: false,
 }
 
 export const CANAIS: readonly ProvedorCanal[] = [
