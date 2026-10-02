@@ -497,3 +497,30 @@ flowchart TB
 - Contexto de domínio novo? Diagrama 3.
 - Fluxo crítico alterado? Diagramas 4 e 5 — são os que mais explicam o sistema para quem chega.
 - Mermaid é texto: entra no diff, e revisão de PR pega diagrama que não bate com o código.
+
+## 12. O turno do agente vendedor (ADR-023/024/027)
+
+```mermaid
+flowchart TD
+  W[Webhook Meta / PlugZapi] -->|tx: mensagem + agente_tarefa| Q[(agente_tarefa<br/>1 pendente por conversa<br/>debounce 3 s)]
+  W -->|200 em < 300 ms| X((fim))
+  K[workers/agente.ts<br/>1 s, FOR UPDATE SKIP LOCKED] --> Q
+  Q --> P{Portão<br/>modo · humano assumiu · ausência · teto · orçamento}
+  P -->|silêncio| D[(agente_decisao)]
+  P -->|entra| A[Alçada do pedido confirmado<br/>efetivarSeDentroDaAlcada]
+  A -->|fora da alçada| H
+  A --> L[Laço de ferramentas<br/>PortaLlmFerramentas · ≤ 6 rodadas · ≤ 20 s]
+  L <-->|sob RLS| F[catalogo_buscar · catalogo_preco_estoque<br/>pedido_ver · pedido_itens · pedido_propor<br/>cliente_perfil · conhecimento_buscar · atendimento_transferir]
+  L --> V[respostaDoAgente Zod<br/>guardrail numérico<br/>confiança ≥ limiar]
+  V -->|mensagem nova chegou| Q
+  V --> M{Modo}
+  M -->|sombra| D
+  M -->|assistido| S[outbox agente.sugestao] --> D
+  M -->|autônomo| G[Gateway único de envio<br/>opt-out · janela · estado do canal] --> D
+  V -->|handoff| H[entregarParaHumano<br/>atendimento na fila · mensagem de sistema · notificação]
+  H --> D
+```
+
+Regras que o diagrama carrega: o modelo nunca efetiva (não há `pedido_efetivar`); número sem origem
+em ferramenta é bloqueado em `V`; qualquer atendimento aberto cala o agente em `P`; cada caminho
+termina em `agente_decisao`, uma linha por turno.
