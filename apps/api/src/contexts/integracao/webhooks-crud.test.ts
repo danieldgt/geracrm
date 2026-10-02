@@ -78,4 +78,24 @@ describe('INT-07: CRUD de webhooks de saída', () => {
     const urls = (doT.json() as { itens: { url: string }[] }).itens.map((i) => i.url)
     expect(urls).not.toContain('https://b/hook')
   })
+
+  it('⚠️ lista por CURSOR (criado_em, id): 20 por página, sem repetir, sem OFFSET', async () => {
+    await dono`DELETE FROM webhook_saida WHERE tenant_id = ${T}`
+    for (let i = 0; i < 23; i++) {
+      expect((await chamar(T, 'POST', '/v1/webhooks', { url: `https://ex/hook/${i}` })).statusCode).toBe(201)
+    }
+    type Pagina = { itens: { id: string }[]; proximoCursor: string | null }
+    const p1 = (await chamar(T, 'GET', '/v1/webhooks')).json() as Pagina
+    expect(p1.itens.length).toBe(20)
+    expect(p1.proximoCursor).toEqual(expect.any(String))
+
+    const p2 = (await chamar(T, 'GET', `/v1/webhooks?cursor=${encodeURIComponent(p1.proximoCursor!)}`)).json() as Pagina
+    expect(p2.itens.length).toBe(3)
+    expect(p2.proximoCursor).toBeNull()
+
+    const ids = [...p1.itens, ...p2.itens].map((i) => i.id)
+    expect(new Set(ids).size).toBe(23)
+
+    expect((await chamar(T, 'GET', '/v1/webhooks?cursor=lixo')).statusCode).toBe(422)
+  })
 })

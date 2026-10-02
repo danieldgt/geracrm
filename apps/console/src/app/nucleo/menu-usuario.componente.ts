@@ -109,6 +109,6 @@ export class MenuUsuarioComponente implements OnInit, OnDestroy {
     return ((partes[0]?.[0] ?? '') + (partes.length > 1 ? partes[partes.length - 1]![0] : '')).toUpperCase() || 'U'
   })
 
-  irPerfil(): void { this.aberto.set(false); void this.router.navigate(['/config']) }
+  irPerfil(): void { this.aberto.set(false); void this.router.navigate(['/perfil']) }
   sair(): void { this.aberto.set(false); this.auth.sair(); void this.router.navigate(['/login']) }
 }

@@ -141,19 +141,27 @@ export class CanaisServico {
 
   // Aquecimento de frota (Onda 3): teto diário de disparo por número.
   readonly aquecimento = signal<Record<string, Aquecimento>>({})
+  /** Falha de aquecimento por canal — a tela mostra ao lado do botão, nunca some. */
+  readonly erroAquecimento = signal<Record<string, string>>({})
 
   async carregarAquecimento(id: string): Promise<void> {
     try {
       const r = await firstValueFrom(this.http.get<Aquecimento>(`/v1/canais/${id}/aquecimento`))
       this.aquecimento.update((a) => ({ ...a, [id]: r }))
-    } catch { /* silencioso */ }
+      this.erroAquecimento.update((m) => { const n = { ...m }; delete n[id]; return n })
+    } catch (e) {
+      // Parcial: o canal continua na lista; só o aquecimento não veio.
+      this.erroAquecimento.update((m) => ({ ...m, [id]: erroApiDe(e).mensagem ?? 'Não foi possível ler o aquecimento.' }))
+    }
   }
 
   async iniciarAquecimento(id: string): Promise<void> {
     try {
       await firstValueFrom(this.http.post(`/v1/canais/${id}/aquecimento`, {}))
       await this.carregarAquecimento(id)
-    } catch { /* silencioso */ }
+    } catch (e) {
+      this.erroAquecimento.update((m) => ({ ...m, [id]: erroApiDe(e).mensagem ?? 'Não foi possível iniciar o aquecimento.' }))
+    }
   }
 }
 

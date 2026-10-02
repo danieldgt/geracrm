@@ -1,8 +1,9 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
-import { RouterLink } from '@angular/router'
+import { ActivatedRoute, RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ConfirmacaoServico, ToastServico, mensagemDeErro, mesclarPagina, queryDeLista } from '../../compartilhado/ui/index.js'
 
 interface Tarefa {
   readonly id: string
@@ -61,6 +62,13 @@ const ABAS = [
       @for (a of abas; track a.chave) {
         <button [class.on]="aba() === a.chave" (click)="trocar(a.chave)">{{ a.rotulo }}</button>
       }
+      @if (contatoId(); as cid) {
+        <!-- Vindo da ficha: a agenda mostra só este cliente, e diz isso. -->
+        <span class="chip-filtro">
+          Tarefas de <a [routerLink]="['/contato', cid]">{{ contatoNome() ?? 'um contato' }}</a>
+          · <a routerLink="/tarefas" (click)="limparContato()">limpar</a>
+        </span>
+      }
     </div>
 
     @switch (estado()) {
@@ -91,6 +99,11 @@ const ABAS = [
               </li>
             }
           </ul>
+          @if (proximoCursor()) {
+            <button class="btn btn--secundario mais" (click)="carregarMais()" [disabled]="carregandoMais()">
+              {{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
+            </button>
+          }
         }
       }
     }
@@ -110,6 +123,9 @@ const ABAS = [
     .abas { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-4); flex-wrap: wrap; }
     .abas button { padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
     .abas button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
+    .chip-filtro { display: inline-flex; align-items: center; gap: 4px; padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--acao); border-radius: var(--raio-completo); background: var(--acao-suave); color: var(--texto); font-size: 12px; }
+    .chip-filtro a { color: var(--acao); text-decoration: none; }
+    .chip-filtro a:hover { text-decoration: underline; }
     button { cursor: pointer; }
     .primario:disabled { opacity: .6; cursor: default; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
@@ -127,27 +143,61 @@ const ABAS = [
     .x { border: 0; background: transparent; color: var(--texto-suave); font-size: 16px; padding: 0 4px; flex: none; }
     .x:hover { color: var(--erro); }
     .badge { font-size: 11px; color: var(--texto-suave); flex: none; }
+    .mais { margin-top: var(--espacamento-4); }
   `,
 })
 export class TarefasPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly route = inject(ActivatedRoute)
+  private readonly confirmacao = inject(ConfirmacaoServico)
+  private readonly toast = inject(ToastServico)
+  /** Filtro por contato (`?contatoId=`), vindo da ficha. */
+  readonly contatoId = signal<string | null>(null)
+  readonly contatoNome = signal<string | null>(null)
   readonly abas = ABAS
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Tarefa[]>([])
+  readonly proximoCursor = signal<string | null>(null)
+  readonly carregandoMais = signal(false)
   readonly aba = signal('hoje')
   readonly mostrarNova = signal(false)
   readonly titulo = signal(''); readonly vence = signal(''); readonly salvando = signal(false); readonly erroForm = signal<string | null>(null)
 
-  ngOnInit(): void { void this.carregar() }
+  ngOnInit(): void {
+    this.contatoId.set(this.route.snapshot.queryParamMap.get('contatoId'))
+    // Vindo da ficha, "Hoje" esconderia o histórico do cliente: abre em "Abertas".
+    if (this.contatoId()) this.aba.set('abertas')
+    void this.carregar()
+  }
   trocar(a: string): void { this.aba.set(a); void this.carregar() }
+  limparContato(): void { this.contatoId.set(null); this.contatoNome.set(null); void this.carregar() }
+
+  private url(cursor: string | null): string {
+    return `/v1/tarefas${queryDeLista({ situacao: this.aba(), contatoId: this.contatoId(), cursor })}`
+  }
 
   async carregar(): Promise<void> {
     this.estado.set('carregando')
     try {
-      const r = await firstValueFrom(this.http.get<{ itens: Tarefa[] }>(`/v1/tarefas?situacao=${this.aba()}`))
+      const r = await firstValueFrom(this.http.get<{ itens: Tarefa[]; proximoCursor: string | null }>(this.url(null)))
       this.itens.set(r.itens)
+      this.proximoCursor.set(r.proximoCursor)
+      // Nome do contato filtrado vem da própria lista (sem chamada extra).
+      if (this.contatoId()) this.contatoNome.set(r.itens.find((t) => t.contato)?.contato ?? this.contatoNome())
       this.estado.set('pronto')
     } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
+  }
+
+  async carregarMais(): Promise<void> {
+    const cursor = this.proximoCursor()
+    if (!cursor || this.carregandoMais()) return
+    this.carregandoMais.set(true)
+    try {
+      const r = await firstValueFrom(this.http.get<{ itens: Tarefa[]; proximoCursor: string | null }>(this.url(cursor)))
+      this.itens.update((a) => mesclarPagina(a, r.itens, (t) => t.id))
+      this.proximoCursor.set(r.proximoCursor)
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais tarefas.')) }
+    finally { this.carregandoMais.set(false) }
   }
 
   async criar(ev: Event): Promise<void> {
@@ -159,14 +209,32 @@ export class TarefasPagina implements OnInit {
         titulo: this.titulo().trim(), venceEm: new Date(this.vence()).toISOString(),
       }))
       this.titulo.set(''); this.vence.set(''); this.mostrarNova.set(false)
+      this.toast.sucesso('Tarefa criada')
       await this.carregar()
-    } catch { this.erroForm.set('Não foi possível criar a tarefa.') } finally { this.salvando.set(false) }
+    } catch (e) { this.erroForm.set(mensagemDeErro(e, 'Não foi possível criar a tarefa.')) }
+    finally { this.salvando.set(false) }
   }
 
   async concluir(id: string): Promise<void> {
-    try { await firstValueFrom(this.http.post(`/v1/tarefas/${id}/concluir`, {})); await this.carregar() } catch { /* ignore */ }
+    try {
+      await firstValueFrom(this.http.post(`/v1/tarefas/${id}/concluir`, {}))
+      this.toast.sucesso('Tarefa concluída')
+      await this.carregar()
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível concluir a tarefa.')) }
   }
   async cancelar(id: string): Promise<void> {
-    try { await firstValueFrom(this.http.post(`/v1/tarefas/${id}/cancelar`, {})); await this.carregar() } catch { /* ignore */ }
+    const t = this.itens().find((x) => x.id === id)
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Cancelar tarefa?',
+      mensagem: `"${t?.titulo ?? 'A tarefa'}" sai da agenda sem ser concluída. Não dá para desfazer.`,
+      acao: 'Cancelar tarefa',
+      cancelar: 'Manter',
+    })
+    if (!ok) return
+    try {
+      await firstValueFrom(this.http.post(`/v1/tarefas/${id}/cancelar`, {}))
+      this.toast.sucesso('Tarefa cancelada')
+      await this.carregar()
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível cancelar a tarefa.')) }
   }
 }

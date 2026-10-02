@@ -1,6 +1,7 @@
 import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { mensagemDeErro } from '../../compartilhado/ui/index.js'
 
 export interface Etapa {
   readonly id: string
@@ -76,6 +77,8 @@ export class FunilServico {
   readonly erroMove = signal<string | null>(null)
   readonly metricas = signal<Metricas | null>(null)
   readonly carregandoMetricas = signal(false)
+  /** Métrica é secundária: falhar não derruba o kanban, mas a tela DIZ que falhou. */
+  readonly erroMetricas = signal<string | null>(null)
 
   // ── Configuração das raias (etapas e motivos) ──
   readonly config = signal<readonly EtapaConfig[]>([])
@@ -135,9 +138,13 @@ export class FunilServico {
   async carregarMetricas(): Promise<void> {
     if (this.metricas() || this.carregandoMetricas()) return
     this.carregandoMetricas.set(true)
+    this.erroMetricas.set(null)
     try {
       this.metricas.set(await firstValueFrom(this.http.get<Metricas>('/v1/funil/metricas')))
-    } catch { /* silencioso: métrica não pode derrubar o kanban */ } finally {
+    } catch (e) {
+      // Parcial: o kanban segue; o painel de métricas mostra o aviso.
+      this.erroMetricas.set(mensagemDeErro(e, 'Não foi possível calcular as métricas.'))
+    } finally {
       this.carregandoMetricas.set(false)
     }
   }
@@ -178,7 +185,9 @@ export class FunilServico {
       const r = await this.buscarColuna(etapaId, col.proximoCursor)
       col.cards = [...col.cards, ...r.itens]
       col.proximoCursor = r.proximoCursor
-    } catch { /* mantém */ } finally {
+    } catch (e) {
+      this.erroMove.set(mensagemDeErro(e, `Não foi possível carregar mais cards de "${col.etapa.nome}".`))
+    } finally {
       col.carregandoMais = false
       this.colunas.set([...cols])
     }
@@ -218,6 +227,9 @@ export class FunilServico {
       await firstValueFrom(this.http.post('/v1/funil/oportunidades', { contatoId }))
       await this.carregar()
       return true
-    } catch { return false }
+    } catch (e) {
+      this.erroMove.set(mensagemDeErro(e, 'Não foi possível criar a oportunidade.'))
+      return false
+    }
   }
 }

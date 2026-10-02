@@ -119,6 +119,15 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
                     </span>
                   </button>
                 }
+                <!-- Lista por CURSOR (regra do projeto): a página seguinte entra
+                     sem duplicata; a busca local filtra só o que já está aqui. -->
+                @if (servico.proximoCursor()) {
+                  <button class="carregar-mais lista-mais" type="button" (click)="servico.carregarMais()"
+                          [disabled]="servico.carregandoMais()">
+                    {{ servico.carregandoMais() ? 'Carregando…' : 'Carregar mais conversas' }}
+                  </button>
+                }
+                @if (servico.erroMais(); as e) { <p class="aviso" role="alert">{{ e }}</p> }
               }
             }
           }
@@ -144,7 +153,9 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
                 <span class="avatar" [style.background]="corAvatar(t.id)">{{ iniciais(t.nome) }}</span>
                 <span class="topo-col">
                   <span class="nome-linha">
-                    <span class="nome">{{ t.nome }}</span>
+                    <!-- Sem beco: o nome leva à ficha do contato (cliente 360°). -->
+                    <a class="nome nome-link" [routerLink]="['/contato', t.contatoId]"
+                       title="Abrir a ficha do contato">{{ t.nome }}</a>
                     <app-canal-simbolo [tipo]="t.canalTipo" [tam]="18" />
                   </span>
                   <span class="sub" [attr.data-estado]="t.exigeJanela24h ? t.janela.estado : 'aberta'">{{ subConversa(t) }}</span>
@@ -185,6 +196,7 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
                           [disabled]="servico.carregandoAnteriores()">
                     {{ servico.carregandoAnteriores() ? 'Carregando…' : 'Ver mensagens anteriores' }}
                   </button>
+                  @if (servico.erroAnteriores(); as e) { <p class="sem-msg" role="alert">{{ e }}</p> }
                 }
                 @if (t.mensagens.length === 0) {
                   <p class="sem-msg">Sem mensagens nesta conversa ainda.</p>
@@ -437,6 +449,9 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
     .atend-badge { font-size: 12px; color: var(--wa-text); background: rgba(255,255,255,.1); padding: 5px 10px; border-radius: 999px; }
     .atend-badge .proto { color: #14e39c; margin-right: 4px; font-variant-numeric: tabular-nums; }
     .topo-col .nome { font-size: 15px; font-weight: 600; }
+    .nome-link { color: inherit; text-decoration: none; }
+    .nome-link:hover, .nome-link:focus-visible { text-decoration: underline; outline: none; }
+    .lista-mais { align-self: center; margin: 10px auto; display: block; }
     .sub { font-size: 12px; color: var(--wa-sec); }
     .presenca { padding: 6px 16px; font-size: 12px; color: var(--wa-text); background: var(--acao-suave); border-bottom: 1px solid var(--wa-line); }
     .sub[data-estado='aberta'] { color: var(--wa-green); }

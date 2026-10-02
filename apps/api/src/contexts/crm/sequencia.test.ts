@@ -100,4 +100,21 @@ describe('Sequências (régua de relacionamento)', () => {
     const r = (await chamar(T, 'GET', '/v1/sequencias')).json() as { itens: unknown[] }
     expect(r.itens.length).toBe(0)
   })
+
+  it('⚠️ lista por CURSOR (criado_em, id): 20 por página, sem repetir, sem OFFSET', async () => {
+    for (let i = 0; i < 23; i++) await criarSeq(T, `Régua ${String(i).padStart(2, '0')}`)
+    type Pagina = { itens: { id: string }[]; proximoCursor: string | null }
+    const p1 = (await chamar(T, 'GET', '/v1/sequencias')).json() as Pagina
+    expect(p1.itens.length).toBe(20)
+    expect(p1.proximoCursor).toEqual(expect.any(String))
+
+    const p2 = (await chamar(T, 'GET', `/v1/sequencias?cursor=${encodeURIComponent(p1.proximoCursor!)}`)).json() as Pagina
+    expect(p2.itens.length).toBe(3)
+    expect(p2.proximoCursor).toBeNull()
+
+    const ids = [...p1.itens, ...p2.itens].map((i) => i.id)
+    expect(new Set(ids).size).toBe(23)
+
+    expect((await chamar(T, 'GET', '/v1/sequencias?cursor=lixo')).statusCode).toBe(422)
+  })
 })

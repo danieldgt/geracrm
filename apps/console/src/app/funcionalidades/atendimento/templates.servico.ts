@@ -1,6 +1,7 @@
 import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { mensagemDeErro } from '../../compartilhado/ui/index.js'
 
 export interface CorpoTemplate {
   header?: { texto: string }
@@ -53,7 +54,9 @@ export class TemplatesServico {
     try {
       const r = await this.buscar(cursor)
       this.itens.set([...this.itens(), ...r.itens]); this.proximoCursor.set(r.proximoCursor)
-    } catch { /* mantém */ } finally { this.carregandoMais.set(false) }
+    } catch (e) {
+      this.erro.set(mensagemDeErro(e, 'Não foi possível carregar mais templates.'))
+    } finally { this.carregandoMais.set(false) }
   }
 
   /** Cria um rascunho. Retorna null em sucesso ou um código de erro tipificado. */
@@ -85,7 +88,8 @@ export class TemplatesServico {
       return true
     } catch (e) {
       const cod = e instanceof HttpErrorResponse ? (e.error as { erro?: string })?.erro : ''
-      this.erro.set(cod === 'template.submetido' ? 'Já foi enviado à Meta — não dá para apagar aqui.' : 'Não foi possível apagar.')
+      this.erro.set(cod === 'template.submetido'
+        ? 'Já foi enviado à Meta — não dá para apagar aqui.' : mensagemDeErro(e, 'Não foi possível apagar o template.'))
       return false
     }
   }

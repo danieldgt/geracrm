@@ -3,6 +3,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import type { TipoCanal } from '@geracrm/shared'
 import { PresencaServico } from './presenca.servico.js'
+import { mesclarPagina } from '../compartilhado/ui/cursor.js'
 
 /** Estado da janela de 24h — vem do domínio (calcularJanela), não daqui. */
 export interface Janela {
@@ -96,9 +97,42 @@ export class InboxServico {
   readonly filtro = signal<'todas' | 'fila' | 'meus'>('todas')
   readonly contadores = signal<{ fila: number; meus: number }>({ fila: 0, meus: 0 })
 
-  private urlLista(): string {
+  /** Página da lista (cursor da API: `(ultima_mensagem_em, id)`). */
+  readonly proximoCursor = signal<string | null>(null)
+  readonly carregandoMais = signal(false)
+  readonly erroMais = signal<string | null>(null)
+  private static readonly PAGINA = 40
+  /** Teto que a API aceita em `limite` — o refresh silencioso não passa disto. */
+  private static readonly LIMITE_MAX = 100
+
+  private urlLista(opcoes: { cursor?: string | null; limite?: number } = {}): string {
     const f = this.filtro()
-    return `/v1/conversas?limite=40${f !== 'todas' ? `&filtro=${f}` : ''}`
+    const qs = new URLSearchParams({ limite: String(opcoes.limite ?? InboxServico.PAGINA) })
+    if (f !== 'todas') qs.set('filtro', f)
+    if (opcoes.cursor) qs.set('cursor', opcoes.cursor)
+    return `/v1/conversas?${qs}`
+  }
+
+  /**
+   * "Carregar mais" da lista — próxima página pelo cursor, mesclada SEM
+   * duplicata (entre uma página e outra a lista anda com o tempo real).
+   */
+  async carregarMais(): Promise<void> {
+    const cursor = this.proximoCursor()
+    if (!cursor || this.carregandoMais()) return
+    this.carregandoMais.set(true)
+    this.erroMais.set(null)
+    try {
+      const r = await firstValueFrom(
+        this.http.get<{ itens: ItemConversa[]; proximoCursor: string | null }>(this.urlLista({ cursor })),
+      )
+      this.conversas.set(mesclarPagina(this.conversas(), r.itens, (c) => c.id))
+      this.proximoCursor.set(r.proximoCursor)
+    } catch {
+      this.erroMais.set('Não foi possível carregar mais conversas.')
+    } finally {
+      this.carregandoMais.set(false)
+    }
   }
   readonly avisoBusca = signal<string | null>(null)
   /** Abre a conversa de um protocolo (E5-08). */
@@ -184,9 +218,10 @@ export class InboxServico {
     this.erro.set(null)
     try {
       const r = await firstValueFrom(
-        this.http.get<{ itens: ItemConversa[] }>(this.urlLista()),
+        this.http.get<{ itens: ItemConversa[]; proximoCursor: string | null }>(this.urlLista()),
       )
       this.conversas.set(r.itens)
+      this.proximoCursor.set(r.proximoCursor)
       this.estado.set('pronto')
       void this.carregarContadores()
     } catch (e) {
@@ -271,12 +306,15 @@ export class InboxServico {
       const url = `/v1/conversas/${t.id}/mensagens?anteriorEm=${encodeURIComponent(primeira.criadoEm)}&anteriorId=${primeira.id}`
       const r = await firstValueFrom(this.http.get<{ mensagens: Mensagem[]; temMaisAntigas: boolean }>(url))
       this.thread.set({ ...t, mensagens: [...r.mensagens, ...t.mensagens], temMaisAntigas: r.temMaisAntigas })
+      this.erroAnteriores.set(null)
     } catch {
-      // silencioso
+      // A pessoa clicou e nada aconteceu — isso precisa ter nome.
+      this.erroAnteriores.set('Não foi possível carregar as mensagens anteriores. Tente de novo.')
     } finally {
       this.carregandoAnteriores.set(false)
     }
   }
+  readonly erroAnteriores = signal<string | null>(null)
 
   /** Marca a conversa lida até a versão atual (para este usuário). */
   private async marcarLida(id: string): Promise<void> {
@@ -295,10 +333,15 @@ export class InboxServico {
    */
   async atualizar(): Promise<void> {
     try {
+      // ⚠️ Rebusca TUDO o que a tela já mostra (até o teto da API), senão um
+      //    evento de tempo real encolheria a lista para a primeira página e a
+      //    pessoa veria sumir o que acabou de carregar com "carregar mais".
+      const limite = Math.min(InboxServico.LIMITE_MAX, Math.max(InboxServico.PAGINA, this.conversas().length))
       const r = await firstValueFrom(
-        this.http.get<{ itens: ItemConversa[] }>(this.urlLista()),
+        this.http.get<{ itens: ItemConversa[]; proximoCursor: string | null }>(this.urlLista({ limite })),
       )
       this.conversas.set(r.itens)
+      this.proximoCursor.set(r.proximoCursor)
       if (this.estado() !== 'pronto') this.estado.set('pronto')
       void this.carregarContadores()
     } catch {

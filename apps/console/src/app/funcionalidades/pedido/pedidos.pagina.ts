@@ -1,8 +1,10 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, signal, OnInit, input, effect } from '@angular/core'
 import { DatePipe } from '@angular/common'
-import { RouterLink } from '@angular/router'
+import { ActivatedRoute, Router, RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { InboxServico } from '../../nucleo/inbox.servico.js'
+import { ToastServico, mensagemDeErro, mesclarPagina } from '../../compartilhado/ui/index.js'
 
 interface PedidoItem {
   readonly id: string; readonly estado: string; readonly contatoId: string | null; readonly contato: string | null
@@ -13,6 +15,8 @@ interface LinhaItem { readonly descricaoSnapshot: string; readonly grade: Record
 interface EtapaDef { readonly etapa: string; readonly rotulo: string; readonly descricao: string; readonly disponivel: boolean; readonly motivoIndisponivel?: string }
 interface PedidoDetalhe {
   readonly id: string; readonly estado: string; readonly contatoId: string | null; readonly contato: string | null
+  /** A conversa onde o pedido nasceu (ADR-005) — `null` quando montado fora do chat. */
+  readonly conversaId?: string | null
   readonly nome: string | null; readonly numeroExterno: string | null; readonly criadoEm: string; readonly confirmadoEm: string | null
   readonly formaPagamento: string | null; readonly observacao: string | null
   readonly canceladoEm: string | null; readonly canceladoMotivo: string | null
@@ -43,6 +47,11 @@ const FILTROS = [
     <header class="cabecalho">
       <h1 class="txt-titulo">Pedidos</h1>
       <p class="sub">Todos os pedidos por estado, vinculados ao cliente. Clique para ver os detalhes.</p>
+      @if (contatoFiltro(); as c) {
+        <p class="chip-filtro">Só os pedidos de um cliente ·
+          <a [routerLink]="['/contato', c]">ver ficha</a> ·
+          <a routerLink="/pedidos">ver todos</a></p>
+      }
     </header>
 
     <div class="filtros">
@@ -100,6 +109,12 @@ const FILTROS = [
 
           <div class="m-meta">
             @if (d.contato && d.contatoId) { <a class="m-cliente" [routerLink]="['/contato', d.contatoId]">👤 {{ d.contato }}</a> }
+            @if (d.conversaId) {
+              <button type="button" class="m-conversa" (click)="abrirConversa(d.conversaId)" title="Abrir a conversa onde este pedido nasceu">💬 Conversa de origem</button>
+            }
+            @if (d.estado === 'rascunho' && d.contatoId) {
+              <a class="m-cliente" routerLink="/pedido" [queryParams]="{ contato: d.contatoId }">✎ Continuar montando</a>
+            }
             <span>Criado {{ d.criadoEm | date: 'dd/MM/yy HH:mm' }}</span>
             @if (d.confirmadoEm) { <span class="ok">✓ Confirmado pelo cliente {{ d.confirmadoEm | date: 'dd/MM HH:mm' }}</span> }
             @if (d.numeroExterno) { <span>NF {{ d.numeroExterno }}</span> }
@@ -233,6 +248,10 @@ const FILTROS = [
     .fechar { border: 0; background: transparent; color: var(--texto-suave); font-size: 22px; cursor: pointer; line-height: 1; }
     .m-meta { display: flex; flex-wrap: wrap; gap: var(--espacamento-3); font-size: 12px; color: var(--texto-secundario); margin-bottom: var(--espacamento-4); }
     .m-cliente { color: var(--acao); text-decoration: none; }
+    .m-conversa { border: 0; background: transparent; color: var(--acao); font: inherit; font-size: 12px; cursor: pointer; padding: 0; }
+    .m-conversa:hover, .m-cliente:hover { text-decoration: underline; }
+    .chip-filtro { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-secundario); }
+    .chip-filtro a { color: var(--acao); }
     .m-meta .ok { color: var(--sucesso); }
     .itens-tab { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 460px; }
     .itens-tab th, .itens-tab td { padding: var(--espacamento-2) var(--espacamento-3); border-bottom: 1px solid var(--borda); text-align: left; }
@@ -262,7 +281,28 @@ const FILTROS = [
 })
 export class PedidosPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly route = inject(ActivatedRoute)
+  private readonly router = inject(Router)
+  private readonly inbox = inject(InboxServico)
+  private readonly toast = inject(ToastServico)
+  /** Deep link `/pedido/:id` (component input binding): abre o detalhe por cima da lista. */
+  readonly id = input<string>()
+  /** `?contatoId=` — a ficha do cliente manda para cá. */
+  readonly contatoFiltro = signal<string | null>(null)
   readonly filtros = FILTROS
+
+  constructor() {
+    effect(() => {
+      const id = this.id()
+      if (id) void this.abrir(id)
+    })
+  }
+
+  /** Abre o chat onde o pedido nasceu (o rail expande sozinho). */
+  abrirConversa(conversaId: string): void {
+    this.fechar()
+    void this.inbox.abrir(conversaId)
+  }
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly PedidoItem[]>([])
   readonly filtro = signal('')
@@ -275,7 +315,10 @@ export class PedidosPagina implements OnInit {
   readonly acionando = signal<string | null>(null)
   readonly etapaMsg = signal<{ ok: boolean; texto: string } | null>(null)
 
-  ngOnInit(): void { void this.carregar() }
+  ngOnInit(): void {
+    this.contatoFiltro.set(this.route.snapshot.queryParamMap.get('contatoId'))
+    void this.carregar()
+  }
   reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
   variacao(g: Record<string, string> | null | undefined): string {
     if (!g) return ''
@@ -293,6 +336,7 @@ export class PedidosPagina implements OnInit {
   private url(cursor: string | null): string {
     const p = new URLSearchParams()
     if (this.filtro()) p.set('estado', this.filtro())
+    if (this.contatoFiltro()) p.set('contatoId', this.contatoFiltro()!)
     if (cursor) p.set('cursor', cursor)
     const q = p.toString()
     return `/v1/pedidos${q ? '?' + q : ''}`
@@ -312,8 +356,9 @@ export class PedidosPagina implements OnInit {
     this.carregandoMais.set(true)
     try {
       const r = await firstValueFrom(this.http.get<{ itens: PedidoItem[]; proximoCursor: string | null }>(this.url(cursor)))
-      this.itens.update((a) => [...a, ...r.itens]); this.proximoCursor.set(r.proximoCursor)
-    } catch { /* mantém */ } finally { this.carregandoMais.set(false) }
+      this.itens.update((a) => mesclarPagina(a, r.itens, (p) => p.id)); this.proximoCursor.set(r.proximoCursor)
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais pedidos.')) }
+    finally { this.carregandoMais.set(false) }
   }
 
   /**
@@ -344,9 +389,17 @@ export class PedidosPagina implements OnInit {
     try {
       const d = await firstValueFrom(this.http.get<PedidoDetalhe>(`/v1/pedidos/${id}`))
       this.detalhe.set(d)
-    } catch { this.fechar() } finally { this.carregandoDet.set(false) }
+    } catch (e) {
+      this.fechar()
+      this.toast.erro(e instanceof HttpErrorResponse && e.status === 404
+        ? 'Pedido não encontrado — pode ter sido removido.' : mensagemDeErro(e, 'Não foi possível abrir o pedido.'))
+    } finally { this.carregandoDet.set(false) }
   }
-  fechar(): void { this.detalhe.set(null); this.etapaMsg.set(null); this.acionando.set(null) }
+  /** Fecha o detalhe; se veio pelo deep link `/pedido/:id`, volta para a lista. */
+  fechar(): void {
+    this.detalhe.set(null); this.etapaMsg.set(null); this.acionando.set(null)
+    if (this.id()) void this.router.navigate(['/pedidos'], { queryParams: this.contatoFiltro() ? { contatoId: this.contatoFiltro() } : {} })
+  }
 
   /** Aciona uma próxima etapa. Hoje DEGRADA honesto: mostra o motivo, não finge. */
   async acionarEtapa(id: string, etapa: string): Promise<void> {

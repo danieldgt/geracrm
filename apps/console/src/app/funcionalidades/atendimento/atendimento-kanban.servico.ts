@@ -1,6 +1,7 @@
 import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { mensagemDeErro } from '../../compartilhado/ui/index.js'
 
 export interface EtapaK { readonly id: string; readonly chave: string; readonly nome: string; readonly tipo: 'atendimento' | 'encerrado'; readonly total: number }
 export interface CardAtend {
@@ -68,7 +69,9 @@ export class AtendimentoKanbanServico {
     try {
       const r = col.tipo === 'fila' ? await this.buscarFila(col.proximoCursor) : await this.buscarColuna(col.etapa!.id, col.proximoCursor)
       alvo.cards = [...alvo.cards, ...r.itens]; alvo.proximoCursor = r.proximoCursor
-    } catch { /* mantém */ } finally { alvo.carregandoMais = false; this.colunas.set([...this.colunas()]) }
+    } catch (e) {
+      this.erroMove.set(mensagemDeErro(e, `Não foi possível carregar mais cards de "${col.nome}".`))
+    } finally { alvo.carregandoMais = false; this.colunas.set([...this.colunas()]) }
   }
 
   /**
@@ -114,17 +117,33 @@ export class AtendimentoKanbanServico {
 
   // ───────── Config do fluxo ─────────
   readonly config = signal<readonly EtapaConfig[]>([])
+  /** ⚠️ Mostrado no modal de configuração — nunca engolido. */
+  readonly erroConfig = signal<string | null>(null)
   async carregarConfig(): Promise<void> {
-    try { this.config.set((await firstValueFrom(this.http.get<{ itens: EtapaConfig[] }>('/v1/atendimento-kanban/config/etapas'))).itens) } catch { /* vazio */ }
+    try {
+      this.config.set((await firstValueFrom(this.http.get<{ itens: EtapaConfig[] }>('/v1/atendimento-kanban/config/etapas'))).itens)
+    } catch (e) { this.erroConfig.set(mensagemDeErro(e, 'Não foi possível carregar as etapas.')) }
   }
-  async criarEtapa(nome: string, tipo: 'atendimento' | 'encerrado'): Promise<void> {
-    await firstValueFrom(this.http.post('/v1/atendimento-kanban/config/etapas', { nome, tipo })); await this.carregarConfig()
+  /** Toda mutação de config: a falha vira texto no modal e devolve false; sucesso recarrega. */
+  private async mutarConfig(acao: () => Promise<unknown>, padrao: string): Promise<boolean> {
+    this.erroConfig.set(null)
+    try {
+      await acao()
+      await this.carregarConfig()
+      return true
+    } catch (e) {
+      this.erroConfig.set(mensagemDeErro(e, padrao))
+      await this.carregarConfig()
+      return false
+    }
   }
-  async editarEtapa(id: string, campos: { nome?: string; ordem?: number; ativo?: boolean; tipo?: string }): Promise<void> {
-    await firstValueFrom(this.http.patch(`/v1/atendimento-kanban/config/etapas/${id}`, campos)); await this.carregarConfig()
+  criarEtapa(nome: string, tipo: 'atendimento' | 'encerrado'): Promise<boolean> {
+    return this.mutarConfig(() => firstValueFrom(this.http.post('/v1/atendimento-kanban/config/etapas', { nome, tipo })), 'Não foi possível criar a etapa.')
   }
-  async removerEtapa(id: string): Promise<void> {
-    try { await firstValueFrom(this.http.delete(`/v1/atendimento-kanban/config/etapas/${id}`)) } catch { /* ignora */ }
-    await this.carregarConfig()
+  editarEtapa(id: string, campos: { nome?: string; ordem?: number; ativo?: boolean; tipo?: string }): Promise<boolean> {
+    return this.mutarConfig(() => firstValueFrom(this.http.patch(`/v1/atendimento-kanban/config/etapas/${id}`, campos)), 'Não foi possível salvar a etapa.')
+  }
+  removerEtapa(id: string): Promise<boolean> {
+    return this.mutarConfig(() => firstValueFrom(this.http.delete(`/v1/atendimento-kanban/config/etapas/${id}`)), 'Não foi possível remover a etapa.')
   }
 }

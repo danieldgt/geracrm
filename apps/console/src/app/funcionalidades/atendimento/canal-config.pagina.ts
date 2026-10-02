@@ -2,6 +2,7 @@ import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@ang
 import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
 
 interface Canal { readonly id: string; readonly nomeAmigavel: string; readonly tipo: string; readonly estado: string; readonly riscoBanimento: boolean }
 import { HorarioAtendimentoComponente, somenteDiasAbertos, type Faixa } from '../../compartilhado/ui/index.js'
@@ -128,6 +129,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 })
 export class CanalConfigPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly toast = inject(ToastServico)
   readonly estado = signal<Estado>('carregando')
   readonly canais = signal<readonly Canal[]>([])
   readonly sel = signal<Canal | null>(null)
@@ -159,7 +161,11 @@ export class CanalConfigPagina implements OnInit {
       this.assinatura.set(cf.assinatura ?? '')
       this.ausencia.set(cf.mensagemAusencia ?? '')
       this.horario.set({ ...cf.horarioAtendimento })
-    } catch { /* mantém */ }
+    } catch (e) {
+      // Parcial: a lista de canais segue; a configuração deste não veio.
+      this.cfg.set(null)
+      this.msg.set(mensagemDeErro(e, 'Não foi possível carregar a configuração deste canal.'))
+    }
   }
 
 
@@ -173,22 +179,32 @@ export class CanalConfigPagina implements OnInit {
         horarioAtendimento: horario, mensagemAusencia: this.ausencia(), assinatura: this.assinatura(),
       }))
       this.msg.set('Configuração salva.')
-    } catch { this.msg.set('Não foi possível salvar.') } finally { this.salvando.set(false) }
+      this.toast.sucesso('Configuração salva')
+    } catch (e) { this.msg.set(mensagemDeErro(e, 'Não foi possível salvar a configuração.')) }
+    finally { this.salvando.set(false) }
   }
 
   async pausar(): Promise<void> {
     const s = this.sel(); if (!s) return
     const motivo = prompt('Por que pausar o disparo deste canal?')?.trim()
     if (!motivo) return
-    this.salvandoPausa.set(true)
-    try { await firstValueFrom(this.http.post(`/v1/canais/${s.id}/config/pausar`, { motivo })); await this.abrirConfig(s.id) }
-    catch { /* ignore */ } finally { this.salvandoPausa.set(false) }
+    this.salvandoPausa.set(true); this.msg.set(null)
+    try {
+      await firstValueFrom(this.http.post(`/v1/canais/${s.id}/config/pausar`, { motivo }))
+      this.toast.sucesso('Disparo pausado')
+      await this.abrirConfig(s.id)
+    } catch (e) { this.msg.set(mensagemDeErro(e, 'Não foi possível pausar o disparo.')) }
+    finally { this.salvandoPausa.set(false) }
   }
 
   async retomar(): Promise<void> {
     const s = this.sel(); if (!s) return
-    this.salvandoPausa.set(true)
-    try { await firstValueFrom(this.http.post(`/v1/canais/${s.id}/config/retomar`, {})); await this.abrirConfig(s.id) }
-    catch { /* ignore */ } finally { this.salvandoPausa.set(false) }
+    this.salvandoPausa.set(true); this.msg.set(null)
+    try {
+      await firstValueFrom(this.http.post(`/v1/canais/${s.id}/config/retomar`, {}))
+      this.toast.sucesso('Disparo retomado')
+      await this.abrirConfig(s.id)
+    } catch (e) { this.msg.set(mensagemDeErro(e, 'Não foi possível retomar o disparo.')) }
+    finally { this.salvandoPausa.set(false) }
   }
 }

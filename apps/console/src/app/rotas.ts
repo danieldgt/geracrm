@@ -95,6 +95,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/crm/automacoes.pagina.js').then((m) => m.AutomacoesPagina),
   fidelidade: () =>
     import('./funcionalidades/crm/fidelidade.pagina.js').then((m) => m.FidelidadePagina),
+  'catalogo-produtos': () =>
+    import('./funcionalidades/catalogo/catalogo-produtos.pagina.js').then((m) => m.CatalogoProdutosPagina),
 }
 
 const rotasFilhas = itensDoMenu()
@@ -135,6 +137,19 @@ export const ROTAS: Routes = [
         path: 'contato/:id',
         loadComponent: () =>
           import('./funcionalidades/crm/ficha.pagina.js').then((m) => m.FichaContatoPagina),
+      },
+      // Detalhe de um pedido (R7): deep link — chega da lista de Pedidos, da
+      // ficha do contato ou do chat. Reusa a tela de lista com o modal aberto.
+      {
+        path: 'pedido/:id',
+        loadComponent: () =>
+          import('./funcionalidades/pedido/pedidos.pagina.js').then((m) => m.PedidosPagina),
+      },
+      // Perfil mínimo do usuário (R7): nome, e-mail, empresa e presença.
+      {
+        path: 'perfil',
+        loadComponent: () =>
+          import('./nucleo/perfil.pagina.js').then((m) => m.PerfilPagina),
       },
       // ROI de um anúncio (AQ-16): detalhe, não vai no menu — chega pela lista
       // de Mídia paga.

@@ -110,4 +110,19 @@ export class FichaServico {
   salvarEndereco(e: Record<string, string>): Promise<boolean> {
     return this.apos(firstValueFrom(this.http.put(`/v1/contatos/${this.idAtual}/endereco`, e)))
   }
+
+  /**
+   * Abre (ou reabre) a conversa deste contato. A API escolhe o número (prefere
+   * um conectado). Falha vem TIPIFICADA: `{ ok: false, mensagem }` com a frase
+   * da API — a tela mostra; não há exceção para engolir.
+   */
+  async conversaDoContato(contatoId: string): Promise<{ ok: true; conversaId: string } | { ok: false; mensagem: string }> {
+    try {
+      const r = await firstValueFrom(this.http.post<{ conversaId: string }>('/v1/conversas', { contatoId }))
+      return { ok: true, conversaId: r.conversaId }
+    } catch (e) {
+      const corpo = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string } | null) : null
+      return { ok: false, mensagem: corpo?.mensagem ?? 'Não foi possível abrir a conversa. Confira se há um número conectado em Meus Números.' }
+    }
+  }
 }

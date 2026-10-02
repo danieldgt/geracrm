@@ -2,6 +2,41 @@ import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
+import { codigoDoErro, corpoDoErro, mensagemDeErro } from '../../compartilhado/ui/erro-http.js'
+
+/**
+ * Falha de negócio ao mexer nos itens — TIPIFICADA (PED-08), com a frase da API
+ * (que já traz a ação corretiva). A tela mostra pelo código, nunca "erro".
+ */
+export interface FalhaItem {
+  readonly codigo:
+    | 'pedido.sku_desconhecido' | 'pedido.sem_preco' | 'pedido.estoque_insuficiente'
+    | 'pedido.regras' | 'pedido.imutavel' | 'pedido.nao_encontrado' | 'pedido.quantidade_invalida'
+    | 'item.nao_encontrado' | 'outro'
+  readonly mensagem: string
+  /** Só em `estoque_insuficiente`: quanto dá para vender. */
+  readonly disponivel?: number
+}
+
+function falhaDe(e: unknown, padrao: string): FalhaItem {
+  const codigo = codigoDoErro(e)
+  const corpo = corpoDoErro(e)
+  const conhecido: readonly FalhaItem['codigo'][] = [
+    'pedido.sku_desconhecido', 'pedido.sem_preco', 'pedido.estoque_insuficiente', 'pedido.regras',
+    'pedido.imutavel', 'pedido.nao_encontrado', 'pedido.quantidade_invalida', 'item.nao_encontrado',
+  ]
+  const mensagens: Partial<Record<FalhaItem['codigo'], string>> = {
+    'pedido.imutavel': 'Este pedido não é mais um rascunho — abra ou crie outro para mexer nos itens.',
+    'pedido.nao_encontrado': 'Este rascunho não existe mais. Crie um novo.',
+    'item.nao_encontrado': 'Este item já não está no rascunho.',
+  }
+  const c = (conhecido as readonly string[]).includes(codigo ?? '') ? (codigo as FalhaItem['codigo']) : 'outro'
+  return {
+    codigo: c,
+    mensagem: mensagemDeErro(e, mensagens[c] ?? padrao),
+    ...(typeof corpo?.disponivel === 'number' ? { disponivel: corpo.disponivel } : {}),
+  }
+}
 
 export interface SkuCatalogo {
   readonly id: string
@@ -81,8 +116,12 @@ export class PedidoServico {
   readonly filtros = signal<{ cores: string[]; tamanhos: string[]; categorias: string[] }>({ cores: [], tamanhos: [], categorias: [] })
   readonly proximoCursor = signal<string | null>(null)
 
+  /** Estado PARCIAL: a busca funciona sem os filtros, mas a tela avisa. */
+  readonly avisoFiltros = signal<string | null>(null)
   async carregarFiltros(): Promise<void> {
-    try { this.filtros.set(await firstValueFrom(this.http.get<{ cores: string[]; tamanhos: string[]; categorias: string[] }>('/v1/catalogo/filtros'))) } catch { /* filtros vazios */ }
+    this.avisoFiltros.set(null)
+    try { this.filtros.set(await firstValueFrom(this.http.get<{ cores: string[]; tamanhos: string[]; categorias: string[] }>('/v1/catalogo/filtros'))) }
+    catch { this.avisoFiltros.set('Os filtros de cor, tamanho e categoria não carregaram — a busca por texto continua funcionando.') }
   }
 
   async buscarCatalogo(f: { termo?: string | undefined; perfil?: string | undefined; cor?: string | undefined; tamanho?: string | undefined; categoria?: string | undefined; precoMin?: string | undefined; precoMax?: string | undefined }, anexar = false): Promise<void> {
@@ -102,11 +141,13 @@ export class PedidoServico {
   // --- Rascunhos por cliente ---
   readonly rascunhos = signal<readonly { id: string; nome: string | null; estado: string; itens: number; totalCentavos: number }[]>([])
 
+  readonly avisoRascunhos = signal<string | null>(null)
   async carregarRascunhos(contatoId: string): Promise<void> {
+    this.avisoRascunhos.set(null)
     try {
       const r = await firstValueFrom(this.http.get<{ itens: { id: string; nome: string | null; estado: string; itens: number; totalCentavos: number }[] }>(`/v1/contatos/${contatoId}/pedidos`))
       this.rascunhos.set(r.itens)
-    } catch { /* lista vazia */ }
+    } catch (e) { this.avisoRascunhos.set(mensagemDeErro(e, 'Não foi possível listar os rascunhos deste cliente.')) }
   }
   async novoRascunho(contatoId: string, nome?: string, conversaId?: string): Promise<void> {
     const r = await firstValueFrom(this.http.post<{ id: string }>('/v1/pedidos', { contatoId, conversaId: conversaId || undefined, nome: nome || undefined, novo: true }))
@@ -131,16 +172,47 @@ export class PedidoServico {
     return r.id
   }
 
-  async adicionar(pedidoId: string, item: {
-    skuId: string; skuSnapshot: string; descricaoSnapshot: string
-    grade: Record<string, string>; quantidade: number; valorUnitarioCentavos: number
-  }): Promise<void> {
+  /** Última falha de negócio nos itens — a tela mostra nomeada, com ação corretiva. */
+  readonly erroItem = signal<FalhaItem | null>(null)
+
+  /**
+   * Adiciona pelo SKU. ⚠️ Só `skuId` + `quantidade` (+ `perfil`): o PREÇO é
+   * resolvido no servidor (ADR-025) — a tela não manda valor nenhum, então não
+   * há como ela "inventar" preço. Falha volta tipificada, não como exceção.
+   */
+  async adicionar(pedidoId: string, item: { skuId: string; quantidade: number; perfil?: PerfilPreco }): Promise<{ ok: true } | { ok: false; falha: FalhaItem }> {
     this.salvandoItem.set(true)
+    this.erroItem.set(null)
     try {
       await firstValueFrom(this.http.post(`/v1/pedidos/${pedidoId}/itens`, item))
       await this.recarregar(pedidoId)
+      return { ok: true }
+    } catch (e) {
+      const falha = falhaDe(e, 'Não foi possível adicionar o item.')
+      this.erroItem.set(falha)
+      return { ok: false, falha }
     } finally {
       this.salvandoItem.set(false)
+    }
+  }
+
+  readonly removendoItem = signal<number | null>(null)
+  /** Remove um item do rascunho (o servidor recalcula os totais). */
+  async removerItem(pedidoId: string, seq: number): Promise<{ ok: true } | { ok: false; falha: FalhaItem }> {
+    this.removendoItem.set(seq)
+    this.erroItem.set(null)
+    try {
+      await firstValueFrom(this.http.delete(`/v1/pedidos/${pedidoId}/itens/${seq}`))
+      await this.recarregar(pedidoId)
+      return { ok: true }
+    } catch (e) {
+      const falha = falhaDe(e, 'Não foi possível remover o item.')
+      this.erroItem.set(falha)
+      // O item pode já ter saído (outra aba): reflete o estado real.
+      if (falha.codigo === 'item.nao_encontrado') await this.recarregar(pedidoId).catch(() => undefined)
+      return { ok: false, falha }
+    } finally {
+      this.removendoItem.set(null)
     }
   }
 

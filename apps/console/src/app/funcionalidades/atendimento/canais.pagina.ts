@@ -116,6 +116,9 @@ import { abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, veri
                     } @else {
                       <button class="btn btn--secundario" (click)="servico.iniciarAquecimento(c.id)">Iniciar aquecimento</button>
                     }
+                    @if (servico.erroAquecimento()[c.id]; as e) {
+                      <span class="aquec-erro" role="alert">{{ e }}</span>
+                    }
                   }
                   <!-- ⚠️ Editar e Remover existem porque cadastro errado era
                        PERMANENTE: um Client-Token colado errado deixava o número
@@ -303,6 +306,7 @@ import { abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, veri
   styles: `
     :host { display: block; width: 100%; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
     .aquec { font-size: 12px; color: var(--texto-secundario); align-self: center; }
+    .aquec-erro { font-size: 12px; color: var(--erro); align-self: center; }
     .saude { display: flex; gap: var(--espacamento-6); padding: var(--espacamento-3) var(--espacamento-4);
       margin-bottom: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .saude .metrica { display: flex; flex-direction: column; gap: 2px; }

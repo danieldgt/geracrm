@@ -1,6 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { FormsModule } from '@angular/forms'
 import { TemplatesServico, type CorpoTemplate, type ItemTemplate } from './templates.servico.js'
+import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
 
 interface Rascunho { id: string | null; nome: string; categoria: string; header: string; body: string; footer: string; botoes: string }
 const VAZIO: Rascunho = { id: null, nome: '', categoria: 'MARKETING', header: '', body: '', footer: '', botoes: '' }
@@ -175,6 +176,8 @@ const ERRO_CRIAR: Record<string, string> = {
 })
 export class TemplatesPagina implements OnInit {
   readonly servico = inject(TemplatesServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
+  private readonly toast = inject(ToastServico)
   readonly rascunho = signal<Rascunho | null>(null)
   readonly erroForm = signal<string | null>(null)
   readonly salvando = signal(false)
@@ -216,5 +219,13 @@ export class TemplatesPagina implements OnInit {
     this.fechar()
   }
 
-  async apagar(t: ItemTemplate): Promise<void> { await this.servico.apagar(t.id) }
+  async apagar(t: ItemTemplate): Promise<void> {
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Apagar template?',
+      mensagem: `O rascunho "${t.nome}" (v${t.versao}) some. Só rascunhos não enviados à Meta podem ser apagados.`,
+      acao: 'Apagar',
+    })
+    if (!ok) return
+    if (await this.servico.apagar(t.id)) this.toast.sucesso('Template apagado')
+  }
 }

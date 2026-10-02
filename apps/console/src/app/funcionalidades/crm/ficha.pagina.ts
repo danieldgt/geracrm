@@ -1,8 +1,10 @@
 import { Component, ChangeDetectionStrategy, inject, input, effect, signal } from '@angular/core'
 import { DatePipe } from '@angular/common'
-import { RouterLink } from '@angular/router'
+import { Router, RouterLink } from '@angular/router'
 import { rotuloSegmento } from '@geracrm/shared'
 import { FichaServico, type FichaContato } from './ficha.servico.js'
+import { InboxServico } from '../../nucleo/inbox.servico.js'
+import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
 
 /**
  * Ficha do Contato — o cliente 360°.
@@ -18,7 +20,9 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink, DatePipe],
   template: `
-    <a routerLink="/contatos" class="voltar">← Contatos</a>
+    <!-- Volta para ONDE a pessoa veio (lista, chat, funil, pedidos) — e para a
+         lista de contatos quando a ficha foi aberta por link direto. -->
+    <a href="/contatos" class="voltar" (click)="voltar($event)">← Voltar</a>
 
     @switch (servico.estado()) {
       @case ('carregando') { <div class="bloco" aria-busy="true"><div class="esqueleto"></div></div> }
@@ -43,6 +47,21 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                   <h1>{{ f.nome }} <button class="lapis" (click)="abrirNome(f.nome)" title="Editar nome">✎</button></h1>
                 }
                 @if (servico.erroEdicao(); as e) { <p class="erro-edit" role="alert">{{ e }}</p> }
+                <!-- Sem beco: da ficha se vai para a conversa, para um pedido novo
+                     e para os pedidos deste cliente — e de lá se volta para cá. -->
+                <div class="acoes-ficha">
+                  <button class="btn btn--primario btn--pequeno" type="button" (click)="abrirConversa(f)"
+                          [disabled]="abrindoConversa()" title="Abrir o chat com este cliente">
+                    {{ abrindoConversa() ? 'Abrindo…' : '💬 Abrir conversa' }}
+                  </button>
+                  <a class="btn btn--secundario btn--pequeno" routerLink="/pedido" [queryParams]="{ contato: f.id }"
+                     title="Montar um pedido para este cliente">🛒 Novo pedido</a>
+                  <a class="btn btn--secundario btn--pequeno" routerLink="/pedidos" [queryParams]="{ contatoId: f.id }"
+                     title="Todos os pedidos deste cliente">🧾 Pedidos</a>
+                  <a class="btn btn--secundario btn--pequeno" routerLink="/tarefas" [queryParams]="{ contatoId: f.id }"
+                     title="Tarefas e follow-ups deste cliente">✅ Tarefas</a>
+                </div>
+                @if (erroConversa(); as e) { <p class="erro-edit" role="alert">{{ e }}</p> }
                 <div class="tags">
                   @if (f.modalidade) { <span class="tag">{{ f.modalidade }}</span> }
                   @if (f.qualificado) { <span class="tag ok">Qualificado</span> }
@@ -62,7 +81,7 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                         @if (t.principal) { <span class="mini">principal</span> }
                         @else { <button class="btn btn--secundario btn--pequeno" (click)="servico.principalTelefone(t.seq)">tornar principal</button> }
                         @if (t.whatsapp) { <span class="mini wpp">WhatsApp</span> }
-                        <button class="x" (click)="servico.removerTelefone(t.seq)" title="Remover">×</button>
+                        <button class="x" (click)="removerTelefone(t)" title="Remover telefone" aria-label="Remover telefone">×</button>
                       </li>
                     }
                   </ul>
@@ -77,7 +96,7 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
                   <ul class="linhas">
                     @for (d of f.documentos; track d.seq) {
                       <li><span class="mono encolhe">{{ d.numero }}</span> <span class="mini">{{ d.tipo }}</span>
-                        <button class="x" (click)="servico.removerDocumento(d.seq)" title="Remover">×</button></li>
+                        <button class="x" (click)="removerDocumento(d)" title="Remover documento" aria-label="Remover documento">×</button></li>
                     }
                   </ul>
                   @if (f.totalDocumentos > f.documentos.length) {
@@ -206,6 +225,8 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
     .add-linha select { flex: 0 0 auto; }
     .voltar { display: inline-block; margin-bottom: var(--espacamento-4); color: var(--acao); text-decoration: none; font-size: 13px; }
     .voltar:hover { text-decoration: underline; }
+    .acoes-ficha { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
+    .acoes-ficha a.btn { text-decoration: none; display: inline-flex; align-items: center; }
     .grade { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(340px, 1.4fr); gap: var(--espacamento-4); align-items: start; }
     .col { display: grid; gap: var(--espacamento-4); }
     .cartao { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
@@ -251,7 +272,57 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
 })
 export class FichaContatoPagina {
   readonly servico = inject(FichaServico)
+  private readonly inbox = inject(InboxServico)
+  private readonly router = inject(Router)
+  private readonly confirmacao = inject(ConfirmacaoServico)
+  private readonly toast = inject(ToastServico)
   readonly id = input.required<string>()
+  readonly abrindoConversa = signal(false)
+  readonly erroConversa = signal<string | null>(null)
+
+  /** Volta pelo histórico; sem histórico (link direto), vai à lista. */
+  voltar(ev: Event): void {
+    ev.preventDefault()
+    if (history.length > 1) history.back()
+    else void this.router.navigateByUrl('/contatos')
+  }
+
+  /**
+   * Abre (ou cria) a conversa deste contato no rail. A API decide por qual
+   * número — o console só pede "conversar com este contato".
+   */
+  async abrirConversa(f: FichaContato): Promise<void> {
+    if (this.abrindoConversa()) return
+    this.abrindoConversa.set(true)
+    this.erroConversa.set(null)
+    try {
+      if (f.telefones.length === 0) {
+        this.erroConversa.set('Este contato não tem telefone — cadastre um acima para conversar.')
+        return
+      }
+      const r = await this.servico.conversaDoContato(f.id)
+      if (!r.ok) { this.erroConversa.set(r.mensagem); return }
+      await this.inbox.abrir(r.conversaId)
+    } finally {
+      this.abrindoConversa.set(false)
+    }
+  }
+
+  async removerTelefone(t: { seq: number; e164: string }): Promise<void> {
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Remover telefone?', mensagem: `${t.e164} deixa de ser um contato deste cliente.`, acao: 'Remover',
+    })
+    if (!ok) return
+    if (await this.servico.removerTelefone(t.seq)) this.toast.sucesso('Telefone removido')
+  }
+
+  async removerDocumento(d: { seq: number; numero: string; tipo: string }): Promise<void> {
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Remover documento?', mensagem: `${d.tipo.toUpperCase()} ${d.numero} sai da ficha deste cliente.`, acao: 'Remover',
+    })
+    if (!ok) return
+    if (await this.servico.removerDocumento(d.seq)) this.toast.sucesso('Documento removido')
+  }
 
   constructor() {
     // ⚠️ `id` vem da rota (component input binding). effect recarrega ao mudar —
