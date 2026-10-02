@@ -62,6 +62,12 @@ export type ResultadoConfirmacao =
   | { readonly tipo: 'nao_afirmativo' }
   | { readonly tipo: 'sem_pendente' }
   | { readonly tipo: 'fora_da_janela'; readonly pedidoId: string }
+  /**
+   * ⚠️ ADR-027: o "sim" é para a proposta VIGENTE, e o conteúdo do pedido mudou
+   * depois que ela foi enviada. O cliente está confirmando outro resumo — quem
+   * decide é uma pessoa, avisada como no `sem_pendente`.
+   */
+  | { readonly tipo: 'proposta_desatualizada'; readonly pedidoId: string }
 
 /**
  * Confirma o pedido pendente da conversa se o texto for afirmativo. Idempotente
@@ -72,8 +78,8 @@ export async function confirmarPedidoPorResposta(
 ): Promise<ResultadoConfirmacao> {
   if (!ehAfirmativo(texto)) return { tipo: 'nao_afirmativo' }
   // O pedido pendente mais recente desta conversa.
-  const [ped] = await tx<{ id: string; contato_id: string | null; fresco: boolean }[]>`
-    SELECT id, contato_id,
+  const [ped] = await tx<{ id: string; contato_id: string | null; fresco: boolean; versao_conteudo: number }[]>`
+    SELECT id, contato_id, versao_conteudo,
            -- ⚠️ Resumo sem carimbo (pedido anterior ao 0073) NÃO é fresco: sem
            --    saber quando o cliente viu aquilo, confirmar é chute. Foi
            --    exatamente assim que um resumo de três dias antes virou pedido.
@@ -87,11 +93,29 @@ export async function confirmarPedidoPorResposta(
   // ⚠️ Fora da janela quem confirma é uma PESSOA: o cliente não está mais
   //    olhando aquele resumo, e o preço provavelmente mudou.
   if (!ped.fresco) return { tipo: 'fora_da_janela', pedidoId: ped.id }
+
+  // ⚠️ Proposta vigente (ADR-027): o "sim" só vale para a VERSÃO que o cliente
+  //    viu. Pedido sem proposta (fluxo humano anterior à 0091) segue como antes
+  //    — o carimbo `resumo_enviado_em` já é a sua janela.
+  const [proposta] = await tx<{ id: string; versao_conteudo: number; expirada: boolean }[]>`
+    SELECT id, versao_conteudo, (expira_em <= ${quando}::timestamptz) AS expirada
+      FROM pedido_proposta
+     WHERE tenant_id = tenant_atual() AND pedido_id = ${ped.id} AND vigente AND confirmada_em IS NULL`
+  if (proposta) {
+    if (proposta.expirada) return { tipo: 'fora_da_janela', pedidoId: ped.id }
+    if (proposta.versao_conteudo !== ped.versao_conteudo) return { tipo: 'proposta_desatualizada', pedidoId: ped.id }
+  }
+
   const [conf] = await tx<{ id: string }[]>`
     UPDATE pedido SET estado = 'confirmado', confirmado_em = ${quando}, atualizado_em = now()
      WHERE tenant_id = tenant_atual() AND id = ${ped.id} AND estado = 'aguardando_confirmacao'
      RETURNING id`
   if (!conf) return { tipo: 'sem_pendente' }
+  if (proposta) {
+    await tx`
+      UPDATE pedido_proposta SET confirmada_em = ${quando}, confirmada_por = 'cliente'
+       WHERE tenant_id = tenant_atual() AND id = ${proposta.id}`
+  }
   // Evento no mesmo commit (INV-40) — a tela e as próximas etapas reagem a isto.
   await tx`
     INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
@@ -125,7 +149,9 @@ export async function marcarResumoEnviado(
            --    A coluna atualizado_em seria esticada por qualquer edição que o
            --    cliente nem viu.
            resumo_enviado_em = now(), atualizado_em = now()
-     WHERE tenant_id = tenant_atual() AND id = ${pedidoId} AND estado = 'rascunho'`
+     -- ⚠️ Reenviar o resumo enquanto ainda espera o "sim" é comércio normal (o
+     --    cliente não viu): o relógio da janela reinicia com a mensagem nova.
+     WHERE tenant_id = tenant_atual() AND id = ${pedidoId} AND estado IN ('rascunho', 'aguardando_confirmacao')`
 
   const superados = await tx<{ id: string }[]>`
     UPDATE pedido

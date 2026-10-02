@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { classificarRfv, normalizarTelefone, normalizarDocumento } from '@geracrm/shared'
+import { classificarRfv, normalizarTelefone, normalizarDocumento, ehPerfilPreco, perfilDeCotacao } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { parseCsvContatos } from './importar-csv.js'
@@ -290,9 +290,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       const dados = await req.comTenant(async (tx) => {
         const [contato] = await tx<{
           id: string; nome: string; modalidade: string | null; qualificado: boolean
-          recebe_campanhas: boolean; recebe_automacoes: boolean; criado_em: Date
+          recebe_campanhas: boolean; recebe_automacoes: boolean; criado_em: Date; perfil_preco: string | null
         }[]>`
-          SELECT id, nome, modalidade, qualificado, recebe_campanhas, recebe_automacoes, criado_em
+          SELECT id, nome, modalidade, qualificado, recebe_campanhas, recebe_automacoes, criado_em, perfil_preco
             FROM contato WHERE id = ${id}
         `
         if (!contato) return null
@@ -358,6 +358,8 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         id: dados.contato.id,
         nome: dados.contato.nome,
         modalidade: dados.contato.modalidade,
+        // Perfil de preço DECLARADO (ADR-025). null = cota pelo padrão (atacado).
+        perfilPreco: dados.contato.perfil_preco,
         qualificado: dados.contato.qualificado,
         recebeCampanhas: dados.contato.recebe_campanhas,
         recebeAutomacoes: dados.contato.recebe_automacoes,
@@ -381,18 +383,29 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   // ───────── Edição da ficha do contato (CRUD dos satélites) ─────────
 
-  /** Edita nome e/ou ativa/desativa (soft delete) o contato. */
-  app.patch<{ Params: { id: string }; Body: { nome?: string; ativo?: boolean } }>(
+  /**
+   * Edita nome, ativa/desativa (soft delete) e/ou o perfil de preço do contato.
+   *
+   * ⚠️ `perfilPreco` (ADR-025): 'varejo' | 'atacado' | null (volta ao padrão).
+   *    É por ele que a montagem de pedido e o agente cotam — o corpo da
+   *    requisição de item nunca carrega preço.
+   */
+  app.patch<{ Params: { id: string }; Body: { nome?: string; ativo?: boolean; perfilPreco?: string | null } }>(
     '/v1/contatos/:id', { preHandler: exigirTenant },
     async (req, reply) => {
       const nome = req.body?.nome?.trim()
       const ativo = req.body?.ativo
-      if (nome === undefined && ativo === undefined) return reply.code(422).send({ erro: 'contato.nada_a_mudar' })
+      const perfilPreco = req.body?.perfilPreco
+      if (nome === undefined && ativo === undefined && perfilPreco === undefined) return reply.code(422).send({ erro: 'contato.nada_a_mudar' })
       if (nome !== undefined && !nome) return reply.code(422).send({ erro: 'contato.nome_obrigatorio', mensagem: 'Nome não pode ficar vazio.' })
+      if (perfilPreco !== undefined && perfilPreco !== null && !ehPerfilPreco(perfilPreco)) {
+        return reply.code(422).send({ erro: 'contato.perfil_preco_invalido', mensagem: 'Perfil de preço deve ser varejo ou atacado.' })
+      }
       const [r] = await req.comTenant((tx) => tx`
         UPDATE contato SET
           nome  = ${nome ?? tx`nome`},
-          ativo = ${ativo === undefined ? tx`ativo` : ativo}
+          ativo = ${ativo === undefined ? tx`ativo` : ativo},
+          perfil_preco = ${perfilPreco === undefined ? tx`perfil_preco` : (perfilPreco === null ? null : perfilDeCotacao(perfilPreco))}
          WHERE tenant_id = tenant_atual() AND id = ${req.params.id} RETURNING id`)
       if (!r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
       return reply.send({ ok: true })
