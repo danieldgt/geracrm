@@ -122,7 +122,7 @@ beforeEach(async () => {
   await dono`UPDATE conversa SET conduzida_por = 'humano' WHERE tenant_id = ${T}`
 })
 afterAll(async () => {
-  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_config', 'notificacao', 'atendimento', 'mensagem', 'conversa', 'contato_telefone', 'contato', 'usuario', 'canal_configuracao', 'canal_conectado', 'outbox']) {
+  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_config', 'notificacao', 'atendimento', 'pedido', 'mensagem', 'conversa', 'contato_telefone', 'contato', 'usuario', 'canal_configuracao', 'canal_conectado', 'outbox']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`DELETE FROM tenant WHERE id = ${T}`
@@ -248,6 +248,26 @@ describe('Portão', () => {
     const r = await turno([await mensagemDoCliente('oi')])
     expect(r.desfecho).toBe('handoff')
     expect(r.motivo).toBe('limite_de_custo')
+  })
+})
+
+describe('Alçada depois do "sim"', () => {
+  it('dado pedido confirmado de origem agente e alçada padrão, então avisa o cliente, transfere por acima_da_alcada e cala', async () => {
+    await configurar('autonomo')
+    const pedidoId = 'b2e20000-dddd-4000-8000-000000000001'
+    await dono`INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, estado, origem, total_centavos, total_pecas, confirmado_em)
+               VALUES (${T}, ${pedidoId}, ${CONTATO}, ${CONVERSA}, 'confirmado', 'agente', 9980, 2, now())`
+    const r = await turno([await mensagemDoCliente('sim')])
+    expect(r.desfecho).toBe('handoff')
+    expect(r.motivo).toBe('acima_da_alcada')
+    expect(enviados[0]).toMatch(/pedido confirmado/i)
+    const [a] = await dono<{ estado: string }[]>`SELECT estado FROM atendimento WHERE tenant_id = ${T}`
+    expect(a!.estado).toBe('na_fila')
+    // Com a conversa na fila, a próxima mensagem não é respondida pelo robô.
+    const r2 = await turno([await mensagemDoCliente('e aí?')])
+    expect(r2.desfecho).toBe('silencio')
+    expect(r2.motivo).toBe('humano_assumiu')
+    await dono`DELETE FROM pedido WHERE tenant_id = ${T}`
   })
 })
 

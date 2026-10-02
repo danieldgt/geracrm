@@ -21,6 +21,7 @@ import { montarSistema, instrucaoDoTurno, esquemaDaResposta } from './instrucao-
 import { entregarParaHumano } from './handoff.js'
 import { chegouMensagemNova, type Tarefa } from './fila.js'
 import { llmFerramentasDoAmbiente } from './fabrica-ferramentas.js'
+import { efetivarSeDentroDaAlcada } from '../../pedido/alcada.js'
 
 /**
  * UM TURNO DO VENDEDOR (ADR-023) — roda no worker, nunca no webhook.
@@ -83,8 +84,11 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     if (!cfg) return { tipo: 'desligado' as const }
     const [conv] = await tx<{ contato_id: string; conduzida_por: string; humano_assumiu: boolean }[]>`
       SELECT c.contato_id, c.conduzida_por,
+             -- ⚠️ Qualquer atendimento ABERTO cala o agente: assumido por alguém OU
+             --    na fila depois de um handoff. Falar por cima de uma entrega é
+             --    desfazer a entrega; quem reabre é a pessoa, ao encerrar.
              EXISTS (SELECT 1 FROM atendimento a WHERE a.tenant_id = c.tenant_id AND a.conversa_id = c.id
-                       AND a.estado = 'em_atendimento' AND a.atendente_id IS NOT NULL) AS humano_assumiu
+                       AND a.estado <> 'encerrado') AS humano_assumiu
         FROM conversa c WHERE c.tenant_id = tenant_atual() AND c.id = ${conversaId}`
     if (!conv) return { tipo: 'sem_conversa' as const }
     const [perfilLinha] = await tx<{ perfil_preco: string | null }[]>`
@@ -130,6 +134,43 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     }
   }
 
+  // ── 2.5 Pedido CONFIRMADO pelo cliente nesta conversa → alçada (ADR-027) ──
+  //    O "sim" foi interpretado pelo domínio na ingestão. Aqui o agente só
+  //    decide o que acontece depois: dentro da alçada o domínio efetiva; fora,
+  //    nasce um atendimento na fila com o resumo. Nunca o modelo.
+  let avisoDoPedido: string | null = null
+  if (!deps.simulacao) {
+    const confirmado = await comTenantServico(tenantId, async (tx) => {
+      const [p] = await tx<{ id: string; total_centavos: string }[]>`
+        SELECT id, total_centavos::text FROM pedido
+         WHERE tenant_id = tenant_atual() AND conversa_id = ${conversaId} AND estado = 'confirmado' AND origem = 'agente'
+         ORDER BY confirmado_em DESC NULLS LAST LIMIT 1`
+      return p ?? null
+    })
+    if (confirmado) {
+      const total = `R$ ${(Number(confirmado.total_centavos) / 100).toFixed(2)}`
+      const r = await efetivarSeDentroDaAlcada(tenantId, confirmado.id, cfg.alcada, agora)
+      if (r.decisao.acao === 'aguardar_vendedor') {
+        if (modo === 'autonomo') {
+          await (deps.enviar ?? enviarTextoNaConversa)(tenantId, conversaId,
+            'Perfeito, pedido confirmado! Nossa equipe vai finalizar e te retorna em breve com os próximos passos.',
+            null, agora, { ehDisparo: false, marcador: 'agente' })
+        }
+        return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'acima_da_alcada',
+          `Pedido confirmado pelo cliente (total ${total}) aguarda um vendedor para faturar: ${r.decisao.motivo}.`, modo, agora)
+      }
+      if (r.decisao.acao === 'efetivar' && r.efetivacao) {
+        const e = r.efetivacao
+        if (e.tipo === 'efetivado') avisoDoPedido = `O pedido confirmado pelo cliente (total ${total}) foi EFETIVADO com o número ${e.numeroExterno}. Agradeça e diga que a equipe retorna sobre pagamento e entrega.`
+        else if (e.tipo === 'degradado') avisoDoPedido = `O pedido confirmado pelo cliente (total ${total}) foi registrado; a equipe fatura manualmente. Agradeça e diga que a equipe retorna sobre pagamento e entrega.`
+        else {
+          return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'acima_da_alcada',
+            `Pedido confirmado pelo cliente (total ${total}) não pôde ser efetivado: ${e.tipo}${e.tipo === 'falha' ? ` (${e.falha.tipo})` : ''}.`, modo, agora)
+        }
+      }
+    }
+  }
+
   // ── 3. Lead, histórico, ferramentas ─────────────────────────────────────
   const [lead, historico] = await comTenantServico(tenantId, async (tx) => [
     await carregarContextoDoLead(tx, conversaId),
@@ -154,7 +195,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
         lead, slots: reuniao.slots, resumo: reuniao.resumo, memoria: [],
         pedido: pedidoAberto ? { itens: pedidoAberto.itens.length, totalCentavos: pedidoAberto.totalCentavos, estado: pedidoAberto.estado } : null,
         horaLocal: agora.toISOString(), primeiraResposta: !historico.some((h) => h.de === 'nos'),
-      }),
+      }) + (avisoDoPedido ? `\n${avisoDoPedido}` : ''),
     },
   ]
   if (pedidoAberto) for (const c of [pedidoAberto.totalCentavos, ...pedidoAberto.itens.flatMap((i) => [i.valorUnitarioCentavos, i.subtotalCentavos])]) registro.centavosVistos.add(c)
