@@ -11,6 +11,7 @@ import { comTenantServico } from '../../../db/index.js'
 import { faltaParaLlmFerramentas } from './fabrica-ferramentas.js'
 import { conduzirTurnoVendedor } from './vendedor.js'
 import { ligacoesPadrao } from './ferramentas/ligacoes.js'
+import { sincronizarPoliticas } from './conhecimento/indexador.js'
 
 /**
  * A superfície do AGENTE VENDEDOR: configurar (modo, persona, alçada, regras,
@@ -175,6 +176,8 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
             prazo_turno_ms = ${corpo.prazoTurnoMs !== undefined ? tx`EXCLUDED.prazo_turno_ms` : tx`agente_config.prazo_turno_ms`},
             orcamento_dia_centavos = ${corpo.orcamentoDiaCentavos !== undefined ? tx`EXCLUDED.orcamento_dia_centavos` : tx`agente_config.orcamento_dia_centavos`},
             atualizado_em = now()`
+        // A base de conhecimento espelha as políticas na MESMA transação (R3).
+        if (corpo.politicas !== undefined) await sincronizarPoliticas(tx, req.params.id, politicas)
         return canal
       })
       if (!gravado) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
