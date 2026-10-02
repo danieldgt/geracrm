@@ -213,6 +213,8 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         LEFT JOIN contato_telefone ct
           ON ct.tenant_id = c.tenant_id AND ct.contato_id = c.id AND ct.principal
        WHERE c.tenant_id = tenant_atual() AND c.ativo
+         -- ⚠️ O contato de simulação do playground não é cliente: fica fora de toda lista.
+         AND coalesce(c.origem_carga, '') <> 'simulacao'
          AND ( c.nome ILIKE ${'%' + q + '%'}
                ${digitos.length >= 4 ? tx`OR ct.e164 LIKE ${'%' + digitos + '%'}` : tx``} )
        ORDER BY c.nome ASC
@@ -256,6 +258,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         LEFT JOIN metricas_contato m
           ON m.tenant_id = c.tenant_id AND m.contato_id = c.id
        WHERE c.tenant_id = tenant_atual() AND c.ativo
+         AND coalesce(c.origem_carga, '') <> 'simulacao'
          AND ${c === null ? tx`true`
               : tx`(coalesce(m.total_centavos, 0), c.id) < (${Number(c[0])}, ${c[1]}::uuid)`}
        ORDER BY coalesce(m.total_centavos, 0) DESC, c.id DESC
