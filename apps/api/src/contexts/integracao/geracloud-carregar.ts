@@ -30,6 +30,11 @@ import { ingerirProdutos } from './ingestao-produtos.js'
 import { ingerirVendas } from './ingestao-vendas.js'
 import { registrarOperacao } from './operacao.js'
 import { decidirCarga, podeMarcarConcluida } from './carga-modo.js'
+// ⚠️ Único ponto em que a integração toca o contexto `catalogo`, e só a função
+//    pública de reindexação (ADR-026): o índice de busca é do catálogo, mas quem
+//    sabe que a carga acabou é este script. Sem isto, produto sincronizado não
+//    existe para o agente até alguém chamar POST /v1/catalogo/reindexar.
+import { reindexarTenant } from '../catalogo/indexador.js'
 
 const base = (process.env.GERACLOUD_BASE_URL ?? '').replace(/\/+$/, '')
 const usuario = process.env.GERACLOUD_USUARIO ?? ''
@@ -171,6 +176,8 @@ async function carregar() {
   console.log(`  ${JSON.stringify(rp)}\n`)
   await registrarOperacao(dono as never, { tenantId: TENANT, conexaoId: CONEXAO, fluxo: 'products',
     total: rp.lidos, aceitos: rp.lidos - rp.rejeitados, rejeitados: rp.rejeitados, rejeicoes: rp.rejeicoes })
+  const ri = await dono.begin((tx) => reindexarTenant(tx as never, { tenantId: TENANT, lote: 500 }))
+  console.log(`  índice de busca: ${JSON.stringify(ri)}\n`)
 
   console.log('▶ Vendas…')
   const rv = await comBatimento('vendas', () => dono.begin((tx) =>

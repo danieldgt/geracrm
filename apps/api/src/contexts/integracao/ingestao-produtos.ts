@@ -99,16 +99,25 @@ async function ingerirUm(
   // The product the SKU belongs to. Deduped by reference — the unique index of
   // migration 0013b is what makes re-importing safe.
   const [produto] = await tx<{ id: string; novo: boolean }[]>`
-    INSERT INTO produto (tenant_id, id, referencia, descricao)
-    VALUES (${tenantId}, ${randomUUID()}, ${sku.referencia}, ${sku.descricao})
+    INSERT INTO produto (tenant_id, id, referencia, descricao, origem)
+    VALUES (${tenantId}, ${randomUUID()}, ${sku.referencia}, ${sku.descricao}, 'erp')
     ON CONFLICT (tenant_id, referencia) DO UPDATE
       -- ⚠️ Atualiza a descrição: o nome do produto muda no ERP e a tela do
       --    vendedor precisa mostrar o nome de hoje, não o do dia da carga.
-      SET descricao = EXCLUDED.descricao
+      SET descricao = EXCLUDED.descricao, atualizado_em = now()
+      -- ⚠️ Origem por campo (ADR-008/025): o que foi cadastrado À MÃO no CRM o
+      --    ERP não sobrescreve. Com a referência pertencendo a um produto
+      --    manual, o DO UPDATE não casa e NENHUMA linha volta — tratado abaixo.
+      WHERE produto.origem = 'erp'
     -- xmax = 0 distingue linha inserida de linha atualizada no mesmo comando.
     RETURNING id, (xmax = 0) AS novo
   `
-  if (produto!.novo) r.produtosCriados += 1
+  if (!produto) {
+    // Rejeita com motivo VISÍVEL no relatório, em vez de unir a grade do ERP a
+    // um produto manual — o mesmo critério do índice único de 0013b.
+    throw new Error(`referência ${sku.referencia} é de produto cadastrado à mão no CRM (origem manual); o ERP não sobrescreve`)
+  }
+  if (produto.novo) r.produtosCriados += 1
 
   const [existente] = await tx<{ sku_id: string }[]>`
     SELECT sku_id FROM sku_identidade_externa
@@ -118,12 +127,15 @@ async function ingerirUm(
   if (existente) {
     await tx`
       UPDATE sku
-         SET produto_id    = ${produto!.id},
+         SET produto_id    = ${produto.id},
              -- ⚠️ ::text::jsonb, não ::jsonb. Ver nota em jsonbDe().
              atributos     = ${jsonbDe(sku.atributos)}::text::jsonb,
              codigo_barras = ${sku.codigoBarras ?? null},
              ativo         = ${sku.ativo}
        WHERE tenant_id = ${tenantId} AND id = ${existente.sku_id}
+         -- Só SKU do ERP (ADR-025). A identidade externa nunca aponta para SKU
+         -- manual; o filtro é a rede de segurança, não o caminho normal.
+         AND origem = 'erp'
     `
     r.skusAtualizados += 1
     return
@@ -132,7 +144,7 @@ async function ingerirUm(
   const skuId = randomUUID()
   await tx`
     INSERT INTO sku (tenant_id, id, produto_id, atributos, codigo_barras, ativo)
-    VALUES (${tenantId}, ${skuId}, ${produto!.id},
+    VALUES (${tenantId}, ${skuId}, ${produto.id},
             ${jsonbDe(sku.atributos)}::text::jsonb,
             ${sku.codigoBarras ?? null}, ${sku.ativo})
   `

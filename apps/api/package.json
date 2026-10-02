@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=.env dist/server.js",
     "migrate": "tsx --env-file=../../.env src/db/migrate.ts",
+    "seed:demo": "tsx --env-file=../../.env src/db/seed-demo.ts",
     "geracloud:explorar": "tsx src/contexts/integracao/geracloud-explorar.ts",
     "geracloud:explorar-detalhe": "tsx src/contexts/integracao/geracloud-explorar-detalhe.ts",
     "geracloud:carregar": "tsx --env-file=../../.env src/contexts/integracao/geracloud-carregar.ts",
