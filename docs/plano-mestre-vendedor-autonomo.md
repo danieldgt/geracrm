@@ -326,8 +326,8 @@ Integração: uma raia por vez na `main`, suíte completa a cada integração, r
 | R4 Pedido | ✅ integrada | `montagem.ts` (preço no servidor, perfil do contato), `proposta.ts` + `pedido_proposta` (0091), `alcada.ts`, regras do perfil vertical, "sim" só confirma a versão vigente |
 | R3 Conhecimento/memória | 🔨 em execução | documentos versionados + trechos (0089), `cliente_memoria` (0090), resumo de sessão |
 | R5 Canal | 🔨 em execução | digitação, mídia Meta, transcrição em worker, `agente_retorno` (0092) |
-| R6 Console agente | 🔨 em execução | config/persona/alçada, playground, decisões, sessões |
-| R7 Console CRM | 🔨 em execução | confirmações, toasts, becos, cursor, catálogo manual, item de pedido |
+| R6 Console agente | ✅ integrada e testada no Chrome | `funcionalidades/atendimento/agente/*`: config com modo/persona/alçada/regras, playground com bastidores, decisões por cursor, sessões; toasts montados no shell |
+| R7 Console CRM | ✅ integrada e testada no Chrome | `ui-confirmar` em toda ação destrutiva (inclusive disparo de campanha), toasts, becos fechados (conversa↔ficha↔pedido↔tarefas, `/pedido/:id`, `/perfil`), cursor em conversas/tarefas/campanhas/sequências/automações/webhooks, cadastro manual de produtos, item de pedido por `skuId` com falhas tipificadas e remoção, `/saude` no proxy, indicador SSE, saída do staff encerra sessão; `base href` corrigido (deep link abria em branco) |
 | R8 Evals | ✅ parcial | `evals/conversas-douradas.json` + runner (simulado no CI, `IA_E2E=1` real); métricas `/v1/agente/metricas`; falta juiz com rubrica e painel |
 | R9 Skills/padrões | ✅ | `geracrm-agente-vendas`, `geracrm-catalogo`, ADR-023…027, workflows `revisar-raia` e `rodada-raias` |
 | R10 Plataforma | ⏳ próxima rodada | white-label, módulos por plano, onboarding guiado, LGPD |
