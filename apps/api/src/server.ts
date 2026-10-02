@@ -13,6 +13,8 @@ import { varrerResumoDiario, HORA_RESUMO_LOCAL } from './contexts/aquisicao/entr
 import { despacharPush, configVapid, envioReal } from './contexts/plataforma/push.js'
 import { despacharCampanhas } from './contexts/crm/despachante-campanha.js'
 import { vigiarConexaoCanais } from './contexts/atendimento/vigia-canal.js'
+import { processarTarefasDoAgente, INTERVALO_WORKER_MS } from './workers/agente.js'
+import { ligacoesPadrao } from './contexts/atendimento/agente/ferramentas/ligacoes.js'
 
 const porta = Number(process.env.PORT ?? 3000)
 
@@ -185,6 +187,23 @@ if (process.env.DATABASE_ADMIN_URL) {
       .finally(() => { despachandoCampanha = false })
   }, 30_000)
   intervalosAquisicao.push(campanhaIntervalo)
+
+  // ⚠️ WORKER DO AGENTE VENDEDOR (ADR-024). O webhook só agenda; é AQUI que o
+  //    turno roda — serial por conversa, com debounce. 1 s de varredura num
+  //    índice parcial é barato; o que custa é a chamada de IA, e ela nunca
+  //    mais segura o 200 do webhook.
+  let processandoAgente = false
+  const agenteIntervalo = setInterval(() => {
+    if (processandoAgente) return
+    processandoAgente = true
+    void processarTarefasDoAgente(donoAquisicao as never, { ligacoes: ligacoesPadrao }, new Date())
+      .then((r) => {
+        if (r.processadas > 0 || r.recuperadas > 0) app.log.info(r, 'turnos do agente')
+      })
+      .catch((e) => app.log.warn({ erro: e }, 'worker do agente falhou'))
+      .finally(() => { processandoAgente = false })
+  }, INTERVALO_WORKER_MS)
+  intervalosAquisicao.push(agenteIntervalo)
 
   // Push nativo (PLT-07) — a notificação que chega com o navegador fechado.
   // ⚠️ 20s: é a mesma ordem de grandeza do despachante de webhooks. Push de

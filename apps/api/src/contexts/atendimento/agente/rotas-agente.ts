@@ -1,45 +1,65 @@
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { REGRAS_AGENTE_PADRAO, validarRegrasAgente, type RegrasDoAgente } from '@geracrm/shared'
+import {
+  REGRAS_AGENTE_PADRAO, validarRegrasAgente, MODOS_AGENTE, OBJETIVOS_AGENTE, SLOTS_QUALIFICACAO,
+  persona as personaSchema, alcadaAgente, ALCADA_PADRAO, PERSONA_PADRAO,
+  type RegrasDoAgente, type ModoAgente,
+} from '@geracrm/shared'
+import { z } from 'zod'
 import { exigirTenant } from '../../../plugins/tenant.js'
-import { faltaParaLlm } from './fabrica.js'
+import { comTenantServico } from '../../../db/index.js'
+import { faltaParaLlmFerramentas } from './fabrica-ferramentas.js'
+import { conduzirTurnoVendedor } from './vendedor.js'
+import { ligacoesPadrao } from './ferramentas/ligacoes.js'
 
 /**
- * A superfície do AGENTE SDR: ligar/desligar, escrever as políticas, e ver o que
- * o robô falou com os clientes.
+ * A superfície do AGENTE VENDEDOR: configurar (modo, persona, alçada, regras,
+ * políticas), ver cada DECISÃO que ele tomou, e conversar com ele no
+ * PLAYGROUND antes de ligar para cliente de verdade.
  *
- * ⚠️ O painel de auditoria não é enfeite — é o invariante 6 do escopo. Sem ele,
- * "o que o robô disse para o meu cliente?" só teria resposta no log do
- * fornecedor de IA, que ninguém do time do cliente vai abrir.
+ * ⚠️ `ativo` continua na resposta e no corpo por compatibilidade de um deploy
+ * com o console anterior: `ativo: true` sem `modo` vira `autonomo`, que é o que
+ * "ligado" sempre significou. A tela nova fala em `modo`.
  */
 
 const PAGINA = 20
+const UUID = /^[0-9a-f-]{36}$/i
+
+const corpoConfig = z.object({
+  ativo: z.boolean().optional(),
+  modo: z.enum(MODOS_AGENTE).optional(),
+  politicas: z.string().max(20_000).optional(),
+  persona: personaSchema.partial().optional(),
+  objetivo: z.enum(OBJETIVOS_AGENTE).optional(),
+  alcada: alcadaAgente.partial().optional(),
+  qualificacao: z.array(z.enum(SLOTS_QUALIFICACAO)).max(SLOTS_QUALIFICACAO.length).optional(),
+  modelo: z.string().trim().max(80).nullable().optional(),
+  limiarConfianca: z.number().min(0).max(1).optional(),
+  maxRodadas: z.number().int().min(1).max(12).optional(),
+  prazoTurnoMs: z.number().int().min(3000).max(60000).optional(),
+  orcamentoDiaCentavos: z.number().int().nonnegative().nullable().optional(),
+}).passthrough()
 
 export async function rotasAgente(app: FastifyInstance): Promise<void> {
-  /** Configuração do agente naquele número. */
   app.get<{ Params: { id: string } }>(
     '/v1/canais/:id/agente', { preHandler: exigirTenant },
     async (req, reply) => {
       const { cfg, temMensagemAusencia } = await req.comTenant(async (tx) => {
         const [linha] = await tx<{
-          ativo: boolean; politicas: string | null
+          ativo: boolean; modo: ModoAgente; politicas: string | null; persona: unknown; objetivo: string; alcada: unknown
+          qualificacao: unknown; modelo: string | null; limiar_confianca: string; max_rodadas: number; prazo_turno_ms: number
+          orcamento_dia_centavos: string | null
           so_quando_ninguem_disponivel: boolean; exigir_ausencia_antes: boolean
-          horas_desde_ausencia: number; reabrir_apos_encerrada: boolean
-          horas_para_reabrir: number
-          minutos_presenca: number; max_turnos: number
-          max_caracteres: number; falas_de_contexto: number
+          horas_desde_ausencia: number; reabrir_apos_encerrada: boolean; horas_para_reabrir: number
+          minutos_presenca: number; max_turnos: number; max_caracteres: number; falas_de_contexto: number
         }[]>`
-          SELECT ativo, politicas,
+          SELECT ativo, modo, politicas, persona, objetivo, alcada, qualificacao, modelo, limiar_confianca, max_rodadas,
+                 prazo_turno_ms, orcamento_dia_centavos,
                  so_quando_ninguem_disponivel, exigir_ausencia_antes,
                  horas_desde_ausencia, reabrir_apos_encerrada, horas_para_reabrir,
                  minutos_presenca, max_turnos, max_caracteres, falas_de_contexto
             FROM agente_config
            WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
-        // ⚠️ A tela precisa saber se existe mensagem de ausência NESTE número:
-        //    com "esperar o cliente insistir" ligado (o padrão), o gatilho do
-        //    agente é a ausência ter saído — e sem texto escrito ela nunca sai.
-        //    O agente ficaria ligado e permanentemente mudo, sem nada na
-        //    interface explicando por quê. É o mesmo tipo de dependência
-        //    invisível que calou o agente em horário comercial até 01/09.
         const [canal] = await tx<{ tem: boolean }[]>`
           SELECT btrim(coalesce(mensagem_ausencia, '')) <> '' AS tem
             FROM canal_configuracao
@@ -48,12 +68,21 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
       })
 
       const p = REGRAS_AGENTE_PADRAO
+      const per = personaSchema.safeParse(cfg?.persona ?? {})
+      const alc = alcadaAgente.safeParse(cfg?.alcada ?? {})
       return reply.send({
         ativo: cfg?.ativo ?? false,
+        modo: cfg?.modo ?? 'desligado',
         politicas: cfg?.politicas ?? '',
-        // ⚠️ Canal sem linha recebe os PADRÕES, não zeros: a tela abre já
-        //    mostrando o agente que ele terá ao ser ligado, e não um formulário
-        //    vazio que o dono teria de adivinhar como preencher.
+        persona: per.success ? per.data : PERSONA_PADRAO,
+        objetivo: cfg?.objetivo ?? 'vender',
+        alcada: alc.success ? alc.data : ALCADA_PADRAO,
+        qualificacao: Array.isArray(cfg?.qualificacao) ? cfg!.qualificacao : [],
+        modelo: cfg?.modelo ?? null,
+        limiarConfianca: cfg ? Number(cfg.limiar_confianca) : 0.6,
+        maxRodadas: cfg?.max_rodadas ?? 6,
+        prazoTurnoMs: cfg?.prazo_turno_ms ?? 20000,
+        orcamentoDiaCentavos: cfg?.orcamento_dia_centavos === null || cfg?.orcamento_dia_centavos === undefined ? null : Number(cfg.orcamento_dia_centavos),
         regras: {
           soQuandoNinguemDisponivel: cfg?.so_quando_ninguem_disponivel ?? p.soQuandoNinguemDisponivel,
           exigirAusenciaAntes: cfg?.exigir_ausencia_antes ?? p.exigirAusenciaAntes,
@@ -65,67 +94,47 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           maxCaracteres: cfg?.max_caracteres ?? p.maxCaracteres,
           falasDeContexto: cfg?.falas_de_contexto ?? p.falasDeContexto,
         } satisfies RegrasDoAgente,
-        // ⚠️ Os padrões vão junto para a tela poder oferecer "voltar ao padrão"
-        //    sem ter uma segunda cópia deles em TypeScript do console.
         padroes: p,
-        // ⚠️ COMPATIBILIDADE, remover no próximo deploy. `maxTurnos` mudou de
-        //    lugar (foi para `regras`), e API e console sobem separados: na
-        //    janela em que a API nova serve o console velho, tirar isto agora
-        //    deixaria o campo em branco na tela. Mesma disciplina aditiva das
-        //    migrations — mudar de lugar são dois deploys.
         maxTurnos: cfg?.max_turnos ?? p.maxTurnos,
-        // ⚠️ A tela precisa dizer o NOME da variável que falta, não "IA
-        //    indisponível": erro genérico manda abrir chamado, nome manda
-        //    resolver.
-        faltaConfigurar: faltaParaLlm(),
-        /**
-         * ⚠️ Sem isto, "esperar o cliente insistir depois da ausência" ligado
-         * num canal sem mensagem de ausência é um agente que nunca abre a boca —
-         * e o log diz `sem_ausencia_antes`, que soa como "ainda não chegou a
-         * hora" e não como "falta configurar". A tela avisa antes.
-         */
+        faltaConfigurar: faltaParaLlmFerramentas(),
         temMensagemAusencia,
+        modos: MODOS_AGENTE,
+        slotsDisponiveis: SLOTS_QUALIFICACAO,
       })
     },
   )
 
-  app.put<{
-    Params: { id: string }
-    Body: { ativo?: boolean; politicas?: string } & Partial<Record<keyof RegrasDoAgente, unknown>>
-  }>(
+  app.put<{ Params: { id: string }; Body: Record<string, unknown> }>(
     '/v1/canais/:id/agente', { preHandler: exigirTenant },
     async (req, reply) => {
-      const politicas = req.body?.politicas?.trim() ?? ''
-      const ativo = req.body?.ativo === true
+      const parse = corpoConfig.safeParse(req.body ?? {})
+      if (!parse.success) {
+        const i = parse.error.issues[0]!
+        return reply.code(422).send({ erro: 'agente.campo_invalido', mensagem: `${i.path.join('.')}: ${i.message}`, campos: [i.path.join('.')] })
+      }
+      const corpo = parse.data
+      const politicas = corpo.politicas?.trim() ?? ''
+      // ⚠️ `modo` manda; sem ele, `ativo` decide pelo significado antigo.
+      const modo: ModoAgente = corpo.modo ?? (corpo.ativo === true ? 'autonomo' : 'desligado')
+      const ativo = modo !== 'desligado'
 
-      // ⚠️ A validação é a MESMA função que a tela usa (packages/shared): faixa
-      //    duplicada entre input e endpoint é o clássico que aceita de um lado e
-      //    recusa do outro. O CHECK do 0078 é a terceira rede, para o que não
-      //    passa por aqui — script, teste, UPDATE à mão.
-      const v = validarRegrasAgente({ ...req.body, maxTurnos: req.body?.maxTurnos })
+      const v = validarRegrasAgente({ ...corpo, maxTurnos: corpo['maxTurnos'] })
       if (!v.ok) {
-        return reply.code(422).send({
-          erro: 'agente.regra_invalida',
-          mensagem: v.erros[0]!.mensagem,
-          campos: v.erros.map((e) => e.campo),
-        })
+        return reply.code(422).send({ erro: 'agente.regra_invalida', mensagem: v.erros[0]!.mensagem, campos: v.erros.map((e) => e.campo) })
       }
       const r = v.regras
-      // ⚠️ Falha de negócio é retorno TIPIFICADO com ação corretiva, não erro de
-      //    banco vazando para a tela. O CHECK do 0071 é a rede de segurança;
-      //    esta é a mensagem que a pessoa lê.
-      if (ativo && !politicas) {
+      if (modo === 'autonomo' && !politicas) {
         return reply.code(422).send({
           erro: 'agente.sem_politicas',
-          mensagem: 'Escreva as políticas da loja antes de ligar o agente — sem elas ele responde "não sei" a tudo.',
+          mensagem: 'Escreva as políticas da loja antes de deixar o agente autônomo — sem elas ele responde "não sei" a tudo. Sombra e assistido não exigem.',
         })
       }
-      if (ativo && faltaParaLlm().length > 0) {
-        return reply.code(422).send({
-          erro: 'agente.sem_chave',
-          mensagem: `Falta configurar ${faltaParaLlm().join(', ')} no servidor.`,
-        })
+      const falta = faltaParaLlmFerramentas()
+      if (ativo && falta.length > 0) {
+        return reply.code(422).send({ erro: 'agente.sem_chave', mensagem: `Falta configurar ${falta.join(', ')} no servidor.` })
       }
+      const personaFinal = personaSchema.parse({ ...PERSONA_PADRAO, ...corpo.persona })
+      const alcadaFinal = alcadaAgente.parse({ ...ALCADA_PADRAO, ...corpo.alcada })
 
       const gravado = await req.comTenant(async (tx) => {
         const [canal] = await tx<{ id: string }[]>`
@@ -133,18 +142,20 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         if (!canal) return null
         await tx`
           INSERT INTO agente_config (
-            tenant_id, canal_id, ativo, politicas, max_turnos,
+            tenant_id, canal_id, ativo, modo, politicas, max_turnos,
             so_quando_ninguem_disponivel, exigir_ausencia_antes, horas_desde_ausencia,
-            reabrir_apos_encerrada, horas_para_reabrir,
-            minutos_presenca, max_caracteres, falas_de_contexto,
+            reabrir_apos_encerrada, horas_para_reabrir, minutos_presenca, max_caracteres, falas_de_contexto,
+            persona, objetivo, alcada, qualificacao, modelo, limiar_confianca, max_rodadas, prazo_turno_ms, orcamento_dia_centavos,
             atualizado_em)
-          VALUES (tenant_atual(), ${req.params.id}, ${ativo}, ${politicas || null}, ${r.maxTurnos},
+          VALUES (tenant_atual(), ${req.params.id}, ${ativo}, ${modo}, ${politicas || null}, ${r.maxTurnos},
                   ${r.soQuandoNinguemDisponivel}, ${r.exigirAusenciaAntes}, ${r.horasDesdeAusencia},
-                  ${r.reabrirAposEncerrada}, ${r.horasParaReabrir},
-                  ${r.minutosPresenca}, ${r.maxCaracteres}, ${r.falasDeContexto},
+                  ${r.reabrirAposEncerrada}, ${r.horasParaReabrir}, ${r.minutosPresenca}, ${r.maxCaracteres}, ${r.falasDeContexto},
+                  ${JSON.stringify(personaFinal)}::text::jsonb, ${corpo.objetivo ?? 'vender'}, ${JSON.stringify(alcadaFinal)}::text::jsonb,
+                  ${JSON.stringify(corpo.qualificacao ?? [])}::text::jsonb, ${corpo.modelo ?? null},
+                  ${corpo.limiarConfianca ?? 0.6}, ${corpo.maxRodadas ?? 6}, ${corpo.prazoTurnoMs ?? 20000}, ${corpo.orcamentoDiaCentavos ?? null},
                   now())
           ON CONFLICT (tenant_id, canal_id) DO UPDATE SET
-            ativo = EXCLUDED.ativo, politicas = EXCLUDED.politicas,
+            ativo = EXCLUDED.ativo, modo = EXCLUDED.modo, politicas = EXCLUDED.politicas,
             max_turnos = EXCLUDED.max_turnos,
             so_quando_ninguem_disponivel = EXCLUDED.so_quando_ninguem_disponivel,
             exigir_ausencia_antes = EXCLUDED.exigir_ausencia_antes,
@@ -154,20 +165,24 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
             minutos_presenca = EXCLUDED.minutos_presenca,
             max_caracteres = EXCLUDED.max_caracteres,
             falas_de_contexto = EXCLUDED.falas_de_contexto,
+            persona = ${corpo.persona ? tx`EXCLUDED.persona` : tx`agente_config.persona`},
+            objetivo = ${corpo.objetivo ? tx`EXCLUDED.objetivo` : tx`agente_config.objetivo`},
+            alcada = ${corpo.alcada ? tx`EXCLUDED.alcada` : tx`agente_config.alcada`},
+            qualificacao = ${corpo.qualificacao ? tx`EXCLUDED.qualificacao` : tx`agente_config.qualificacao`},
+            modelo = ${corpo.modelo !== undefined ? tx`EXCLUDED.modelo` : tx`agente_config.modelo`},
+            limiar_confianca = ${corpo.limiarConfianca !== undefined ? tx`EXCLUDED.limiar_confianca` : tx`agente_config.limiar_confianca`},
+            max_rodadas = ${corpo.maxRodadas !== undefined ? tx`EXCLUDED.max_rodadas` : tx`agente_config.max_rodadas`},
+            prazo_turno_ms = ${corpo.prazoTurnoMs !== undefined ? tx`EXCLUDED.prazo_turno_ms` : tx`agente_config.prazo_turno_ms`},
+            orcamento_dia_centavos = ${corpo.orcamentoDiaCentavos !== undefined ? tx`EXCLUDED.orcamento_dia_centavos` : tx`agente_config.orcamento_dia_centavos`},
             atualizado_em = now()`
         return canal
       })
       if (!gravado) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
-      return reply.send({ ok: true })
+      return reply.send({ ok: true, modo })
     },
   )
 
-  /**
-   * O que o agente conduziu — a entrega ao humano.
-   *
-   * ⚠️ Paginado por CURSOR, como toda lista do produto: `top-N` cru e OFFSET
-   * profundo já derrubaram um Postgres desta casa em horário comercial.
-   */
+  /** Sessões conduzidas — paginado por cursor. */
   app.get<{ Querystring: { cursor?: string } }>(
     '/v1/agente/sessoes', { preHandler: exigirTenant },
     async (req, reply) => {
@@ -177,40 +192,189 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curEm = em; curId = id
       }
-
       const linhas = await req.comTenant((tx) => tx<{
-        id: string; conversa_id: string; contato: string | null
-        estado: string; turnos: number; motivo_saida: string | null
-        iniciada_em: Date; encerrada_em: Date | null
-        extraido: Record<string, unknown>; descartados: unknown[]
-        tokens_entrada: number; tokens_saida: number
+        id: string; conversa_id: string; contato: string | null; estado: string; turnos: number; motivo_saida: string | null
+        iniciada_em: Date; encerrada_em: Date | null; extraido: Record<string, unknown>; descartados: unknown[]
+        tokens_entrada: number; tokens_saida: number; fase: string; modo: string | null; slots: Record<string, unknown>; custo_centavos: string
       }[]>`
         SELECT s.id, s.conversa_id, ct.nome AS contato, s.estado, s.turnos, s.motivo_saida,
-               s.iniciada_em, s.encerrada_em, s.extraido, s.descartados,
-               s.tokens_entrada, s.tokens_saida
+               s.iniciada_em, s.encerrada_em, s.extraido, s.descartados, s.tokens_entrada, s.tokens_saida,
+               s.fase, s.modo, s.slots, s.custo_centavos
           FROM agente_sessao s
           JOIN conversa cv ON cv.tenant_id = s.tenant_id AND cv.id = s.conversa_id
           LEFT JOIN contato ct ON ct.tenant_id = cv.tenant_id AND ct.id = cv.contato_id
          WHERE s.tenant_id = tenant_atual()
            AND ${curEm === null ? tx`true` : tx`(s.iniciada_em, s.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
          ORDER BY s.iniciada_em DESC, s.id DESC LIMIT ${PAGINA + 1}`)
-
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
       const ultimo = pagina[pagina.length - 1]
-
       return reply.send({
         itens: pagina.map((l) => ({
-          id: l.id, conversaId: l.conversa_id, contato: l.contato,
-          estado: l.estado, turnos: l.turnos, motivoSaida: l.motivo_saida,
-          iniciadaEm: l.iniciada_em, encerradaEm: l.encerrada_em,
-          extraido: l.extraido, descartados: l.descartados,
-          // ⚠️ O custo aparece por sessão, na tela de quem paga a conta.
-          tokens: l.tokens_entrada + l.tokens_saida,
+          id: l.id, conversaId: l.conversa_id, contato: l.contato, estado: l.estado, turnos: l.turnos,
+          motivoSaida: l.motivo_saida, iniciadaEm: l.iniciada_em, encerradaEm: l.encerrada_em,
+          extraido: l.extraido, descartados: l.descartados, tokens: l.tokens_entrada + l.tokens_saida,
+          fase: l.fase, modo: l.modo, slots: l.slots, custoCentavos: Number(l.custo_centavos),
         })),
-        proximoCursor: temMais && ultimo
-          ? Buffer.from(`${ultimo.iniciada_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
+        proximoCursor: temMais && ultimo ? Buffer.from(`${ultimo.iniciada_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
       })
+    },
+  )
+
+  /**
+   * As DECISÕES — uma por turno (ADR-023). Por conversa ou por canal, cursor.
+   * É a resposta a "por que o robô disse isso?".
+   */
+  app.get<{ Querystring: { cursor?: string; conversaId?: string; canalId?: string } }>(
+    '/v1/agente/decisoes', { preHandler: exigirTenant },
+    async (req, reply) => {
+      let curEm: string | null = null, curId: string | null = null
+      if (req.query.cursor) {
+        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
+        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
+        curEm = em; curId = id
+      }
+      const conversaId = req.query.conversaId && UUID.test(req.query.conversaId) ? req.query.conversaId : null
+      const canalId = req.query.canalId && UUID.test(req.query.canalId) ? req.query.canalId : null
+      const linhas = await req.comTenant((tx) => tx<{
+        id: string; conversa_id: string; canal_id: string; contato: string | null; modo: string; desfecho: string
+        portao_motivo: string | null; modelo: string | null; ferramentas: unknown[]; resposta: unknown; confianca: string | null
+        handoff_motivo: string | null; numeros_bloqueados: unknown[]; uso: unknown; custo_centavos: string; latencia_ms: number | null
+        rodadas: number; enviada: boolean; erro: string | null; criado_em: Date
+      }[]>`
+        SELECT d.id, d.conversa_id, d.canal_id, ct.nome AS contato, d.modo, d.desfecho, d.portao_motivo, d.modelo,
+               d.ferramentas, d.resposta, d.confianca, d.handoff_motivo, d.numeros_bloqueados, d.uso, d.custo_centavos,
+               d.latencia_ms, d.rodadas, d.enviada, d.erro, d.criado_em
+          FROM agente_decisao d
+          JOIN conversa cv ON cv.tenant_id = d.tenant_id AND cv.id = d.conversa_id
+          LEFT JOIN contato ct ON ct.tenant_id = cv.tenant_id AND ct.id = cv.contato_id
+         WHERE d.tenant_id = tenant_atual()
+           AND ${conversaId ? tx`d.conversa_id = ${conversaId}` : tx`true`}
+           AND ${canalId ? tx`d.canal_id = ${canalId}` : tx`true`}
+           AND ${curEm === null ? tx`true` : tx`(d.criado_em, d.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+         ORDER BY d.criado_em DESC, d.id DESC LIMIT ${PAGINA + 1}`)
+      const temMais = linhas.length > PAGINA
+      const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
+      const ultimo = pagina[pagina.length - 1]
+      return reply.send({
+        itens: pagina.map((l) => ({
+          id: l.id, conversaId: l.conversa_id, canalId: l.canal_id, contato: l.contato, modo: l.modo, desfecho: l.desfecho,
+          portaoMotivo: l.portao_motivo, modelo: l.modelo, ferramentas: l.ferramentas, resposta: l.resposta,
+          confianca: l.confianca === null ? null : Number(l.confianca), handoffMotivo: l.handoff_motivo,
+          numerosBloqueados: l.numeros_bloqueados, uso: l.uso, custoCentavos: Number(l.custo_centavos),
+          latenciaMs: l.latencia_ms, rodadas: l.rodadas, enviada: l.enviada, erro: l.erro, criadoEm: l.criado_em,
+        })),
+        proximoCursor: temMais && ultimo ? Buffer.from(`${ultimo.criado_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
+      })
+    },
+  )
+
+  /**
+   * PLAYGROUND: conversa com o agente REAL (ferramentas, catálogo, políticas do
+   * canal) numa conversa de simulação — nunca envia WhatsApp, nunca cria
+   * atendimento, grava decisão com modo 'simulacao'.
+   *
+   * ⚠️ É assim que o dono testa antes de ligar: "o que ele diria se o cliente
+   * perguntasse X?" com o catálogo de verdade e o custo de verdade medido.
+   */
+  app.post<{ Params: { id: string }; Body: { mensagem?: string; conversaId?: string } }>(
+    '/v1/canais/:id/agente/simular', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const canalId = req.params.id
+      const texto = req.body?.mensagem?.trim() ?? ''
+      if (!texto) return reply.code(422).send({ erro: 'agente.mensagem_vazia', mensagem: 'Escreva a mensagem do cliente.' })
+      if (texto.length > 2000) return reply.code(422).send({ erro: 'agente.mensagem_longa', mensagem: 'Até 2000 caracteres.' })
+      const pedida = req.body?.conversaId && UUID.test(req.body.conversaId) ? req.body.conversaId : null
+
+      const preparo = await req.comTenant(async (tx) => {
+        const [canal] = await tx<{ id: string }[]>`SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${canalId}`
+        if (!canal) return null
+        const [cfg] = await tx<{ modo: string }[]>`SELECT modo FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}`
+        if (!cfg) return { semConfig: true as const }
+        // O contato de simulação do canal: um só, reaproveitado.
+        const chave = `sim:${canalId}`
+        const [existente] = await tx<{ contato_id: string }[]>`
+          SELECT ie.contato_id FROM contato_identidade_externa ie
+           WHERE ie.tenant_id = tenant_atual() AND ie.sistema = 'simulacao' AND ie.id_externo = ${chave}`
+        let contatoId = existente?.contato_id
+        if (!contatoId) {
+          contatoId = randomUUID()
+          await tx`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo, recebe_campanhas, recebe_automacoes)
+                   VALUES (tenant_atual(), ${contatoId}, 'Cliente de simulação', 'simulacao', true, false, false)`
+          await tx`INSERT INTO contato_identidade_externa (tenant_id, contato_id, sistema, id_externo)
+                   VALUES (tenant_atual(), ${contatoId}, 'simulacao', ${chave})`
+        }
+        let conversaId = pedida
+        if (conversaId) {
+          const [c] = await tx<{ id: string }[]>`
+            SELECT id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId} AND contato_id = ${contatoId} AND canal_id = ${canalId}`
+          if (!c) conversaId = null
+        }
+        if (!conversaId) {
+          const [c] = await tx<{ id: string }[]>`
+            SELECT id FROM conversa WHERE tenant_id = tenant_atual() AND canal_id = ${canalId} AND contato_id = ${contatoId}`
+          conversaId = c?.id ?? null
+          if (!conversaId) {
+            conversaId = randomUUID()
+            await tx`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao, ultima_entrante_em)
+                     VALUES (tenant_atual(), ${conversaId}, ${canalId}, ${contatoId}, 1, now())`
+          }
+        }
+        const mensagemId = randomUUID()
+        await tx`
+          INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+          VALUES (tenant_atual(), ${mensagemId}, ${conversaId}, 'entrante', 'texto', ${JSON.stringify({ texto, simulacao: true })}::text::jsonb, now())`
+        await tx`UPDATE conversa SET ultima_entrante_em = now(), ultima_mensagem_em = now(), ultima_direcao = 'entrante' WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
+        return { semConfig: false as const, conversaId, mensagemId, contatoId }
+      })
+      if (!preparo) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
+      if (preparo.semConfig) return reply.code(422).send({ erro: 'agente.sem_configuracao', mensagem: 'Salve a configuração do agente antes de simular.' })
+
+      const r = await conduzirTurnoVendedor(
+        { tenant_id: req.tenantId!, id: randomUUID(), conversa_id: preparo.conversaId, canal_id: canalId, mensagens_ids: [preparo.mensagemId], tentativas: 1, executar_em: new Date() },
+        { ligacoes: ligacoesPadrao, simulacao: true },
+      )
+      // As mensagens do agente entram na conversa de simulação para o próximo turno ter contexto.
+      if (r.mensagens?.length) {
+        await comTenantServico(req.tenantId!, async (tx) => {
+          for (const m of r.mensagens!) {
+            await tx`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, criado_em)
+                     VALUES (tenant_atual(), ${randomUUID()}, ${preparo.conversaId}, 'saliente', 'texto',
+                             ${JSON.stringify({ texto: m, automatica: 'agente', simulacao: true })}::text::jsonb, 'enviada', now())`
+          }
+        })
+      }
+      return reply.send({
+        conversaId: preparo.conversaId,
+        desfecho: r.desfecho,
+        mensagens: r.mensagens ?? [],
+        handoff: r.handoff ?? null,
+        motivo: r.motivo ?? null,
+        detalhe: r.detalhe ?? null,
+        decisaoId: r.decisaoId ?? null,
+        rastro: r.rastro ? { chamadas: r.rastro.chamadas, rodadas: r.rastro.rodadas, uso: r.rastro.uso, modelo: r.rastro.modelo, latenciaMs: r.rastro.latenciaMs } : null,
+      })
+    },
+  )
+
+  /** Zera a conversa de simulação do canal (mensagens, sessão e decisões dela). */
+  app.delete<{ Params: { id: string } }>(
+    '/v1/canais/:id/agente/simular', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const apagadas = await req.comTenant(async (tx) => {
+        const [c] = await tx<{ id: string }[]>`
+          SELECT cv.id FROM conversa cv
+            JOIN contato_identidade_externa ie ON ie.tenant_id = cv.tenant_id AND ie.contato_id = cv.contato_id
+           WHERE cv.tenant_id = tenant_atual() AND cv.canal_id = ${req.params.id}
+             AND ie.sistema = 'simulacao' AND ie.id_externo = ${`sim:${req.params.id}`}`
+        if (!c) return 0
+        await tx`DELETE FROM agente_decisao WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`
+        await tx`DELETE FROM agente_sessao WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`
+        await tx`DELETE FROM pedido WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`
+        const r = await tx`DELETE FROM mensagem WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`
+        return r.count
+      })
+      return reply.send({ ok: true, mensagensApagadas: apagadas })
     },
   )
 }

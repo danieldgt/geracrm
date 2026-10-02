@@ -5,6 +5,7 @@ import { confirmarPedidoPorResposta } from '../pedido/confirmacao-pedido.js'
 import { consumirCodigoOrigem } from '../aquisicao/consumo-codigo.js'
 import { emSavepoint, type Sql } from '../../db/index.js'
 import { notificarMensagemEntrante, notificarConfirmacaoSemPedido } from './notificacao.js'
+import { agendarTurno } from './agente/fila.js'
 
 /**
  * Ingestão de mensagem ENTRANTE — o nosso fluxo (INV-12), não o do ERP.
@@ -209,6 +210,20 @@ export async function ingerirMensagemEntrante(
       await emSavepoint(tx, (sp) => consumirCodigoOrigem(sp, contatoId, texto))
     } catch { /* atribuição é acessório; a mensagem não pode se perder por ela */ }
   }
+
+  // 6.7 ⚠️ AGENDA o turno do agente no MESMO commit (ADR-024, INV-40): se a
+  //     mensagem reverter, a tarefa some junto. Mensagem nova numa tarefa ainda
+  //     pendente REAGENDA (debounce) em vez de criar outra. Só quando o agente
+  //     deste canal não está desligado — a leitura é um SELECT por chave.
+  try {
+    await emSavepoint(tx, async (sp) => {
+      const [cfg] = await sp<{ modo: string }[]>`
+        SELECT modo FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}`
+      if (cfg && cfg.modo !== 'desligado') {
+        await agendarTurno(sp, { conversaId, canalId, mensagemId, agora: msg.recebidaEm })
+      }
+    })
+  } catch { /* agendar é acessório; a mensagem não pode se perder por ele */ }
 
   // 7. Notifica o atendente que assumiu esta conversa (PLT-07), no mesmo commit.
   //    Só entrante NOVA chega aqui — a duplicada já retornou lá em cima.

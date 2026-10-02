@@ -154,3 +154,16 @@ async function notificar(
               ${JSON.stringify({ usuarioId })}::text::jsonb)`
   }
 }
+
+/**
+ * O AGENTE entregou a conversa a uma pessoa. Avisa quem cuida da fila (ou o
+ * dono da carteira), com o motivo no título — é o que faz o handoff ser visto,
+ * e não só gravado.
+ */
+export async function notificarHandoffDoAgente(
+  tx: Sql, conversaId: string, motivo: string,
+): Promise<void> {
+  const q = await quemAvisar(tx, conversaId)
+  if (!q) return
+  await notificar(tx, q.alvos, 'agente.handoff', `${q.titulo} — o agente transferiu: ${motivo}`, conversaId)
+}

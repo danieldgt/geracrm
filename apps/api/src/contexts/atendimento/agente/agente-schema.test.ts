@@ -61,29 +61,38 @@ const sessao = (estado: string, motivo: string | null, encerrada: boolean) => do
   VALUES (${T}, ${randomUUID()}, ${CONVERSA}, ${CANAL}, ${estado}, ${motivo},
           ${encerrada ? new Date() : null})`
 
-describe('⚠️ Agente ligado exige base de políticas', () => {
+describe('⚠️ Agente AUTÔNOMO exige base de políticas (0084)', () => {
   /**
-   * Agente ligado com a base vazia responde "não sei" a tudo — gasta a paciência
-   * do cliente e o dinheiro do dono para não informar nada. É pior que não ter
-   * agente, e é o tipo de erro que só aparece com o cliente do cliente.
+   * Agente falando sozinho com a base vazia responde "não sei" a tudo — gasta a
+   * paciência do cliente e o dinheiro do dono para não informar nada. Já os modos
+   * sombra e assistido não falam com ninguém: exigir texto ali impediria o jeito
+   * seguro de começar. A trava mudou de alvo (ativo → modo autônomo), não de ideia.
    */
-  it('ativar sem políticas é recusado pelo banco', async () => {
+  it('modo autônomo sem políticas é recusado pelo banco', async () => {
     await expect(dono`
-      INSERT INTO agente_config (tenant_id, canal_id, ativo) VALUES (${T}, ${CANAL}, true)`,
-    ).rejects.toThrow(/agente_ativo_exige_politicas/)
+      INSERT INTO agente_config (tenant_id, canal_id, ativo, modo) VALUES (${T}, ${CANAL}, true, 'autonomo')`,
+    ).rejects.toThrow(/agente_autonomo_exige_politicas/)
   })
 
   it('políticas em branco também não valem', async () => {
     await expect(dono`
-      INSERT INTO agente_config (tenant_id, canal_id, ativo, politicas)
-      VALUES (${T}, ${CANAL}, true, '   ')`,
-    ).rejects.toThrow(/agente_ativo_exige_politicas/)
+      INSERT INTO agente_config (tenant_id, canal_id, ativo, modo, politicas)
+      VALUES (${T}, ${CANAL}, true, 'autonomo', '   ')`,
+    ).rejects.toThrow(/agente_autonomo_exige_politicas/)
+  })
+
+  it('sombra pode ficar sem políticas — é o modo de quem ainda está testando', async () => {
+    await dono`INSERT INTO agente_config (tenant_id, canal_id, ativo, modo) VALUES (${T}, ${CANAL}, true, 'sombra')`
+    const [c] = await dono<{ modo: string }[]>`SELECT modo FROM agente_config WHERE tenant_id = ${T}`
+    expect(c!.modo).toBe('sombra')
+    await dono`DELETE FROM agente_config WHERE tenant_id = ${T}`
   })
 
   it('desligado pode ficar sem políticas — é o estado de quem ainda vai configurar', async () => {
     await dono`INSERT INTO agente_config (tenant_id, canal_id, ativo) VALUES (${T}, ${CANAL}, false)`
-    const [c] = await dono<{ ativo: boolean }[]>`SELECT ativo FROM agente_config WHERE tenant_id = ${T}`
+    const [c] = await dono<{ ativo: boolean; modo: string }[]>`SELECT ativo, modo FROM agente_config WHERE tenant_id = ${T}`
     expect(c!.ativo).toBe(false)
+    expect(c!.modo).toBe('desligado')
   })
 })
 

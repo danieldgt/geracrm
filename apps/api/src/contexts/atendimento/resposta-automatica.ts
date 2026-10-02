@@ -1,7 +1,6 @@
 import { comTenantServico } from '../../db/index.js'
 import { responderAusencia } from './ausencia.js'
 import { motivoDisponibilidade, quemAtende } from './disponibilidade.js'
-import { conduzirTurno } from './agente/turno.js'
 
 /**
  * O QUE O PRODUTO RESPONDE SOZINHO a uma mensagem entrante — e em que ordem.
@@ -57,30 +56,28 @@ export interface ResumoAutomatico {
 export async function responderAutomaticamente(
   tenantId: string, conversaId: string, canalId: string, agora: Date = new Date(),
 ): Promise<ResumoAutomatico> {
-  const equipe = await comTenantServico(tenantId, (tx) => quemAtende(tx, canalId, agora))
+  const { equipe, agente } = await comTenantServico(tenantId, async (tx) => {
+    const [cfg] = await tx<{ modo: string; exigir_ausencia_antes: boolean }[]>`
+      SELECT modo, exigir_ausencia_antes FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}`
+    return { equipe: await quemAtende(tx, canalId, agora), agente: cfg ?? null }
+  })
   const disponibilidade = motivoDisponibilidade(equipe)
 
-  const ausencia = await responderAusencia(tenantId, conversaId, canalId, agora, equipe)
+  // ⚠️ Vendedor AUTÔNOMO que não espera a ausência responde ele mesmo: mandar
+  //    "não há ninguém disponível" e, 3 s depois, o robô puxando conversa é a
+  //    contradição que o §4.3.1 do escopo existe para evitar — só que invertida.
+  const agenteResponde = agente?.modo === 'autonomo' && !agente.exigir_ausencia_antes
+  const ausencia = agenteResponde ? 'agente_responde' : await responderAusencia(tenantId, conversaId, canalId, agora, equipe)
 
-  // ⚠️ O AGENTE SDR entra DEPOIS da ausência, nunca junto. Se a ausência acabou
-  //    de sair NESTA mensagem, o agente fica para a próxima: mandar as duas de
-  //    uma vez faria a primeira ("voltamos às 9h") contradizer a segunda, que
-  //    puxa conversa. Quem escreve de novo depois da ausência mostrou interesse
-  //    — é esse o lead que vale o custo de uma conversa com IA (§4.3.1).
-  if (ausencia === 'enviada') {
-    return {
-      ausencia, agenteFalou: false, agenteEncerrouPor: null,
-      agenteMotivo: 'ausencia_recem_enviada', agenteDetalhe: null, disponibilidade,
-    }
-  }
-
-  const t = await conduzirTurno(tenantId, conversaId, canalId, agora, { equipe })
+  // ⚠️ O TURNO do agente não roda mais aqui (ADR-024): foi agendado na
+  //    transação da ingestão e corre no worker, fora do caminho do 2xx. Este
+  //    resumo diz só o que saiu agora e por que o agente foi (ou não) agendado.
   return {
     ausencia,
-    agenteFalou: t.falou,
-    agenteEncerrouPor: t.falou ? t.encerrouPor : null,
-    agenteMotivo: t.falou ? null : t.motivo,
-    agenteDetalhe: t.falou ? null : (t.detalhe ?? null),
+    agenteFalou: false,
+    agenteEncerrouPor: null,
+    agenteMotivo: !agente || agente.modo === 'desligado' ? 'agente_desligado' : 'agendado_no_worker',
+    agenteDetalhe: agente ? `modo ${agente.modo}` : null,
     disponibilidade,
   }
 }
