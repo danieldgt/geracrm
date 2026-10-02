@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { PAGINA, lerCursor, paginar } from './cursor-criado-em.js'
 
 /**
  * Sequências (régua de relacionamento) — CRUD do playbook + aplicação.
@@ -12,16 +13,29 @@ import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
  * Automações e vem depois. Tenant sempre de tenant_atual() (ADR-001).
  */
 export async function rotasSequencia(app: FastifyInstance): Promise<void> {
-  // Listagem (conjunto pequeno) com contagem de passos.
-  app.get('/v1/sequencias', { preHandler: exigirTenant }, async (req, reply) => {
-    const linhas = await req.comTenant((tx) => tx<{ id: string; nome: string; objetivo: string | null; ativa: boolean; passos: number }[]>`
-      SELECT s.id, s.nome, s.objetivo, s.ativa,
-             (SELECT count(*)::int FROM sequencia_passo p WHERE p.tenant_id = s.tenant_id AND p.sequencia_id = s.id) AS passos
-        FROM sequencia s
-       WHERE s.tenant_id = tenant_atual()
-       ORDER BY s.nome ASC LIMIT 200`)
-    return reply.send({ itens: linhas.map((l) => ({ id: l.id, nome: l.nome, objetivo: l.objetivo, ativa: l.ativa, passos: l.passos })) })
-  })
+  // Listagem por CURSOR (criado_em, id) com contagem de passos — 20 por página.
+  app.get<{ Querystring: { cursor?: string } }>(
+    '/v1/sequencias', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const cursor = lerCursor(req.query.cursor)
+      if (cursor === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido', mensagem: 'Cursor inválido.' })
+      const linhas = await req.comTenant((tx) => tx<{
+        id: string; nome: string; objetivo: string | null; ativa: boolean; passos: number; criado_em_txt: string
+      }[]>`
+        SELECT s.id, s.nome, s.objetivo, s.ativa, s.criado_em::text AS criado_em_txt,
+               (SELECT count(*)::int FROM sequencia_passo p WHERE p.tenant_id = s.tenant_id AND p.sequencia_id = s.id) AS passos
+          FROM sequencia s
+         WHERE s.tenant_id = tenant_atual()
+           AND ${cursor === null ? tx`true` : tx`(s.criado_em, s.id) < (${cursor.em}::text::timestamptz, ${cursor.id}::text::uuid)`}
+         ORDER BY s.criado_em DESC, s.id DESC
+         LIMIT ${PAGINA + 1}`)
+      const { pagina, proximoCursor } = paginar(linhas)
+      return reply.send({
+        itens: pagina.map((l) => ({ id: l.id, nome: l.nome, objetivo: l.objetivo, ativa: l.ativa, passos: l.passos })),
+        proximoCursor,
+      })
+    },
+  )
 
   app.post<{ Body: { nome?: string; objetivo?: string } }>(
     '/v1/sequencias', { preHandler: exigirTenant },

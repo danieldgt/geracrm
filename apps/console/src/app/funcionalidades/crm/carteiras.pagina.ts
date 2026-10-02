@@ -3,6 +3,7 @@ import { RouterLink } from '@angular/router'
 import { SlicePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ConfirmacaoServico, ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
 
 interface Vendedor { readonly usuarioId: string; readonly usuario: string; readonly clientes: number }
 interface Membro { readonly id: string; readonly nome: string }
@@ -92,6 +93,9 @@ type Alvo = { tipo: 'vendedor'; id: string; nome: string } | { tipo: 'orfaos' } 
                 </ul>
                 @if (temMais()) { <button class="btn btn--secundario btn--bloco" (click)="carregarContatos(true)">Carregar mais</button> }
               }
+              @if (erroContatos(); as e) {
+                <p class="erro" role="alert">{{ e }} <button class="btn btn--secundario btn--pequeno" (click)="carregarContatos()">Tentar de novo</button></p>
+              }
             }
           </section>
         </div>
@@ -131,6 +135,7 @@ type Alvo = { tipo: 'vendedor'; id: string; nome: string } | { tipo: 'orfaos' } 
     .acoes { display: flex; align-items: center; gap: var(--espacamento-2); flex: none; }
     .sel { padding: var(--espacamento-1) var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 12px; }
     .btn--bloco { margin-top: var(--espacamento-2); }
+    .erro { margin: var(--espacamento-3) 0 0; color: var(--erro); font-size: 13px; display: flex; gap: var(--espacamento-2); align-items: center; flex-wrap: wrap; }
     button:disabled, select:disabled { opacity: .6; cursor: default; }
   `,
 })
@@ -144,6 +149,9 @@ export class CarteirasPagina implements OnInit {
   readonly contatos = signal<readonly ContatoCarteira[]>([])
   readonly temMais = signal(false)
   readonly movendo = signal<string | null>(null)
+  readonly erroContatos = signal<string | null>(null)
+  private readonly confirmacao = inject(ConfirmacaoServico)
+  private readonly toast = inject(ToastServico)
   private cursor: string | null = null
 
   readonly tituloAlvo = computed(() => {
@@ -189,32 +197,52 @@ export class CarteirasPagina implements OnInit {
     if (a === null) return
     if (!anexar) { this.cursor = null; this.contatos.set([]) }
     const base = a.tipo === 'orfaos' ? 'orfaos=1' : `usuarioId=${a.id}`
-    const url = `/v1/carteiras/contatos?${base}${this.cursor ? `&cursor=${this.cursor}` : ''}`
+    const url = `/v1/carteiras/contatos?${base}${this.cursor ? `&cursor=${encodeURIComponent(this.cursor)}` : ''}`
+    this.erroContatos.set(null)
     try {
       const r = await firstValueFrom(this.http.get<{ itens: ContatoCarteira[]; proximoCursor: string | null }>(url))
       this.contatos.set(anexar ? [...this.contatos(), ...r.itens] : r.itens)
       this.cursor = r.proximoCursor
       this.temMais.set(r.proximoCursor !== null)
-    } catch { /* mantém o que já tinha; o estado geral segue 'pronto' */ }
+    } catch (e) {
+      // Parcial: as carteiras continuam; só os clientes do alvo não vieram.
+      this.erroContatos.set(mensagemDeErro(e, 'Não foi possível carregar os clientes desta carteira.'))
+    }
   }
 
   async transferir(contatoId: string, usuarioId: string): Promise<void> {
     if (!usuarioId || this.movendo()) return
+    const destino = this.equipe().find((m) => m.id === usuarioId)?.nome ?? 'o vendedor'
     this.movendo.set(contatoId)
     try {
       await firstValueFrom(this.http.post(`/v1/contatos/${contatoId}/carteira`, { usuarioId }))
+      this.toast.sucesso(`Cliente transferido para ${destino}`)
       await this.carregar()
-    } catch { /* falha silenciosa: recarrega no finally reflete o estado real */ }
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível transferir o cliente.'))
+      await this.carregar() // reflete o estado real
+    }
     finally { this.movendo.set(null) }
   }
 
   async soltar(contatoId: string): Promise<void> {
     if (this.movendo()) return
+    const c = this.contatos().find((x) => x.id === contatoId)
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Deixar cliente sem dono?',
+      mensagem: `${c?.nome ?? 'O cliente'} sai desta carteira e vai para os órfãos até alguém assumir. A transferência fica no histórico.`,
+      acao: 'Soltar',
+    })
+    if (!ok) return
     this.movendo.set(contatoId)
     try {
       await firstValueFrom(this.http.delete(`/v1/contatos/${contatoId}/carteira`))
+      this.toast.sucesso('Cliente solto da carteira')
       await this.carregar()
-    } catch { /* idem */ }
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível soltar o cliente.'))
+      await this.carregar()
+    }
     finally { this.movendo.set(null) }
   }
 }

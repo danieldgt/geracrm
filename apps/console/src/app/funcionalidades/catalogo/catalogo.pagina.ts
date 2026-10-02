@@ -1,10 +1,11 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { ActivatedRoute, Router } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
 
 interface Sku { readonly id: string; readonly atributos: Record<string, string>; readonly precoCentavos: number | null; readonly saldo: number | null; readonly codigoBarras?: string | null }
-interface ProdutoApi { readonly id: string; readonly referencia: string; readonly descricao: string; readonly skus: readonly Sku[] }
+interface ProdutoApi { readonly id: string; readonly referencia: string; readonly descricao: string; readonly skus: readonly Sku[]; readonly origem?: 'erp' | 'manual' }
 
 interface Cel { readonly saldo: number | null; readonly precoCentavos: number | null; readonly codigoBarras: string | null }
 interface Cor { readonly nome: string; readonly hex: string | null }
@@ -66,13 +67,24 @@ const TAM_LETRA: Record<string, number> = { PP: 1, P: 2, M: 3, G: 4, GG: 5, XG: 
         @if (itens().length === 0) {
           <div class="bloco"><h2 class="txt-secao">Nada encontrado</h2><p>Refine a busca ou sincronize o catálogo do ERP.</p></div>
         } @else {
+          <!-- ⚠️ "Adicionar ao pedido" precisa de um cliente: o pedido nasce
+               para alguém. Sem ?contato= na URL, o botão fica visível e
+               explicado (não some) — e a dica diz por onde ir. -->
+          @if (!contatoId()) {
+            <p class="dica-pedido txt-denso" role="status">Para adicionar ao pedido, venha pela ficha do cliente — o pedido precisa de um cliente.</p>
+          }
           <ul class="lista">
             @for (p of itens(); track p.id) {
               <li class="prod">
                 <div class="prod-topo">
                   <strong class="ref txt-dados">{{ p.referencia }}</strong>
                   <span class="desc encolhe">{{ p.descricao }}</span>
+                  @if (p.origem) { <span class="origem" [class.erp]="p.origem === 'erp'">{{ p.origem === 'erp' ? 'ERP' : 'Manual' }}</span> }
                   <span class="preco txt-dados">{{ p.precoRotulo }}</span>
+                  <button type="button" class="add-pedido" [disabled]="!contatoId()" (click)="adicionarAoPedido(p)"
+                          [title]="contatoId() ? 'Abrir o pedido deste cliente com este produto' : 'Escolha o cliente primeiro: abra a ficha do contato e clique em Novo pedido'">
+                    🛒 Adicionar ao pedido
+                  </button>
                 </div>
 
                 @if (p.temGrade) {
@@ -155,6 +167,14 @@ const TAM_LETRA: Record<string, number> = { PP: 1, P: 2, M: 3, G: 4, GG: 5, XG: 
     .ref { color: var(--acao); flex: none; }
     .desc { color: var(--texto); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .preco { color: var(--texto-secundario); flex: none; font-size: 13px; }
+    .origem { flex: none; font-size: 11px; font-weight: 600; line-height: 1; padding: 3px 8px; border-radius: var(--raio-completo); border: 1px solid var(--borda); color: var(--texto-secundario); white-space: nowrap; }
+    .origem.erp { color: var(--acao); border-color: var(--acao); }
+    .add-pedido { flex: none; padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+    .add-pedido:hover:not(:disabled) { background: var(--acao-suave); color: var(--marca); border-color: var(--acao); }
+    .add-pedido:disabled { opacity: .55; cursor: not-allowed; }
+    .add-pedido:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+    .dica-pedido { margin: 0 0 var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle); background: var(--acao-suave); color: var(--texto); }
+    @media (max-width: 640px) { .prod-topo { flex-wrap: wrap; } }
     table.grade { border-collapse: collapse; font-size: 13px; min-width: max-content; }
     table.grade th, table.grade td { border: 1px solid var(--borda); padding: var(--espacamento-1) var(--espacamento-3); text-align: center; }
     .canto { color: var(--texto-suave); font-weight: 500; font-size: 11px; text-align: left; white-space: nowrap; }
@@ -177,6 +197,10 @@ const TAM_LETRA: Record<string, number> = { PP: 1, P: 2, M: 3, G: 4, GG: 5, XG: 
 })
 export class CatalogoPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly route = inject(ActivatedRoute)
+  private readonly router = inject(Router)
+  /** Cliente de contexto (?contato=<id>) — vem da ficha. Sem ele, não há pedido a abrir. */
+  readonly contatoId = signal<string | null>(null)
   readonly estado = signal<Estado>('buscando')
   readonly itens = signal<readonly Produto[]>([])
   readonly temMais = signal(false)
@@ -185,7 +209,17 @@ export class CatalogoPagina implements OnInit {
   private cursor: string | null = null
   private timer?: ReturnType<typeof setTimeout>
 
-  ngOnInit(): void { void this.buscar() }
+  ngOnInit(): void {
+    this.contatoId.set(this.route.snapshot.queryParamMap.get('contato'))
+    void this.buscar()
+  }
+
+  /** Abre o pedido do cliente já com a busca no produto escolhido. */
+  adicionarAoPedido(p: Produto): void {
+    const contato = this.contatoId()
+    if (!contato) return
+    void this.router.navigate(['/pedido'], { queryParams: { contato, busca: p.referencia } })
+  }
   reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
   atributos(a: Record<string, string>): string { return Object.values(a).join(' · ') || '—' }
   celula(p: Produto, cor: string, tam: string): Cel | undefined { return p.cells[`${cor}||${tam}`] }

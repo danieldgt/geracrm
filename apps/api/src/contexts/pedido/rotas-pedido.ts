@@ -289,9 +289,10 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
           ultimo_erro: unknown; forma_pagamento: string | null; observacao: string | null; nome: string | null
           contato: string | null; numero_externo: string | null; criado_em: Date; confirmado_em: Date | null
           cancelado_em: Date | null; cancelado_motivo: string | null; origem: string; desconto_pct: string
+          conversa_id: string | null
         }[]>`SELECT p.id, p.estado, p.total_centavos::text, p.total_pecas::text, p.contato_id, p.ultimo_erro,
                     p.forma_pagamento, p.observacao, p.nome, p.numero_externo, p.criado_em, p.confirmado_em,
-                    p.cancelado_em, p.cancelado_motivo, p.origem, p.desconto_pct::text,
+                    p.cancelado_em, p.cancelado_motivo, p.origem, p.desconto_pct::text, p.conversa_id,
                     c.nome AS contato
                FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
               WHERE p.id = ${req.params.id}`
@@ -315,6 +316,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         descontoPct: Number(dados.pedido.desconto_pct),
         contatoId: dados.pedido.contato_id,
         contato: dados.pedido.contato,
+        // A conversa onde o pedido nasceu (ADR-005) — a tela de detalhe linka de volta.
+        conversaId: dados.pedido.conversa_id,
         nome: dados.pedido.nome,
         numeroExterno: dados.pedido.numero_externo,
         criadoEm: dados.pedido.criado_em,

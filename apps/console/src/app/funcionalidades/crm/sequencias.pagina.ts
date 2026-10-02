@@ -1,10 +1,12 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
-import { HttpClient, HttpErrorResponse } from '@angular/common/http'
+import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ConfirmacaoServico, ToastServico, ehStatus, mensagemDeErro, mesclarPagina, queryDeLista } from '../../compartilhado/ui/index.js'
 
 interface Sequencia { readonly id: string; readonly nome: string; readonly objetivo: string | null; readonly ativa: boolean; readonly passos: number }
 interface Passo { readonly seq: number; readonly offsetDias: number; readonly titulo: string; readonly descricao: string | null }
 interface AchadoContato { readonly id: string; readonly nome: string }
+interface Pagina { readonly itens: Sequencia[]; readonly proximoCursor: string | null }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
@@ -34,18 +36,23 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                 <input [value]="novoNome()" (input)="novoNome.set($any($event.target).value)" placeholder="Ex.: Pós-venda" />
               </label>
               <button class="btn btn--primario" type="submit" [disabled]="criando() || !novoNome().trim()">+</button>
-              @if (erroNova()) { <p class="erro">{{ erroNova() }}</p> }
+              @if (erroNova()) { <p class="erro" role="alert">{{ erroNova() }}</p> }
             </form>
             <ul class="seqs">
               @for (s of seqs(); track s.id) {
                 <li class="sq" [class.on]="sel()?.id === s.id" (click)="abrir(s)">
                   <span class="sq-nome encolhe">{{ s.nome }}</span>
                   <span class="sq-qtd txt-dados">{{ s.passos }} passo{{ s.passos === 1 ? '' : 's' }}</span>
-                  <button class="x" (click)="excluir(s.id, $event)" title="Excluir">×</button>
+                  <button class="x" (click)="excluir(s, $event)" title="Excluir" aria-label="Excluir sequência">×</button>
                 </li>
               }
               @if (seqs().length === 0) { <li class="vazio">Nenhuma sequência ainda.</li> }
             </ul>
+            @if (proximoCursor()) {
+              <button class="btn btn--secundario btn--bloco mais" (click)="carregarMais()" [disabled]="carregandoMais()">
+                {{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
+              </button>
+            }
           </section>
 
           <section class="col detalhe">
@@ -56,6 +63,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                 <h2 class="txt-secao encolhe">{{ sel()!.nome }}</h2>
               </div>
 
+              @if (erroPassos()) { <p class="erro" role="alert">{{ erroPassos() }}</p> }
               <ol class="passos">
                 @for (p of passos(); track p.seq) {
                   <li class="ps">
@@ -64,7 +72,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                       <span class="ps-tit">{{ p.titulo }}</span>
                       @if (p.descricao) { <span class="ps-desc">{{ p.descricao }}</span> }
                     </div>
-                    <button class="x" (click)="removerPasso(p.seq)" title="Remover passo">×</button>
+                    <button class="x" (click)="removerPasso(p)" title="Remover passo" aria-label="Remover passo">×</button>
                   </li>
                 }
                 @if (passos().length === 0) { <li class="vazio">Sem passos. Adicione o primeiro abaixo.</li> }
@@ -75,6 +83,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                 <input class="off" type="number" min="0" [value]="pOffset()" (input)="pOffset.set(+$any($event.target).value)" aria-label="Dias" />
                 <input class="pt" [value]="pTitulo()" (input)="pTitulo.set($any($event.target).value)" placeholder="O que fazer neste toque" aria-label="Título do passo" />
                 <button class="btn btn--primario" type="submit" [disabled]="addP() || !pTitulo().trim()">Adicionar</button>
+                @if (erroPasso()) { <p class="erro" role="alert">{{ erroPasso() }}</p> }
               </form>
 
               <div class="aplicar">
@@ -88,7 +97,8 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                     </ul>
                   }
                 </div>
-                @if (msg()) { <p class="ok">{{ msg() }}</p> }
+                @if (erroBusca()) { <p class="erro" role="alert">{{ erroBusca() }}</p> }
+                @if (msg(); as m) { <p [class.ok]="m.ok" [class.erro]="!m.ok" [attr.role]="m.ok ? 'status' : 'alert'">{{ m.texto }}</p> }
               </div>
             }
           </section>
@@ -119,6 +129,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .sq-nome { flex: 1; color: var(--texto); font-size: 14px; }
     .sq-qtd { color: var(--texto-secundario); font-size: 12px; }
     .vazio { padding: var(--espacamento-6); text-align: center; color: var(--texto-suave); font-size: 13px; }
+    .mais { margin-top: var(--espacamento-2); }
     .det-topo { margin-bottom: var(--espacamento-3); }
     .det-topo h2 { margin: 0; }
     .passos { list-style: none; margin: 0 0 var(--espacamento-3); padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
@@ -144,37 +155,80 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .achados li { padding: var(--espacamento-2) var(--espacamento-3); cursor: pointer; }
     .achados li:hover { background: var(--acao-suave); }
     .ok { margin: var(--espacamento-3) 0 0; color: var(--sucesso); font-size: 13px; }
+    .aplicar .erro { margin-top: var(--espacamento-3); }
   `,
 })
 export class SequenciasPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly toast = inject(ToastServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
   readonly estado = signal<Estado>('carregando')
   readonly seqs = signal<readonly Sequencia[]>([])
+  readonly proximoCursor = signal<string | null>(null)
+  readonly carregandoMais = signal(false)
   readonly sel = signal<Sequencia | null>(null)
   readonly passos = signal<readonly Passo[]>([])
+  readonly erroPassos = signal<string | null>(null)
   readonly novoNome = signal(''); readonly criando = signal(false); readonly erroNova = signal<string | null>(null)
-  readonly pOffset = signal(7); readonly pTitulo = signal(''); readonly addP = signal(false)
-  readonly termo = signal(''); readonly achados = signal<readonly AchadoContato[]>([]); readonly msg = signal<string | null>(null)
+  readonly pOffset = signal(7); readonly pTitulo = signal(''); readonly addP = signal(false); readonly erroPasso = signal<string | null>(null)
+  readonly termo = signal(''); readonly achados = signal<readonly AchadoContato[]>([]); readonly erroBusca = signal<string | null>(null)
+  readonly msg = signal<{ ok: boolean; texto: string } | null>(null)
   private buscaSeq = 0
 
   ngOnInit(): void { void this.carregar() }
 
+  private pagina(cursor: string | null): Promise<Pagina> {
+    return firstValueFrom(this.http.get<Pagina>(`/v1/sequencias${queryDeLista({ cursor })}`))
+  }
+
   async carregar(): Promise<void> {
     this.estado.set('carregando')
     try {
-      const r = await firstValueFrom(this.http.get<{ itens: Sequencia[] }>('/v1/sequencias'))
+      const r = await this.pagina(null)
       this.seqs.set(r.itens)
+      this.proximoCursor.set(r.proximoCursor)
       this.estado.set('pronto')
       const s = this.sel()
-      if (s) { const atual = r.itens.find((x) => x.id === s.id) ?? null; this.sel.set(atual); if (atual) await this.carregarPassos() }
-    } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
+      if (s) {
+        // A selecionada pode estar numa página ainda não carregada: mantém o
+        // que já havia em vez de perder a seleção.
+        const atual = r.itens.find((x) => x.id === s.id)
+        if (atual) { this.sel.set(atual); await this.carregarPassos() }
+      }
+    } catch (e) { this.estado.set(ehStatus(e, 403) ? 'sem_permissao' : 'erro') }
+  }
+
+  async carregarMais(): Promise<void> {
+    const cursor = this.proximoCursor()
+    if (!cursor || this.carregandoMais()) return
+    this.carregandoMais.set(true)
+    try {
+      const r = await this.pagina(cursor)
+      this.seqs.update((a) => mesclarPagina(a, r.itens, (s) => s.id))
+      this.proximoCursor.set(r.proximoCursor)
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais sequências.'))
+    } finally { this.carregandoMais.set(false) }
   }
 
   abrir(s: Sequencia): void { this.sel.set(s); this.msg.set(null); this.termo.set(''); this.achados.set([]); void this.carregarPassos() }
 
   async carregarPassos(): Promise<void> {
     const s = this.sel(); if (!s) return
-    try { const r = await firstValueFrom(this.http.get<{ itens: Passo[] }>(`/v1/sequencias/${s.id}/passos`)); this.passos.set(r.itens) } catch { /* mantém */ }
+    this.erroPassos.set(null)
+    try {
+      const r = await firstValueFrom(this.http.get<{ itens: Passo[] }>(`/v1/sequencias/${s.id}/passos`))
+      this.passos.set(r.itens)
+    } catch (e) {
+      this.erroPassos.set(mensagemDeErro(e, 'Não foi possível carregar os passos. Tente abrir a sequência de novo.'))
+    }
+  }
+
+  /** Atualiza a contagem de passos da selecionada na lista, sem recarregar tudo. */
+  private atualizarContagem(id: string, delta: number): void {
+    this.seqs.update((a) => a.map((s) => (s.id === id ? { ...s, passos: s.passos + delta } : s)))
+    const sel = this.sel()
+    if (sel?.id === id) this.sel.set({ ...sel, passos: sel.passos + delta })
   }
 
   async criar(ev: Event): Promise<void> {
@@ -182,41 +236,80 @@ export class SequenciasPagina implements OnInit {
     const nome = this.novoNome().trim()
     if (this.criando() || !nome) return
     this.criando.set(true); this.erroNova.set(null)
-    try { await firstValueFrom(this.http.post('/v1/sequencias', { nome })); this.novoNome.set(''); await this.carregar() }
-    catch (e) { this.erroNova.set(e instanceof HttpErrorResponse && e.status === 409 ? 'Já existe uma com esse nome.' : 'Não foi possível criar.') }
-    finally { this.criando.set(false) }
+    try {
+      await firstValueFrom(this.http.post('/v1/sequencias', { nome }))
+      this.novoNome.set('')
+      this.toast.sucesso('Sequência criada')
+      await this.carregar()
+    } catch (e) {
+      this.erroNova.set(ehStatus(e, 409) ? 'Já existe uma sequência com esse nome.' : mensagemDeErro(e, 'Não foi possível criar a sequência.'))
+    } finally { this.criando.set(false) }
   }
 
-  async excluir(id: string, ev: Event): Promise<void> {
+  async excluir(s: Sequencia, ev: Event): Promise<void> {
     ev.stopPropagation()
-    try { await firstValueFrom(this.http.delete(`/v1/sequencias/${id}`)); if (this.sel()?.id === id) this.sel.set(null); await this.carregar() } catch { /* ignore */ }
+    const ok = await this.confirmacao.confirmar({
+      titulo: `Excluir “${s.nome}”?`,
+      mensagem: s.passos > 0
+        ? `Os ${s.passos} passos somem junto. Tarefas já criadas a partir dela continuam na agenda.`
+        : 'Tarefas já criadas a partir dela continuam na agenda.',
+      acao: 'Excluir',
+    })
+    if (!ok) return
+    try {
+      await firstValueFrom(this.http.delete(`/v1/sequencias/${s.id}`))
+      if (this.sel()?.id === s.id) { this.sel.set(null); this.passos.set([]) }
+      this.seqs.update((a) => a.filter((x) => x.id !== s.id))
+      this.toast.sucesso('Sequência excluída')
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível excluir a sequência.'))
+    }
   }
 
   async addPasso(ev: Event): Promise<void> {
     ev.preventDefault()
     const s = this.sel(); const titulo = this.pTitulo().trim()
     if (!s || this.addP() || !titulo) return
-    this.addP.set(true)
+    this.addP.set(true); this.erroPasso.set(null)
     try {
       await firstValueFrom(this.http.post(`/v1/sequencias/${s.id}/passos`, { offsetDias: this.pOffset(), titulo }))
       this.pTitulo.set('')
-      await this.carregarPassos(); await this.carregar()
-    } catch { /* ignore */ } finally { this.addP.set(false) }
+      this.toast.sucesso('Passo adicionado')
+      this.atualizarContagem(s.id, 1)
+      await this.carregarPassos()
+    } catch (e) {
+      this.erroPasso.set(mensagemDeErro(e, 'Não foi possível adicionar o passo.'))
+    } finally { this.addP.set(false) }
   }
 
-  async removerPasso(seq: number): Promise<void> {
+  async removerPasso(p: Passo): Promise<void> {
     const s = this.sel(); if (!s) return
-    try { await firstValueFrom(this.http.delete(`/v1/sequencias/${s.id}/passos/${seq}`)); await this.carregarPassos(); await this.carregar() } catch { /* ignore */ }
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Remover este passo?',
+      mensagem: `D+${p.offsetDias} · ${p.titulo}. Tarefas já criadas por ele continuam na agenda.`,
+      acao: 'Remover',
+    })
+    if (!ok) return
+    try {
+      await firstValueFrom(this.http.delete(`/v1/sequencias/${s.id}/passos/${p.seq}`))
+      this.toast.sucesso('Passo removido')
+      this.atualizarContagem(s.id, -1)
+      await this.carregarPassos()
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível remover o passo.'))
+    }
   }
 
   async buscar(q: string): Promise<void> {
-    this.termo.set(q); this.msg.set(null)
+    this.termo.set(q); this.msg.set(null); this.erroBusca.set(null)
     const seq = ++this.buscaSeq
     if (q.trim().length < 2) { this.achados.set([]); return }
     try {
       const r = await firstValueFrom(this.http.get<{ itens: AchadoContato[] }>(`/v1/contatos/busca?q=${encodeURIComponent(q.trim())}`))
       if (seq === this.buscaSeq) this.achados.set(r.itens)
-    } catch { /* silencioso */ }
+    } catch (e) {
+      if (seq === this.buscaSeq) this.erroBusca.set(mensagemDeErro(e, 'A busca de contatos falhou. Tente de novo.'))
+    }
   }
 
   async aplicar(a: AchadoContato): Promise<void> {
@@ -224,7 +317,12 @@ export class SequenciasPagina implements OnInit {
     this.termo.set(''); this.achados.set([])
     try {
       const r = await firstValueFrom(this.http.post<{ tarefasCriadas: number }>(`/v1/sequencias/${s.id}/aplicar`, { contatoId: a.id }))
-      this.msg.set(`${r.tarefasCriadas} tarefa${r.tarefasCriadas === 1 ? '' : 's'} criada${r.tarefasCriadas === 1 ? '' : 's'} para ${a.nome}.`)
-    } catch { this.msg.set('Não foi possível aplicar a sequência.') }
+      const n = r.tarefasCriadas
+      const texto = `${n} tarefa${n === 1 ? '' : 's'} criada${n === 1 ? '' : 's'} para ${a.nome}.`
+      this.msg.set({ ok: true, texto })
+      this.toast.sucesso('Sequência aplicada')
+    } catch (e) {
+      this.msg.set({ ok: false, texto: mensagemDeErro(e, 'Não foi possível aplicar a sequência.') })
+    }
   }
 }

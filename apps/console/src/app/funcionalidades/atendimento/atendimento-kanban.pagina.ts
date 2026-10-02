@@ -3,6 +3,7 @@ import { FormsModule } from '@angular/forms'
 import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop'
 import { AtendimentoKanbanServico, type Card, type CardAtend, type Coluna } from './atendimento-kanban.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
+import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
 
 /**
  * Painel de atendimentos (visão do gestor). 1ª coluna "Aguardando" derivada da
@@ -80,6 +81,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
           <button class="cfg-x" (click)="fecharConfig()" aria-label="Fechar">✕</button>
         </header>
         <p class="cfg-dica">As etapas viram colunas do painel. Uma empresa monta um fluxo simples ou completo — o tipo <b>Encerrado</b> fecha o atendimento ao receber o card.</p>
+        @if (servico.erroConfig(); as e) { <p class="cfg-erro" role="alert">{{ e }}</p> }
 
         <ul class="cfg-lista">
           @for (e of servico.config(); track e.id) {
@@ -126,6 +128,8 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
+    .cfg-erro { margin: 0 0 var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-3);
+      border-radius: var(--raio-controle); background: var(--erro-suave); color: var(--erro); font-size: 12px; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .board { display: flex; gap: var(--espacamento-3); align-items: stretch; flex: 1; min-height: 0; overflow-x: auto; padding-bottom: var(--espacamento-2); }
     .col-esq { width: 280px; height: 200px; border-radius: var(--raio-painel); background: var(--superficie); flex: none; }
@@ -190,6 +194,8 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
 export class AtendimentoKanbanPagina implements OnInit {
   readonly servico = inject(AtendimentoKanbanServico)
   private readonly inbox = inject(InboxServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
+  private readonly toast = inject(ToastServico)
   readonly config = signal(false)
   readonly novoNome = signal('')
   readonly novoTipo = signal<'atendimento' | 'encerrado'>('atendimento')
@@ -249,27 +255,37 @@ export class AtendimentoKanbanPagina implements OnInit {
   }
 
   // ───────── Config ─────────
-  abrirConfig(): void { this.config.set(true); void this.servico.carregarConfig() }
+  abrirConfig(): void { this.config.set(true); this.servico.erroConfig.set(null); void this.servico.carregarConfig() }
   fecharConfig(): void { this.config.set(false); void this.servico.carregar() }
   async criar(): Promise<void> {
     const nome = this.novoNome().trim()
     if (!nome) return
-    await this.servico.criarEtapa(nome, this.novoTipo())
-    this.novoNome.set('')
+    if (await this.servico.criarEtapa(nome, this.novoTipo())) { this.novoNome.set(''); this.toast.sucesso('Etapa criada') }
   }
   renomear(e: { id: string; nome: string }, ev: Event): void {
     const nome = (ev.target as HTMLInputElement).value.trim()
     if (nome && nome !== e.nome) void this.servico.editarEtapa(e.id, { nome })
   }
   alternarAtivo(e: { id: string; ativo: boolean }): void { void this.servico.editarEtapa(e.id, { ativo: !e.ativo }) }
-  remover(e: { id: string }): void { void this.servico.removerEtapa(e.id) }
+  async remover(e: { id: string; nome: string; total: number }): Promise<void> {
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Remover etapa?',
+      mensagem: e.total > 0
+        ? `"${e.nome}" tem ${e.total} atendimento(s). Mova-os antes, ou marque a etapa como inativa.`
+        : `"${e.nome}" some do painel. Não dá para desfazer.`,
+      acao: 'Remover',
+    })
+    if (!ok) return
+    if (await this.servico.removerEtapa(e.id)) this.toast.sucesso('Etapa removida')
+  }
   async reordenar(e: { id: string; ordem: number }, dir: -1 | 1): Promise<void> {
     const lista = [...this.servico.config()].sort((a, b) => a.ordem - b.ordem)
     const i = lista.findIndex((x) => x.id === e.id)
     const j = i + dir
     if (j < 0 || j >= lista.length) return
     const outro = lista[j]!
-    await this.servico.editarEtapa(e.id, { ordem: outro.ordem })
-    await this.servico.editarEtapa(outro.id, { ordem: e.ordem })
+    if (await this.servico.editarEtapa(e.id, { ordem: outro.ordem })) {
+      await this.servico.editarEtapa(outro.id, { ordem: e.ordem })
+    }
   }
 }

@@ -1,6 +1,7 @@
 import { randomUUID, randomBytes } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { PAGINA, lerCursor, paginar } from '../crm/cursor-criado-em.js'
 
 /**
  * Gestão de webhooks de saída (INT-07). O despacho roda no worker; aqui é só
@@ -9,20 +10,32 @@ import { exigirTenant } from '../../plugins/tenant.js'
  * para assinar, não para reexibir).
  */
 export async function rotasWebhooksSaida(app: FastifyInstance): Promise<void> {
-  app.get('/v1/webhooks', { preHandler: exigirTenant }, async (req, reply) => {
-    const linhas = await req.comTenant((tx) => tx<{
-      id: string; url: string; eventos: string[]; ativo: boolean
-      entregue_em: Date | null; ultimo_erro: string | null; criado_em: Date
-    }[]>`
-      SELECT id, url, eventos, ativo, entregue_em, ultimo_erro, criado_em
-        FROM webhook_saida WHERE tenant_id = tenant_atual() ORDER BY criado_em DESC LIMIT 100`)
-    return reply.send({
-      itens: linhas.map((l) => ({
-        id: l.id, url: l.url, eventos: l.eventos, ativo: l.ativo,
-        entregueEm: l.entregue_em, ultimoErro: l.ultimo_erro, criadoEm: l.criado_em,
-      })),
-    })
-  })
+  // Listagem por CURSOR (criado_em, id) — 20 por página.
+  app.get<{ Querystring: { cursor?: string } }>(
+    '/v1/webhooks', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const cursor = lerCursor(req.query.cursor)
+      if (cursor === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido', mensagem: 'Cursor inválido.' })
+      const linhas = await req.comTenant((tx) => tx<{
+        id: string; url: string; eventos: string[]; ativo: boolean
+        entregue_em: Date | null; ultimo_erro: string | null; criado_em: Date; criado_em_txt: string
+      }[]>`
+        SELECT id, url, eventos, ativo, entregue_em, ultimo_erro, criado_em, criado_em::text AS criado_em_txt
+          FROM webhook_saida
+         WHERE tenant_id = tenant_atual()
+           AND ${cursor === null ? tx`true` : tx`(criado_em, id) < (${cursor.em}::text::timestamptz, ${cursor.id}::text::uuid)`}
+         ORDER BY criado_em DESC, id DESC
+         LIMIT ${PAGINA + 1}`)
+      const { pagina, proximoCursor } = paginar(linhas)
+      return reply.send({
+        itens: pagina.map((l) => ({
+          id: l.id, url: l.url, eventos: l.eventos, ativo: l.ativo,
+          entregueEm: l.entregue_em, ultimoErro: l.ultimo_erro, criadoEm: l.criado_em,
+        })),
+        proximoCursor,
+      })
+    },
+  )
 
   app.post<{ Body: { url?: string; eventos?: string[] } }>(
     '/v1/webhooks',

@@ -1,6 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ConfirmacaoServico, ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
 
 interface Lista { readonly id: string; readonly nome: string; readonly descricao: string | null; readonly membros: number }
 interface Membro { readonly id: string; readonly nome: string }
@@ -68,6 +69,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                 }
               </div>
 
+              @if (erroMembros(); as e) { <p class="erro" role="alert">{{ e }} <button class="btn btn--secundario btn--pequeno" (click)="carregarMembros()">Tentar de novo</button></p> }
               @if (membros().length === 0) {
                 <div class="bloco"><p>Lista vazia. Busque um contato acima para adicionar.</p></div>
               } @else {
@@ -128,8 +130,11 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 })
 export class ListasPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly confirmacao = inject(ConfirmacaoServico)
+  private readonly toast = inject(ToastServico)
   readonly estado = signal<Estado>('carregando')
   readonly listas = signal<readonly Lista[]>([])
+  readonly erroMembros = signal<string | null>(null)
   readonly selecionada = signal<Lista | null>(null)
   readonly membros = signal<readonly Membro[]>([])
   readonly temMais = signal(false)
@@ -161,13 +166,17 @@ export class ListasPagina implements OnInit {
     const l = this.selecionada()
     if (!l) return
     if (!anexar) { this.cursor = null; this.membros.set([]) }
-    const url = `/v1/listas/${l.id}/membros${this.cursor ? `?cursor=${this.cursor}` : ''}`
+    const url = `/v1/listas/${l.id}/membros${this.cursor ? `?cursor=${encodeURIComponent(this.cursor)}` : ''}`
+    this.erroMembros.set(null)
     try {
       const r = await firstValueFrom(this.http.get<{ itens: Membro[]; proximoCursor: string | null }>(url))
       this.membros.set(anexar ? [...this.membros(), ...r.itens] : r.itens)
       this.cursor = r.proximoCursor
       this.temMais.set(r.proximoCursor !== null)
-    } catch { /* mantém o que tinha */ }
+    } catch (e) {
+      // Parcial: a lista continua; só os membros não vieram — e a tela diz isso.
+      this.erroMembros.set(mensagemDeErro(e, 'Não foi possível carregar os membros.'))
+    }
   }
 
   async criar(ev: Event): Promise<void> {
@@ -178,19 +187,29 @@ export class ListasPagina implements OnInit {
     try {
       await firstValueFrom(this.http.post('/v1/listas', { nome }))
       this.novoNome.set('')
+      this.toast.sucesso('Lista criada')
       await this.carregar()
     } catch (e) {
-      this.erroNova.set(e instanceof HttpErrorResponse && e.status === 409 ? 'Já existe uma lista com esse nome.' : 'Não foi possível criar.')
+      this.erroNova.set(e instanceof HttpErrorResponse && e.status === 409
+        ? 'Já existe uma lista com esse nome.' : mensagemDeErro(e, 'Não foi possível criar a lista.'))
     } finally { this.criando.set(false) }
   }
 
   async excluir(id: string, ev: Event): Promise<void> {
     ev.stopPropagation()
+    const l = this.listas().find((x) => x.id === id)
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Excluir lista?',
+      mensagem: `"${l?.nome ?? 'Esta lista'}" some com os ${l?.membros ?? 0} membro(s). Os contatos continuam na base. Não dá para desfazer.`,
+      acao: 'Excluir',
+    })
+    if (!ok) return
     try {
       await firstValueFrom(this.http.delete(`/v1/listas/${id}`))
       if (this.selecionada()?.id === id) this.selecionada.set(null)
+      this.toast.sucesso('Lista excluída')
       await this.carregar()
-    } catch { /* ignore */ }
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível excluir a lista.')) }
   }
 
   async buscar(q: string): Promise<void> {
@@ -200,7 +219,11 @@ export class ListasPagina implements OnInit {
     try {
       const r = await firstValueFrom(this.http.get<{ itens: AchadoContato[] }>(`/v1/contatos/busca?q=${encodeURIComponent(q.trim())}`))
       if (seq === this.buscaSeq) this.achados.set(r.itens)
-    } catch { /* silencioso */ }
+    } catch (e) {
+      // Busca é digitação contínua: só a tentativa MAIS recente avisa, para não
+      // empilhar um toast por tecla.
+      if (seq === this.buscaSeq) { this.achados.set([]); this.toast.erro(mensagemDeErro(e, 'Não foi possível buscar contatos.')) }
+    }
   }
 
   async adicionar(a: AchadoContato): Promise<void> {
@@ -209,16 +232,25 @@ export class ListasPagina implements OnInit {
     try {
       await firstValueFrom(this.http.post(`/v1/listas/${l.id}/membros`, { contatoId: a.id }))
       this.termo.set(''); this.achados.set([])
+      this.toast.sucesso(`${a.nome} adicionado à lista`)
       await this.carregar()
-    } catch { /* ignore */ }
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível adicionar o contato.')) }
   }
 
   async remover(contatoId: string): Promise<void> {
     const l = this.selecionada()
     if (!l) return
+    const m = this.membros().find((x) => x.id === contatoId)
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Remover da lista?',
+      mensagem: `${m?.nome ?? 'O contato'} sai de "${l.nome}". O cadastro dele continua na base.`,
+      acao: 'Remover',
+    })
+    if (!ok) return
     try {
       await firstValueFrom(this.http.delete(`/v1/listas/${l.id}/membros/${contatoId}`))
+      this.toast.sucesso('Contato removido da lista')
       await this.carregar()
-    } catch { /* ignore */ }
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível remover o contato.')) }
   }
 }

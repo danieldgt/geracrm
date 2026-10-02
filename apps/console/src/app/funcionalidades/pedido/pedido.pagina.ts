@@ -1,8 +1,9 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { SlicePipe } from '@angular/common'
-import { ActivatedRoute } from '@angular/router'
+import { ActivatedRoute, RouterLink } from '@angular/router'
 import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
+import { ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
 import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
 
 /**
@@ -18,7 +19,7 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
 @Component({
   selector: 'app-pedido-assistido',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SlicePipe],
+  imports: [SlicePipe, RouterLink],
   template: `
     <header class="cabecalho">
       <div>
@@ -43,8 +44,11 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
         }
         <button class="r-novo" (click)="novoRascunho()">+ Novo</button>
         @if (servico.pedido()) { <button class="r-rename" (click)="renomear()" title="Renomear rascunho">✎</button> }
+        @if (contatoId(); as c) { <a class="r-ficha" [routerLink]="['/contato', c]" title="Abrir a ficha do cliente">👤 Ficha do cliente</a> }
       </div>
+      @if (servico.avisoRascunhos(); as a) { <p class="aviso-parcial" role="alert">{{ a }}</p> }
     }
+    @if (erroInicio(); as e) { <p class="aviso-erro" role="alert">{{ e }}</p> }
 
     <div class="grade-tela">
       <!-- Busca + grade -->
@@ -74,6 +78,8 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
           <input class="preco-f" inputmode="decimal" placeholder="R$ mín" [value]="fPrecoMin()" (change)="fPrecoMin.set($any($event.target).value); aplicarFiltro()" aria-label="Preço mínimo" />
           <input class="preco-f" inputmode="decimal" placeholder="R$ máx" [value]="fPrecoMax()" (change)="fPrecoMax.set($any($event.target).value); aplicarFiltro()" aria-label="Preço máximo" />
         </div>
+        @if (servico.avisoFiltros(); as a) { <p class="aviso-parcial" role="alert">{{ a }}</p> }
+        @if (erroBusca(); as e) { <p class="aviso-erro" role="alert">{{ e }} <button class="add" type="button" (click)="aplicarFiltro()">Tentar de novo</button></p> }
 
         @if (servico.buscando()) { <p class="dica">Buscando…</p> }
         @else if (resultados().length === 0 && buscou()) {
@@ -178,9 +184,28 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
                   </div>
                   <span class="mono">{{ i.quantidade }} × {{ reais(i.valorUnitarioCentavos) }}</span>
                   <span class="mono sub-total">{{ reais(i.quantidade * i.valorUnitarioCentavos) }}</span>
+                  @if (ped.estado === 'rascunho') {
+                    <button class="x" type="button" (click)="removerItem(ped.id, i.seq)"
+                            [disabled]="servico.removendoItem() === i.seq"
+                            [attr.aria-label]="'Remover ' + i.descricaoSnapshot" title="Remover do rascunho">×</button>
+                  }
                 </li>
               }
             </ul>
+            <!-- ⚠️ Falha de negócio NOMEADA com ação corretiva (PED-08): estoque,
+                 preço ausente, SKU fora do catálogo, regra do perfil, pedido fechado. -->
+            @if (servico.erroItem(); as f) {
+              <div class="efet efet--aviso" role="alert">
+                ⚠️ {{ f.mensagem }}
+                @if (f.codigo === 'pedido.estoque_insuficiente' && f.disponivel !== undefined) {
+                  <span class="efet-nota">Disponível agora: {{ f.disponivel }}. Reduza a quantidade e adicione de novo.</span>
+                } @else if (f.codigo === 'pedido.sem_preco') {
+                  <span class="efet-nota">Troque o perfil (atacado/varejo) ou cadastre o preço no catálogo.</span>
+                } @else if (f.codigo === 'pedido.imutavel') {
+                  <span class="efet-nota">Crie um rascunho novo com "+ Novo".</span>
+                }
+              </div>
+            }
             <div class="totais">
               <span>{{ ped.totalPecas }} peças</span>
               <strong class="mono">{{ reais(ped.totalCentavos) }}</strong>
@@ -280,7 +305,15 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
     .dica-g { font-size: 11px; color: var(--texto-suave); }
     .rascunho h2 { margin: 0 0 var(--espacamento-3); font-size: 16px; color: var(--texto); }
     .vazio { font-size: 13px; color: var(--texto-suave); }
-    .itens li { display: grid; grid-template-columns: 1fr auto auto; gap: var(--espacamento-2); align-items: center; padding: var(--espacamento-2) 0; border-bottom: 1px solid var(--borda); font-size: 13px; }
+    .itens li { display: grid; grid-template-columns: 1fr auto auto auto; gap: var(--espacamento-2); align-items: center; padding: var(--espacamento-2) 0; border-bottom: 1px solid var(--borda); font-size: 13px; }
+    .x { border: 0; background: transparent; color: var(--texto-suave); font-size: 16px; line-height: 1; padding: 0 4px; cursor: pointer; }
+    .x:hover:not(:disabled) { color: var(--erro); }
+    .x:disabled { opacity: .5; cursor: default; }
+    .aviso-parcial { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--atencao); }
+    .aviso-erro { margin: var(--espacamento-2) 0 0; font-size: 13px; color: var(--erro); display: flex; gap: var(--espacamento-2); align-items: center; flex-wrap: wrap; }
+    .efet-nota { display: block; }
+    .r-ficha { margin-left: auto; font-size: 12px; color: var(--acao); text-decoration: none; }
+    .r-ficha:hover { text-decoration: underline; }
     .desc strong { display: block; color: var(--texto); }
     .mono { font-family: var(--tipografia-familia-dados); font-variant-numeric: tabular-nums; }
     .sub-total { font-weight: 600; color: var(--texto); }
@@ -324,42 +357,54 @@ export class PedidoAssistidoPagina implements OnInit {
   readonly fCor = signal(''); readonly fTamanho = signal(''); readonly fCategoria = signal('')
   readonly fPrecoMin = signal(''); readonly fPrecoMax = signal('')
   readonly contatoId = signal<string | null>(null)
+  readonly erroInicio = signal<string | null>(null)
+  readonly erroBusca = signal<string | null>(null)
+  private readonly toast = inject(ToastServico)
   private conversaId: string | null = null
 
-  /** Entrada: ?contato=<id> (cliente) e/ou ?conversa=<id> (chat). */
+  /** Entrada: ?contato=<id> (cliente) e/ou ?conversa=<id> (chat) e ?busca= (vindo do catálogo). */
   ngOnInit(): void {
     const p = this.route.snapshot.queryParamMap
     const contato = p.get('contato'); this.conversaId = p.get('conversa')
+    const busca = p.get('busca')
+    if (busca) this.termo.set(busca)
     void this.servico.carregarFiltros()
     void this.iniciar(contato, this.conversaId)
-    void this.servico.buscarCatalogo({ perfil: this.perfil() })
-    this.buscou.set(true)
+    this.rodarBusca()
   }
   private async iniciar(contato: string | null, conversa: string | null): Promise<void> {
-    // Vindo do chat (?conversa=): cai no rascunho NÃO finalizado daquela conversa
-    // (retoma o que estava montando); se a conversa é nova ou o pedido anterior já
-    // saiu de 'rascunho' (enviado/confirmado/efetivado), o backend cria um vazio.
-    // É a idempotência por conversa (INV-52) — a regra que o usuário quer.
-    if (conversa) {
-      await this.servico.abrirDaConversa(conversa)
-      const cid = contato ?? this.servico.pedido()?.contatoId ?? null
-      this.contatoId.set(cid)
-      if (cid) await this.servico.carregarRascunhos(cid)
-      return
-    }
-    // Sem conversa (aberto por ?contato=): retoma o rascunho não finalizado mais
-    // recente do cliente, ou cria um novo. Os demais ficam nos chips.
-    if (contato) {
-      this.contatoId.set(contato)
-      await this.servico.carregarRascunhos(contato)
-      const rs = this.servico.rascunhos().filter((r) => r.estado === 'rascunho')
-      if (rs.length) await this.servico.abrirRascunho(rs[0]!.id)
-      else await this.servico.novoRascunho(contato)
+    this.erroInicio.set(null)
+    try {
+      // Vindo do chat (?conversa=): cai no rascunho NÃO finalizado daquela conversa
+      // (retoma o que estava montando); se a conversa é nova ou o pedido anterior já
+      // saiu de 'rascunho' (enviado/confirmado/efetivado), o backend cria um vazio.
+      // É a idempotência por conversa (INV-52) — a regra que o usuário quer.
+      if (conversa) {
+        await this.servico.abrirDaConversa(conversa)
+        const cid = contato ?? this.servico.pedido()?.contatoId ?? null
+        this.contatoId.set(cid)
+        if (cid) await this.servico.carregarRascunhos(cid)
+        return
+      }
+      // Sem conversa (aberto por ?contato=): retoma o rascunho não finalizado mais
+      // recente do cliente, ou cria um novo. Os demais ficam nos chips.
+      if (contato) {
+        this.contatoId.set(contato)
+        await this.servico.carregarRascunhos(contato)
+        const rs = this.servico.rascunhos().filter((r) => r.estado === 'rascunho')
+        if (rs.length) await this.servico.abrirRascunho(rs[0]!.id)
+        else await this.servico.novoRascunho(contato)
+      }
+    } catch (e) {
+      // ⚠️ Antes isto era uma Promise rejeitada no vazio: a tela abria sem
+      //    rascunho e sem dizer por quê.
+      this.erroInicio.set(mensagemDeErro(e, 'Não foi possível abrir o rascunho deste cliente.'))
     }
   }
 
   salvarContexto(id: string, campo: 'formaPagamento' | 'observacao', valor: string): void {
-    void this.servico.salvarContexto(id, { [campo]: valor || null })
+    this.servico.salvarContexto(id, { [campo]: valor || null })
+      .catch((e: unknown) => this.toast.erro(mensagemDeErro(e, 'Não foi possível salvar o contexto do pedido.')))
   }
 
   private timer: ReturnType<typeof setTimeout> | null = null
@@ -380,16 +425,37 @@ export class PedidoAssistidoPagina implements OnInit {
       precoMax: this.fPrecoMax() ? String(Math.round(Number(this.fPrecoMax()) * 100)) : undefined,
     }
   }
-  private rodarBusca(): void { this.buscou.set(true); void this.servico.buscarCatalogo(this.paramsBusca()) }
-  carregarMais(): void { void this.servico.buscarCatalogo(this.paramsBusca(), true) }
+  private rodarBusca(): void {
+    this.buscou.set(true)
+    this.erroBusca.set(null)
+    this.servico.buscarCatalogo(this.paramsBusca())
+      .catch((e: unknown) => this.erroBusca.set(mensagemDeErro(e, 'Não foi possível buscar no catálogo.')))
+  }
+  carregarMais(): void {
+    this.erroBusca.set(null)
+    this.servico.buscarCatalogo(this.paramsBusca(), true)
+      .catch((e: unknown) => this.erroBusca.set(mensagemDeErro(e, 'Não foi possível carregar mais produtos.')))
+  }
 
   // Rascunhos do cliente.
   async novoRascunho(): Promise<void> {
     const c = this.contatoId(); if (!c) return
     const nome = prompt('Nome do novo rascunho (ex.: Reposição):')?.trim()
-    await this.servico.novoRascunho(c, nome || undefined, this.conversaId ?? undefined)
+    try {
+      await this.servico.novoRascunho(c, nome || undefined, this.conversaId ?? undefined)
+      this.toast.sucesso('Rascunho criado')
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível criar o rascunho.')) }
   }
-  async trocarRascunho(id: string): Promise<void> { await this.servico.abrirRascunho(id) }
+  async trocarRascunho(id: string): Promise<void> {
+    try { await this.servico.abrirRascunho(id) }
+    catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível abrir o rascunho.')) }
+  }
+
+  /** Remove um item do rascunho. Falha vem tipificada e aparece embaixo da lista. */
+  async removerItem(pedidoId: string, seq: number): Promise<void> {
+    const r = await this.servico.removerItem(pedidoId, seq)
+    if (r.ok) this.toast.sucesso('Item removido')
+  }
 
   /** Confirma e envia o resumo; ao enviar, abre o chat (rail) onde a mensagem caiu. */
   async enviarResumo(id: string): Promise<void> {
@@ -400,7 +466,9 @@ export class PedidoAssistidoPagina implements OnInit {
   async renomear(): Promise<void> {
     const ped = this.servico.pedido(); const c = this.contatoId(); if (!ped) return
     const nome = prompt('Renomear rascunho:', ped.nome ?? '')?.trim()
-    if (nome) await this.servico.renomear(ped.id, nome, c ?? undefined)
+    if (!nome) return
+    try { await this.servico.renomear(ped.id, nome, c ?? undefined); this.toast.sucesso('Rascunho renomeado') }
+    catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível renomear.')) }
   }
 
   alternar(id: string): void { this.aberto.update((a) => (a === id ? null : id)) }
@@ -450,37 +518,45 @@ export class PedidoAssistidoPagina implements OnInit {
   algumaQtd(p: ProdutoCatalogo): boolean {
     return p.skus.some((s) => s.precoCentavos !== null && (Number(this.qtdGrade()[s.id]) || 0) > 0)
   }
-  /** Adiciona ao rascunho todas as células da grade com quantidade > 0. */
+  /**
+   * Adiciona ao rascunho todas as células da grade com quantidade > 0.
+   * ⚠️ Para na PRIMEIRA falha de negócio: a mensagem nomeia o SKU e a célula
+   * continua preenchida para a pessoa corrigir; as já adicionadas são limpas.
+   */
   async adicionarGrade(p: ProdutoCatalogo): Promise<void> {
     const mapa = this.qtdGrade()
     const alvos = p.skus.filter((s) => s.precoCentavos !== null && (Number(mapa[s.id]) || 0) > 0)
     if (alvos.length === 0) return
-    const pedidoId = await this.servico.garantirPedido()
+    const pedidoId = await this.garantirPedidoOuAvisar()
+    if (!pedidoId) return
+    let adicionados = 0
     for (const s of alvos) {
-      await this.servico.adicionar(pedidoId, {
-        skuId: s.id, skuSnapshot: s.codigoBarras ?? p.referencia, descricaoSnapshot: p.descricao,
-        grade: s.atributos, quantidade: Number(mapa[s.id]) || 0, valorUnitarioCentavos: s.precoCentavos!,
-      })
+      const r = await this.servico.adicionar(pedidoId, { skuId: s.id, quantidade: Number(mapa[s.id]) || 0, perfil: this.perfil() })
+      if (!r.ok) break
+      adicionados++
+      this.qtdGrade.update((m) => { const n = { ...m }; delete n[s.id]; return n })
     }
-    // Limpa as quantidades já adicionadas.
-    this.qtdGrade.update((m) => { const n = { ...m }; for (const s of alvos) delete n[s.id]; return n })
+    if (adicionados > 0) this.toast.sucesso(adicionados === 1 ? 'Item adicionado' : `${adicionados} itens adicionados`)
   }
   atributosGrade(g: Record<string, string>): string[] { return Object.values(g) }
 
-  async adicionar(p: ProdutoCatalogo, s: SkuCatalogo, qtd: string): Promise<void> {
+  /**
+   * Adiciona um SKU. ⚠️ Vai só `skuId` + `quantidade` + `perfil`: o preço é
+   * resolvido no SERVIDOR (ADR-025) — a tela mostra o preço da tabela, mas não
+   * é ela que o grava. Falha volta nomeada (sem preço, sem estoque, regra).
+   */
+  async adicionar(_p: ProdutoCatalogo, s: SkuCatalogo, qtd: string): Promise<void> {
     const quantidade = Number(qtd) || 0
-    // ⚠️ Preço do ERP (snapshot na inclusão, INV-25). Sem preço, não adiciona.
-    if (quantidade <= 0 || s.precoCentavos === null) return
+    if (quantidade <= 0) return
+    const pedidoId = await this.garantirPedidoOuAvisar()
+    if (!pedidoId) return
+    const r = await this.servico.adicionar(pedidoId, { skuId: s.id, quantidade, perfil: this.perfil() })
+    if (r.ok) this.toast.sucesso('Item adicionado')
+  }
 
-    const pedidoId = await this.servico.garantirPedido()
-    await this.servico.adicionar(pedidoId, {
-      skuId: s.id,
-      skuSnapshot: s.codigoBarras ?? p.referencia,
-      descricaoSnapshot: p.descricao,
-      grade: s.atributos,
-      quantidade,
-      valorUnitarioCentavos: s.precoCentavos,
-    })
+  private async garantirPedidoOuAvisar(): Promise<string | null> {
+    try { return await this.servico.garantirPedido(this.contatoId() ?? undefined) }
+    catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível abrir o rascunho.')); return null }
   }
 
   reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }

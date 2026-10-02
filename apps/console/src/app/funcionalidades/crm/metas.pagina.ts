@@ -1,6 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ConfirmacaoServico, ToastServico, mensagemDeErro, reaisParaCentavos } from '../../compartilhado/ui/index.js'
 
 interface Meta {
   readonly id: string
@@ -58,7 +59,8 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
       <button class="btn btn--primario" type="submit" [disabled]="salvando() || !valorNumerico()">
         {{ salvando() ? 'Salvando…' : 'Definir meta' }}
       </button>
-      @if (erroForm()) { <p class="erro">{{ erroForm() }}</p> }
+      @if (erroForm()) { <p class="erro" role="alert">{{ erroForm() }}</p> }
+      @if (erroEquipe(); as e) { <p class="aviso-parcial" role="status">{{ e }}</p> }
     </form>
 
     @switch (estado()) {
@@ -112,6 +114,7 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
     .campo-valor input { flex: 1; padding: var(--espacamento-2) var(--espacamento-3); border: 0; background: transparent; color: var(--texto); font: inherit; }
     .campo-valor input:focus { outline: none; }
     .erro { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
+    .aviso-parcial { width: 100%; margin: 0; color: var(--atencao); font-size: 12px; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
     .esq { height: 76px; border-radius: var(--raio-painel); background: var(--superficie); margin-bottom: var(--espacamento-2); }
     .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }
@@ -134,9 +137,12 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
 })
 export class MetasPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly confirmacao = inject(ConfirmacaoServico)
+  private readonly toast = inject(ToastServico)
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Meta[]>([])
   readonly equipe = signal<readonly Membro[]>([])
+  readonly erroEquipe = signal<string | null>(null)
   private readonly hoje = new Date()
   readonly ano = signal(this.hoje.getUTCFullYear())
   readonly mes = signal(this.hoje.getUTCMonth() + 1)
@@ -150,12 +156,10 @@ export class MetasPagina implements OnInit {
   reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
   min(a: number, b: number): number { return Math.min(a, b) }
 
-  // "1.234,56" ou "1234,56" ou "1234" → centavos. null se inválido/zero.
+  // R$ digitado → centavos (regra compartilhada em compartilhado/ui/dinheiro.ts). null se inválido/zero.
   private parseReais(v: string): number | null {
-    const limpo = v.trim().replace(/\./g, '').replace(',', '.')
-    if (!limpo || !/^\d+(\.\d{1,2})?$/.test(limpo)) return null
-    const c = Math.round(Number(limpo) * 100)
-    return c > 0 ? c : null
+    const c = reaisParaCentavos(v)
+    return c !== null && c > 0 ? c : null
   }
 
   mudarMes(delta: number): void {
@@ -169,7 +173,11 @@ export class MetasPagina implements OnInit {
     try {
       const r = await firstValueFrom(this.http.get<{ itens: Membro[] }>('/v1/equipe'))
       this.equipe.set(r.itens)
-    } catch { /* seletor fica só com "Equipe" */ }
+      this.erroEquipe.set(null)
+    } catch (e) {
+      // Parcial: dá para definir a meta da equipe; a lista de vendedores não veio.
+      this.erroEquipe.set(mensagemDeErro(e, 'A lista de vendedores não carregou — só a meta da equipe está disponível.'))
+    }
   }
 
   async carregar(): Promise<void> {
@@ -191,11 +199,24 @@ export class MetasPagina implements OnInit {
         usuarioId: this.alvoUsuario() || null, ano: this.ano(), mes: this.mes(), alvoCentavos: alvo,
       }))
       this.valor.set('')
+      this.toast.sucesso('Meta definida')
       await this.carregar()
-    } catch { this.erroForm.set('Não foi possível salvar a meta.') } finally { this.salvando.set(false) }
+    } catch (e) { this.erroForm.set(mensagemDeErro(e, 'Não foi possível salvar a meta.')) }
+    finally { this.salvando.set(false) }
   }
 
   async excluir(id: string): Promise<void> {
-    try { await firstValueFrom(this.http.delete(`/v1/metas/${id}`)); await this.carregar() } catch { /* ignore */ }
+    const m = this.itens().find((x) => x.id === id)
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Remover meta?',
+      mensagem: `A meta de ${m?.usuario ?? 'este alvo'} em ${this.rotuloMes()} (${this.reais(m?.alvo ?? 0)}) some. O realizado continua nas vendas.`,
+      acao: 'Remover',
+    })
+    if (!ok) return
+    try {
+      await firstValueFrom(this.http.delete(`/v1/metas/${id}`))
+      this.toast.sucesso('Meta removida')
+      await this.carregar()
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível remover a meta.')) }
   }
 }

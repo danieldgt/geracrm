@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { executarAutomacoesDoTenant } from './automacao-motor.js'
+import { PAGINA, lerCursor, paginar } from './cursor-criado-em.js'
 
 const GATILHOS = new Set(['rfv_segmento', 'dias_sem_comprar', 'lead_frio', 'nps_detrator', 'reposicao_ritmo'])
 const ACOES = new Set(['criar_tarefa', 'aplicar_sequencia', 'adicionar_lista', 'enviar_mensagem'])
@@ -15,22 +16,33 @@ const MAX_TEXTO = 900
  * agora" chama o motor em modo dono, isolado pelo tid explícito do token.
  */
 export async function rotasAutomacao(app: FastifyInstance): Promise<void> {
-  app.get('/v1/automacoes', { preHandler: exigirTenant }, async (req, reply) => {
-    const linhas = await req.comTenant((tx) => tx<{
-      id: string; nome: string; ativa: boolean; gatilho: string; gatilho_param: Record<string, unknown>
-      acao: string; acao_param: Record<string, unknown>; ultima_execucao_em: Date | null; execucoes: number
-    }[]>`
-      SELECT a.id, a.nome, a.ativa, a.gatilho, a.gatilho_param, a.acao, a.acao_param, a.ultima_execucao_em,
-             (SELECT count(*)::int FROM automacao_execucao e WHERE e.tenant_id = a.tenant_id AND e.automacao_id = a.id) AS execucoes
-        FROM automacao a WHERE a.tenant_id = tenant_atual()
-       ORDER BY a.ativa DESC, a.nome ASC LIMIT 200`)
-    return reply.send({
-      itens: linhas.map((l) => ({
-        id: l.id, nome: l.nome, ativa: l.ativa, gatilho: l.gatilho, gatilhoParam: l.gatilho_param,
-        acao: l.acao, acaoParam: l.acao_param, ultimaExecucaoEm: l.ultima_execucao_em, execucoes: l.execucoes,
-      })),
-    })
-  })
+  // Listagem por CURSOR (criado_em, id) — 20 por página.
+  app.get<{ Querystring: { cursor?: string } }>(
+    '/v1/automacoes', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const cursor = lerCursor(req.query.cursor)
+      if (cursor === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido', mensagem: 'Cursor inválido.' })
+      const linhas = await req.comTenant((tx) => tx<{
+        id: string; nome: string; ativa: boolean; gatilho: string; gatilho_param: Record<string, unknown>
+        acao: string; acao_param: Record<string, unknown>; ultima_execucao_em: Date | null; execucoes: number; criado_em_txt: string
+      }[]>`
+        SELECT a.id, a.nome, a.ativa, a.gatilho, a.gatilho_param, a.acao, a.acao_param, a.ultima_execucao_em, a.criado_em::text AS criado_em_txt,
+               (SELECT count(*)::int FROM automacao_execucao e WHERE e.tenant_id = a.tenant_id AND e.automacao_id = a.id) AS execucoes
+          FROM automacao a
+         WHERE a.tenant_id = tenant_atual()
+           AND ${cursor === null ? tx`true` : tx`(a.criado_em, a.id) < (${cursor.em}::text::timestamptz, ${cursor.id}::text::uuid)`}
+         ORDER BY a.criado_em DESC, a.id DESC
+         LIMIT ${PAGINA + 1}`)
+      const { pagina, proximoCursor } = paginar(linhas)
+      return reply.send({
+        itens: pagina.map((l) => ({
+          id: l.id, nome: l.nome, ativa: l.ativa, gatilho: l.gatilho, gatilhoParam: l.gatilho_param,
+          acao: l.acao, acaoParam: l.acao_param, ultimaExecucaoEm: l.ultima_execucao_em, execucoes: l.execucoes,
+        })),
+        proximoCursor,
+      })
+    },
+  )
 
   app.post<{ Body: { nome?: string; gatilho?: string; gatilhoParam?: object; acao?: string; acaoParam?: object } }>(
     '/v1/automacoes', { preHandler: exigirTenant },

@@ -1,6 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { RouterLink } from '@angular/router'
 import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop'
 import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConfig } from './funil.servico.js'
+import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
 
 /**
  * Kanban do funil de relacionamento (Onda 2). Colunas paginadas + drag-drop
@@ -10,7 +12,7 @@ import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConf
 @Component({
   selector: 'app-funil',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CdkDropListGroup, CdkDropList, CdkDrag],
+  imports: [CdkDropListGroup, CdkDropList, CdkDrag, RouterLink],
   template: `
     <header class="cabecalho">
       <div>
@@ -28,6 +30,9 @@ import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConf
     @if (mostrarMetricas()) {
       @if (servico.carregandoMetricas() && !servico.metricas()) {
         <div class="metricas"><p class="dica-m">Calculando métricas…</p></div>
+      } @else if (servico.erroMetricas(); as e) {
+        <div class="metricas"><p class="dica-m erro-m" role="alert">{{ e }}
+          <button class="btn btn--secundario" (click)="servico.carregarMetricas()">Tentar de novo</button></p></div>
       } @else if (servico.metricas(); as m) {
         <div class="metricas">
           <!-- KPIs de recompra (a métrica central do recorrente) -->
@@ -100,7 +105,10 @@ import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConf
                    (cdkDropListDropped)="soltou($event, col)">
                 @for (card of col.cards; track card.id) {
                   <article class="card" cdkDrag [cdkDragData]="card">
-                    <span class="card-nome encolhe">{{ card.nome }}</span>
+                    <!-- Sem beco: o card leva à ficha do cliente. stopPropagation
+                         para o link não disputar com o drag/abrir do card. -->
+                    <a class="card-nome encolhe" [routerLink]="['/contato', card.contatoId]"
+                       (click)="$event.stopPropagation()" [title]="'Abrir a ficha de ' + card.nome">{{ card.nome }}</a>
                     @if (card.valorCentavos !== null) {
                       <span class="card-valor txt-dados">{{ reais(card.valorCentavos) }}</span>
                     }
@@ -254,7 +262,10 @@ import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConf
       background: var(--superficie-elevada); border: 1px solid var(--borda); border-left: 3px solid var(--borda-forte);
       border-radius: var(--raio-controle); cursor: grab; box-shadow: var(--elevacao-nenhuma); }
     .card:active { cursor: grabbing; }
-    .card-nome { font-size: 13px; color: var(--texto); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card-nome { font-size: 13px; color: var(--texto); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
+    .card-nome:hover { color: var(--acao); text-decoration: underline; }
+    .card-nome:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 1px; border-radius: var(--raio-controle); }
+    .erro-m { color: var(--erro); display: flex; gap: var(--espacamento-2); align-items: center; flex-wrap: wrap; }
     .card-valor { font-size: 12px; color: var(--sucesso); }
     .card-resp { font-size: 11px; color: var(--texto-suave); }
     .col-vazia { margin: var(--espacamento-2) 0; color: var(--texto-suave); font-size: 12px; text-align: center; }
@@ -318,6 +329,8 @@ import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConf
 })
 export class FunilPagina implements OnInit {
   readonly servico = inject(FunilServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
+  private readonly toast = inject(ToastServico)
   readonly perdendo = signal<{ card: Card; deEtapa: string; indice: number } | null>(null)
   readonly mostrarMetricas = signal(false)
   readonly configAberta = signal(false)
@@ -420,22 +433,36 @@ export class FunilPagina implements OnInit {
   }
 
   async removerEtapa(e: EtapaConfig): Promise<void> {
-    await this.servico.removerEtapa(e.id)
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Remover raia?',
+      mensagem: e.total > 0
+        ? `"${e.nome}" tem ${e.total} oportunidade(s). A API só remove raia vazia — mova os cards antes, ou marque a raia como inativa.`
+        : `"${e.nome}" some do funil. Não dá para desfazer.`,
+      acao: 'Remover',
+    })
+    if (!ok) return
+    if (await this.servico.removerEtapa(e.id)) this.toast.sucesso('Raia removida')
   }
 
   async criarEtapa(): Promise<void> {
     const nome = this.novoNome().trim()
     if (!nome) return
-    if (await this.servico.criarEtapa(nome, this.novoTipo())) this.novoNome.set('')
+    if (await this.servico.criarEtapa(nome, this.novoTipo())) { this.novoNome.set(''); this.toast.sucesso('Raia criada') }
   }
 
   async criarMotivo(): Promise<void> {
     const nome = this.novoMotivo().trim()
     if (!nome) return
-    if (await this.servico.criarMotivo(nome)) this.novoMotivo.set('')
+    if (await this.servico.criarMotivo(nome)) { this.novoMotivo.set(''); this.toast.sucesso('Motivo criado') }
   }
 
   async removerMotivo(m: MotivoConfig): Promise<void> {
-    await this.servico.removerMotivo(m.codigo)
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Remover motivo de perda?',
+      mensagem: `"${m.nome}" deixa de ser opção ao registrar uma perda. As perdas já registradas com ele continuam no histórico.`,
+      acao: 'Remover',
+    })
+    if (!ok) return
+    if (await this.servico.removerMotivo(m.codigo)) this.toast.sucesso('Motivo removido')
   }
 }

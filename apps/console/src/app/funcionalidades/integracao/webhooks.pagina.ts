@@ -1,7 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
-import { HttpClient, HttpErrorResponse } from '@angular/common/http'
+import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ConfirmacaoServico, ToastServico, ehStatus, mensagemDeErro, mesclarPagina, queryDeLista } from '../../compartilhado/ui/index.js'
 
 interface Webhook {
   readonly id: string
@@ -11,6 +12,7 @@ interface Webhook {
   readonly entregueEm: string | null
   readonly ultimoErro: string | null
 }
+interface Pagina { readonly itens: Webhook[]; readonly proximoCursor: string | null }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
@@ -69,12 +71,17 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                     @if (w.ultimoErro) { · <span class="ruim">⚠️ {{ w.ultimoErro }}</span> }
                   </span>
                 </div>
-                <button class="btn btn--perigo btn--pequeno remover" (click)="remover(w.id)" [disabled]="removendo().has(w.id)">
+                <button class="btn btn--perigo btn--pequeno remover" (click)="remover(w)" [disabled]="removendo().has(w.id)">
                   {{ removendo().has(w.id) ? '…' : 'Remover' }}
                 </button>
               </li>
             }
           </ul>
+          @if (proximoCursor()) {
+            <button class="btn btn--secundario mais" (click)="carregarMais()" [disabled]="carregandoMais()">
+              {{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
+            </button>
+          }
         }
       }
     }
@@ -105,12 +112,17 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .meta { font-size: 12px; color: var(--texto-suave); }
     .meta .ruim { color: var(--erro); }
     .remover { flex: none; }
+    .mais { margin-top: var(--espacamento-4); }
   `,
 })
 export class WebhooksPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly toast = inject(ToastServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Webhook[]>([])
+  readonly proximoCursor = signal<string | null>(null)
+  readonly carregandoMais = signal(false)
   readonly url = signal('')
   readonly salvando = signal(false)
   readonly erroAdd = signal<string | null>(null)
@@ -119,15 +131,33 @@ export class WebhooksPagina implements OnInit {
 
   ngOnInit(): void { void this.carregar() }
 
+  private pagina(cursor: string | null): Promise<Pagina> {
+    return firstValueFrom(this.http.get<Pagina>(`/v1/webhooks${queryDeLista({ cursor })}`))
+  }
+
   async carregar(): Promise<void> {
     this.estado.set('carregando')
     try {
-      const r = await firstValueFrom(this.http.get<{ itens: Webhook[] }>('/v1/webhooks'))
+      const r = await this.pagina(null)
       this.itens.set(r.itens)
+      this.proximoCursor.set(r.proximoCursor)
       this.estado.set('pronto')
     } catch (e) {
-      this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro')
+      this.estado.set(ehStatus(e, 403) ? 'sem_permissao' : 'erro')
     }
+  }
+
+  async carregarMais(): Promise<void> {
+    const cursor = this.proximoCursor()
+    if (!cursor || this.carregandoMais()) return
+    this.carregandoMais.set(true)
+    try {
+      const r = await this.pagina(cursor)
+      this.itens.update((a) => mesclarPagina(a, r.itens, (w) => w.id))
+      this.proximoCursor.set(r.proximoCursor)
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais webhooks.'))
+    } finally { this.carregandoMais.set(false) }
   }
 
   async adicionar(ev: Event): Promise<void> {
@@ -140,20 +170,30 @@ export class WebhooksPagina implements OnInit {
       const r = await firstValueFrom(this.http.post<{ segredo: string }>('/v1/webhooks', { url }))
       this.segredoNovo.set(r.segredo)
       this.url.set('')
+      this.toast.sucesso('Webhook adicionado')
       await this.carregar()
     } catch (e) {
-      this.erroAdd.set(e instanceof HttpErrorResponse && e.status === 422
-        ? 'URL inválida. Use uma URL https.' : 'Não foi possível criar o webhook.')
+      this.erroAdd.set(ehStatus(e, 422)
+        ? 'URL inválida. Use uma URL https.' : mensagemDeErro(e, 'Não foi possível criar o webhook.'))
     } finally { this.salvando.set(false) }
   }
 
-  async remover(id: string): Promise<void> {
-    this.removendo.update((s) => new Set(s).add(id))
+  async remover(w: Webhook): Promise<void> {
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Remover este webhook?',
+      mensagem: `${w.url} deixa de receber eventos. Para voltar, cadastre de novo (gera outro segredo).`,
+      acao: 'Remover',
+    })
+    if (!ok) return
+    this.removendo.update((s) => new Set(s).add(w.id))
     try {
-      await firstValueFrom(this.http.delete(`/v1/webhooks/${id}`))
-      this.itens.update((a) => a.filter((w) => w.id !== id))
-    } catch { /* mantém */ } finally {
-      this.removendo.update((s) => { const n = new Set(s); n.delete(id); return n })
+      await firstValueFrom(this.http.delete(`/v1/webhooks/${w.id}`))
+      this.itens.update((a) => a.filter((x) => x.id !== w.id))
+      this.toast.sucesso('Webhook removido')
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível remover o webhook.'))
+    } finally {
+      this.removendo.update((s) => { const n = new Set(s); n.delete(w.id); return n })
     }
   }
 }

@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
+import { criarApp } from '../../app.js'
+import { encerrarBanco } from '../../db/index.js'
 import { executarNoTenant } from './automacao-motor.js'
 
 /** Motor de automações — gatilhos, ações internas, dedup e isolamento. */
@@ -211,5 +214,37 @@ describe('Ação enviar_mensagem', () => {
     const [t] = await tarefas()
     expect(t!.descricao).toContain('Oi, tudo bem?')
     await dono`UPDATE contato SET nome = 'Lead frio' WHERE tenant_id = ${T} AND id = ${C_LEAD}`
+  })
+})
+
+/**
+ * GET /v1/automacoes por CURSOR (criado_em, id) — a lista de regras também é
+ * paginada (regra da casa: nada de `LIMIT 200` cru).
+ */
+describe('GET /v1/automacoes por cursor', () => {
+  let app: FastifyInstance
+  const chamar = (url: string) => app.inject({ method: 'GET', url, headers: { 'x-tenant-id': T } })
+
+  beforeAll(async () => {
+    process.env.DEV_TENANT_HEADER = 'on'
+    app = await criarApp(); await app.ready()
+  })
+  afterAll(async () => { await app.close(); await encerrarBanco() })
+
+  it('⚠️ 20 por página, segunda página pelo cursor, sem repetir; cursor lixo → 422', async () => {
+    for (let i = 0; i < 23; i++) await novaAutomacao('dias_sem_comprar', { dias: 30 + i }, 'criar_tarefa', { titulo: `T${i}` })
+    type Pagina = { itens: { id: string }[]; proximoCursor: string | null }
+    const p1 = (await chamar('/v1/automacoes')).json() as Pagina
+    expect(p1.itens.length).toBe(20)
+    expect(p1.proximoCursor).toEqual(expect.any(String))
+
+    const p2 = (await chamar(`/v1/automacoes?cursor=${encodeURIComponent(p1.proximoCursor!)}`)).json() as Pagina
+    expect(p2.itens.length).toBe(3)
+    expect(p2.proximoCursor).toBeNull()
+
+    const ids = [...p1.itens, ...p2.itens].map((i) => i.id)
+    expect(new Set(ids).size).toBe(23)
+
+    expect((await chamar('/v1/automacoes?cursor=lixo')).statusCode).toBe(422)
   })
 })

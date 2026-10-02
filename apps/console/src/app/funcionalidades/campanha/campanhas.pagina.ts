@@ -1,7 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
-import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ConfirmacaoServico, ToastServico, mensagemDeErro, mesclarPagina } from '../../compartilhado/ui/index.js'
 
 interface Campanha {
   readonly id: string
@@ -37,7 +37,6 @@ const SEGMENTOS = [
 @Component({
   selector: 'app-campanhas',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe],
   template: `
     <header class="cabecalho">
       <div>
@@ -60,6 +59,7 @@ const SEGMENTOS = [
         <button class="btn btn--primario" type="submit" [disabled]="salvando() || !nome().trim() || !mensagem().trim()">
           {{ salvando() ? 'Criando…' : 'Criar' }}
         </button>
+        @if (erroForm(); as e) { <p class="erro" role="alert">{{ e }}</p> }
       </form>
     }
 
@@ -95,6 +95,7 @@ const SEGMENTOS = [
                 @if (audiencia()[c.id] !== undefined) {
                   <p class="camp-info">Audiência: <b>{{ audiencia()[c.id] }}</b> contatos.</p>
                 }
+                @if (erroItem()[c.id]; as e) { <p class="erro" role="alert">{{ e }}</p> }
                 @if (roi()[c.id]; as r) {
                   <div class="roi">
                     <div class="roi-box exata">
@@ -112,6 +113,11 @@ const SEGMENTOS = [
               </li>
             }
           </ul>
+          @if (proximoCursor()) {
+            <button class="btn btn--secundario mais" (click)="carregarMais()" [disabled]="carregandoMais()">
+              {{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
+            </button>
+          }
         }
       }
     }
@@ -127,6 +133,8 @@ const SEGMENTOS = [
     .nova .msg { flex: 1; min-width: 180px; }
     .janela { font-size: 12px; color: var(--texto-suave); display: flex; align-items: center; gap: var(--espacamento-2); }
     .janela input { width: 60px; }
+    .erro { width: 100%; margin: var(--espacamento-2) 0 0; color: var(--erro); font-size: 13px; }
+    .mais { margin-top: var(--espacamento-4); }
     button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .esq { height: 60px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
@@ -148,9 +156,16 @@ const SEGMENTOS = [
 })
 export class CampanhasPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly confirmacao = inject(ConfirmacaoServico)
+  private readonly toast = inject(ToastServico)
   readonly segmentos = SEGMENTOS
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Campanha[]>([])
+  readonly proximoCursor = signal<string | null>(null)
+  readonly carregandoMais = signal(false)
+  readonly erroForm = signal<string | null>(null)
+  /** Erro localizado por campanha (audiência/ROI/disparo) — fica no card. */
+  readonly erroItem = signal<Record<string, string>>({})
   readonly mostrarNova = signal(false)
   readonly nome = signal(''); readonly segmento = signal('todos'); readonly mensagem = signal(''); readonly janela = signal(7)
   readonly salvando = signal(false)
@@ -168,47 +183,93 @@ export class CampanhasPagina implements OnInit {
   async carregar(): Promise<void> {
     this.estado.set('carregando')
     try {
-      const r = await firstValueFrom(this.http.get<{ itens: Campanha[] }>('/v1/campanhas'))
+      const r = await firstValueFrom(this.http.get<{ itens: Campanha[]; proximoCursor: string | null }>('/v1/campanhas'))
       this.itens.set(r.itens)
+      this.proximoCursor.set(r.proximoCursor)
       this.estado.set('pronto')
     } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
+  }
+
+  async carregarMais(): Promise<void> {
+    const cursor = this.proximoCursor()
+    if (!cursor || this.carregandoMais()) return
+    this.carregandoMais.set(true)
+    try {
+      const r = await firstValueFrom(this.http.get<{ itens: Campanha[]; proximoCursor: string | null }>(
+        `/v1/campanhas?cursor=${encodeURIComponent(cursor)}`))
+      this.itens.update((a) => mesclarPagina(a, r.itens, (c) => c.id))
+      this.proximoCursor.set(r.proximoCursor)
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais campanhas.')) }
+    finally { this.carregandoMais.set(false) }
+  }
+
+  private falhaNoItem(id: string, e: unknown, padrao: string): void {
+    this.erroItem.update((m) => ({ ...m, [id]: mensagemDeErro(e, padrao) }))
+  }
+  private limparFalha(id: string): void {
+    this.erroItem.update((m) => { const n = { ...m }; delete n[id]; return n })
   }
 
   async criar(ev: Event): Promise<void> {
     ev.preventDefault()
     if (this.salvando()) return
-    this.salvando.set(true)
+    this.salvando.set(true); this.erroForm.set(null)
     try {
       await firstValueFrom(this.http.post('/v1/campanhas', {
         nome: this.nome().trim(), segmentoAlvo: this.segmento(), mensagem: this.mensagem().trim(), janelaDias: this.janela(),
       }))
       this.nome.set(''); this.mensagem.set(''); this.mostrarNova.set(false)
+      this.toast.sucesso('Campanha criada')
       await this.carregar()
-    } catch { /* erro silencioso p/ MVP */ } finally { this.salvando.set(false) }
+    } catch (e) { this.erroForm.set(mensagemDeErro(e, 'Não foi possível criar a campanha.')) }
+    finally { this.salvando.set(false) }
   }
 
-  async verAudiencia(id: string): Promise<void> {
+  /** Devolve o tamanho da audiência (e guarda no card); null se não deu para apurar. */
+  async verAudiencia(id: string): Promise<number | null> {
+    this.limparFalha(id)
     try {
       const r = await firstValueFrom(this.http.get<{ total: number }>(`/v1/campanhas/${id}/audiencia`))
       this.audiencia.update((a) => ({ ...a, [id]: r.total }))
-    } catch { /* ignore */ }
+      return r.total
+    } catch (e) { this.falhaNoItem(id, e, 'Não foi possível calcular a audiência.'); return null }
   }
 
+  /**
+   * ⚠️ Disparo em massa NUNCA sai de um clique só: confirma nomeando quantos
+   * contatos vão receber. Audiência ainda não calculada → busca antes de perguntar.
+   */
   async disparar(id: string): Promise<void> {
+    if (this.ocupada().has(id)) return
+    const c = this.itens().find((x) => x.id === id)
     this.ocupada.update((s) => new Set(s).add(id))
     try {
+      const total = this.audiencia()[id] ?? await this.verAudiencia(id)
+      const alcance = total === null ? 'para todo o segmento' : `para ${total} contato${total === 1 ? '' : 's'}`
+      const ok = await this.confirmacao.confirmar({
+        titulo: 'Disparar campanha?',
+        mensagem: `"${c?.nome ?? 'A campanha'}" será enviada ${alcance} (${this.rotuloSegmento(c?.segmentoAlvo ?? 'todos')}). `
+          + 'Depois de disparada não dá para cancelar nem desfazer.',
+        acao: 'Disparar',
+        perigo: true,
+      })
+      if (!ok) return
+      this.limparFalha(id)
       await firstValueFrom(this.http.post(`/v1/campanhas/${id}/disparar`, {}))
+      this.toast.sucesso('Campanha disparada')
       await this.carregar()
       await this.verRoi(id)
-    } catch { /* ignore */ } finally {
+    } catch (e) { this.falhaNoItem(id, e, 'Não foi possível disparar a campanha.') }
+    finally {
       this.ocupada.update((s) => { const n = new Set(s); n.delete(id); return n })
     }
   }
 
   async verRoi(id: string): Promise<void> {
+    this.limparFalha(id)
     try {
       const r = await firstValueFrom(this.http.get<Roi>(`/v1/campanhas/${id}/roi`))
       this.roi.update((m) => ({ ...m, [id]: r }))
-    } catch { /* ignore */ }
+    } catch (e) { this.falhaNoItem(id, e, 'Não foi possível carregar o ROI.') }
   }
 }

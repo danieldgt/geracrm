@@ -47,6 +47,8 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Sobreposição de origens (catálogo × WhatsApp × ERP) e distribuição RFV.' },
       { rota: 'catalogo', rotulo: 'Catálogo', icone: '📦', status: 'pronto', onda: 'O1',
         descricao: 'Produtos e SKUs com grade cor × tamanho, saldo e preço.' },
+      { rota: 'catalogo-produtos', rotulo: 'Cadastro de Produtos', icone: '🏷️', status: 'pronto', onda: 'O4',
+        descricao: 'Cadastre produtos, variações, preços e saldo à mão — convive com o que vem do ERP.' },
     ],
   },
   {

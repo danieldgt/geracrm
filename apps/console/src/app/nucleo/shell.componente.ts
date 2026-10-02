@@ -7,6 +7,8 @@ import { MENU } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
 import { MenuUsuarioComponente } from './menu-usuario.componente.js'
 import { MarcaComponente } from '../compartilhado/ui/marca.componente.js'
+import { ToastsComponente } from '../compartilhado/ui/toast.js'
+import { ConfirmarComponente } from '../compartilhado/ui/confirmar.componente.js'
 import { ChatRailComponente } from '../funcionalidades/atendimento/chat-rail.componente.js'
 import { InboxServico } from './inbox.servico.js'
 import { EventosServico } from './eventos.servico.js'
@@ -28,7 +30,7 @@ import { AuthServico } from './auth.servico.js'
 @Component({
   selector: 'app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente, MarcaComponente, ChatRailComponente],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente, MarcaComponente, ChatRailComponente, ToastsComponente, ConfirmarComponente],
   template: `
     <div class="grade">
       <aside class="lateral" [class.recolhida]="recolhida()">
@@ -106,6 +108,13 @@ import { AuthServico } from './auth.servico.js'
       <!-- Barra superior: ações do usuário no canto direito (padrão de app). -->
       <header class="topo">
         <span class="espaco"></span>
+        <!-- ⚠️ Estado do tempo real SEMPRE visível (skill: silêncio é pior que
+             aviso). A vendedora precisa saber quando parou de receber. -->
+        <span class="sse" [attr.data-estado]="eventos.estado()" role="status"
+              [title]="'Tempo real: ' + rotuloSse()">
+          <span class="sse-ponto" aria-hidden="true"></span>
+          <span class="sse-txt">{{ rotuloSse() }}</span>
+        </span>
         <button class="tema" (click)="tema.alternar()" [attr.aria-label]="'Tema: ' + tema.tema()"
                 [title]="'Tema: ' + tema.tema() + ' (clique para trocar)'">{{ iconeTema() }}</button>
         <app-sino />
@@ -139,6 +148,8 @@ import { AuthServico } from './auth.servico.js'
         <router-outlet />
       </div>
     </div>
+    <ui-toasts />
+    <ui-confirmar />
   `,
   styles: `
     :host { display: block; height: 100vh; }
@@ -162,6 +173,16 @@ import { AuthServico } from './auth.servico.js'
       gap: var(--espacamento-2); padding: 0 var(--espacamento-4);
       background: var(--superficie-elevada); border-bottom: 1px solid var(--borda); }
     .topo .espaco { flex: 1; }
+    /* Indicador do SSE: ponto + texto; cor por estado, só de token. */
+    .sse { display: inline-flex; align-items: center; gap: var(--espacamento-1); font-size: 11px; color: var(--texto-suave);
+      padding: 2px var(--espacamento-2); border-radius: var(--raio-completo); }
+    .sse-ponto { width: 8px; height: 8px; border-radius: var(--raio-completo); background: var(--texto-suave); flex: none; }
+    .sse[data-estado='conectado'] .sse-ponto { background: var(--sucesso); }
+    .sse[data-estado='conectando'] .sse-ponto, .sse[data-estado='reconectando'] .sse-ponto { background: var(--atencao); }
+    .sse[data-estado='reconectando'] { color: var(--atencao); }
+    .sse[data-estado='offline'] .sse-ponto { background: var(--erro); }
+    .sse[data-estado='offline'] { color: var(--erro); }
+    @media (max-width: 640px) { .sse-txt { display: none; } }
     .marca .espaco { flex: 1; }
     .tema { border: none; background: transparent; color: var(--texto-secundario); font-size: 15px; cursor: pointer; padding: 4px 6px; border-radius: var(--raio-controle); }
     .tema:hover { background: var(--superficie-hover); }
@@ -232,7 +253,7 @@ import { AuthServico } from './auth.servico.js'
 export class ShellComponente implements OnInit {
   readonly recolhida = signal(false)
   readonly filtro = signal('')
-  private readonly eventos = inject(EventosServico)
+  readonly eventos = inject(EventosServico)
   readonly alertas = inject(AlertasServico)
   readonly tema = inject(TemaServico)
   readonly inbox = inject(InboxServico)
@@ -279,6 +300,16 @@ export class ShellComponente implements OnInit {
     if (!item) return
     void this.router.navigateByUrl('/' + item.rota)
     this.filtro.set('')
+  }
+
+  rotuloSse(): string {
+    switch (this.eventos.estado()) {
+      case 'conectado': return 'conectado'
+      case 'conectando': return 'conectando…'
+      case 'reconectando': return 'reconectando…'
+      case 'offline': return 'offline'
+      default: return 'tempo real parado'
+    }
   }
 
   iconeTema(): string {

@@ -117,8 +117,26 @@ export class AuthServico {
     location.assign('/')
   }
 
-  /** Sai do cliente e volta ao login original — recarregando, pelo mesmo motivo. */
-  sairDoCliente(): void {
+  /**
+   * Sai do cliente e volta ao login original — recarregando, pelo mesmo motivo.
+   *
+   * ⚠️ ENCERRA a sessão no servidor antes de limpar o storage. Sem isto a
+   * sessão de acesso continuava válida até expirar: a trilha do cliente
+   * mostrava "staff ainda dentro" depois de a pessoa ter saído, e o token
+   * seguia utilizável. Melhor esforço com timeout curto — a saída local nunca
+   * fica presa esperando a rede.
+   */
+  async sairDoCliente(): Promise<void> {
+    const token = this.sessaoStaff()?.token
+    if (token) {
+      try {
+        await fetch('/v1/staff/acessos/atual', {
+          method: 'DELETE',
+          headers: { authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(4000),
+        })
+      } catch { /* rede/timeout: o servidor expira a sessão sozinho; a saída local segue */ }
+    }
     localStorage.removeItem(CHAVE_SESSAO_STAFF)
     this.sessaoStaff.set(null)
     location.assign('/')

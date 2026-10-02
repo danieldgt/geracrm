@@ -1,7 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
-import { HttpClient, HttpErrorResponse } from '@angular/common/http'
+import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ConfirmacaoServico, ToastServico, ehStatus, mensagemDeErro, mesclarPagina, queryDeLista } from '../../compartilhado/ui/index.js'
 
 interface Automacao {
   readonly id: string; readonly nome: string; readonly ativa: boolean
@@ -10,6 +11,7 @@ interface Automacao {
   readonly ultimaExecucaoEm: string | null; readonly execucoes: number
 }
 interface Ref { readonly id: string; readonly nome: string }
+interface Pagina { readonly itens: Automacao[]; readonly proximoCursor: string | null }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 const SEGMENTOS: Ref[] = [
@@ -45,7 +47,10 @@ const MAX_TEXTO = 900
       </div>
     </header>
 
-    @if (msg()) { <p class="ok">{{ msg() }}</p> }
+    @if (msg(); as m) { <p [class.ok]="m.ok" [class.erro]="!m.ok" [attr.role]="m.ok ? 'status' : 'alert'">{{ m.texto }}</p> }
+    <!-- Parcial: a lista carregou, mas os seletores de sequência/lista não — a
+         tela avisa e deixa criar as outras ações. -->
+    @if (erroRefs()) { <p class="aviso-parcial" role="alert">{{ erroRefs() }} <button class="link" (click)="carregarRefs()">Tentar de novo</button></p> }
 
     @if (mostrarNova()) {
       <form class="nova" (submit)="criar($event)">
@@ -117,7 +122,7 @@ const MAX_TEXTO = 900
 
         <div class="acoes-form">
           <button class="btn btn--primario" type="submit" [disabled]="salvando() || !nome().trim()">{{ salvando() ? 'Criando…' : 'Criar regra' }}</button>
-          @if (erroForm()) { <span class="erro">{{ erroForm() }}</span> }
+          @if (erroForm()) { <span class="erro" role="alert">{{ erroForm() }}</span> }
         </div>
       </form>
     }
@@ -144,10 +149,15 @@ const MAX_TEXTO = 900
                   <span class="r-exec txt-dados">{{ a.execucoes }} exec.</span>
                   @if (a.ultimaExecucaoEm) { <span class="r-quando">último {{ a.ultimaExecucaoEm | date: 'dd/MM HH:mm' }}</span> }
                 </div>
-                <button class="x" (click)="excluir(a.id)" title="Excluir">×</button>
+                <button class="x" (click)="excluir(a)" title="Excluir" aria-label="Excluir automação">×</button>
               </li>
             }
           </ul>
+          @if (proximoCursor()) {
+            <button class="btn btn--secundario mais" (click)="carregarMais()" [disabled]="carregandoMais()">
+              {{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
+            </button>
+          }
         }
       }
     }
@@ -159,6 +169,11 @@ const MAX_TEXTO = 900
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; max-width: 60ch; }
     .dir { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }
     .ok { color: var(--sucesso); font-size: 13px; margin: 0 0 var(--espacamento-3); }
+    p.erro { color: var(--erro); font-size: 13px; margin: 0 0 var(--espacamento-3); }
+    .aviso-parcial { margin: 0 0 var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle);
+      background: var(--atencao-suave); color: var(--texto); font-size: 13px; }
+    .link { border: 0; background: transparent; color: var(--acao); font: inherit; font-size: 13px; cursor: pointer; padding: 0; text-decoration: underline; }
+    .mais { margin-top: var(--espacamento-4); }
     .nova { display: grid; gap: var(--espacamento-3); margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .campo { display: flex; flex-direction: column; gap: var(--espacamento-2); color: var(--texto); font-size: 13px; }
     .ajuda-g { font-size: 12px; color: var(--texto-suave); }
@@ -199,13 +214,19 @@ const MAX_TEXTO = 900
 })
 export class AutomacoesPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly toast = inject(ToastServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
   readonly gatilhos = ['rfv_segmento', 'dias_sem_comprar', 'lead_frio', 'nps_detrator', 'reposicao_ritmo']
   readonly acoes = ['criar_tarefa', 'aplicar_sequencia', 'adicionar_lista', 'enviar_mensagem']
   readonly segmentos = SEGMENTOS
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Automacao[]>([])
+  readonly proximoCursor = signal<string | null>(null)
+  readonly carregandoMais = signal(false)
   readonly sequencias = signal<readonly Ref[]>([]); readonly listas = signal<readonly Ref[]>([])
-  readonly mostrarNova = signal(false); readonly rodando = signal(false); readonly msg = signal<string | null>(null)
+  readonly erroRefs = signal<string | null>(null)
+  readonly mostrarNova = signal(false); readonly rodando = signal(false)
+  readonly msg = signal<{ ok: boolean; texto: string } | null>(null)
   // form
   readonly nome = signal(''); readonly gatilho = signal('dias_sem_comprar'); readonly acao = signal('criar_tarefa')
   readonly segmento = signal('em-risco'); readonly dias = signal(60); readonly notaMax = signal(6)
@@ -236,23 +257,57 @@ export class AutomacoesPagina implements OnInit {
   }
   private segNome(c: string): string { return SEGMENTOS.find((s) => s.id === c)?.nome ?? c }
 
+  /**
+   * Seletores de sequência/lista. ⚠️ As duas listas são paginadas por cursor:
+   * o seletor percorre as páginas até o fim (conjunto de configuração, pequeno)
+   * — nada de `LIMIT 200` cru no servidor.
+   */
   async carregarRefs(): Promise<void> {
+    this.erroRefs.set(null)
     try {
-      const [seq, lis] = await Promise.all([
-        firstValueFrom(this.http.get<{ itens: { id: string; nome: string }[] }>('/v1/sequencias')),
-        firstValueFrom(this.http.get<{ itens: { id: string; nome: string }[] }>('/v1/listas')),
-      ])
-      this.sequencias.set(seq.itens); this.listas.set(lis.itens)
-    } catch { /* selects vazios */ }
+      const [seq, lis] = await Promise.all([this.todasAsPaginas('/v1/sequencias'), this.todasAsPaginas('/v1/listas')])
+      this.sequencias.set(seq); this.listas.set(lis)
+    } catch (e) {
+      this.erroRefs.set(mensagemDeErro(e, 'Não foi possível carregar as sequências e listas para o seletor.'))
+    }
+  }
+  private async todasAsPaginas(base: string): Promise<Ref[]> {
+    let acumulado: Ref[] = []
+    let cursor: string | null = null
+    do {
+      const r: { itens: Ref[]; proximoCursor?: string | null } =
+        await firstValueFrom(this.http.get<{ itens: Ref[]; proximoCursor?: string | null }>(`${base}${queryDeLista({ cursor })}`))
+      acumulado = mesclarPagina(acumulado, r.itens, (x) => x.id)
+      cursor = r.proximoCursor ?? null
+    } while (cursor)
+    return acumulado
+  }
+
+  private pagina(cursor: string | null): Promise<Pagina> {
+    return firstValueFrom(this.http.get<Pagina>(`/v1/automacoes${queryDeLista({ cursor })}`))
   }
 
   async carregar(): Promise<void> {
     this.estado.set('carregando')
     try {
-      const r = await firstValueFrom(this.http.get<{ itens: Automacao[] }>('/v1/automacoes'))
+      const r = await this.pagina(null)
       this.itens.set(r.itens)
+      this.proximoCursor.set(r.proximoCursor)
       this.estado.set('pronto')
-    } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
+    } catch (e) { this.estado.set(ehStatus(e, 403) ? 'sem_permissao' : 'erro') }
+  }
+
+  async carregarMais(): Promise<void> {
+    const cursor = this.proximoCursor()
+    if (!cursor || this.carregandoMais()) return
+    this.carregandoMais.set(true)
+    try {
+      const r = await this.pagina(cursor)
+      this.itens.update((a) => mesclarPagina(a, r.itens, (x) => x.id))
+      this.proximoCursor.set(r.proximoCursor)
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais automações.'))
+    } finally { this.carregandoMais.set(false) }
   }
 
   private montarGatilhoParam(): object {
@@ -288,24 +343,50 @@ export class AutomacoesPagina implements OnInit {
         acao: this.acao(), acaoParam: this.montarAcaoParam(),
       }))
       this.nome.set(''); this.titulo.set(''); this.texto.set(''); this.mostrarNova.set(false)
+      this.toast.sucesso('Regra criada')
       await this.carregar()
     } catch (e) {
-      this.erroForm.set(e instanceof HttpErrorResponse && e.status === 422 ? 'Confira a sequência/lista escolhida.' : 'Não foi possível criar.')
+      // ⚠️ A API devolve a frase com a ação corretiva (ex.: "Escreva a mensagem…").
+      this.erroForm.set(mensagemDeErro(e, ehStatus(e, 422) ? 'Confira a sequência/lista escolhida.' : 'Não foi possível criar a regra.'))
     } finally { this.salvando.set(false) }
   }
 
   async alternar(a: Automacao, ativa: boolean): Promise<void> {
-    try { await firstValueFrom(this.http.patch(`/v1/automacoes/${a.id}`, { ativa })); await this.carregar() } catch { /* ignore */ }
+    try {
+      await firstValueFrom(this.http.patch(`/v1/automacoes/${a.id}`, { ativa }))
+      this.itens.update((lista) => lista.map((x) => (x.id === a.id ? { ...x, ativa } : x)))
+      this.toast.sucesso(ativa ? 'Regra ativada' : 'Regra pausada')
+    } catch (e) {
+      // Devolve o switch ao estado real: a tela não pode mentir.
+      this.itens.update((lista) => lista.map((x) => (x.id === a.id ? { ...x, ativa: a.ativa } : x)))
+      this.toast.erro(mensagemDeErro(e, ativa ? 'Não foi possível ativar a regra.' : 'Não foi possível pausar a regra.'))
+    }
   }
-  async excluir(id: string): Promise<void> {
-    try { await firstValueFrom(this.http.delete(`/v1/automacoes/${id}`)); await this.carregar() } catch { /* ignore */ }
+  async excluir(a: Automacao): Promise<void> {
+    const ok = await this.confirmacao.confirmar({
+      titulo: `Excluir “${a.nome}”?`,
+      mensagem: a.execucoes > 0
+        ? `A regra deixa de rodar. As ${a.execucoes} execuções já feitas (tarefas, listas, mensagens) continuam.`
+        : 'A regra deixa de rodar. Não dá para desfazer.',
+      acao: 'Excluir',
+    })
+    if (!ok) return
+    try {
+      await firstValueFrom(this.http.delete(`/v1/automacoes/${a.id}`))
+      this.itens.update((lista) => lista.filter((x) => x.id !== a.id))
+      this.toast.sucesso('Regra excluída')
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível excluir a regra.'))
+    }
   }
   async rodar(): Promise<void> {
     this.rodando.set(true); this.msg.set(null)
     try {
       const r = await firstValueFrom(this.http.post<{ acoesExecutadas: number }>('/v1/automacoes/executar', {}))
-      this.msg.set(`Varredura concluída: ${r.acoesExecutadas} ação(ões) executada(s).`)
+      this.msg.set({ ok: true, texto: `Varredura concluída: ${r.acoesExecutadas} ação(ões) executada(s).` })
       await this.carregar()
-    } catch { this.msg.set('Não foi possível rodar agora.') } finally { this.rodando.set(false) }
+    } catch (e) {
+      this.msg.set({ ok: false, texto: mensagemDeErro(e, 'Não foi possível rodar a varredura agora.') })
+    } finally { this.rodando.set(false) }
   }
 }
