@@ -49,6 +49,10 @@ atendente precisa poder ouvir.
 
 ## Agente autônomo (IA-05…09)
 
+> **2026-10-02:** o agente passou a ser VENDEDOR (ADR-023…027). A implementação — fila, laço de
+> ferramentas, guardrail numérico, modos, alçada, playground, evals — está na skill
+> `geracrm-agente-vendas`. O que segue abaixo continua valendo como invariante.
+
 O que o agente precisa **antes** de falar com cliente:
 
 - □ **Base de conhecimento** da marca, versionada
