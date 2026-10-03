@@ -1,20 +1,55 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": [
+    "DATABASE_*",
+    "CREDENCIAL_CHAVE",
+    "CRYPTO_KEY",
+    "NODE_ENV",
+    "CI",
+    "PORT",
+    "LOG_LEVEL",
+    "DEV_TENANT_HEADER",
+    "IA_*",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "VOYAGE_API_KEY",
+    "GROQ_API_KEY",
+    "TRANSCRICAO_*",
+    "META_*",
+    "COGNITO_*",
+    "S3_*",
+    "MIDIA_*",
+    "GERACRM_*",
+    "SEED_*",
+    "RAILWAY_*",
+    "VAPID_*",
+    "GOOGLE_*",
+    "AWS_*",
+    "SERVICE_ROLE"
+  ],
   "tasks": {
     "build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**"]
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**"
+      ]
     },
     "dev": {
       "cache": false,
       "persistent": true
     },
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": [
+        "^build"
+      ]
     },
     "lint": {},
     "typecheck": {
-      "dependsOn": ["^build"]
+      "dependsOn": [
+        "^build"
+      ]
     }
   }
 }
