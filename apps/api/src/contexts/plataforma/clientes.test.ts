@@ -135,18 +135,18 @@ describe('Plataforma: cadastro de clientes', () => {
   })
 
   it('modelo de funil desconhecido é recusado antes de criar qualquer coisa', async () => {
-    const antes = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tenant`
+    const antes = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tenant WHERE plano_id = ${PLANO}`
     const r = await chamar('POST', '/v1/plataforma/clientes',
       { nome: 'X', planoCodigo: 'plano-cli', verticalCodigo: 'modelo-cli', modeloFunil: 'inventado' })
     expect(r.statusCode).toBe(422)
-    const depois = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tenant`
+    const depois = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tenant WHERE plano_id = ${PLANO}`
     expect(depois[0]!.n).toBe(antes[0]!.n)
   })
 
   it('⚠️ pedir login sem a API configurada falha ANTES de criar o cliente', async () => {
     const chave = process.env.AWS_ACCESS_KEY_ID
     delete process.env.AWS_ACCESS_KEY_ID
-    const antes = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tenant`
+    const antes = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tenant WHERE plano_id = ${PLANO}`
 
     const r = await chamar('POST', '/v1/plataforma/clientes', {
       nome: 'Com Login', planoCodigo: 'plano-cli', verticalCodigo: 'modelo-cli',
@@ -154,7 +154,7 @@ describe('Plataforma: cadastro de clientes', () => {
     })
     expect(r.statusCode).toBe(503)
 
-    const depois = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tenant`
+    const depois = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tenant WHERE plano_id = ${PLANO}`
     expect(depois[0]!.n).toBe(antes[0]!.n) // nenhum tenant órfão
     if (chave !== undefined) process.env.AWS_ACCESS_KEY_ID = chave
   })
