@@ -17,11 +17,30 @@ import type { MotivoFalhaLlm } from './porta.js'
 const URL_COMPLETIONS = 'https://openrouter.ai/api/v1/chat/completions'
 const MODELOS_POR_CHAMADA = 3
 
+/**
+ * PRESETS de fornecedores OpenAI-compatíveis. O fio é o mesmo; o que muda é
+ * URL, chave, e o que cada um aceita (cadeia `models`, `strict`).
+ *
+ * ⚠️ Modelos GRATUITOS costumam ignorar `response_format` e devolver texto cru,
+ * ou recusar `strict`. O adaptador DEGRADA em vez de falhar: tenta json_schema,
+ * depois json_object, depois sem formato — e texto cru vira uma mensagem.
+ */
+export const PRESETS = {
+  openrouter: { url: URL_COMPLETIONS, cadeia: true, strict: true },
+  groq: { url: 'https://api.groq.com/openai/v1/chat/completions', cadeia: false, strict: false },
+  gemini: { url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', cadeia: false, strict: false },
+} as const
+export type PresetCompat = keyof typeof PRESETS
+
 export interface ConfigOpenRouterFerramentas {
   readonly apiKey: string
   readonly modelos: readonly string[]
   readonly buscar?: typeof fetch | undefined
   readonly timeoutMs?: number | undefined
+  /** Fornecedor OpenAI-compatível. Padrão: openrouter. */
+  readonly preset?: PresetCompat | undefined
+  /** URL alternativa (qualquer endpoint `chat/completions` compatível). */
+  readonly url?: string | undefined
 }
 
 type MensagemFio =
@@ -31,13 +50,19 @@ type MensagemFio =
 interface ChamadaFio { id: string; type: 'function'; function: { name: string; arguments: string } }
 
 export class LlmOpenRouterFerramentas implements PortaLlmFerramentas {
-  readonly nome = 'openrouter'
+  readonly nome: string
   readonly capacidades: CapacidadesLlmFerramentas = { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false }
   readonly #modelos: readonly string[]
   readonly #buscar: typeof fetch
   readonly #timeoutMs: number
+  readonly #preset: (typeof PRESETS)[PresetCompat]
+  readonly #url: string
   constructor(private readonly cfg: ConfigOpenRouterFerramentas) {
-    this.#modelos = cfg.modelos.map((m) => m.trim()).filter(Boolean).slice(0, MODELOS_POR_CHAMADA)
+    const preset = cfg.preset ?? 'openrouter'
+    this.nome = preset
+    this.#preset = PRESETS[preset]
+    this.#url = cfg.url?.trim() || this.#preset.url
+    this.#modelos = cfg.modelos.map((m) => m.trim()).filter(Boolean).slice(0, this.#preset.cadeia ? MODELOS_POR_CHAMADA : 1)
     this.#buscar = cfg.buscar ?? fetch
     this.#timeoutMs = cfg.timeoutMs ?? 45_000
   }
@@ -54,13 +79,17 @@ export class LlmOpenRouterFerramentas implements PortaLlmFerramentas {
 
     const tools = pedido.ferramentas.map((f) => ({
       type: 'function' as const,
-      function: { name: f.nome, description: f.descricao, parameters: f.esquema, strict: true },
+      function: { name: f.nome, description: f.descricao, parameters: f.esquema, ...(this.#preset.strict ? { strict: true } : {}) },
     }))
+    // ⚠️ O esquema vai ESCRITO no system também: modelo gratuito que ignora
+    //    `response_format` ainda sabe o que devolver.
     const mensagens: MensagemFio[] = [
-      { role: 'system', content: pedido.sistema.map((b) => b.texto).join('\n\n') },
+      { role: 'system', content: pedido.sistema.map((b) => b.texto).join('\n\n') + `\n\n<formato_obrigatorio>Responda SOMENTE com um objeto JSON válido, sem texto fora dele, neste formato: {"mensagens":["texto da primeira bolha","(opcional) segunda bolha"],"confianca":0.9,"fase":"descoberta|recomendacao|proposta|fechamento|handoff","handoff":{"motivo":"...","resumo":"..."} (opcional),"slots":{} (opcional)}</formato_obrigatorio>` },
       ...paraFio(pedido.mensagens),
     ]
     const modelos = pedido.modelo?.trim() ? [pedido.modelo.trim()] : this.#modelos
+    // Formato: json_schema → json_object → nenhum (cada 400 por formato desce um degrau).
+    let formato: 'json_schema' | 'json_object' | 'nenhum' = 'json_schema'
 
     try {
       while (true) {
@@ -68,19 +97,26 @@ export class LlmOpenRouterFerramentas implements PortaLlmFerramentas {
         const ultima = rodadas >= pedido.limites.maxRodadas
         const corpo = {
           model: modelos[0],
-          ...(modelos.length > 1 ? { models: modelos, route: 'fallback' } : {}),
+          ...(this.#preset.cadeia && modelos.length > 1 ? { models: modelos, route: 'fallback' } : {}),
           max_tokens: pedido.limites.maxTokensSaida,
           messages: mensagens,
           ...(tools.length ? { tools, tool_choice: ultima ? 'none' : 'auto' } : {}),
-          response_format: { type: 'json_schema', json_schema: { name: 'resposta_do_agente', strict: true, schema: pedido.esquemaSaida } },
+          ...(formato === 'json_schema' ? { response_format: { type: 'json_schema', json_schema: { name: 'resposta_do_agente', strict: true, schema: pedido.esquemaSaida } } }
+            : formato === 'json_object' ? { response_format: { type: 'json_object' } } : {}),
         }
-        const r = await this.#buscar(URL_COMPLETIONS, {
+        const r = await this.#buscar(this.#url, {
           method: 'POST', signal: prazo.signal,
           headers: { authorization: `Bearer ${this.cfg.apiKey}`, 'content-type': 'application/json', 'x-title': 'GeraCRM' },
           body: JSON.stringify(corpo),
         })
         if (!r.ok) {
           const texto = await r.text().catch(() => '')
+          // Fornecedor recusou o FORMATO (ou o strict/tools): desce um degrau e repete a rodada.
+          if (r.status === 400 && formato !== 'nenhum' && /response_format|json_schema|json_object|strict|structured/i.test(texto)) {
+            formato = formato === 'json_schema' ? 'json_object' : 'nenhum'
+            rodadas -= 1
+            continue
+          }
           return { ok: false, ...mapearStatus(r.status, texto), rastro: rastro('fim') }
         }
         const json = await r.json().catch(() => null) as RespostaFio | null
@@ -110,12 +146,10 @@ export class LlmOpenRouterFerramentas implements PortaLlmFerramentas {
           }
           continue
         }
-        const texto = (msg.content ?? '').trim().replace(/^```(?:json)?\s*|\s*```$/g, '')
-        try {
-          return { ok: true, saida: JSON.parse(texto), rastro: rastro(ultima ? 'max_rodadas' : 'fim') }
-        } catch {
-          return { ok: false, motivo: 'resposta_inesperada', detalhe: `não veio JSON: ${texto.slice(0, 120)}`, rastro: rastro('fim') }
-        }
+        const texto = (msg.content ?? '').trim()
+        const saida = interpretarSaida(texto)
+        if (!saida) return { ok: false, motivo: 'resposta_inesperada', detalhe: 'resposta vazia', rastro: rastro('fim') }
+        return { ok: true, saida, rastro: rastro(ultima ? 'max_rodadas' : 'fim') }
       }
     } catch (e) {
       const detalhe = e instanceof Error ? e.message : String(e)
@@ -124,6 +158,37 @@ export class LlmOpenRouterFerramentas implements PortaLlmFerramentas {
       clearTimeout(timer)
     }
   }
+}
+
+/**
+ * O que o modelo devolveu → a saída que o domínio valida.
+ *
+ * ⚠️ Modelo gratuito: às vezes JSON com cerca de markdown, às vezes JSON com
+ * outro nome de campo, às vezes TEXTO CRU. Tudo isso vira `{mensagens:[…]}` —
+ * o guardrail numérico e a validação de confiança continuam valendo no turno.
+ * Devolve null só para resposta vazia.
+ */
+export function interpretarSaida(texto: string): unknown {
+  const limpo = texto.replace(/^```(?:json)?\s*|\s*```$/g, '').trim()
+  if (!limpo) return null
+  const candidato = extrairJson(limpo)
+  if (candidato && typeof candidato === 'object') {
+    const o = candidato as Record<string, unknown>
+    if (Array.isArray(o['mensagens'])) return { confianca: 0.7, ...o }
+    const texto1 = ['texto', 'resposta', 'mensagem', 'message', 'content', 'reply'].map((k) => o[k]).find((v) => typeof v === 'string' && v.trim())
+    if (typeof texto1 === 'string') return { ...o, mensagens: [texto1.trim()], confianca: typeof o['confianca'] === 'number' ? o['confianca'] : 0.6 }
+  }
+  // Texto cru: vira UMA mensagem com confiança baixa (o modelo não seguiu o formato).
+  return { mensagens: [limpo.slice(0, 1200)], confianca: 0.6 }
+}
+
+function extrairJson(texto: string): unknown {
+  try { return JSON.parse(texto) } catch { /* segue */ }
+  const ini = texto.indexOf('{'), fim = texto.lastIndexOf('}')
+  if (ini >= 0 && fim > ini) {
+    try { return JSON.parse(texto.slice(ini, fim + 1)) } catch { /* segue */ }
+  }
+  return null
 }
 
 interface RespostaFio {

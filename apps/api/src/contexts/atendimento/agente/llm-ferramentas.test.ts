@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { LlmOpenRouterFerramentas } from './openrouter-ferramentas.js'
+import { LlmOpenRouterFerramentas, interpretarSaida } from './openrouter-ferramentas.js'
 import { paraMensagens } from './claude-ferramentas.js'
 import { faltaParaLlmFerramentas, llmFerramentasDoAmbiente } from './fabrica-ferramentas.js'
 import type { PedidoDeLaco } from './porta-llm.js'
@@ -61,12 +61,12 @@ describe('OpenRouter com ferramentas', () => {
     }
   })
 
-  it('resposta que não é JSON → resposta_inesperada com o começo do texto', async () => {
+  it('resposta que não é JSON vira UMA mensagem com confiança baixa (modelo gratuito que ignorou o formato)', async () => {
     const llm = new LlmOpenRouterFerramentas({ apiKey: 'k', modelos: ['a/x'], buscar: fetchDeRespostas([
       { choices: [{ finish_reason: 'stop', message: { content: 'Olá! Temos sim.' } }] },
     ]) })
     const r = await llm.rodar(pedidoBase(async () => ({ ok: true, saida: {} })))
-    expect(r).toMatchObject({ ok: false, motivo: 'resposta_inesperada' })
+    expect(r).toMatchObject({ ok: true, saida: { mensagens: ['Olá! Temos sim.'], confianca: 0.6 } })
   })
 
   it('no teto de rodadas pede a resposta final sem ferramentas (tool_choice none)', async () => {
@@ -81,6 +81,52 @@ describe('OpenRouter com ferramentas', () => {
     expect(r.ok).toBe(true)
     expect(corpos[1]!['tool_choice']).toBe('none')
     if (r.ok) expect(r.rastro.parouPor).toBe('max_rodadas')
+  })
+})
+
+describe('OpenRouter — modelos gratuitos que não seguem o formato', () => {
+  it('texto cru vira uma mensagem com confiança baixa; JSON com outro nome de campo é mapeado; cerca markdown é removida', () => {
+    expect(interpretarSaida('Oi! Temos camisetas sim.')).toEqual({ mensagens: ['Oi! Temos camisetas sim.'], confianca: 0.6 })
+    expect(interpretarSaida('```json\n{"resposta":"Temos sim","confianca":0.8}\n```')).toMatchObject({ mensagens: ['Temos sim'], confianca: 0.8 })
+    expect(interpretarSaida('Claro: {"mensagens":["A","B"],"confianca":0.9} fim')).toMatchObject({ mensagens: ['A', 'B'], confianca: 0.9 })
+    expect(interpretarSaida('   ')).toBeNull()
+  })
+
+  it('400 por response_format desce para json_object e depois para nenhum, sem gastar rodada', async () => {
+    const corpos: Record<string, unknown>[] = []
+    const llm = new LlmOpenRouterFerramentas({ apiKey: 'k', modelos: ['x/free'], buscar: fetchDeRespostas([
+      new Response('{"error":{"message":"response_format json_schema is not supported"}}', { status: 400 }),
+      new Response('{"error":{"message":"response_format not supported by this model"}}', { status: 400 }),
+      { choices: [{ finish_reason: 'stop', message: { content: 'Olá, posso ajudar?' } }] },
+    ], corpos) })
+    const r = await llm.rodar(pedidoBase(async () => ({ ok: true, saida: {} })))
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.saida).toEqual({ mensagens: ['Olá, posso ajudar?'], confianca: 0.6 })
+      expect(r.rastro.rodadas).toBe(1)
+    }
+    expect((corpos[0]!['response_format'] as { type: string }).type).toBe('json_schema')
+    expect((corpos[1]!['response_format'] as { type: string }).type).toBe('json_object')
+    expect(corpos[2]!['response_format']).toBeUndefined()
+    // O esquema também foi escrito no system, para o modelo que ignora o parâmetro.
+    const sys = (corpos[2]!['messages'] as { role: string; content: string }[])[0]!
+    expect(sys.content).toContain('formato_obrigatorio')
+  })
+
+  it('preset groq: URL do Groq, sem cadeia models e sem strict', async () => {
+    const corpos: Record<string, unknown>[] = []
+    const urls: string[] = []
+    const buscar = (async (url: unknown, init?: RequestInit) => {
+      urls.push(String(url)); corpos.push(JSON.parse(String(init?.body)))
+      return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{"mensagens":["ok"],"confianca":0.9}' } }] }), { status: 200 })
+    }) as unknown as typeof fetch
+    const llm = new LlmOpenRouterFerramentas({ preset: 'groq', apiKey: 'k', modelos: ['llama-3.3-70b-versatile', 'outro'], buscar })
+    expect(llm.nome).toBe('groq')
+    const r = await llm.rodar(pedidoBase(async () => ({ ok: true, saida: {} })))
+    expect(r.ok).toBe(true)
+    expect(urls[0]).toContain('api.groq.com')
+    expect(corpos[0]!['models']).toBeUndefined()
+    expect((corpos[0]!['tools'] as { function: { strict?: boolean } }[])[0]!.function.strict).toBeUndefined()
   })
 })
 
@@ -108,5 +154,8 @@ describe('Fábrica', () => {
     expect(llmFerramentasDoAmbiente({ IA_PROVEDOR: 'openrouter', OPENROUTER_API_KEY: 'k', IA_MODELO: 'a/x,b/y' }).nome).toBe('openrouter')
     expect(llmFerramentasDoAmbiente({ ANTHROPIC_API_KEY: 'k' }).nome).toBe('claude')
     expect(llmFerramentasDoAmbiente({ IA_PROVEDOR: 'simulado' }).nome).toBe('simulado')
+    expect(faltaParaLlmFerramentas({ IA_PROVEDOR: 'groq' })).toEqual(['GROQ_API_KEY'])
+    expect(llmFerramentasDoAmbiente({ IA_PROVEDOR: 'groq', GROQ_API_KEY: 'k' }).nome).toBe('groq')
+    expect(llmFerramentasDoAmbiente({ IA_PROVEDOR: 'gemini', GEMINI_API_KEY: 'k' }).nome).toBe('gemini')
   })
 })
