@@ -337,6 +337,10 @@ Revisão adversarial do núcleo (2026-10-02): 4 achados graves e 5 médios corri
 com dono, guardrail sem R$, migração em sombra, concorrência do worker, teto do debounce, handoff só
 em autônomo).
 
+Adendo 2026-10-04: catálogo de modelos de IA por cliente (0093, `docs/estudo-modelos-llm.md`) —
+escolha por número na tela do agente e permissão por cliente na Plataforma; adaptador tolerante a
+modelos gratuitos (Groq recomendado sem orçamento).
+
 Pendências conhecidas (próxima rodada): worker que embute trechos/produtos pendentes (exige pgvector
 no Railway); proposta com botões Confirmar/Alterar no oficial (adaptador pronto, falta o caminho no
 gateway); `enviarLista`; INV-23 (throttle) antes de autônomo no não-oficial; exibir as capacidades

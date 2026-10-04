@@ -70,6 +70,17 @@ zerando em produção = algo volátil entrou no prefixo).
 `output_config.format` — **forçar ferramenta devolve 400 nos modelos atuais**. `simulado` é um
 vendedor de regras para testes/playground; recusado em produção.
 
+## Catálogo de modelos (0093, `docs/estudo-modelos-llm.md`)
+
+Três camadas: **catálogo** `modelo_ia` (global, mantido pela Gera3: fornecedor, id na API,
+capacidades, custo, limite gratuito), **permissão** `tenant_modelo_ia` (staff decide por cliente;
+sem linhas valem os `padrao_novos_tenants`), **escolha** `agente_config.modelo` (código do catálogo,
+por número). A chave do fornecedor é NOSSA, no ambiente; fornecedor sem chave aparece como
+indisponível com o nome da variável. Adicionar modelo = linha no catálogo (migration aditiva) +
+rodar as douradas com `IA_E2E=1` nele. Fornecedores pelo fio OpenAI (`openrouter-ferramentas.ts`,
+presets): openrouter, groq, gemini, cerebras, maritaca — o adaptador degrada formato
+(json_schema → json_object → nenhum) e aceita texto cru; o guardrail numérico não depende do modelo.
+
 ## Playground e auditoria
 
 `POST /v1/canais/:id/agente/simular` roda o agente REAL (ferramentas, catálogo, políticas) numa
