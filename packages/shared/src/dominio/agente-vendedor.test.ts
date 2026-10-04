@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { describe, expect, it } from 'vitest'
 import { fatiarMensagem, respostaDoAgente, verificarNumerosNaResposta } from './agente-vendedor.js'
 import { decidirAlcada, podeTransitar } from './pedido.js'
@@ -33,6 +34,13 @@ describe('Resposta estruturada', () => {
     expect(respostaDoAgente.safeParse({ mensagens: [], confianca: 0.5 }).success).toBe(false)
     expect(respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 1.5 }).success).toBe(false)
     expect(respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 0.9 }).success).toBe(true)
+  })
+  it('slots é PARCIAL: {} e um subconjunto passam; chave desconhecida reprova; o schema não exige nenhum slot', () => {
+    expect(respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 0.9, slots: {} }).success).toBe(true)
+    expect(respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 0.9, slots: { cidade: 'Fortaleza' } }).success).toBe(true)
+    expect(respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 0.9, slots: { inventada: 'x' } }).success).toBe(false)
+    const esquema = z.toJSONSchema(respostaDoAgente, { target: 'draft-7' }) as unknown as { properties: { slots: { required?: string[] } } }
+    expect(esquema.properties.slots.required).toBeUndefined()
   })
 })
 

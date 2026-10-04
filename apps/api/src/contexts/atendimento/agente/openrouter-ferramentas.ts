@@ -2,6 +2,7 @@ import type {
   PedidoDeLaco, PortaLlmFerramentas, ResultadoLaco, CapacidadesLlmFerramentas, ChamadaRegistrada, RastroDoLaco,
 } from './porta-llm.js'
 import type { MotivoFalhaLlm } from './porta.js'
+import { SLOTS_QUALIFICACAO } from '@geracrm/shared'
 
 /**
  * Adaptador OPENROUTER com laço de ferramentas — a RESERVA DE DISPONIBILIDADE
@@ -86,7 +87,7 @@ export class LlmOpenRouterFerramentas implements PortaLlmFerramentas {
     // ⚠️ O esquema vai ESCRITO no system também: modelo gratuito que ignora
     //    `response_format` ainda sabe o que devolver.
     const mensagens: MensagemFio[] = [
-      { role: 'system', content: pedido.sistema.map((b) => b.texto).join('\n\n') + `\n\n<formato_obrigatorio>Responda SOMENTE com um objeto JSON válido, sem texto fora dele, neste formato: {"mensagens":["texto da primeira bolha","(opcional) segunda bolha"],"confianca":0.9,"fase":"descoberta|recomendacao|proposta|fechamento|handoff","handoff":{"motivo":"...","resumo":"..."} (opcional),"slots":{} (opcional)}</formato_obrigatorio>` },
+      { role: 'system', content: pedido.sistema.map((b) => b.texto).join('\n\n') + `\n\n<formato_obrigatorio>Responda SOMENTE com um objeto JSON válido, sem texto fora dele, neste formato: {"mensagens":["texto da primeira bolha","(opcional) segunda bolha"],"confianca":0.9,"fase":"descoberta|recomendacao|proposta|fechamento|handoff","handoff":{"motivo":"...","resumo":"..."} (opcional),"slots":{"cidade":"..."} (opcional; só chaves ${SLOTS_QUALIFICACAO.join('|')} e só o que o cliente disse)}</formato_obrigatorio>` },
       ...paraFio(pedido.mensagens),
     ]
     const modelos = pedido.modelo?.trim() ? [pedido.modelo.trim()] : this.#modelos
@@ -176,6 +177,11 @@ export function interpretarSaida(texto: string): unknown {
   const candidato = extrairJson(limpo)
   if (candidato && typeof candidato === 'object' && !Array.isArray(candidato)) {
     const o = { ...(candidato as Record<string, unknown>) }
+    if ('slots' in o) {
+      const slots = normalizarSlots(o['slots'])
+      if (slots) o['slots'] = slots
+      else delete o['slots']
+    }
     const brutas = o['mensagens'] ?? o['messages'] ?? o['respostas']
     const mensagens = normalizarMensagens(Array.isArray(brutas) ? brutas : brutas !== undefined ? [brutas] : [])
     if (mensagens.length > 0) return { ...o, mensagens, confianca: normalizarConfianca(o['confianca']) }
@@ -188,6 +194,21 @@ export function interpretarSaida(texto: string): unknown {
   }
   // Texto cru: vira UMA mensagem com confiança baixa (o modelo não seguiu o formato).
   return { mensagens: [limpo.slice(0, 1200)], confianca: 0.6 }
+}
+
+/**
+ * `slots` como o modelo gratuito manda: `{}`, nulos, chave inventada, número.
+ * Fica só chave conhecida com texto não vazio — o resto é como se não tivesse vindo.
+ */
+function normalizarSlots(bruto: unknown): Record<string, string> | undefined {
+  if (!bruto || typeof bruto !== 'object' || Array.isArray(bruto)) return undefined
+  const out: Record<string, string> = {}
+  for (const chave of SLOTS_QUALIFICACAO) {
+    const v = (bruto as Record<string, unknown>)[chave]
+    const t = typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : ''
+    if (t) out[chave] = t.slice(0, 120)
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /**

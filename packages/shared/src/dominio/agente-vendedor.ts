@@ -79,8 +79,13 @@ export const respostaDoAgente = z.object({
   confianca: z.number().min(0).max(1),
   fase: z.enum(FASES_VENDA).optional(),
   handoff: z.object({ motivo: z.enum(MOTIVOS_HANDOFF), resumo: z.string().trim().max(600) }).optional(),
-  /** Slots que o cliente DISSE neste turno. Ainda passam por validação. */
-  slots: z.record(z.enum(SLOTS_QUALIFICACAO), z.string().trim().max(120)).optional(),
+  /**
+   * Slots que o cliente DISSE neste turno. Ainda passam por validação.
+   * ⚠️ `partialRecord`, nunca `record`: no Zod 4 o record com enum de chaves é
+   * EXAUSTIVO — `{}` reprova e o JSON Schema marca os 7 slots como obrigatórios,
+   * o que empurra o modelo a inventar o que o cliente não disse.
+   */
+  slots: z.partialRecord(z.enum(SLOTS_QUALIFICACAO), z.string().trim().max(120)).optional(),
 })
 export type RespostaDoAgente = z.infer<typeof respostaDoAgente>
 

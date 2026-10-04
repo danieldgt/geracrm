@@ -62,6 +62,11 @@ hora — vai como **operador** dentro das mensagens, nunca no system). Mudar o b
 mudança de comportamento: changelog + rodar as evals. Nada volátil no system (`cache_read_input_tokens`
 zerando em produção = algo volátil entrou no prefixo).
 
+⚠️ `respostaDoAgente.slots` é `z.partialRecord`, nunca `z.record`: no Zod 4 o record com enum de
+chaves é exaustivo — `{}` reprova com "expected string, received undefined" e o JSON Schema marca
+todos os slots como obrigatórios, empurrando o modelo a inventar. O adaptador OpenAI-compatível
+ainda normaliza slots nulos, vazios ou com chave desconhecida antes do parse.
+
 ## Modelo
 
 `fabrica-ferramentas.ts`: `IA_PROVEDOR = claude | simulado`; `ANTHROPIC_API_KEY`; `IA_MODELO`

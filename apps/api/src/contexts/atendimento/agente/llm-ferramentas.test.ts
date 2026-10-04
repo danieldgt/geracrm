@@ -97,6 +97,12 @@ describe('OpenRouter — modelos gratuitos que não seguem o formato', () => {
     expect(interpretarSaida('{"messages":["a","b","c","d"]}')).toMatchObject({ mensagens: ['a', 'b', 'c'], confianca: 0.7 })
     expect(interpretarSaida('["x","y"]')).toMatchObject({ mensagens: ['x', 'y'] })
   })
+  it('slots: {} some; nulo, chave inventada e vazio caem fora; número vira texto', () => {
+    expect(interpretarSaida('{"mensagens":["Oi"],"confianca":0.9,"slots":{}}')).not.toHaveProperty('slots')
+    expect(interpretarSaida('{"mensagens":["Oi"],"confianca":0.9,"slots":{"tipoCompra":null,"cidade":" Fortaleza ","volume":120,"inventada":"x","prazo":""}}'))
+      .toMatchObject({ slots: { cidade: 'Fortaleza', volume: '120' } })
+    expect(interpretarSaida('{"mensagens":["Oi"],"confianca":0.9,"slots":"nenhum"}')).not.toHaveProperty('slots')
+  })
 
   it('400 por response_format desce para json_object e depois para nenhum, sem gastar rodada', async () => {
     const corpos: Record<string, unknown>[] = []
