@@ -18,7 +18,7 @@ import { processarTranscricoes, INTERVALO_TRANSCRICAO_MS } from './workers/trans
 import { transcricaoDoAmbiente } from './contexts/atendimento/midia/transcricao/fabrica.js'
 import { processarRetornos, INTERVALO_RETORNOS_MS } from './contexts/atendimento/agente/retorno.js'
 import { passadaDeEmbedding } from './contexts/atendimento/agente/conhecimento/embutir-pendentes.js'
-import { embeddingDoAmbiente } from './contexts/catalogo/porta-embedding.js'
+import { embeddingDoAmbiente, faltaParaEmbedding } from './contexts/catalogo/porta-embedding.js'
 import { ligacoesPadrao } from './contexts/atendimento/agente/ferramentas/ligacoes.js'
 
 const porta = Number(process.env.PORT ?? 3000)
@@ -274,7 +274,8 @@ if (process.env.DATABASE_ADMIN_URL) {
 
 // PERNA SEMÂNTICA (ADR-026): embute trechos de conhecimento e produtos pendentes.
 // Como dono, com advisory lock (instâncias não pagam em dobro), em pool `max: 1`
-// (lock e unlock na mesma conexão). ⚠️ Só liga com VOYAGE_API_KEY; sem ela, ou
+// (lock e unlock na mesma conexão). ⚠️ Só liga com provedor de embedding configurado
+// (Cloudflare ou Voyage); sem ele, ou
 // sem pgvector no servidor, a busca segue lexical e a tela diz por quê.
 // Cadência folgada e lotes pequenos: a faixa gratuita da Voyage é apertada.
 let donoEmbedding: ReturnType<typeof postgres> | undefined
@@ -295,7 +296,7 @@ if (process.env.DATABASE_ADMIN_URL) {
         .finally(() => { embutindo = false })
     }, 60_000)
   } else {
-    app.log.info('busca semântica desligada (sem VOYAGE_API_KEY)')
+    app.log.info({ falta: faltaParaEmbedding() }, 'busca semântica desligada — falta variável de embedding')
   }
 }
 
