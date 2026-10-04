@@ -3,6 +3,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import type { AlcadaAgente, ModoAgente, PersonaResolvida, RegrasDoAgente } from '@geracrm/shared'
 import type { ErroApi } from './agente.regras.js'
+import type { CatalogoDoTenant } from './modelos.regras.js'
 
 /**
  * A porta HTTP do agente vendedor — tipos da resposta e chamadas, nada de tela.
@@ -104,6 +105,8 @@ export interface Sessao {
   readonly modo: string | null
   readonly slots: Record<string, unknown>
   readonly custoCentavos: number
+  /** ⚠️ Opcional: a API atual não manda por sessão; quando vier, a tela já mostra. */
+  readonly modelo?: string | null
 }
 
 export interface Pagina<T> { readonly itens: readonly T[]; readonly proximoCursor: string | null }
@@ -122,6 +125,11 @@ export class AgenteServico {
 
   carregarConfig(canalId: string): Promise<ConfigAgente> {
     return firstValueFrom(this.http.get<ConfigAgente>(`/v1/canais/${canalId}/agente`))
+  }
+
+  /** Os modelos que ESTE tenant pode escolher (o staff libera; a chave é do servidor). */
+  listarModelos(): Promise<CatalogoDoTenant> {
+    return firstValueFrom(this.http.get<CatalogoDoTenant>('/v1/agente/modelos'))
   }
 
   async salvarConfig(canalId: string, corpo: Record<string, unknown>): Promise<Resultado<{ modo: ModoAgente }>> {

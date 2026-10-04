@@ -58,6 +58,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
                   <span>{{ s.turnos }} {{ s.turnos === 1 ? 'turno' : 'turnos' }}</span>
                   <span>{{ s.tokens }} tokens</span>
                   <span>{{ reais(s.custoCentavos) }}</span>
+                  @if (s.modelo) { <span class="modelo encolhe" title="Modelo">{{ s.modelo }}</span> }
                 </div>
                 @if (s.motivoSaida) { <p class="motivo">Saiu porque: {{ s.motivoSaida }}</p> }
                 @if (resumo(s); as r) { <p class="extraido">{{ r }}</p> }
@@ -92,6 +93,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
     .linha { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; min-width: 0; }
     .nome { color: var(--texto); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 120px; }
     .meta { display: flex; gap: var(--espacamento-3); flex-wrap: wrap; color: var(--texto-suave); }
+    .modelo { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .motivo { margin: 0; color: var(--texto-secundario); font-size: 13px; }
     .extraido { margin: 0; color: var(--texto); font-size: 13px; overflow-wrap: anywhere; }
     .descartado { margin: 0; color: var(--atencao); font-size: 12px; display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }

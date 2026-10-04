@@ -3,6 +3,7 @@ import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { AuthServico } from '../../nucleo/auth.servico.js'
+import { ModelosClienteComponente } from './modelos-cliente.componente.js'
 
 interface Cliente {
   readonly id: string
@@ -41,7 +42,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 @Component({
   selector: 'app-clientes-plataforma',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe],
+  imports: [DatePipe, ModelosClienteComponente],
   template: `
     <header class="cabecalho">
       <h1 class="txt-titulo">Clientes</h1>
@@ -158,17 +159,24 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         } @else {
           <ul class="lista">
             @for (c of itens(); track c.id) {
-              <li class="item" [class.item--aberto]="pedindoMotivo() === c.id">
+              <li class="item" [class.item--aberto]="pedindoMotivo() === c.id || modelosAberto() === c.id">
                 <div class="linha">
                   <span class="c-nome encolhe">{{ c.nome }}</span>
                   <span class="c-plano">{{ c.plano }}</span>
                   <span class="c-data txt-dados">{{ c.criadoEm | date: 'dd/MM/yyyy' }}</span>
                   <span class="c-estado" [class.c-estado--off]="!c.ativo">{{ c.ativo ? 'Ativa' : 'Inativa' }}</span>
+                  <button class="btn btn--fantasma btn--pequeno" type="button" (click)="alternarModelos(c)"
+                          [attr.aria-expanded]="modelosAberto() === c.id">
+                    {{ modelosAberto() === c.id ? 'Fechar modelos' : 'Modelos de IA' }}
+                  </button>
                   <button class="btn btn--secundario btn--pequeno" (click)="pedirMotivo(c)"
                           [disabled]="entrando() === c.id">
                     {{ entrando() === c.id ? 'Entrando…' : 'Entrar' }}
                   </button>
                 </div>
+                @if (modelosAberto() === c.id) {
+                  <app-modelos-cliente [clienteId]="c.id" [clienteNome]="c.nome" (fechar)="modelosAberto.set(null)" />
+                }
                 @if (pedindoMotivo() === c.id) {
                   <div class="motivo-linha">
                     <input class="motivo-in" [value]="motivo()" (input)="motivo.set(valor($event))"
@@ -229,7 +237,8 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .item { display: flex; flex-direction: column; gap: var(--espacamento-2); padding: var(--espacamento-3);
       border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie-elevada); }
     .item--aberto { border-color: var(--acao); }
-    .linha { display: flex; align-items: center; gap: var(--espacamento-3); width: 100%; }
+    .linha { display: flex; align-items: center; gap: var(--espacamento-3); width: 100%; flex-wrap: wrap; min-width: 0; }
+    .item { min-width: 0; }
     .motivo-linha { display: flex; gap: var(--espacamento-2); width: 100%; }
     .motivo-in { flex: 1; min-width: 0; padding: var(--espacamento-2) var(--espacamento-3);
       border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
@@ -254,6 +263,8 @@ export class ClientesPlataformaPagina implements OnInit {
   readonly entrando = signal<string | null>(null)
   readonly pedindoMotivo = signal<string | null>(null)
   readonly motivo = signal('')
+  /** Um painel de modelos aberto por vez — o id do cliente expandido. */
+  readonly modelosAberto = signal<string | null>(null)
   private readonly auth = inject(AuthServico)
 
   readonly nome = signal('')
@@ -294,6 +305,10 @@ export class ClientesPlataformaPagina implements OnInit {
     this.motivo.set('')
     this.pedindoMotivo.set(c.id)
     this.erroForm.set(null)
+  }
+
+  alternarModelos(c: Cliente): void {
+    this.modelosAberto.update((atual) => (atual === c.id ? null : c.id))
   }
 
   cancelarMotivo(): void {
