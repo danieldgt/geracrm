@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  criarEmbeddingVoyage, embeddingDoAmbiente, EmbeddingIndisponivel, ErroEmbedding, DIMENSOES_VOYAGE,
+  criarEmbeddingVoyage, criarEmbeddingCloudflare, embeddingDoAmbiente, faltaParaEmbedding,
+  EmbeddingIndisponivel, ErroEmbedding, DIMENSOES_VOYAGE,
 } from './porta-embedding.js'
 
 /**
@@ -98,17 +99,61 @@ describe('Adaptador Voyage — falhas tipificadas', () => {
 })
 
 describe('Fábrica pelo ambiente', () => {
-  it('sem VOYAGE_API_KEY, então o objeto nulo: capacidade desligada e embutir estoura tipificado', async () => {
+  it('sem nenhuma chave, então o objeto nulo: capacidade desligada, embutir estoura tipificado e `falta` nomeia as variáveis', async () => {
     const porta = embeddingDoAmbiente({})
     expect(porta).toBe(EmbeddingIndisponivel)
     expect(porta.capacidades.buscaSemantica).toBe(false)
     await expect(porta.embutir(['x'], 'consulta')).rejects.toMatchObject({ codigo: 'nao_configurado' })
+    expect(faltaParaEmbedding({})).toBe('CLOUDFLARE_ACCOUNT_ID e CLOUDFLARE_AI_TOKEN (ou VOYAGE_API_KEY)')
+    expect(faltaParaEmbedding({ CLOUDFLARE_ACCOUNT_ID: 'a' })).toBe('CLOUDFLARE_AI_TOKEN (ou VOYAGE_API_KEY)')
   })
 
-  it('com VOYAGE_API_KEY, então o adaptador Voyage com capacidade ligada', () => {
-    const porta = embeddingDoAmbiente({ VOYAGE_API_KEY: 'abc' })
-    expect(porta.nome).toBe('voyage:voyage-4')
-    expect(porta.capacidades.buscaSemantica).toBe(true)
-    expect(porta.dimensoes).toBe(1024)
+  it('só com VOYAGE_API_KEY, então Voyage; com as duas da Cloudflare, Cloudflare ganha; EMBEDDING_PROVEDOR força', () => {
+    expect(embeddingDoAmbiente({ VOYAGE_API_KEY: 'abc' }).nome).toBe('voyage:voyage-4')
+    const cf = embeddingDoAmbiente({ VOYAGE_API_KEY: 'abc', CLOUDFLARE_ACCOUNT_ID: 'acc', CLOUDFLARE_AI_TOKEN: 'tok' })
+    expect(cf.nome).toBe('cloudflare:@cf/baai/bge-m3')
+    expect(cf.dimensoes).toBe(1024)
+    expect(embeddingDoAmbiente({ EMBEDDING_PROVEDOR: 'voyage', VOYAGE_API_KEY: 'abc', CLOUDFLARE_ACCOUNT_ID: 'acc', CLOUDFLARE_AI_TOKEN: 'tok' }).nome).toBe('voyage:voyage-4')
+    // Pedido explícito sem a chave correspondente NÃO cai para o outro: fica desligado e diz o que falta.
+    expect(embeddingDoAmbiente({ EMBEDDING_PROVEDOR: 'cloudflare', VOYAGE_API_KEY: 'abc' })).toBe(EmbeddingIndisponivel)
+    expect(faltaParaEmbedding({ EMBEDDING_PROVEDOR: 'cloudflare', VOYAGE_API_KEY: 'abc' })).toBe('CLOUDFLARE_ACCOUNT_ID e CLOUDFLARE_AI_TOKEN')
+    expect(faltaParaEmbedding({ EMBEDDING_PROVEDOR: 'voyage' })).toBe('VOYAGE_API_KEY')
+  })
+})
+
+describe('Adaptador Cloudflare Workers AI (bge-m3)', () => {
+  const vetorCf = (semente: number) => Array.from({ length: 1024 }, (_, i) => (i + semente) / 1000)
+
+  it('manda {text:[...]} com Bearer para a conta certa e devolve result.data na ordem', async () => {
+    const { f, chamadas } = fetchFalso({ corpo: { success: true, result: { shape: [2, 1024], data: [vetorCf(1), vetorCf(2)] } } })
+    const porta = criarEmbeddingCloudflare({ accountId: 'conta-1', token: 'tok', fetch: f })
+    const r = await porta.embutir(['camiseta', 'calça'], 'documento')
+    expect(r).toHaveLength(2)
+    expect(r[0]![0]).toBeCloseTo(1 / 1000)
+    expect(chamadas[0]!.url).toBe('https://api.cloudflare.com/client/v4/accounts/conta-1/ai/run/@cf/baai/bge-m3')
+    const init = chamadas[0]!.init
+    expect((init.headers as Record<string, string>)['authorization']).toBe('Bearer tok')
+    expect(JSON.parse(init.body as string)).toEqual({ text: ['camiseta', 'calça'] })
+  })
+
+  it('aceita também itens {embedding} e recusa vetor de dimensão errada', async () => {
+    const ok = criarEmbeddingCloudflare({ accountId: 'a', token: 't', fetch: fetchFalso({ corpo: { success: true, result: { data: [{ embedding: vetorCf(3) }] } } }).f })
+    expect((await ok.embutir(['x'], 'consulta'))[0]).toHaveLength(1024)
+    const errado = criarEmbeddingCloudflare({ accountId: 'a', token: 't', fetch: fetchFalso({ corpo: { success: true, result: { data: [[0.1, 0.2]] } } }).f })
+    await expect(errado.embutir(['x'], 'consulta')).rejects.toMatchObject({ codigo: 'resposta_inesperada' })
+  })
+
+  it('mapeia 401/403 → autenticacao, 429 → limite_excedido, 5xx → indisponivel, success:false → tipificado, timeout por chamada → tempo_esgotado', async () => {
+    const porta = (resposta: Parameters<typeof fetchFalso>[0]) => criarEmbeddingCloudflare({ accountId: 'a', token: 't', fetch: fetchFalso(resposta).f })
+    await expect(porta({ status: 401 }).embutir(['x'], 'consulta')).rejects.toMatchObject({ codigo: 'autenticacao' })
+    await expect(porta({ status: 429 }).embutir(['x'], 'consulta')).rejects.toMatchObject({ codigo: 'limite_excedido' })
+    await expect(porta({ status: 503 }).embutir(['x'], 'consulta')).rejects.toMatchObject({ codigo: 'indisponivel' })
+    await expect(porta({ corpo: { success: false, errors: [{ code: 10000, message: 'Authentication error' }] } }).embutir(['x'], 'consulta'))
+      .rejects.toMatchObject({ codigo: 'autenticacao' })
+    const lento: typeof fetch = (_u, init) => new Promise((_res, rej) => {
+      init?.signal?.addEventListener('abort', () => rej(Object.assign(new Error('t'), { name: 'TimeoutError' })))
+    })
+    const p = criarEmbeddingCloudflare({ accountId: 'a', token: 't', fetch: lento, timeoutMs: 10_000 })
+    await expect(p.embutir(['x'], 'consulta', { timeoutMs: 20 })).rejects.toMatchObject({ codigo: 'tempo_esgotado' })
   })
 })

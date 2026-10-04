@@ -126,7 +126,8 @@ describe('Capacidades, embutir e extrair', () => {
     expect(r.statusCode).toBe(200)
     const cap = r.json() as { pgvector: boolean; semantica: string; embedding: { configurado: boolean; falta: string | null }; pendentes: { trechos: number; produtos: number } }
     expect(typeof cap.pgvector).toBe('boolean')
-    expect(cap.embedding).toMatchObject({ configurado: false, falta: 'VOYAGE_API_KEY' })
+    expect(cap.embedding.configurado).toBe(false)
+    expect(cap.embedding.falta).toMatch(/CLOUDFLARE_ACCOUNT_ID.*VOYAGE_API_KEY/)
     expect(cap.semantica).toBe(cap.pgvector ? 'sem_chave' : 'sem_pgvector')
     expect(cap.pendentes.trechos).toBeGreaterThanOrEqual(0)
   })

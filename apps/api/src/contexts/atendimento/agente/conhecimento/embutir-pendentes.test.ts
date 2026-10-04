@@ -92,7 +92,8 @@ describe('capacidadesDeBusca', () => {
   it('com pgvector e SEM chave: semantica=sem_chave, falta VOYAGE_API_KEY, pendentes contam tudo', async () => {
     const cap = await noTenant((tx) => capacidadesDeBusca(tx, EmbeddingIndisponivel))
     expect(cap.pgvector).toBe(true)
-    expect(cap).toMatchObject({ semantica: 'sem_chave', embedding: { configurado: false, provedor: null, falta: 'VOYAGE_API_KEY' } })
+    expect(cap).toMatchObject({ semantica: 'sem_chave', embedding: { configurado: false, provedor: null } })
+    expect(cap.embedding.falta).toMatch(/CLOUDFLARE_ACCOUNT_ID e CLOUDFLARE_AI_TOKEN \(ou VOYAGE_API_KEY\)/)
     expect(cap.pendentes.trechos).toBe(2)
     expect(cap.pendentes.produtos).toBe(1)
     expect(cap.embutidos).toEqual({ produtos: 0, trechos: 0 })

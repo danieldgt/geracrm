@@ -632,6 +632,17 @@ capacidade `buscaSemantica` — degradação visível, nunca quebra.
 **Consequências.** Nenhum serviço externo de busca; tudo sob RLS; o custo de embedding é
 desprezível (≈ US$0,09 por 10 mil produtos). Reranker só se a medição pedir.
 
+**Adendo 2026-10-04.** Dois adaptadores atrás de `PortaEmbedding`: **Cloudflare Workers AI**
+(`@cf/baai/bge-m3`, 1024 dims, serverless gerenciado — modelo sempre quente, cobrado por token,
+cota diária gratuita) é o padrão quando `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_AI_TOKEN` existem;
+Voyage (`voyage-4`) é a alternativa; `EMBEDDING_PROVEDOR` força. Trocar de provedor muda
+`porta.nome` e invalida todos os vetores (o worker `embutir-pendentes` refaz; a busca só compara
+vetores do mesmo `modelo_embedding`). O vetor da **pergunta** passa por cache global
+(`embedding_consulta_cache`, 0095: hash do texto normalizado + modelo, sem texto, sem tenant) e
+tem tempo limite curto (2 s) — estourou, a busca segue lexical naquele turno. Descartado: nó
+próprio que dorme (cold start de 10 s no caminho da pergunta) e híbrido de dois fornecedores
+(vetores não comparáveis).
+
 ## ADR-027 — Propor-e-confirmar com alçada: o modelo propõe, o domínio efetiva
 
 **Contexto.** Incidente de 27/08: um "sim" confirmou o pedido errado. O fluxo `enviar-resumo →

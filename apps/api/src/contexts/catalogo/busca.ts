@@ -2,6 +2,7 @@ import type { AtributosSku, OrigemCatalogo, PerfilPreco, ProdutoResumo, SkuResum
 import type { Sql } from '../../db/index.js'
 import { jsonbDe } from '../../db/jsonb.js'
 import { fragmentoPrecoDeVenda, precosDeVenda, type PrecoDeVenda } from '../pedido/preco-de-venda.js'
+import { chaveDeConsulta, type CacheConsulta } from './cache-consulta.js'
 import { temColunaEmbedding } from './indexador.js'
 import { ErroEmbedding, type PortaEmbedding } from './porta-embedding.js'
 
@@ -96,17 +97,41 @@ function tokensParaTrgm(consulta: string): string[] {
 }
 
 /**
+ * ⚠️ Caminho QUENTE: a pergunta do cliente espera no máximo isto pelo vetor.
+ *    Estourou → busca lexical neste turno, sem erro. O lote do worker usa o
+ *    tempo limite longo do adaptador.
+ */
+export const TIMEOUT_CONSULTA_MS = 2_000
+
+export interface OpcoesEmbutirConsulta {
+  readonly cache?: CacheConsulta | undefined
+  readonly timeoutMs?: number | undefined
+}
+
+export type ResultadoEmbutirConsulta =
+  | { vetor: number[]; modelo: string; origem: 'cache' | 'fornecedor' }
+  | { vetor: null; motivo: string }
+
+/**
  * Embute a consulta ANTES de abrir a transação. Devolve `null` quando a
  * capacidade está desligada ou o fornecedor falhou — a busca degrada para
- * lexical, e o chamador pode registrar o motivo.
+ * lexical, e o chamador pode registrar o motivo. Com `cache`, pergunta repetida
+ * não vai ao fornecedor.
  */
 export async function embutirConsulta(
-  porta: PortaEmbedding, consulta: string,
-): Promise<{ vetor: number[]; modelo: string } | { vetor: null; motivo: string }> {
+  porta: PortaEmbedding, consulta: string, opcoes: OpcoesEmbutirConsulta = {},
+): Promise<ResultadoEmbutirConsulta> {
   if (!porta.capacidades.buscaSemantica) return { vetor: null, motivo: 'capacidade_desligada' }
+  const chave = opcoes.cache ? chaveDeConsulta(porta.nome, consulta) : null
+  if (chave && opcoes.cache) {
+    const guardado = await opcoes.cache.ler(chave)
+    if (guardado) return { vetor: guardado, modelo: porta.nome, origem: 'cache' }
+  }
   try {
-    const [vetor] = await porta.embutir([consulta], 'consulta')
-    return vetor ? { vetor, modelo: porta.nome } : { vetor: null, motivo: 'resposta_inesperada' }
+    const [vetor] = await porta.embutir([consulta], 'consulta', { timeoutMs: opcoes.timeoutMs ?? TIMEOUT_CONSULTA_MS })
+    if (!vetor) return { vetor: null, motivo: 'resposta_inesperada' }
+    if (chave && opcoes.cache) await opcoes.cache.gravar(chave, porta.nome, vetor)
+    return { vetor, modelo: porta.nome, origem: 'fornecedor' }
   } catch (erro) {
     return { vetor: null, motivo: erro instanceof ErroEmbedding ? erro.codigo : 'indisponivel' }
   }

@@ -19,6 +19,8 @@ const EXCECOES_TENANCY = new Set([
   'tenant', 'plano', 'perfil_vertical_modelo', 'tarifa_meta', 'schema_migrations',
   // Catálogo global de modelos de IA (0093): mantido pela Gera3, como `plano`.
   'modelo_ia',
+  // Cache global do vetor de consulta (0095): só hash + vetor, sem texto nem dono.
+  'embedding_consulta_cache',
 ])
 
 const aqui = dirname(fileURLToPath(import.meta.url))

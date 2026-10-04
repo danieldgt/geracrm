@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { exigirTenant } from '../../../../plugins/tenant.js'
+import { sql } from '../../../../db/index.js'
 import { embutirConsulta } from '../../../catalogo/busca.js'
+import { cacheConsultaPadrao } from '../../../catalogo/cache-consulta.js'
 import { embeddingDoAmbiente } from '../../../catalogo/porta-embedding.js'
 import { buscarConhecimento } from './busca.js'
 import { capacidadesDeBusca, embutirPendentes } from './embutir-pendentes.js'
@@ -285,7 +287,9 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
       const c = parse.data
       // Embedding ANTES da transação: rede externa nunca com transação aberta.
       const porta = embeddingDoAmbiente()
-      const embutido = porta.capacidades.buscaSemantica ? await embutirConsulta(porta, c.pergunta) : { vetor: null, motivo: 'capacidade_desligada' }
+      const embutido = porta.capacidades.buscaSemantica
+        ? await embutirConsulta(porta, c.pergunta, { cache: cacheConsultaPadrao(sql) })
+        : { vetor: null as null, motivo: 'capacidade_desligada' }
       const r = await req.comTenant((tx) => buscarConhecimento(tx, {
         pergunta: c.pergunta, canalId: c.canalId ?? undefined, limite: 5,
         ...(embutido.vetor ? { vetorConsulta: embutido.vetor, modeloEmbedding: embutido.modelo } : {}),
@@ -294,6 +298,7 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
         trechos: r.trechos.map((t) => ({ ...t, fonte: `${t.titulo} v${t.versao}` })),
         fontes: r.fontes,
         semantica: embutido.vetor ? 'ligada' : embutido.motivo,
+        vetorDe: embutido.vetor ? embutido.origem : null,
       })
     },
   )

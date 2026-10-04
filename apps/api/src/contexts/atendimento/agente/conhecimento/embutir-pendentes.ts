@@ -1,6 +1,7 @@
 import type { Sql } from '../../../../db/index.js'
 import { temColunaEmbedding } from '../../../catalogo/indexador.js'
-import { ErroEmbedding, type CodigoErroEmbedding, type PortaEmbedding } from '../../../catalogo/porta-embedding.js'
+import { podarCache } from '../../../catalogo/cache-consulta.js'
+import { ErroEmbedding, faltaParaEmbedding, type CodigoErroEmbedding, type PortaEmbedding } from '../../../catalogo/porta-embedding.js'
 import { temColunaEmbeddingConhecimento } from './indexador.js'
 
 /**
@@ -24,7 +25,8 @@ export type EstadoSemantica = 'ligada' | 'sem_pgvector' | 'sem_chave'
 
 export interface CapacidadesDeBusca {
   readonly pgvector: boolean
-  readonly embedding: { readonly configurado: boolean; readonly provedor: string | null; readonly falta: 'VOYAGE_API_KEY' | null }
+  /** `falta` nomeia a(s) variável(is) de ambiente que destravam a semântica — para quem resolve. */
+  readonly embedding: { readonly configurado: boolean; readonly provedor: string | null; readonly falta: string | null }
   readonly semantica: EstadoSemantica
   readonly pendentes: { readonly produtos: number; readonly trechos: number }
   readonly embutidos: { readonly produtos: number; readonly trechos: number }
@@ -75,13 +77,13 @@ async function contar(tx: Sql, tabela: Tabela, porta: PortaEmbedding, pgvector: 
   return { pendentes: r?.pendentes ?? 0, embutidos: r?.embutidos ?? 0 }
 }
 
-export async function capacidadesDeBusca(tx: Sql, porta: PortaEmbedding): Promise<CapacidadesDeBusca> {
+export async function capacidadesDeBusca(tx: Sql, porta: PortaEmbedding, env: NodeJS.ProcessEnv = process.env): Promise<CapacidadesDeBusca> {
   const pgvector = await temPgvector(tx)
   const [p, t] = await Promise.all([contar(tx, 'produto_indice', porta, pgvector), contar(tx, 'conhecimento_trecho', porta, pgvector)])
   const configurado = porta.capacidades.buscaSemantica
   return {
     pgvector,
-    embedding: { configurado, provedor: configurado ? porta.nome : null, falta: configurado ? null : 'VOYAGE_API_KEY' },
+    embedding: { configurado, provedor: configurado ? porta.nome : null, falta: configurado ? null : faltaParaEmbedding(env) },
     semantica: estadoSemantica(pgvector, porta),
     pendentes: { produtos: p.pendentes, trechos: t.pendentes },
     embutidos: { produtos: p.embutidos, trechos: t.embutidos },
@@ -180,7 +182,10 @@ export async function passadaDeEmbedding(
   try {
     const executar: Executar = <T>(fn: (tx: Sql) => Promise<T>) =>
       dono.begin((tx) => fn(tx as unknown as Sql)) as unknown as Promise<T>
-    return await embutirPendentes(executar, porta, opcoes)
+    const r = await embutirPendentes(executar, porta, opcoes)
+    // Poda do cache de consultas na mesma passada: barato, e ninguém mais faz.
+    await podarCache(dono).catch(() => 0)
+    return r
   } finally {
     await dono`SELECT pg_advisory_unlock(hashtext('embutir_pendentes'))`
   }

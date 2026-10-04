@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import { comTenantServico, type Sql } from '../../../../db/index.js'
+import { comTenantServico, type Sql, sql } from '../../../../db/index.js'
 import { buscarCatalogo, detalharProduto, precoEEstoque, type ProdutoDetalhe } from '../../../catalogo/busca.js'
 import {
   obterOuCriarRascunho, adicionarItemPorSku, alterarQuantidade, removerItem, lerRascunho, voltarARascunho,
 } from '../../../pedido/montagem.js'
 import { precosDeVenda } from '../../../pedido/preco-de-venda.js'
 import { embutirConsulta } from '../../../catalogo/busca.js'
+import { cacheConsultaPadrao } from '../../../catalogo/cache-consulta.js'
 import { embeddingDoAmbiente } from '../../../catalogo/porta-embedding.js'
 import { alterarCarrinhoEnsaio, lerCarrinhoEnsaio } from './carrinho-ensaio.js'
 import { proporPedido, HORAS_VALIDADE_PROPOSTA } from '../../../pedido/proposta.js'
@@ -53,7 +54,7 @@ export const catalogoReal: CatalogoPorta = {
   async buscar(ctx, p) {
     // A perna semântica só entra se houver embedding configurado — e o vetor é
     // calculado ANTES da transação (rede fora da tx).
-    const emb = await embutirConsulta(embedding, p.consulta)
+    const emb = await embutirConsulta(embedding, p.consulta, { cache: cacheConsultaPadrao(sql) })
     const r = await comTenantServico(ctx.tenantId, (tx) => buscarCatalogo(tx, {
       consulta: p.consulta, perfil: ctx.perfil, limite: p.limite,
       ...(emb.vetor ? { vetorConsulta: emb.vetor, modeloEmbedding: emb.modelo } : {}),

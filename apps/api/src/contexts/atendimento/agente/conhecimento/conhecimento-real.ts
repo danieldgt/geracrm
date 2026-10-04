@@ -1,5 +1,6 @@
-import { comTenantServico } from '../../../../db/index.js'
+import { comTenantServico, sql } from '../../../../db/index.js'
 import { embutirConsulta } from '../../../catalogo/busca.js'
+import { cacheConsultaPadrao } from '../../../catalogo/cache-consulta.js'
 import { embeddingDoAmbiente, type PortaEmbedding } from '../../../catalogo/porta-embedding.js'
 import type { ConhecimentoPorta } from '../ferramentas/ligacoes-porta.js'
 import { buscarConhecimento } from './busca.js'
@@ -25,7 +26,7 @@ export function criarConhecimentoReal(opcoes: { embedding?: PortaEmbedding } = {
   return {
     async buscar(ctx, pergunta) {
       const e = embedding()
-      const emb = e.capacidades.buscaSemantica ? await embutirConsulta(e, pergunta) : null
+      const emb = e.capacidades.buscaSemantica ? await embutirConsulta(e, pergunta, { cache: cacheConsultaPadrao(sql) }) : null
       const r = await comTenantServico(ctx.tenantId, (tx) => buscarConhecimento(tx, {
         pergunta, canalId: ctx.canalId, limite: TRECHOS_PARA_O_MODELO,
         ...(emb?.vetor ? { vetorConsulta: emb.vetor, modeloEmbedding: emb.modelo } : {}),

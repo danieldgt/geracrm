@@ -47,7 +47,17 @@ Fusão por RRF (k=60). `fontes` diz quais pernas rodaram — a tela mostra.
   advisory lock, pool `max:1`, a cada 60 s em `server.ts`, só com `VOYAGE_API_KEY`). Lote pequeno
   (16) por causa da faixa gratuita da Voyage. Trocar de provedor (`porta.nome`) torna tudo pendente.
 - A tela lê `GET /v1/agente/conhecimento/capacidades` e mostra "lexical" ou "lexical + semântica"
-  com o motivo (`sem_pgvector` / `sem_chave`) — degradação visível (ADR-008).
+  com o motivo (`sem_pgvector` / `sem_chave`, e `falta` nomeia as variáveis) — degradação visível
+  (ADR-008).
+- **Provedores** (`porta-embedding.ts`): Cloudflare Workers AI `@cf/baai/bge-m3` (padrão quando
+  `CLOUDFLARE_ACCOUNT_ID`+`CLOUDFLARE_AI_TOKEN`) e Voyage `voyage-4`; `EMBEDDING_PROVEDOR` força.
+  Pedido explícito sem chave fica desligado (não cai para o outro). `embutir(textos, tipo,
+  { timeoutMs })` aceita tempo limite por chamada.
+- **Cache da pergunta** (`cache-consulta.ts`, tabela global `embedding_consulta_cache` 0095 —
+  exceção de tenancy no scanner): `embutirConsulta(porta, texto, { cache })` lê por hash de
+  (modelo + texto normalizado), grava no acerto do fornecedor; LRU em memória na frente;
+  `TIMEOUT_CONSULTA_MS = 2 s` no caminho quente; `podarCache` roda na passada do worker. Falha de
+  cache nunca falha a busca.
 
 ## Seed de demonstração
 

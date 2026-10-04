@@ -70,3 +70,15 @@ POST /v1/agente/conhecimento/buscar    (já existe)  { pergunta, canalId? }
 3. Chrome: criar documento, importar `.md`, testar pergunta, ver fontes; ligar chave local da Voyage
    só se houver; sem ela, conferir a degradação visível.
 4. `pnpm lint typecheck test` verdes → commit → push → CI → `/saude` → ler `capacidades` em produção.
+
+## Adendo — provedor serverless e cache da pergunta (2026-10-04, tarde)
+
+- Adaptador **Cloudflare Workers AI** (`@cf/baai/bge-m3`) como padrão; Voyage como alternativa;
+  `EMBEDDING_PROVEDOR` força. Railway: `CLOUDFLARE_ACCOUNT_ID` e `CLOUDFLARE_AI_TOKEN` criadas vazias.
+- **Cache do vetor da pergunta**: migration 0095 (`embedding_consulta_cache`, global, sem texto),
+  LRU em memória na frente, poda na passada do worker. `vetorDe: 'cache'|'fornecedor'` na resposta
+  de `POST …/buscar` para a tela/diagnóstico.
+- **Tempo limite separado**: 2 s para a pergunta (degrada para lexical), 15 s para o lote.
+- Como obter as credenciais: dash.cloudflare.com → Account ID na página de Workers & Pages;
+  API token em "My Profile → API Tokens → Create Token" com a permissão **Workers AI: Read**.
+
