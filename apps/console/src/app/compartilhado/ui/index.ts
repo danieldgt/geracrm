@@ -13,3 +13,9 @@ export { reaisParaCentavos, centavosParaReais, formatarReais } from './dinheiro.
 export { corpoDoErro, codigoDoErro, mensagemDeErro, ehStatus, type ErroApi } from './erro-http.js'
 export { HorarioAtendimentoComponente, somenteDiasAbertos, DIAS,
          type Faixa, type HorarioAtendimento } from './horario-atendimento.componente.js'
+export { QualidadeComponente } from './qualidade.componente.js'
+export {
+  PROVEDORES_IA, QUALIDADE_MAX, rotuloProvedor, pontosQualidade, rotuloQualidade, formatarUsd, linhaDeCusto,
+  agruparPorPreco, badgesDoModelo, permitidosDe, alternarCodigo, codigosParaSalvar, mudouPermissao,
+  type ModeloIa, type ModeloComPermissao, type ProvedorIa,
+} from './modelos-ia.regras.js'

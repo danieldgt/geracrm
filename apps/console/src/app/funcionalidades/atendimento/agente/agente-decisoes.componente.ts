@@ -58,6 +58,8 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
                   <span title="Custo estimado">{{ reais(d.custoCentavos) }}</span>
                   <span title="Latência">{{ d.latenciaMs ?? '—' }} ms</span>
                   <span [title]="d.enviada ? 'Enviada ao cliente' : 'Não enviada'">{{ d.enviada ? 'enviada' : 'não enviada' }}</span>
+                  <!-- Qual modelo respondeu — é o que torna custo e qualidade comparáveis por modelo. -->
+                  @if (d.modelo) { <span class="modelo encolhe" title="Modelo">{{ d.modelo }}</span> }
                   @if (d.numerosBloqueados.length > 0) {
                     <ui-badge tom="atencao">{{ d.numerosBloqueados.length }} valor(es) barrado(s)</ui-badge>
                   }
@@ -136,6 +138,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
     .quando { color: var(--texto-suave); }
     .contato { color: var(--texto); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 120px; }
     .metricas { display: flex; gap: var(--espacamento-3); flex-wrap: wrap; color: var(--texto-secundario); align-items: center; }
+    .modelo { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .acoes { display: flex; gap: var(--espacamento-1); flex-wrap: wrap; }
     .detalhes { display: grid; grid-template-columns: max-content 1fr; gap: var(--espacamento-1) var(--espacamento-3);
       margin: var(--espacamento-2) 0 0; padding: var(--espacamento-3); border: 1px solid var(--borda);

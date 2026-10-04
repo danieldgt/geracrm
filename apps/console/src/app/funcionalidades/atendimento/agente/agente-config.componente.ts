@@ -5,7 +5,8 @@ import {
   avisosDasRegras, type ModoAgente, type RegrasDoAgente,
 } from '@geracrm/shared'
 import {
-  BotaoComponente, CampoComponente, PainelComponente, EsqueletoComponente, EstadoComponente, ToastServico,
+  BotaoComponente, CampoComponente, PainelComponente, EsqueletoComponente, EstadoComponente, BadgeComponente,
+  QualidadeComponente, ToastServico, agruparPorPreco, linhaDeCusto, rotuloProvedor, type ModeloIa,
 } from '../../../compartilhado/ui/index.js'
 import { AgenteServico, ehSemPermissao, type ConfigAgente } from './agente.servico.js'
 import {
@@ -13,8 +14,13 @@ import {
   badgeModo, centavosParaTexto, corpoParaSalvar, errosDoServidor, mudouDoPadrao, validarFormulario,
   type FormularioAgente,
 } from './agente.regras.js'
+import {
+  MODELO_PADRAO_DO_SERVIDOR, escolhaForaDaLista, opcaoPadraoDoServidor, podeEscolher, type CatalogoDoTenant,
+} from './modelos.regras.js'
 
 type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
+/** O seletor de modelo carrega à parte: se falhar, o resto do formulário segue de pé (parcial). */
+type EstadoModelos = 'carregando' | 'pronto' | 'erro'
 
 /**
  * Configuração do agente vendedor num número: modo, persona, objetivo, alçada,
@@ -28,7 +34,10 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
 @Component({
   selector: 'app-agente-config',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, BotaoComponente, CampoComponente, PainelComponente, EsqueletoComponente, EstadoComponente],
+  imports: [
+    RouterLink, BotaoComponente, CampoComponente, PainelComponente, EsqueletoComponente, EstadoComponente,
+    BadgeComponente, QualidadeComponente,
+  ],
   template: `
     @switch (estado()) {
       @case ('carregando') {
@@ -79,6 +88,94 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
                   </label>
                 }
               </div>
+            </ui-painel>
+
+            <!-- (a2) Modelo de IA — o cliente escolhe o modelo; a chave é do servidor e nunca aparece.
+                 ⚠️ Carrega à parte do formulário: se a lista falhar, o resto segue editável (parcial). -->
+            <ui-painel>
+              <h2 class="txt-secao secao" id="rot-modelo">Modelo de IA</h2>
+              <p class="dica topo">Qual modelo responde neste número. Quem libera os modelos da sua conta é a Gera3 — e a chave de cada fornecedor fica no servidor.</p>
+              @switch (estadoModelos()) {
+                @case ('carregando') {
+                  <div class="esq-lista" aria-busy="true">
+                    <ui-esqueleto altura="64px" /><ui-esqueleto altura="64px" /><ui-esqueleto altura="64px" />
+                  </div>
+                }
+                @case ('erro') {
+                  <div class="aviso aviso--erro" role="alert">
+                    Não foi possível carregar a lista de modelos. O modelo salvo continua valendo; dá para tentar de novo.
+                    <div class="topo-2"><ui-botao variante="secundario" (click)="carregarModelos()">Tentar de novo</ui-botao></div>
+                  </div>
+                }
+                @case ('pronto') {
+                  @if (catalogo(); as cat) {
+                    <div class="modelos" role="radiogroup" aria-labelledby="rot-modelo"
+                         [attr.aria-invalid]="erroDe('modelo') ? 'true' : null"
+                         [attr.aria-describedby]="erroDe('modelo') ? 'erro-modelo' : null">
+
+                      <!-- Primeira opção, sempre: o padrão do servidor (ou o aviso do que falta). -->
+                      @if (opcaoPadrao(); as p) {
+                        <label class="modo card-modelo" [class.sel]="f().modelo === padraoDoServidor" [class.off]="!p.disponivel">
+                          <input type="radio" name="modelo" [value]="padraoDoServidor" [checked]="f().modelo === padraoDoServidor"
+                                 [disabled]="!p.disponivel" (change)="escolherModelo(padraoDoServidor)" />
+                          <span class="modo-txt encolhe">
+                            <span class="modo-rot">{{ p.rotulo }}</span>
+                            <span class="modo-exp" [class.alerta]="!p.disponivel">{{ p.explicacao }}</span>
+                          </span>
+                        </label>
+                      }
+
+                      <!-- ⚠️ O código salvo saiu da lista (restrição posterior): não some em silêncio. -->
+                      @if (foraDaLista(); as fora) {
+                        <label class="modo card-modelo sel off">
+                          <input type="radio" name="modelo" [value]="fora" checked disabled />
+                          <span class="modo-txt encolhe">
+                            <span class="modo-rot">Modelo salvo: <span class="txt-dados">{{ fora }}</span></span>
+                            <span class="modo-exp alerta">Não está mais liberado para a sua conta. Escolha outro abaixo antes de salvar — ou fale com o suporte.</span>
+                          </span>
+                        </label>
+                      }
+
+                      @if (cat.itens.length === 0) {
+                        <p class="dica vazio-modelos">Nenhum modelo liberado além do padrão — fale com o suporte para liberar outros.</p>
+                      }
+
+                      @for (g of grupos(); track g.titulo) {
+                        @if (g.itens.length > 0) {
+                          @if (mostraTitulos()) { <h3 class="txt-rotulo grupo">{{ g.titulo }}</h3> }
+                          @for (m of g.itens; track m.codigo) {
+                            <label class="modo card-modelo" [class.sel]="f().modelo === m.codigo" [class.off]="!pode(m)">
+                              <input type="radio" name="modelo" [value]="m.codigo" [checked]="f().modelo === m.codigo"
+                                     [disabled]="!pode(m)" (change)="escolherModelo(m.codigo)" />
+                              <span class="modo-txt encolhe">
+                                <!-- Badges em ORDEM FIXA: preço, ferramentas, saída estruturada. -->
+                                <span class="linha-modelo">
+                                  <span class="modo-rot encolhe">{{ m.nome }}</span>
+                                  <ui-badge [tom]="m.gratuito ? 'sucesso' : 'neutro'">{{ m.gratuito ? 'Grátis' : 'Pago' }}</ui-badge>
+                                  @if (m.ferramentas) { <ui-badge tom="info">ferramentas</ui-badge> }
+                                  @if (m.saidaEstruturada) { <ui-badge tom="info">saída estruturada</ui-badge> }
+                                </span>
+                                <span class="meta-modelo">
+                                  <span>{{ provedor(m.provedor) }}</span>
+                                  <ui-qualidade [valor]="m.qualidade" />
+                                  @if (custo(m); as c) { <span class="txt-dados">{{ c }}</span> }
+                                </span>
+                                @if (m.descricao) { <span class="modo-exp">{{ m.descricao }}</span> }
+                                @if (m.observacao) { <span class="obs">{{ m.observacao }}</span> }
+                                @if (!m.disponivel) {
+                                  <span class="modo-exp alerta">Indisponível: <span class="txt-dados">{{ m.motivoIndisponivel ?? 'sem chave no servidor' }}</span></span>
+                                }
+                              </span>
+                            </label>
+                          }
+                        }
+                      }
+                    </div>
+                    @if (erroDe('modelo'); as e) { <span class="msg-erro" id="erro-modelo" role="alert">{{ e }}</span> }
+                    <p class="dica">Trocar de modelo vale a partir da próxima mensagem. Cada decisão registra qual modelo respondeu.</p>
+                  }
+                }
+              }
             </ui-painel>
 
             <!-- (b) Persona -->
@@ -281,8 +378,6 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
               <details class="avancado">
                 <summary class="txt-secao">Avançado</summary>
                 <div class="grade-2 topo">
-                  <ui-campo rotulo="Modelo (opcional)" [valor]="f().modelo" (valorChange)="mudar('modelo', $event)"
-                            [erro]="erroDe('modelo')" placeholder="Em branco usa o padrão do servidor" />
                   <label class="campo">
                     <span>Limiar de confiança (0 a 1)</span>
                     <input type="number" step="0.05" [min]="faixasAvancado.limiarConfianca.min" [max]="faixasAvancado.limiarConfianca.max"
@@ -342,7 +437,20 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
     .modo:hover { background: var(--superficie-hover); }
     .modo.sel { border-color: var(--acao); background: var(--superficie-selecionada); }
     .modo.off { opacity: .55; cursor: default; }
+    .modo:has(input:focus-visible) { outline: 2px solid var(--borda-foco); outline-offset: 1px; }
     .modo input { margin-top: 3px; flex: none; }
+    .modelos { display: grid; gap: var(--espacamento-2); min-width: 0; }
+    .modelos[aria-invalid='true'] .card-modelo { border-color: var(--borda-erro); }
+    .card-modelo .modo-txt { gap: var(--espacamento-1); }
+    .linha-modelo { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; min-width: 0; }
+    .linha-modelo .modo-rot { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .meta-modelo { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap;
+      color: var(--texto-secundario); font-size: 12px; }
+    .obs { color: var(--texto-suave); font-size: 12px; overflow-wrap: anywhere; }
+    .alerta { color: var(--atencao); }
+    .grupo { margin: var(--espacamento-2) 0 0; }
+    .vazio-modelos { margin: 0; }
+    .topo-2 { margin-top: var(--espacamento-2); }
     .modo-txt { display: grid; gap: 2px; }
     .modo-rot { color: var(--texto); font-size: 13px; font-weight: 600; }
     .modo-exp { color: var(--texto-secundario); font-size: 12px; }
@@ -403,13 +511,45 @@ export class AgenteConfigComponente {
   readonly avisos = computed(() => avisosDasRegras(this.f().regras))
   readonly mudouDoPadrao = computed(() => mudouDoPadrao(this.f().regras, this.cfg()?.padroes ?? REGRAS_AGENTE_PADRAO))
 
+  // ─── Seletor de modelo (catálogo do tenant; o staff libera, a chave é do servidor) ───
+  readonly padraoDoServidor = MODELO_PADRAO_DO_SERVIDOR
+  readonly estadoModelos = signal<EstadoModelos>('carregando')
+  readonly catalogo = signal<CatalogoDoTenant | null>(null)
+  readonly opcaoPadrao = computed(() => { const c = this.catalogo(); return c ? opcaoPadraoDoServidor(c) : null })
+  readonly grupos = computed(() => {
+    const g = agruparPorPreco(this.catalogo()?.itens ?? [])
+    return [{ titulo: 'Gratuitos', itens: g.gratuitos }, { titulo: 'Pagos', itens: g.pagos }]
+  })
+  /** Os títulos de grupo só ajudam quando há os dois grupos. */
+  readonly mostraTitulos = computed(() => this.grupos().every((g) => g.itens.length > 0))
+  readonly foraDaLista = computed(() => escolhaForaDaLista(this.f().modelo, this.catalogo()?.itens ?? []))
+
   constructor() {
     // Trocar de número recarrega; `untracked` para a carga não virar dependência.
     effect(() => { this.canalId(); untracked(() => void this.carregar()) })
+    // O catálogo é do tenant, não do número: uma carga por tela.
+    void this.carregarModelos()
   }
 
   erroDe(campo: string): string | null {
     return this.errosServidor()[campo] ?? this.errosLocais()[campo] ?? null
+  }
+
+  provedor(p: string): string { return rotuloProvedor(p) }
+  custo(m: ModeloIa): string | null { return linhaDeCusto(m) }
+  pode(m: ModeloIa): boolean { return podeEscolher(m) }
+
+  escolherModelo(codigo: string): void { this.mudar('modelo', codigo) }
+
+  async carregarModelos(): Promise<void> {
+    this.estadoModelos.set('carregando')
+    try {
+      this.catalogo.set(await this.api.listarModelos())
+      this.estadoModelos.set('pronto')
+    } catch {
+      // ⚠️ Parcial: o formulário segue de pé; só o seletor mostra erro com "tentar de novo".
+      this.estadoModelos.set('erro')
+    }
   }
 
   bloqueiaModo(m: ModoAgente): boolean {
