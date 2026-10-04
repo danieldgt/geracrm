@@ -29,6 +29,8 @@ export const PRESETS = {
   openrouter: { url: URL_COMPLETIONS, cadeia: true, strict: true },
   groq: { url: 'https://api.groq.com/openai/v1/chat/completions', cadeia: false, strict: false },
   gemini: { url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', cadeia: false, strict: false },
+  cerebras: { url: 'https://api.cerebras.ai/v1/chat/completions', cadeia: false, strict: false },
+  maritaca: { url: 'https://chat.maritaca.ai/api/chat/completions', cadeia: false, strict: false },
 } as const
 export type PresetCompat = keyof typeof PRESETS
 

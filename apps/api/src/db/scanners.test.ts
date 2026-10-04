@@ -17,6 +17,8 @@ const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () =>
  *  decisão consciente — o varredor Tenancy falha para qualquer outra. */
 const EXCECOES_TENANCY = new Set([
   'tenant', 'plano', 'perfil_vertical_modelo', 'tarifa_meta', 'schema_migrations',
+  // Catálogo global de modelos de IA (0093): mantido pela Gera3, como `plano`.
+  'modelo_ia',
 ])
 
 const aqui = dirname(fileURLToPath(import.meta.url))

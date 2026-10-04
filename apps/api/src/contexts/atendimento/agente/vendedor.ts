@@ -21,7 +21,8 @@ import type { Ligacoes } from './ferramentas/ligacoes-porta.js'
 import { montarSistema, instrucaoDoTurno, esquemaDaResposta } from './instrucao-vendedor.js'
 import { entregarParaHumano } from './handoff.js'
 import { chegouMensagemNova, type Tarefa } from './fila.js'
-import { llmFerramentasDoAmbiente } from './fabrica-ferramentas.js'
+import { llmFerramentasDoAmbiente, criarLlmDoCatalogo } from './fabrica-ferramentas.js'
+import { resolverModelo } from './modelos.js'
 import { efetivarSeDentroDaAlcada } from '../../pedido/alcada.js'
 
 /**
@@ -105,17 +106,20 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
                                           WHERE m.tenant_id = tenant_atual() AND m.conversa_id = ${conversaId}
                                             AND m.id = ANY(${[...tarefa.mensagens_ids]}::uuid[])), ${agora}::timestamptz)) AS recem`
     const [fusoLinha] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
+    // O modelo escolhido na tela é um código do catálogo; fora do catálogo/permissão, vale o padrão do ambiente.
+    const modeloEscolhido = await resolverModelo(tx, cfg.modelo)
     const equipe = deps.equipe ?? await quemAtende(tx, canalId, agora)
     const custoHoje = cfg.orcamentoDiaCentavos === null ? 0 : await custoDoDia(tx, canalId, agora, fusoLinha?.fuso ?? 'America/Sao_Paulo')
     return {
       tipo: 'ok' as const, cfg, conv, reuniao, equipe, custoHoje,
       perfil: perfilDeCotacao(perfilLinha?.perfil_preco ?? PERFIL_PRECO_PADRAO),
       ausenciaRecemEnviada: ausenciaAgora?.recem ?? false, fuso: fusoLinha?.fuso ?? 'America/Sao_Paulo',
+      modeloEscolhido,
     }
   })
   if (dados.tipo === 'desligado') return silencio(tenantId, tarefa, 'agente_desligado', 'desligado', agora)
   if (dados.tipo === 'sem_conversa') return { desfecho: 'silencio', motivo: 'conversa_inexistente' }
-  const { cfg, conv, reuniao, equipe, custoHoje, perfil, ausenciaRecemEnviada, fuso } = dados
+  const { cfg, conv, reuniao, equipe, custoHoje, perfil, ausenciaRecemEnviada, fuso, modeloEscolhido } = dados
   const modo: ModoAgente | 'simulacao' = deps.simulacao ? 'simulacao' : cfg.modo
 
   // ── 2. Portão ───────────────────────────────────────────────────────────
@@ -231,12 +235,12 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   for (const c of centavosDoPedidoConfirmado) registro.centavosVistos.add(c)
 
   // ── 4. O laço ───────────────────────────────────────────────────────────
-  const llm = deps.llm ?? llmFerramentasDoAmbiente()
+  const llm = deps.llm ?? (modeloEscolhido ? criarLlmDoCatalogo(modeloEscolhido) : llmFerramentasDoAmbiente())
   const r = await llm.rodar({
     sistema, mensagens, ferramentas: registro.definicoes, executar: registro.executar,
     esquemaSaida: esquemaDaResposta(),
     limites: { maxRodadas: cfg.maxRodadas, maxTokensSaida: 1500, prazoMs: cfg.prazoTurnoMs },
-    modelo: cfg.modelo ?? undefined, esforco: 'low',
+    esforco: 'low',
   })
   const custo = r.rastro ? custoEstimadoCentavos(r.rastro.modelo, r.rastro.uso) : 0
 

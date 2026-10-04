@@ -46,6 +46,7 @@ import { rotasMapa } from './contexts/plataforma/rotas-mapa.js'
 import { rotasConfig } from './contexts/plataforma/rotas-config.js'
 import { rotasClientes } from './contexts/plataforma/rotas-clientes.js'
 import { rotasStaff } from './contexts/plataforma/rotas-staff.js'
+import { rotasModelosIa } from './contexts/plataforma/rotas-modelos-ia.js'
 import { rotasEventos } from './contexts/atendimento/eventos/rotas-eventos.js'
 import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
 import { rotasCatalogoManual } from './contexts/catalogo/rotas-catalogo-manual.js'
@@ -137,6 +138,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasConfig)
   await app.register(rotasClientes)
   await app.register(rotasStaff)
+  await app.register(rotasModelosIa)
   await app.register(rotasEventos)
   await app.register(rotasPedido)
   await app.register(rotasCatalogoManual)

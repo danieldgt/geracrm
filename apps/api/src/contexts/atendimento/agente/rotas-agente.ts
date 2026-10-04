@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { exigirTenant } from '../../../plugins/tenant.js'
 import { comTenantServico } from '../../../db/index.js'
 import { faltaParaLlmFerramentas } from './fabrica-ferramentas.js'
+import { modelosPermitidos } from './modelos.js'
 import { conduzirTurnoVendedor } from './vendedor.js'
 import { ligacoesPadrao } from './ferramentas/ligacoes.js'
 import { sincronizarPoliticas } from './conhecimento/indexador.js'
@@ -137,8 +138,17 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           mensagem: 'Escreva as políticas da loja antes de deixar o agente autônomo — sem elas ele responde "não sei" a tudo. Sombra e assistido não exigem.',
         })
       }
+      // ⚠️ O modelo é um CÓDIGO do catálogo e tem de estar permitido para este
+      //    tenant e disponível no servidor. Sem modelo = o padrão do ambiente.
+      const modeloCodigo = corpo.modelo?.trim() || null
+      if (modeloCodigo) {
+        const permitidos = await req.comTenant((tx) => modelosPermitidos(tx))
+        const m = permitidos.find((p) => p.codigo === modeloCodigo)
+        if (!m) return reply.code(422).send({ erro: 'agente.modelo_nao_permitido', mensagem: 'Este modelo não está liberado para a sua conta. Escolha um da lista.', campos: ['modelo'] })
+        if (!m.disponivel) return reply.code(422).send({ erro: 'agente.modelo_indisponivel', mensagem: `${m.nome} está sem chave no servidor (${m.motivoIndisponivel}). Escolha outro ou peça a configuração.`, campos: ['modelo'] })
+      }
       const falta = faltaParaLlmFerramentas()
-      if (ativo && falta.length > 0) {
+      if (ativo && falta.length > 0 && !modeloCodigo) {
         return reply.code(422).send({ erro: 'agente.sem_chave', mensagem: `Falta configurar ${falta.join(', ')} no servidor.` })
       }
       const personaFinal = personaSchema.parse({ ...PERSONA_PADRAO, ...corpo.persona })
@@ -159,7 +169,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
                   ${r.soQuandoNinguemDisponivel}, ${r.exigirAusenciaAntes}, ${r.horasDesdeAusencia},
                   ${r.reabrirAposEncerrada}, ${r.horasParaReabrir}, ${r.minutosPresenca}, ${r.maxCaracteres}, ${r.falasDeContexto},
                   ${JSON.stringify(personaFinal)}::text::jsonb, ${corpo.objetivo ?? 'vender'}, ${JSON.stringify(alcadaFinal)}::text::jsonb,
-                  ${JSON.stringify(corpo.qualificacao ?? [])}::text::jsonb, ${corpo.modelo ?? null},
+                  ${JSON.stringify(corpo.qualificacao ?? [])}::text::jsonb, ${corpo.modelo === undefined ? null : modeloCodigo},
                   ${corpo.limiarConfianca ?? 0.6}, ${corpo.maxRodadas ?? 6}, ${corpo.prazoTurnoMs ?? 20000}, ${corpo.orcamentoDiaCentavos ?? null},
                   now())
           ON CONFLICT (tenant_id, canal_id) DO UPDATE SET
@@ -387,6 +397,13 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
       return reply.send({ ok: true, mensagensApagadas: apagadas })
     },
   )
+
+  /** Os modelos que este tenant pode escolher — com disponibilidade no servidor. */
+  app.get('/v1/agente/modelos', { preHandler: exigirTenant }, async (req, reply) => {
+    const itens = await req.comTenant((tx) => modelosPermitidos(tx))
+    const padrao = faltaParaLlmFerramentas().length === 0 ? (process.env.IA_PROVEDOR?.trim() || 'claude') : null
+    return reply.send({ itens, provedorPadrao: padrao, faltaPadrao: faltaParaLlmFerramentas() })
+  })
 
   /**
    * MÉTRICAS do agente (§6 do plano): o que diz se ele ajuda ou atrapalha.

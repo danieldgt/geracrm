@@ -25,12 +25,38 @@ const COMPAT = {
   openrouter: { chave: 'OPENROUTER_API_KEY', modeloPadrao: null },
   groq: { chave: 'GROQ_API_KEY', modeloPadrao: 'llama-3.3-70b-versatile' },
   gemini: { chave: 'GEMINI_API_KEY', modeloPadrao: 'gemini-2.5-flash' },
+  cerebras: { chave: 'CEREBRAS_API_KEY', modeloPadrao: 'llama-3.3-70b' },
+  maritaca: { chave: 'MARITACA_API_KEY', modeloPadrao: 'sabia-3.1' },
 } as const
+export type ProvedorLlm = 'claude' | keyof typeof COMPAT
+
+/** A variável de ambiente que falta para um fornecedor — ou null se está pronto. */
+export function chaveQueFalta(provedor: ProvedorLlm, env: NodeJS.ProcessEnv = process.env): string | null {
+  const nome = provedor === 'claude' ? 'ANTHROPIC_API_KEY' : COMPAT[provedor].chave
+  return env[nome]?.trim() ? null : nome
+}
+
+/**
+ * O adaptador para UMA entrada do catálogo (`modelo_ia`): o cliente escolheu o
+ * modelo; a chave é a nossa, do ambiente. Fornecedor sem chave devolve o objeto
+ * nulo com o nome da variável — a tela já mostrou isso como indisponível.
+ */
+export function criarLlmDoCatalogo(
+  entrada: { provedor: ProvedorLlm; modelo: string }, env: NodeJS.ProcessEnv = process.env,
+): PortaLlmFerramentas {
+  const falta = chaveQueFalta(entrada.provedor, env)
+  if (falta) return new LlmFerramentasNaoImplementado(`${entrada.provedor}: falta ${falta}`)
+  const bruto = Number(env.IA_TIMEOUT_MS)
+  const timeoutMs = Number.isFinite(bruto) && bruto >= 1_000 && bruto <= 120_000 ? bruto : undefined
+  if (entrada.provedor === 'claude') return new LlmClaudeFerramentas({ apiKey: env.ANTHROPIC_API_KEY!.trim(), modelo: entrada.modelo })
+  const c = COMPAT[entrada.provedor]
+  return new LlmOpenRouterFerramentas({ preset: entrada.provedor, apiKey: env[c.chave]!.trim(), modelos: [entrada.modelo], timeoutMs })
+}
 
 export function faltaParaLlmFerramentas(env: NodeJS.ProcessEnv = process.env): readonly string[] {
   const pedido = env.IA_PROVEDOR?.trim()
   if (pedido === 'simulado') return env.NODE_ENV === 'production' ? ['IA_PROVEDOR=simulado não é permitido em produção'] : []
-  if (pedido === 'groq' || pedido === 'gemini') {
+  if (pedido === 'groq' || pedido === 'gemini' || pedido === 'cerebras' || pedido === 'maritaca') {
     return env[COMPAT[pedido].chave]?.trim() ? [] : [COMPAT[pedido].chave]
   }
   if (pedido === 'openrouter' || (!pedido && !env.ANTHROPIC_API_KEY?.trim() && env.OPENROUTER_API_KEY?.trim())) {
@@ -50,7 +76,7 @@ export function llmFerramentasDoAmbiente(env: NodeJS.ProcessEnv = process.env): 
   const bruto = Number(env.IA_TIMEOUT_MS)
   const timeoutMs = Number.isFinite(bruto) && bruto >= 1_000 && bruto <= 120_000 ? bruto : undefined
   if (pedido === 'simulado') return new LlmSimulado()
-  if (pedido === 'groq' || pedido === 'gemini') {
+  if (pedido === 'groq' || pedido === 'gemini' || pedido === 'cerebras' || pedido === 'maritaca') {
     const c = COMPAT[pedido]
     return new LlmOpenRouterFerramentas({
       preset: pedido, apiKey: env[c.chave]!.trim(), timeoutMs,
