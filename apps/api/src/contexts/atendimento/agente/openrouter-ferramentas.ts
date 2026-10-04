@@ -174,14 +174,47 @@ export function interpretarSaida(texto: string): unknown {
   const limpo = texto.replace(/^```(?:json)?\s*|\s*```$/g, '').trim()
   if (!limpo) return null
   const candidato = extrairJson(limpo)
-  if (candidato && typeof candidato === 'object') {
-    const o = candidato as Record<string, unknown>
-    if (Array.isArray(o['mensagens'])) return { confianca: 0.7, ...o }
-    const texto1 = ['texto', 'resposta', 'mensagem', 'message', 'content', 'reply'].map((k) => o[k]).find((v) => typeof v === 'string' && v.trim())
-    if (typeof texto1 === 'string') return { ...o, mensagens: [texto1.trim()], confianca: typeof o['confianca'] === 'number' ? o['confianca'] : 0.6 }
+  if (candidato && typeof candidato === 'object' && !Array.isArray(candidato)) {
+    const o = { ...(candidato as Record<string, unknown>) }
+    const brutas = o['mensagens'] ?? o['messages'] ?? o['respostas']
+    const mensagens = normalizarMensagens(Array.isArray(brutas) ? brutas : brutas !== undefined ? [brutas] : [])
+    if (mensagens.length > 0) return { ...o, mensagens, confianca: normalizarConfianca(o['confianca']) }
+    const texto1 = ['texto', 'resposta', 'mensagem', 'message', 'content', 'reply', 'answer'].map((k) => o[k]).find((v) => typeof v === 'string' && v.trim())
+    if (typeof texto1 === 'string') return { ...o, mensagens: [texto1.trim()], confianca: normalizarConfianca(o['confianca'], 0.6) }
+  }
+  if (Array.isArray(candidato)) {
+    const mensagens = normalizarMensagens(candidato)
+    if (mensagens.length > 0) return { mensagens, confianca: 0.6 }
   }
   // Texto cru: vira UMA mensagem com confiança baixa (o modelo não seguiu o formato).
   return { mensagens: [limpo.slice(0, 1200)], confianca: 0.6 }
+}
+
+/**
+ * `mensagens` como o modelo gratuito manda: strings, objetos {texto|text|content},
+ * números, nulos no meio. Fica só o que é texto não vazio, no máximo 3.
+ */
+function normalizarMensagens(brutas: readonly unknown[]): string[] {
+  const out: string[] = []
+  for (const m of brutas) {
+    let t: string | null = null
+    if (typeof m === 'string') t = m
+    else if (typeof m === 'number') t = String(m)
+    else if (m && typeof m === 'object') {
+      const o = m as Record<string, unknown>
+      const v = ['texto', 'text', 'content', 'mensagem', 'message', 'body'].map((k) => o[k]).find((x) => typeof x === 'string')
+      if (typeof v === 'string') t = v
+    }
+    if (t && t.trim()) out.push(t.trim().slice(0, 1200))
+    if (out.length === 3) break
+  }
+  return out
+}
+
+function normalizarConfianca(v: unknown, padrao = 0.7): number {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v.replace(',', '.')) : NaN
+  if (!Number.isFinite(n)) return padrao
+  return n > 1 ? Math.min(n / 100, 1) : Math.max(n, 0)
 }
 
 function extrairJson(texto: string): unknown {

@@ -91,6 +91,12 @@ describe('OpenRouter — modelos gratuitos que não seguem o formato', () => {
     expect(interpretarSaida('Claro: {"mensagens":["A","B"],"confianca":0.9} fim')).toMatchObject({ mensagens: ['A', 'B'], confianca: 0.9 })
     expect(interpretarSaida('   ')).toBeNull()
   })
+  it('normaliza mensagens que vêm como objetos, nulos, string única ou "messages"; confiança em texto ou em %', () => {
+    expect(interpretarSaida('{"mensagens":[{"texto":"Oi"},null,{"content":"Tudo bem?"}],"confianca":"0,8"}')).toMatchObject({ mensagens: ['Oi', 'Tudo bem?'], confianca: 0.8 })
+    expect(interpretarSaida('{"mensagens":"Só uma","confianca":85}')).toMatchObject({ mensagens: ['Só uma'], confianca: 0.85 })
+    expect(interpretarSaida('{"messages":["a","b","c","d"]}')).toMatchObject({ mensagens: ['a', 'b', 'c'], confianca: 0.7 })
+    expect(interpretarSaida('["x","y"]')).toMatchObject({ mensagens: ['x', 'y'] })
+  })
 
   it('400 por response_format desce para json_object e depois para nenhum, sem gastar rodada', async () => {
     const corpos: Record<string, unknown>[] = []

@@ -262,7 +262,8 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   // ── 5. Validação + guardrail ────────────────────────────────────────────
   const parse = respostaDoAgente.safeParse(r.saida)
   if (!parse.success) {
-    const recado = `a IA respondeu fora do formato: ${parse.error.issues[0]?.message ?? ''}`
+    const amostra = JSON.stringify(mascarar(r.saida) ?? null).slice(0, 220)
+    const recado = `a IA respondeu fora do formato: ${parse.error.issues[0]?.path.join('.') ?? ''} ${parse.error.issues[0]?.message ?? ''} — recebido: ${amostra}`
     const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, agora, latenciaMs: Date.now() - inicio }))
     if (deps.simulacao) return { desfecho: 'falha', motivo: 'resposta_inesperada', detalhe: recado, decisaoId, rastro: r.rastro }
     return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'modelo_indisponivel', recado, modo, agora, decisaoId)
