@@ -35,12 +35,17 @@ describe('Resposta estruturada', () => {
     expect(respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 1.5 }).success).toBe(false)
     expect(respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 0.9 }).success).toBe(true)
   })
-  it('slots é PARCIAL: {} e um subconjunto passam; chave desconhecida reprova; o schema não exige nenhum slot', () => {
+  it('slots é PARCIAL: {} e um subconjunto passam; chave desconhecida é descartada; o schema não exige slot nem usa propertyNames', () => {
     expect(respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 0.9, slots: {} }).success).toBe(true)
     expect(respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 0.9, slots: { cidade: 'Fortaleza' } }).success).toBe(true)
-    expect(respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 0.9, slots: { inventada: 'x' } }).success).toBe(false)
-    const esquema = z.toJSONSchema(respostaDoAgente, { target: 'draft-7' }) as unknown as { properties: { slots: { required?: string[] } } }
+    const comInventada = respostaDoAgente.safeParse({ mensagens: ['oi'], confianca: 0.9, slots: { inventada: 'x', volume: '10' } })
+    expect(comInventada.success && comInventada.data.slots).toEqual({ volume: '10' })
+    const esquema = z.toJSONSchema(respostaDoAgente, { target: 'draft-7' }) as unknown as {
+      properties: { slots: { required?: string[]; propertyNames?: unknown; properties: Record<string, unknown> } }
+    }
     expect(esquema.properties.slots.required).toBeUndefined()
+    expect(esquema.properties.slots.propertyNames).toBeUndefined()
+    expect(Object.keys(esquema.properties.slots.properties)).toContain('tipoCompra')
   })
 })
 

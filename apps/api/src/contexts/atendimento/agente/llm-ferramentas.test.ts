@@ -104,6 +104,22 @@ describe('OpenRouter — modelos gratuitos que não seguem o formato', () => {
     expect(interpretarSaida('{"mensagens":["Oi"],"confianca":0.9,"slots":"nenhum"}')).not.toHaveProperty('slots')
   })
 
+  it('erro de gramática do fornecedor de trás (200 com `error`, "Unimplemented keys: propertyNames") desce o formato em vez de falhar', async () => {
+    const corpos: Record<string, unknown>[] = []
+    const llm = new LlmOpenRouterFerramentas({ apiKey: 'k', modelos: ['openrouter/free'], buscar: fetchDeRespostas([
+      { error: { message: 'Upstream error from Nvidia: ValueError: Grammar error: Unimplemented keys: ["propertyNames"]', code: 502 } },
+      { choices: [{ finish_reason: 'stop', message: { content: '{"mensagens":["Temos camisas sim"],"confianca":0.8,"slots":{}}' } }] },
+    ], corpos) })
+    const r = await llm.rodar(pedidoBase(async () => ({ ok: true, saida: {} })))
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.saida).toMatchObject({ mensagens: ['Temos camisas sim'], confianca: 0.8 })
+      expect(r.rastro.rodadas).toBe(1)
+    }
+    expect((corpos[0]!['response_format'] as { type: string }).type).toBe('json_schema')
+    expect((corpos[1]!['response_format'] as { type: string }).type).toBe('json_object')
+  })
+
   it('400 por response_format desce para json_object e depois para nenhum, sem gastar rodada', async () => {
     const corpos: Record<string, unknown>[] = []
     const llm = new LlmOpenRouterFerramentas({ apiKey: 'k', modelos: ['x/free'], buscar: fetchDeRespostas([

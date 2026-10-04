@@ -62,10 +62,13 @@ hora — vai como **operador** dentro das mensagens, nunca no system). Mudar o b
 mudança de comportamento: changelog + rodar as evals. Nada volátil no system (`cache_read_input_tokens`
 zerando em produção = algo volátil entrou no prefixo).
 
-⚠️ `respostaDoAgente.slots` é `z.partialRecord`, nunca `z.record`: no Zod 4 o record com enum de
-chaves é exaustivo — `{}` reprova com "expected string, received undefined" e o JSON Schema marca
-todos os slots como obrigatórios, empurrando o modelo a inventar. O adaptador OpenAI-compatível
-ainda normaliza slots nulos, vazios ou com chave desconhecida antes do parse.
+⚠️ `respostaDoAgente.slots` é um `z.object` plano com cada slot opcional — nunca `z.record` nem
+`z.partialRecord`: no Zod 4 o record com enum de chaves é exaustivo (`{}` reprova com "expected
+string, received undefined" e o JSON Schema marca os 7 slots como obrigatórios, empurrando o modelo
+a inventar), e os dois viram `propertyNames` no JSON Schema, que fornecedores gratuitos recusam
+("Grammar error: Unimplemented keys"). O adaptador OpenAI-compatível normaliza slots nulos, vazios
+ou com chave desconhecida antes do parse, e trata recusa de schema (mesmo em 200 com `error`) como
+degrau de formato: json_schema → json_object → nenhum.
 
 ## Modelo
 

@@ -115,7 +115,7 @@ export class LlmOpenRouterFerramentas implements PortaLlmFerramentas {
         if (!r.ok) {
           const texto = await r.text().catch(() => '')
           // Fornecedor recusou o FORMATO (ou o strict/tools): desce um degrau e repete a rodada.
-          if (r.status === 400 && formato !== 'nenhum' && /response_format|json_schema|json_object|strict|structured/i.test(texto)) {
+          if (formato !== 'nenhum' && recusouFormato(texto)) {
             formato = formato === 'json_schema' ? 'json_object' : 'nenhum'
             rodadas -= 1
             continue
@@ -123,7 +123,17 @@ export class LlmOpenRouterFerramentas implements PortaLlmFerramentas {
           return { ok: false, ...mapearStatus(r.status, texto), rastro: rastro('fim') }
         }
         const json = await r.json().catch(() => null) as RespostaFio | null
-        if (!json || json.error) return { ok: false, motivo: 'indisponivel', detalhe: json?.error?.message ?? 'corpo vazio', rastro: rastro('fim') }
+        if (json?.error) {
+          // OpenRouter devolve 200 com `error` quando o fornecedor de trás recusa — inclusive o
+          // schema ("Grammar error: Unimplemented keys"). Mesmo tratamento: desce o formato.
+          if (formato !== 'nenhum' && recusouFormato(json.error.message ?? '')) {
+            formato = formato === 'json_schema' ? 'json_object' : 'nenhum'
+            rodadas -= 1
+            continue
+          }
+          return { ok: false, motivo: 'indisponivel', detalhe: json.error.message ?? 'erro do fornecedor', rastro: rastro('fim') }
+        }
+        if (!json) return { ok: false, motivo: 'indisponivel', detalhe: 'corpo vazio', rastro: rastro('fim') }
         modeloUsado = json.model ?? modeloUsado
         const u = json.usage
         if (u) {
@@ -194,6 +204,14 @@ export function interpretarSaida(texto: string): unknown {
   }
   // Texto cru: vira UMA mensagem com confiança baixa (o modelo não seguiu o formato).
   return { mensagens: [limpo.slice(0, 1200)], confianca: 0.6 }
+}
+
+/**
+ * O fornecedor recusou o FORMATO (response_format, strict, ou o próprio JSON Schema —
+ * "Grammar error", "Unimplemented keys", "schema"), e não a requisição em si.
+ */
+function recusouFormato(texto: string): boolean {
+  return /response_format|json_schema|json_object|strict|structured|grammar|schema|propertyNames|unimplemented keys/i.test(texto)
 }
 
 /**

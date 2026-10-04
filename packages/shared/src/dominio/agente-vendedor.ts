@@ -73,6 +73,12 @@ export const ROTULO_HANDOFF: Readonly<Record<MotivoHandoff, string>> = {
  * A RESPOSTA do modelo num turno — o que o laço exige como saída estruturada.
  * ⚠️ 1 a 3 mensagens curtas: cada bolha custa dinheiro na Meta desde out/2026.
  */
+const slotsDaResposta = z.object(
+  Object.fromEntries(SLOTS_QUALIFICACAO.map((k) => [k, z.string().trim().max(120).optional()])) as {
+    [K in SlotQualificacao]: z.ZodOptional<z.ZodString>
+  },
+)
+
 export const respostaDoAgente = z.object({
   mensagens: z.array(z.string().trim().min(1).max(1200)).min(1).max(3),
   /** 0..1 — abaixo do limiar do canal vira handoff por incerteza. */
@@ -81,11 +87,12 @@ export const respostaDoAgente = z.object({
   handoff: z.object({ motivo: z.enum(MOTIVOS_HANDOFF), resumo: z.string().trim().max(600) }).optional(),
   /**
    * Slots que o cliente DISSE neste turno. Ainda passam por validação.
-   * ⚠️ `partialRecord`, nunca `record`: no Zod 4 o record com enum de chaves é
-   * EXAUSTIVO — `{}` reprova e o JSON Schema marca os 7 slots como obrigatórios,
-   * o que empurra o modelo a inventar o que o cliente não disse.
+   * ⚠️ Objeto plano com cada slot opcional — nunca `z.record`/`z.partialRecord`:
+   * o record com enum de chaves é exaustivo no Zod 4 (`{}` reprova) e os dois
+   * viram `propertyNames` no JSON Schema, que fornecedores gratuitos (Nvidia via
+   * OpenRouter) recusam com "Grammar error". Chave desconhecida é descartada.
    */
-  slots: z.partialRecord(z.enum(SLOTS_QUALIFICACAO), z.string().trim().max(120)).optional(),
+  slots: slotsDaResposta.optional(),
 })
 export type RespostaDoAgente = z.infer<typeof respostaDoAgente>
 
