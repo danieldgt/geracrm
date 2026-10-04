@@ -5,6 +5,8 @@ import { exigirTenant } from '../../../../plugins/tenant.js'
 import { embutirConsulta } from '../../../catalogo/busca.js'
 import { embeddingDoAmbiente } from '../../../catalogo/porta-embedding.js'
 import { buscarConhecimento } from './busca.js'
+import { capacidadesDeBusca, embutirPendentes } from './embutir-pendentes.js'
+import { extrairTexto, MAX_BYTES_ARQUIVO, MAX_CARACTERES_DOCUMENTO, TIPOS_ARQUIVO } from './extrair-texto.js'
 import { reindexarDocumento } from './indexador.js'
 import { TIPOS_DOCUMENTO, type TipoDocumento } from './porta.js'
 
@@ -25,14 +27,14 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const corpoCriar = z.object({
   titulo: z.string().trim().min(1).max(200),
   tipo: z.enum(TIPOS_DOCUMENTO),
-  conteudo: z.string().trim().min(1).max(50_000),
+  conteudo: z.string().trim().min(1).max(MAX_CARACTERES_DOCUMENTO),
   canalId: z.string().regex(UUID).nullable().optional(),
 })
 
 const corpoEditar = z.object({
   titulo: z.string().trim().min(1).max(200).optional(),
   tipo: z.enum(TIPOS_DOCUMENTO).optional(),
-  conteudo: z.string().trim().min(1).max(50_000).optional(),
+  conteudo: z.string().trim().min(1).max(MAX_CARACTERES_DOCUMENTO).optional(),
   canalId: z.string().regex(UUID).nullable().optional(),
   publicado: z.boolean().optional(),
 })
@@ -41,6 +43,16 @@ const corpoBuscar = z.object({
   pergunta: z.string().trim().min(1).max(300),
   canalId: z.string().regex(UUID).nullable().optional(),
 })
+
+/** Base64 de até 6 MB decodificados (≈ 8 MB no fio); o teto do corpo da rota acompanha. */
+const corpoExtrair = z.object({
+  nome: z.string().trim().min(1).max(200),
+  tipo: z.enum(TIPOS_ARQUIVO),
+  conteudoBase64: z.string().min(1).max(Math.ceil(MAX_BYTES_ARQUIVO * 4 / 3) + 4),
+})
+const LIMITE_CORPO_EXTRAIR = 12 * 1024 * 1024
+/** "Embutir agora" da tela: até 5 lotes por clique — o worker continua o resto. */
+const MAX_LOTES_PELA_TELA = 5
 
 interface LinhaDocumento {
   id: string; canal_id: string | null; titulo: string; tipo: TipoDocumento; conteudo: string
@@ -212,6 +224,58 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
     },
   )
 
+  /**
+   * O que a busca CONSEGUE neste servidor: pgvector? chave de embedding? quanto
+   * falta embutir? É o que a tela mostra como "lexical" ou "lexical + semântica"
+   * — e o que nos diz, em produção, se o Postgres tem a extensão (ADR-008).
+   */
+  app.get(
+    '/v1/agente/conhecimento/capacidades', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const porta = embeddingDoAmbiente()
+      const cap = await req.comTenant((tx) => capacidadesDeBusca(tx, porta))
+      return reply.send(cap)
+    },
+  )
+
+  /** "Embutir agora": alguns lotes deste tenant, sob RLS; o worker segue o resto. */
+  app.post(
+    '/v1/agente/conhecimento/embutir', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const porta = embeddingDoAmbiente()
+      const r = await embutirPendentes((fn) => req.comTenant(fn), porta, { maxLotes: MAX_LOTES_PELA_TELA })
+      if (r.parou === 'sem_pgvector' || r.parou === 'sem_chave') {
+        return reply.code(409).send({ erro: 'conhecimento.semantica_desligada', semantica: r.parou })
+      }
+      if (r.parou !== null) {
+        return reply.code(502).send({ erro: 'conhecimento.embedding_falhou', codigo: r.parou, produtos: r.produtos, trechos: r.trechos, restantes: r.restantes })
+      }
+      return reply.send({ ok: true, produtos: r.produtos, trechos: r.trechos, restantes: r.restantes })
+    },
+  )
+
+  /**
+   * Importar arquivo: devolve o TEXTO para a pessoa revisar — nunca cria o
+   * documento sozinho. `.txt`/`.md` direto; PDF pela camada de texto.
+   */
+  app.post<{ Body: unknown }>(
+    '/v1/agente/conhecimento/extrair', { preHandler: exigirTenant, bodyLimit: LIMITE_CORPO_EXTRAIR },
+    async (req, reply) => {
+      const parse = corpoExtrair.safeParse(req.body ?? {})
+      if (!parse.success) return campoInvalido(reply, parse.error)
+      const c = parse.data
+      let bytes: Uint8Array
+      try {
+        bytes = new Uint8Array(Buffer.from(c.conteudoBase64.replace(/^data:[^,]*,/, ''), 'base64'))
+      } catch {
+        return reply.code(422).send({ erro: 'conhecimento.arquivo_invalido', mensagem: 'Conteúdo não é base64 válido.', campos: ['conteudoBase64'] })
+      }
+      const r = await extrairTexto(c.tipo, bytes)
+      if (!r.ok) return reply.code(422).send({ erro: `conhecimento.${r.erro}`, mensagem: r.mensagem, campos: ['conteudoBase64'] })
+      return reply.send({ texto: r.texto, caracteres: r.caracteres, paginas: r.paginas, avisos: r.avisos })
+    },
+  )
+
   /** "Testar a base": o que o agente receberia para esta pergunta, com fonte e versão. */
   app.post<{ Body: unknown }>(
     '/v1/agente/conhecimento/buscar', { preHandler: exigirTenant },
@@ -224,7 +288,7 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
       const embutido = porta.capacidades.buscaSemantica ? await embutirConsulta(porta, c.pergunta) : { vetor: null, motivo: 'capacidade_desligada' }
       const r = await req.comTenant((tx) => buscarConhecimento(tx, {
         pergunta: c.pergunta, canalId: c.canalId ?? undefined, limite: 5,
-        ...(embutido.vetor ? { vetorConsulta: embutido.vetor } : {}),
+        ...(embutido.vetor ? { vetorConsulta: embutido.vetor, modeloEmbedding: embutido.modelo } : {}),
       }))
       return reply.send({
         trechos: r.trechos.map((t) => ({ ...t, fonte: `${t.titulo} v${t.versao}` })),

@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, computed, effect, inject, input, signal, untracked } from '@angular/core'
+import { Component, ChangeDetectionStrategy, computed, effect, inject, input, output, signal, untracked } from '@angular/core'
 import { RouterLink } from '@angular/router'
 import {
   MODOS_AGENTE, ROTULO_MODO, OBJETIVOS_AGENTE, TONS, SLOTS_QUALIFICACAO, REGRAS_AGENTE_PADRAO,
@@ -17,6 +17,8 @@ import {
 import {
   MODELO_PADRAO_DO_SERVIDOR, escolhaForaDaLista, opcaoPadraoDoServidor, podeEscolher, type CatalogoDoTenant,
 } from './modelos.regras.js'
+import { ConhecimentoServico } from './conhecimento.servico.js'
+import { fraseCapacidade } from './conhecimento.regras.js'
 
 type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
 /** O seletor de modelo carrega à parte: se falhar, o resto do formulário segue de pé (parcial). */
@@ -269,6 +271,11 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
                 <!-- ⚠️ Agente autônomo sem base responde "não sei" a tudo. -->
                 <small>Preço e estoque ele busca no catálogo; o resto só responde se estiver aqui. O modo autônomo exige este texto.</small>
               </label>
+              <!-- Estado da busca da base de conhecimento (carregado uma vez; falha silenciosa = não aparece). -->
+              @if (buscaConhecimento(); as b) {
+                <p class="dica busca-estado">Base de conhecimento: {{ b }}.
+                  <button type="button" class="link" (click)="abrirConhecimento.emit()">Abrir a aba Conhecimento</button></p>
+              }
             </ui-painel>
 
             <!-- (f) Regras de entrada -->
@@ -472,6 +479,9 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
     .aviso--erro { background: var(--erro-suave); }
     .aviso ul { margin: var(--espacamento-1) 0 0; padding-left: var(--espacamento-4); display: grid; gap: 2px; }
     .aviso a { color: var(--acao); }
+    .busca-estado { margin: var(--espacamento-2) 0 0; }
+    .link { border: 0; background: transparent; padding: 0; font: inherit; color: var(--acao); cursor: pointer; text-decoration: underline; }
+    .link:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
     .avancado summary { cursor: pointer; color: var(--texto); }
     .avancado[open] summary { margin-bottom: var(--espacamento-3); }
     .acoes { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; }
@@ -480,8 +490,11 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
 })
 export class AgenteConfigComponente {
   readonly canalId = input.required<string>()
+  /** A página troca para a aba Conhecimento. */
+  readonly abrirConhecimento = output<void>()
 
   private readonly api = inject(AgenteServico)
+  private readonly conhecimento = inject(ConhecimentoServico)
   private readonly toast = inject(ToastServico)
 
   readonly modos = MODOS_AGENTE
@@ -523,12 +536,22 @@ export class AgenteConfigComponente {
   /** Os títulos de grupo só ajudam quando há os dois grupos. */
   readonly mostraTitulos = computed(() => this.grupos().every((g) => g.itens.length > 0))
   readonly foraDaLista = computed(() => escolhaForaDaLista(this.f().modelo, this.catalogo()?.itens ?? []))
+  /** Frase do estado da busca da base de conhecimento; `null` enquanto não carregou ou se falhou. */
+  readonly buscaConhecimento = signal<string | null>(null)
 
   constructor() {
     // Trocar de número recarrega; `untracked` para a carga não virar dependência.
     effect(() => { this.canalId(); untracked(() => void this.carregar()) })
     // O catálogo é do tenant, não do número: uma carga por tela.
     void this.carregarModelos()
+    void this.carregarBuscaConhecimento()
+  }
+
+  /** Uma linha sob as políticas dizendo se a base busca só por palavras ou também por sentido. Falhou? Não aparece. */
+  private async carregarBuscaConhecimento(): Promise<void> {
+    try {
+      this.buscaConhecimento.set(fraseCapacidade(await this.conhecimento.capacidades()))
+    } catch { /* silencioso: é informativo, a aba Conhecimento tem o estado completo */ }
   }
 
   erroDe(campo: string): string | null {

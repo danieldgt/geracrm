@@ -8,12 +8,14 @@ import { AgenteConfigComponente } from './agente-config.componente.js'
 import { AgentePlaygroundComponente } from './agente-playground.componente.js'
 import { AgenteDecisoesComponente } from './agente-decisoes.componente.js'
 import { AgenteSessoesComponente } from './agente-sessoes.componente.js'
+import { AgenteConhecimentoComponente } from './agente-conhecimento.componente.js'
 
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
-type Aba = 'configuracao' | 'playground' | 'decisoes' | 'sessoes'
+type Aba = 'configuracao' | 'conhecimento' | 'playground' | 'decisoes' | 'sessoes'
 
 const ABAS: readonly { readonly id: Aba; readonly rotulo: string }[] = [
   { id: 'configuracao', rotulo: 'Configuração' },
+  { id: 'conhecimento', rotulo: 'Conhecimento' },
   { id: 'playground', rotulo: 'Playground' },
   { id: 'decisoes', rotulo: 'Decisões' },
   { id: 'sessoes', rotulo: 'Sessões' },
@@ -25,7 +27,7 @@ const ABAS: readonly { readonly id: Aba; readonly rotulo: string }[] = [
  *
  * A página só cuida do número selecionado e das abas; cada aba carrega o seu
  * dado e tem os seus cinco estados. Trocar de número recarrega as abas por
- * número (config, playground, decisões); sessões são do tenant inteiro.
+ * número (config, conhecimento, playground, decisões); sessões são do tenant inteiro.
  */
 @Component({
   selector: 'app-agente',
@@ -33,7 +35,8 @@ const ABAS: readonly { readonly id: Aba; readonly rotulo: string }[] = [
   host: { class: 'pagina' },
   imports: [
     RouterLink, BotaoComponente, CabecalhoTelaComponente, PainelComponente, EsqueletoComponente, EstadoComponente,
-    AgenteConfigComponente, AgentePlaygroundComponente, AgenteDecisoesComponente, AgenteSessoesComponente,
+    AgenteConfigComponente, AgenteConhecimentoComponente, AgentePlaygroundComponente, AgenteDecisoesComponente,
+    AgenteSessoesComponente,
   ],
   template: `
     <ui-cabecalho-tela titulo="Agente vendedor"
@@ -81,7 +84,8 @@ const ABAS: readonly { readonly id: Aba; readonly rotulo: string }[] = [
 
           <div role="tabpanel" [id]="'painel-' + aba()" [attr.aria-labelledby]="'aba-' + aba()" class="painel-aba">
             @switch (aba()) {
-              @case ('configuracao') { <app-agente-config [canalId]="canalId()" /> }
+              @case ('configuracao') { <app-agente-config [canalId]="canalId()" (abrirConhecimento)="aba.set('conhecimento')" /> }
+              @case ('conhecimento') { <app-agente-conhecimento [canalId]="canalId()" /> }
               @case ('playground') { <app-agente-playground [canalId]="canalId()" /> }
               @case ('decisoes') { <app-agente-decisoes [canalId]="canalId()" /> }
               @case ('sessoes') { <app-agente-sessoes /> }

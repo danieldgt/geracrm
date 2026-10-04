@@ -30,6 +30,8 @@ export interface OpcoesBuscaConhecimento {
   readonly limite?: number | undefined
   /** Embedding da pergunta já calculado FORA da transação (rede externa). */
   readonly vetorConsulta?: readonly number[] | undefined
+  /** Provedor que gerou o vetor: a perna semântica só compara com trechos embutidos por ele. */
+  readonly modeloEmbedding?: string | undefined
 }
 
 export interface TrechoEncontrado {

@@ -89,6 +89,17 @@ rodar as douradas com `IA_E2E=1` nele. Fornecedores pelo fio OpenAI (`openrouter
 presets): openrouter, groq, gemini, cerebras, maritaca — o adaptador degrada formato
 (json_schema → json_object → nenhum) e aceita texto cru; o guardrail numérico não depende do modelo.
 
+## Base de conhecimento (tela e API)
+
+Aba **Conhecimento** na tela do agente: documentos por tipo (políticas/faq/frete/pagamento/troca/
+produto/outro), globais ou do número, versionados; "testar a base" mostra os trechos com título,
+versão, score e as pernas (`lexical`/`trgm`/`semantica`). Importar arquivo (`.txt/.md/.pdf`) passa por
+`POST /v1/agente/conhecimento/extrair`, que devolve o TEXTO para revisão — nunca salva sozinho; PDF
+sem camada de texto é 422 `conhecimento.sem_texto` (sem OCR). O documento de políticas do canal
+espelha `agente_config.politicas` nos dois sentidos. Capacidade e pendências de embedding em
+`GET /v1/agente/conhecimento/capacidades`; "Embutir agora" em `POST …/embutir` (409 quando a
+semântica está desligada). Regras do retrieval na skill `geracrm-catalogo`.
+
 ## Playground e auditoria
 
 `POST /v1/canais/:id/agente/simular` roda o agente REAL (ferramentas, catálogo, políticas) numa

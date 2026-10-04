@@ -55,7 +55,8 @@ export const catalogoReal: CatalogoPorta = {
     // calculado ANTES da transação (rede fora da tx).
     const emb = await embutirConsulta(embedding, p.consulta)
     const r = await comTenantServico(ctx.tenantId, (tx) => buscarCatalogo(tx, {
-      consulta: p.consulta, perfil: ctx.perfil, limite: p.limite, ...(emb.vetor ? { vetorConsulta: emb.vetor } : {}),
+      consulta: p.consulta, perfil: ctx.perfil, limite: p.limite,
+      ...(emb.vetor ? { vetorConsulta: emb.vetor, modeloEmbedding: emb.modelo } : {}),
     }))
     return { itens: r.itens.map(paraLlm) }
   },

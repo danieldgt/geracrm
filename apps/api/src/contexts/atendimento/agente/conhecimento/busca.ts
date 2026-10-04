@@ -101,6 +101,7 @@ export async function buscarConhecimento(tx: Sql, opcoes: OpcoesBuscaConheciment
         JOIN conhecimento_documento d ON d.tenant_id = ct.tenant_id AND d.id = ct.documento_id
        WHERE ct.tenant_id = tenant_atual()
          AND ct.embedding IS NOT NULL
+         AND ${opcoes.modeloEmbedding ? tx`ct.modelo_embedding = ${opcoes.modeloEmbedding}` : tx`true`}
          AND ${visivel}
        ORDER BY posicao
        LIMIT ${candidatos}`

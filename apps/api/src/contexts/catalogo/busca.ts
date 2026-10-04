@@ -40,6 +40,12 @@ export interface OpcoesBusca {
   filtros?: FiltrosCatalogo
   /** Embedding da consulta já calculado fora da transação (ver `embutirConsulta`). */
   vetorConsulta?: readonly number[]
+  /**
+   * Nome do provedor que gerou o vetor (`porta.nome`). Com ele, a perna semântica só
+   * compara com linhas embutidas pelo MESMO provedor — vetor de outro modelo não é
+   * comparável e, numa troca de provedor, ficaria no banco até o worker refazer.
+   */
+  modeloEmbedding?: string
 }
 
 export interface SkuDetalhe extends SkuResumo {
@@ -96,11 +102,11 @@ function tokensParaTrgm(consulta: string): string[] {
  */
 export async function embutirConsulta(
   porta: PortaEmbedding, consulta: string,
-): Promise<{ vetor: number[] } | { vetor: null; motivo: string }> {
+): Promise<{ vetor: number[]; modelo: string } | { vetor: null; motivo: string }> {
   if (!porta.capacidades.buscaSemantica) return { vetor: null, motivo: 'capacidade_desligada' }
   try {
     const [vetor] = await porta.embutir([consulta], 'consulta')
-    return vetor ? { vetor } : { vetor: null, motivo: 'resposta_inesperada' }
+    return vetor ? { vetor, modelo: porta.nome } : { vetor: null, motivo: 'resposta_inesperada' }
   } catch (erro) {
     return { vetor: null, motivo: erro instanceof ErroEmbedding ? erro.codigo : 'indisponivel' }
   }
@@ -176,6 +182,7 @@ export async function buscarCatalogo(tx: Sql, opcoes: OpcoesBusca): Promise<Resu
         JOIN produto p ON p.tenant_id = pi.tenant_id AND p.id = pi.produto_id
        WHERE pi.tenant_id = tenant_atual()
          AND pi.embedding IS NOT NULL
+         AND ${opcoes.modeloEmbedding ? tx`pi.modelo_embedding = ${opcoes.modeloEmbedding}` : tx`true`}
          AND ${filtros}
        ORDER BY posicao
        LIMIT ${candidatos}`

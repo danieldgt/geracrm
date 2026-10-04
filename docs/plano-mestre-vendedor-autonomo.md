@@ -341,7 +341,12 @@ Adendo 2026-10-04: catálogo de modelos de IA por cliente (0093, `docs/estudo-mo
 escolha por número na tela do agente e permissão por cliente na Plataforma; adaptador tolerante a
 modelos gratuitos (Groq recomendado sem orçamento).
 
-Pendências conhecidas (próxima rodada): worker que embute trechos/produtos pendentes (exige pgvector
-no Railway); proposta com botões Confirmar/Alterar no oficial (adaptador pronto, falta o caminho no
-gateway); `enviarLista`; INV-23 (throttle) antes de autônomo no não-oficial; exibir as capacidades
-novas do canal na tela de Números; juiz LLM só com `IA_E2E`; R10 (plataforma).
+Pendências conhecidas (próxima rodada): proposta com botões Confirmar/Alterar no oficial (adaptador
+pronto, falta o caminho no gateway); `enviarLista`; INV-23 (throttle) antes de autônomo no
+não-oficial; exibir as capacidades novas do canal na tela de Números; juiz LLM só com `IA_E2E`; R10
+(plataforma); OCR para PDF digitalizado na importação de conhecimento.
+
+**2026-10-04 — fechado:** aba Conhecimento no console (CRUD, importar `.txt/.md/.pdf`, testar a
+base), worker de embeddings (`embutir-pendentes.ts`, migration 0094, imagem pgvector local/CI) e
+capacidade de busca visível na tela (`docs/plano-rag-conhecimento.md`). Em produção depende de
+`VOYAGE_API_KEY` no Railway e de o Postgres ter pgvector — `capacidades` responde.

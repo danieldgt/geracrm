@@ -38,9 +38,16 @@ Fusão por RRF (k=60). `fontes` diz quais pernas rodaram — a tela mostra.
 
 - Reindexar: `indexarProduto` após escrita manual; `reindexarTenant` após sincronismo do ERP e
   por `POST /v1/catalogo/reindexar`. Hash do texto evita trabalho repetido.
-- pgvector é **capacidade**: a migration cria coluna/HNSW só se a extensão existir. Sem ela, o
-  produto funciona lexical; com ela e `VOYAGE_API_KEY`, `voyage-4` (1024) embute consulta e
-  documentos. Falta um worker que embute os pendentes — pendência registrada.
+- pgvector é **capacidade**: 0088/0089 criam coluna/HNSW só se a extensão existir, e **0094**
+  reaplica a mesma guarda num banco que ganhou a extensão depois (local: imagem
+  `pgvector/pgvector:pg17` no compose e no CI). Sem ela, o produto funciona lexical.
+- **Embeddings pendentes**: `atendimento/agente/conhecimento/embutir-pendentes.ts` —
+  `capacidadesDeBusca` (pgvector? chave? pendentes/embutidos), `embutirPendentes` (lê lote →
+  embute FORA da transação → grava com guarda de `texto_hash`), `passadaDeEmbedding` (worker, dono,
+  advisory lock, pool `max:1`, a cada 60 s em `server.ts`, só com `VOYAGE_API_KEY`). Lote pequeno
+  (16) por causa da faixa gratuita da Voyage. Trocar de provedor (`porta.nome`) torna tudo pendente.
+- A tela lê `GET /v1/agente/conhecimento/capacidades` e mostra "lexical" ou "lexical + semântica"
+  com o motivo (`sem_pgvector` / `sem_chave`) — degradação visível (ADR-008).
 
 ## Seed de demonstração
 

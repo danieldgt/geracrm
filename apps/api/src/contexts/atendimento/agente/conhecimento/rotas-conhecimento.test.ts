@@ -120,6 +120,44 @@ describe('CRUD de documentos', () => {
   })
 })
 
+describe('Capacidades, embutir e extrair', () => {
+  it('GET capacidades diz se há pgvector e que falta VOYAGE_API_KEY (ambiente de teste sem chave)', async () => {
+    const r = await chamar(T, 'GET', '/v1/agente/conhecimento/capacidades')
+    expect(r.statusCode).toBe(200)
+    const cap = r.json() as { pgvector: boolean; semantica: string; embedding: { configurado: boolean; falta: string | null }; pendentes: { trechos: number; produtos: number } }
+    expect(typeof cap.pgvector).toBe('boolean')
+    expect(cap.embedding).toMatchObject({ configurado: false, falta: 'VOYAGE_API_KEY' })
+    expect(cap.semantica).toBe(cap.pgvector ? 'sem_chave' : 'sem_pgvector')
+    expect(cap.pendentes.trechos).toBeGreaterThanOrEqual(0)
+  })
+
+  it('POST embutir sem chave → 409 conhecimento.semantica_desligada com o motivo', async () => {
+    const r = await chamar(T, 'POST', '/v1/agente/conhecimento/embutir')
+    expect(r.statusCode).toBe(409)
+    expect(r.json()).toMatchObject({ erro: 'conhecimento.semantica_desligada' })
+    expect(['sem_chave', 'sem_pgvector']).toContain((r.json() as { semantica: string }).semantica)
+  })
+
+  it('POST extrair .md devolve o texto para revisão, sem criar documento; data-URL é aceita', async () => {
+    const antes = (await chamar(T, 'GET', '/v1/agente/conhecimento?incluirDespublicados=true')).json() as { itens: Doc[] }
+    const b64 = Buffer.from('# Frete\r\n\r\nEnviamos em 2 dias.\r\n', 'utf8').toString('base64')
+    const r = await chamar(T, 'POST', '/v1/agente/conhecimento/extrair', { nome: 'frete.md', tipo: 'text/markdown', conteudoBase64: `data:text/markdown;base64,${b64}` })
+    expect(r.statusCode).toBe(200)
+    expect(r.json()).toMatchObject({ texto: '# Frete\n\nEnviamos em 2 dias.', caracteres: 28, paginas: null, avisos: [] })
+    const depois = (await chamar(T, 'GET', '/v1/agente/conhecimento?incluirDespublicados=true')).json() as { itens: Doc[] }
+    expect(depois.itens.length).toBe(antes.itens.length)
+  })
+
+  it('POST extrair: tipo fora da lista → 422 campo_invalido; arquivo vazio → 422 conhecimento.sem_texto', async () => {
+    const r1 = await chamar(T, 'POST', '/v1/agente/conhecimento/extrair', { nome: 'x.docx', tipo: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', conteudoBase64: 'AA==' })
+    expect(r1.statusCode).toBe(422)
+    expect((r1.json() as { erro: string }).erro).toBe('conhecimento.campo_invalido')
+    const r2 = await chamar(T, 'POST', '/v1/agente/conhecimento/extrair', { nome: 'vazio.txt', tipo: 'text/plain', conteudoBase64: Buffer.from('   ').toString('base64') })
+    expect(r2.statusCode).toBe(422)
+    expect((r2.json() as { erro: string }).erro).toBe('conhecimento.sem_texto')
+  })
+})
+
 describe('Listagem por cursor', () => {
   it('dado 23 documentos, então 20 na primeira página, 3 na segunda, e o cursor inválido é 422', async () => {
     for (let i = 0; i < 23; i++) {

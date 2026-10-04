@@ -25,10 +25,10 @@ export function criarConhecimentoReal(opcoes: { embedding?: PortaEmbedding } = {
   return {
     async buscar(ctx, pergunta) {
       const e = embedding()
-      const vetor = e.capacidades.buscaSemantica ? (await embutirConsulta(e, pergunta)).vetor : null
+      const emb = e.capacidades.buscaSemantica ? await embutirConsulta(e, pergunta) : null
       const r = await comTenantServico(ctx.tenantId, (tx) => buscarConhecimento(tx, {
         pergunta, canalId: ctx.canalId, limite: TRECHOS_PARA_O_MODELO,
-        ...(vetor ? { vetorConsulta: vetor } : {}),
+        ...(emb?.vetor ? { vetorConsulta: emb.vetor, modeloEmbedding: emb.modelo } : {}),
       }))
       return { trechos: r.trechos.map((t) => ({ texto: t.texto, fonte: `${t.titulo} v${t.versao}` })) }
     },

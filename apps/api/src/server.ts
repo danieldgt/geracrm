@@ -17,6 +17,8 @@ import { processarTarefasDoAgente, INTERVALO_WORKER_MS } from './workers/agente.
 import { processarTranscricoes, INTERVALO_TRANSCRICAO_MS } from './workers/transcricao.js'
 import { transcricaoDoAmbiente } from './contexts/atendimento/midia/transcricao/fabrica.js'
 import { processarRetornos, INTERVALO_RETORNOS_MS } from './contexts/atendimento/agente/retorno.js'
+import { passadaDeEmbedding } from './contexts/atendimento/agente/conhecimento/embutir-pendentes.js'
+import { embeddingDoAmbiente } from './contexts/catalogo/porta-embedding.js'
 import { ligacoesPadrao } from './contexts/atendimento/agente/ferramentas/ligacoes.js'
 
 const porta = Number(process.env.PORT ?? 3000)
@@ -270,6 +272,33 @@ if (process.env.DATABASE_ADMIN_URL) {
   }
 }
 
+// PERNA SEMÂNTICA (ADR-026): embute trechos de conhecimento e produtos pendentes.
+// Como dono, com advisory lock (instâncias não pagam em dobro), em pool `max: 1`
+// (lock e unlock na mesma conexão). ⚠️ Só liga com VOYAGE_API_KEY; sem ela, ou
+// sem pgvector no servidor, a busca segue lexical e a tela diz por quê.
+// Cadência folgada e lotes pequenos: a faixa gratuita da Voyage é apertada.
+let donoEmbedding: ReturnType<typeof postgres> | undefined
+let embeddingIntervalo: ReturnType<typeof setInterval> | undefined
+if (process.env.DATABASE_ADMIN_URL) {
+  const portaEmbedding = embeddingDoAmbiente()
+  if (portaEmbedding.capacidades.buscaSemantica) {
+    donoEmbedding = postgres(process.env.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {} })
+    let embutindo = false
+    embeddingIntervalo = setInterval(() => {
+      if (embutindo) return
+      embutindo = true
+      void passadaDeEmbedding(donoEmbedding as never, portaEmbedding)
+        .then((r) => {
+          if (typeof r === 'object' && (r.produtos > 0 || r.trechos > 0 || r.parou)) app.log.info(r, 'embeddings pendentes')
+        })
+        .catch((e) => app.log.warn({ erro: e }, 'worker de embeddings falhou'))
+        .finally(() => { embutindo = false })
+    }, 60_000)
+  } else {
+    app.log.info('busca semântica desligada (sem VOYAGE_API_KEY)')
+  }
+}
+
 // Graceful shutdown: para de aceitar requisição, termina as que estão em voo,
 // e só então fecha o banco. Encerrar o pool antes derruba transação aberta.
 for (const sinal of ['SIGINT', 'SIGTERM'] as const) {
@@ -279,9 +308,11 @@ for (const sinal of ['SIGINT', 'SIGTERM'] as const) {
     for (const i of intervalosAquisicao) clearInterval(i)
     if (donoAquisicao) await donoAquisicao.end()
     if (varreduraAutomacao) clearInterval(varreduraAutomacao)
+    if (embeddingIntervalo) clearInterval(embeddingIntervalo)
     await app.close()
     if (donoWebhook) await donoWebhook.end()
     await encerrarDonoAutomacao()
+    await donoEmbedding?.end()
     await encerrarBanco()
     process.exit(0)
   })

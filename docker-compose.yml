@@ -7,7 +7,7 @@
 #
 services:
   postgres:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     container_name: geracrm-postgres
     environment:
       POSTGRES_USER: geracrm
@@ -40,7 +40,7 @@ services:
   # Réplica de leitura — o analítico não compete com o inbox (stack §8).
   # Em dev ela existe para o código nunca "esquecer" de usá-la.
   postgres_replica:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     container_name: geracrm-postgres-replica
     environment:
       POSTGRES_USER: geracrm
