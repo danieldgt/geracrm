@@ -32,11 +32,11 @@ export const etapaFiltroSaida: EtapaPosResposta = {
   async executar(ctx, entrada) {
     const compliance = lerComplianceExtra(ctx.cfgExtra['compliance'])
     const guardrails: MarcaGuardrail[] = []
-    // Escassez ("poucas unidades") só é verdade com SALDO de ferramenta de
-    // catálogo/estoque NESTE turno (`saldoDeEstoqueVisto`, do registro de
-    // ferramentas). ⚠️ Um número qualquer de fonte (preço, prazo) não abona:
+    // Escassez ("poucas unidades") só é verdade com saldo BAIXO de ferramenta
+    // de catálogo/estoque NESTE turno (`saldoBaixoVisto`: 0 < saldo ≤
+    // LIMIAR_ESCASSEZ, do registro de ferramentas). Saldo 0 ou alto desmente a frase. ⚠️ Um número qualquer de fonte (preço, prazo) não abona:
     // ausente ou false = escassez vetada (fail-closed).
-    const estoqueComFonte = entrada.saldoDeEstoqueVisto === true
+    const estoqueComFonte = entrada.saldoBaixoVisto === true
     let mensagens: string[] = []
     for (const m of entrada.mensagens) {
       const r = filtrarSaida(m, { extras: compliance.frasesProibidas, estoqueComFonte })

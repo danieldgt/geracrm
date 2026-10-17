@@ -110,15 +110,23 @@ export async function registrarAlertaLlm(
 
 /**
  * Fecha o alerta `agente_llm_indisponivel` do tenant (P0c-h): o vendedor chama
- * no turno em que o modelo RESPONDEU. Idempotente e barato (índice parcial de
- * alertas abertos): sem alerta aberto, não faz nada. Devolve se fechou algum.
+ * no turno em que o modelo respondeu E a resposta passou no schema. Idempotente
+ * e barato (índice parcial de alertas abertos). Devolve se fechou.
+ * ⚠️ O alerta é UM por tenant, mas cada número tem o seu modelo: o número B
+ *    funcionando não prova que o A voltou. Só fecha se nenhum OUTRO número teve
+ *    turno com falha nos últimos `JANELA_SEGUIDA_MS`.
  * ⚠️ Sem isto, uma falha de madrugada deixa o painel vermelho para sempre —
  *    alerta que não fecha ensina a ignorar alerta.
  */
-export async function resolverAlertaLlm(tenantId: string, agora: Date = new Date()): Promise<boolean> {
+export async function resolverAlertaLlm(tenantId: string, canalId: string, agora: Date = new Date()): Promise<boolean> {
+  const desde = new Date(agora.getTime() - JANELA_SEGUIDA_MS)
   const fechados = await comTenantServico(tenantId, (tx) => tx<{ id: string }[]>`
     UPDATE alerta SET resolvido_em = ${agora}
      WHERE tenant_id = tenant_atual() AND tipo = ${TIPO_ALERTA_LLM} AND resolvido_em IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM agente_decisao d
+          WHERE d.tenant_id = tenant_atual() AND d.canal_id <> ${canalId}
+            AND d.falha_tipo IS NOT NULL AND d.criado_em > ${desde})
     RETURNING id`)
   return fechados.length > 0
 }

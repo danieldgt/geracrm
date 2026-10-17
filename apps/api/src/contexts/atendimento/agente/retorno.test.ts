@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import postgres from 'postgres'
 import { encerrarBanco, comTenantServico } from '../../../db/index.js'
 import {
@@ -239,6 +239,8 @@ describe('Processar os vencidos', () => {
     respostaDoEnvio = () => { throw new Error('provedor explodiu') }
     let agora = new Date()
     await agendar('proposta_sem_resposta', new Date(agora.getTime() - 1000))
+    const logs: string[] = []
+    const espiao = vi.spyOn(process.stderr, 'write').mockImplementation((c: string | Uint8Array) => { logs.push(String(c)); return true })
     for (let i = 1; i <= MAX_FALHAS_TRANSPORTE; i++) {
       const r = await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T }, agora)
       expect(r).toMatchObject(i < MAX_FALHAS_TRANSPORTE ? { reagendados: 1, recusados: 0 } : { recusados: 1, reagendados: 0 })
@@ -246,6 +248,12 @@ describe('Processar os vencidos', () => {
       expect(f!.falhas_transporte).toBe(i)
       agora = new Date(agora.getTime() + H)
     }
+    espiao.mockRestore()
+    // Log estruturado a cada falha: o erro não some no relatório.
+    const meus = logs.map((x) => { try { return JSON.parse(x) as Record<string, unknown> } catch { return null } })
+      .filter((x) => x?.['contexto'] === 'agente.retorno' && x['tenantId'] === T)
+    expect(meus).toHaveLength(MAX_FALHAS_TRANSPORTE)
+    expect(meus.at(-1)).toMatchObject({ nivel: 'error', esgotou: true, erro: 'provedor explodiu' })
     const [l] = await retornos()
     expect(l).toMatchObject({ estado: 'recusado', detalhe: 'erro_esgotado: erro: provedor explodiu' })
     // Encerrado: a passada seguinte não pega de novo.

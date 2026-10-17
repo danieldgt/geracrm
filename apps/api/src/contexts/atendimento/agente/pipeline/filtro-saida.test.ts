@@ -192,11 +192,11 @@ describe('Extras do número (agente_config.compliance) — só acrescentam', () 
 
 describe('Etapa — casos da revisão adversarial', () => {
   const ctx = { cfgExtra: {} } as unknown as ContextoPipeline
-  const rodar = (mensagens: string[], numerosVistos: ReadonlySet<number> = new Set(), saldoDeEstoqueVisto?: boolean) =>
-    etapaFiltroSaida.executar(ctx, { mensagens, handoff: null, centavosVistos: new Set(), numerosVistos, saldoDeEstoqueVisto, falasAnterioresDoAgente: [] })
+  const rodar = (mensagens: string[], numerosVistos: ReadonlySet<number> = new Set(), saldoBaixoVisto?: boolean) =>
+    etapaFiltroSaida.executar(ctx, { mensagens, handoff: null, centavosVistos: new Set(), numerosVistos, saldoBaixoVisto, falasAnterioresDoAgente: [] })
 
   it('escassez é FAIL-CLOSED: sem saldo de ferramenta de estoque no turno, sai mesmo com números de fonte', async () => {
-    // Qualquer número de fonte (preço, prazo) não abona "poucas unidades"; só `saldoDeEstoqueVisto`.
+    // Qualquer número de fonte (preço, prazo) não abona "poucas unidades"; só `saldoBaixoVisto`.
     for (const saldo of [undefined, false]) {
       for (const numeros of [new Set<number>(), new Set([4])]) {
         const r = await rodar(['Restam poucas unidades em estoque segundo o sistema. Quer que eu reserve?'], numeros, saldo)

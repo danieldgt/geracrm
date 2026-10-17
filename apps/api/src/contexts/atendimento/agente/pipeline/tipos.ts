@@ -141,18 +141,26 @@ export interface EntradaPosResposta {
   /**
    * Números de negócio (%, quantidade, prazo) que vieram de fonte (P7): as
    * ferramentas do turno e, como fonte GERAL (nunca de %), as quantidades do
-   * pedido aberto e a memória do contato que o modelo recebeu na instrução (P0c-a).
+   * pedido aberto (P0c-a).
    */
   readonly numerosVistos: ReadonlySet<number>
   /**
-   * Uma ferramenta de catálogo/estoque devolveu SALDO apurado neste turno
-   * (registro de ferramentas). Só isso abona escassez ("restam poucas
+   * Números com peso de FALA DO CLIENTE, vindos de fora das mensagens do turno:
+   * a memória do contato (P0c-a). ⚠️ A memória é escrita pelo modelo
+   * (`memoria_anotar`), então nunca é fonte geral — só abona número NÃO
+   * bloqueante e nunca percentual, como o que o cliente escreveu. Ausente = vazio.
+   */
+  readonly numerosDoCliente?: ReadonlySet<number> | undefined
+  /**
+   * Uma ferramenta de catálogo/estoque devolveu saldo BAIXO apurado neste turno
+   * (0 < saldo ≤ `LIMIAR_ESCASSEZ`, registro de ferramentas). Só isso abona escassez ("restam poucas
    * unidades") no filtro de saída. Ausente = false (fail-closed).
    */
-  readonly saldoDeEstoqueVisto?: boolean | undefined
+  readonly saldoBaixoVisto?: boolean | undefined
   /**
-   * Texto FIXO do turno, escrito pelo código e não pelo modelo: o prefixo das
-   * etapas pré-modelo (a abertura da P4) e, quando há, as respostas fixas. Vai
+   * TODO texto fixo do turno — escrito pelo código, não pelo modelo: o prefixo
+   * das etapas pré-modelo (a abertura da P4) e, quando há, as respostas fixas
+   * de etapa. Quem acrescentar texto fixo ao turno o acrescenta aqui também. Vai
    * junto para que as regras de qualidade (P12) o tratem como isento — avaliar
    * a abertura como se fosse fala do modelo puniria o texto aprovado. Ausente = [].
    */

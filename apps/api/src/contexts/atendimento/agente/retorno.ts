@@ -185,7 +185,13 @@ export async function processarRetornos(
         //    transporte, com o mesmo teto: um erro que se repete sempre não
         //    pode virar retorno pendente para sempre, tentando a cada 15 min.
         const detalhe = `erro: ${erro instanceof Error ? erro.message : String(erro)}`.slice(0, 480)
-        if (v.falhas_transporte + 1 >= MAX_FALHAS_TRANSPORTE) {
+        const esgotou = v.falhas_transporte + 1 >= MAX_FALHAS_TRANSPORTE
+        process.stderr.write(`${JSON.stringify({
+          nivel: 'error', contexto: 'agente.retorno', msg: 'retorno falhou com erro inesperado',
+          tenantId: v.tenant_id, retornoId: v.id, motivo: v.motivo, falhas: v.falhas_transporte + 1, esgotou,
+          erro: erro instanceof Error ? erro.message : String(erro),
+        })}\n`)
+        if (esgotou) {
           r.recusados += 1
           await dono`UPDATE agente_retorno SET falhas_transporte = falhas_transporte + 1, estado = 'recusado',
                             detalhe = ${`erro_esgotado: ${detalhe}`}, concluido_em = ${agora}

@@ -316,17 +316,19 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   const pedidoAberto = ligacoes.pedido ? await ligacoes.pedido.ver(ctxFerr).catch(() => null) : null
   if (pedidoAberto) for (const c of [pedidoAberto.totalCentavos, ...pedidoAberto.itens.flatMap((i) => [i.valorUnitarioCentavos, i.subtotalCentavos])]) registro.centavosVistos.add(c)
   for (const c of centavosDoPedidoConfirmado) registro.centavosVistos.add(c)
-  // Fontes de NÚMERO de fora do laço (P0c-a), como fonte GERAL do guardrail
-  // ampliado (P7) — nunca de %: `numerosDoTexto` e `add` vão para o conjunto
-  // geral; `percentuais` só recebe o que uma ferramenta marcou como percentual.
-  //   - o pedido aberto, carregado aqui e não por ferramenta: nº de itens e
-  //     quantidade de cada um;
-  //   - a memória do contato que o modelo recebe na instrução do turno.
+  // Fontes de NÚMERO de fora do laço (P0c-a) para o guardrail ampliado (P7):
+  //   - o pedido aberto, carregado aqui e não por ferramenta (nº de itens e
+  //     quantidade de cada um), é fato do domínio → fonte GERAL (nunca de %);
+  //   - a memória do contato NÃO é fonte geral: quem escreve nela é o próprio
+  //     modelo (`memoria_anotar`), e um número inventado num turno se "lavaria"
+  //     no seguinte. Vale como fala do CLIENTE (`numerosDoCliente`): só abona
+  //     número não bloqueante, nunca % nem "temos N"/"entrega em N dias".
   if (pedidoAberto) {
     registro.numerosVistos.add(pedidoAberto.itens.length)
     for (const i of pedidoAberto.itens) registro.numerosVistos.add(i.quantidade)
   }
-  for (const m of memoria) numerosDoTexto(m, registro.numerosVistos)
+  const numerosDaMemoria = new Set<number>()
+  for (const m of memoria) numerosDoTexto(m, numerosDaMemoria)
 
   /**
    * O RABO DO TURNO, comum à resposta do modelo e à resposta fixa:
@@ -453,7 +455,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     if (pre.prefixo.length === 0) return { mensagens: [] as readonly string[], guardrails: [] as readonly MarcaGuardrail[], estado: {} as PatchEstado }
     const r = await pipeline.filtro.executar(ctx, {
       mensagens: pre.prefixo, handoff: handoffAtual, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
-      saldoDeEstoqueVisto: registro.saldoDeEstoqueVisto, mensagensFixas: fixasDoTurno,
+      saldoBaixoVisto: registro.saldoBaixoVisto, mensagensFixas: fixasDoTurno, numerosDoCliente: numerosDaMemoria,
       falasAnterioresDoAgente: historico.filter((h) => h.de === 'nos').map((h) => h.texto),
     })
     if (r.bloquear) return { mensagens: [] as readonly string[], guardrails: r.guardrails, estado: r.estado ?? {} }
@@ -501,7 +503,8 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     esforco: 'low',
   })
   // Com o tenant, modelo sem preço no catálogo abre o alerta `preco_desconhecido` já (P0c-c).
-  const custo = r.rastro ? await custoDoLaco({ provedor: r.rastro.provedor ?? llm.nome, modelo: r.rastro.modelo, uso: r.rastro.uso, tenantId }) : 0
+  // Simulação/copiloto não abrem alerta: o painel é da operação real.
+  const custo = r.rastro ? await custoDoLaco({ provedor: r.rastro.provedor ?? llm.nome, modelo: r.rastro.modelo, uso: r.rastro.uso, tenantId: semEfeito ? undefined : tenantId }) : 0
 
   if (!r.ok) {
     const recado = recadoDaFalha(r.motivo, r.detalhe)
@@ -526,15 +529,6 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       desfecho: entrega ? 'handoff' : 'falha', motivo: 'modelo_indisponivel', detalhe: recado, decisaoId, rastro: r.rastro,
       ...(falha.acao === 'aviso_e_reagendar' && falha.reagendarEmMs !== undefined ? { reagendarEmMs: falha.reagendarEmMs } : {}),
     }
-  }
-
-  // O modelo respondeu: fecha o alerta `agente_llm_indisponivel` (P0c-h). Mesma
-  // regra de quem abre (falha-llm): simulação e copiloto não mexem no painel.
-  // ⚠️ Best-effort: o painel nunca impede a resposta ao cliente.
-  if (!semEfeito) {
-    await resolverAlertaLlm(tenantId, agora).catch((e: unknown) => {
-      process.stderr.write(`${JSON.stringify({ nivel: 'warn', contexto: 'agente.llm', tenantId, conversaId, msg: 'alerta agente_llm_indisponivel não fechou', erro: e instanceof Error ? e.message : String(e) })}\n`)
-    })
   }
 
   // ── 6. Validação ────────────────────────────────────────────────────────
@@ -562,6 +556,16 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     }
   }
 
+  // O modelo respondeu NO FORMATO: fecha o alerta `agente_llm_indisponivel`
+  // (P0c-h). Depois do parse — modelo sempre malformado não pode fazer o alerta
+  // piscar (fecha aqui, reabre na falha). Mesma regra de quem abre (falha-llm):
+  // simulação e copiloto não mexem no painel. ⚠️ Best-effort: nunca trava a resposta.
+  if (!semEfeito) {
+    await resolverAlertaLlm(tenantId, canalId, agora).catch((e: unknown) => {
+      process.stderr.write(`${JSON.stringify({ nivel: 'warn', contexto: 'agente.llm', tenantId, conversaId, msg: 'alerta agente_llm_indisponivel não fechou', erro: e instanceof Error ? e.message : String(e) })}\n`)
+    })
+  }
+
   // ── 7. Guardrail R$ (o original, inegociável) ───────────────────────────
   let resposta: RespostaDoAgente = parse.data
   const guardrails: MarcaGuardrail[] = [...guardrailsPre]
@@ -585,7 +589,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   // ── 8. Depois do modelo: números → filtro → pergunta → qualidade ────────
   const cadeia = await rodarPosResposta(pipeline, ctx, {
     mensagens: resposta.mensagens, handoff, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
-    saldoDeEstoqueVisto: registro.saldoDeEstoqueVisto, mensagensFixas: pre.prefixo,
+    saldoBaixoVisto: registro.saldoBaixoVisto, mensagensFixas: pre.prefixo, numerosDoCliente: numerosDaMemoria,
     falasAnterioresDoAgente: historico.filter((h) => h.de === 'nos').map((h) => h.texto),
   })
   guardrails.push(...cadeia.guardrails)

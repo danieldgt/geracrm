@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { textoAvisoPrivacidade, verificarNumerosNaResposta } from '@geracrm/shared'
 import { exigirTenant } from '../../../plugins/tenant.js'
 import { exigirPapel } from '../../plataforma/papel.js'
@@ -11,7 +11,8 @@ import { lerPrivacidade, VERSAO_PADRAO } from './privacidade.js'
  *
  *   GET /v1/privacidade                         — configuração + prévia do aviso (qualquer usuário do tenant)
  *   PUT /v1/privacidade                         — grava (admin; auditada com {antes, depois})
- *   GET /v1/contatos/:id/avisos-privacidade     — avisos exibidos ao contato, por cursor
+ *   GET /v1/contatos/:id/avisos-privacidade     — avisos exibidos ao contato, por cursor (gestor/admin:
+ *                                                 é prova LGPD, não dado de atendimento)
  *
  * ⚠️ O tenant sai do token (RLS), nunca do corpo.
  */
@@ -42,6 +43,11 @@ export function validarPrivacidade(b: CorpoPrivacidade | undefined): Validacao {
     return { ok: false, campo: 'textoPadrao', mensagem: 'O aviso de privacidade não pode citar valor em reais nem percentual.' }
   }
   return { ok: true, url: url || null, versao, textoPadrao: textoPadrao || null }
+}
+
+/** A linha de `usuario` nasce no batimento; garantir antes de `exigirPapel` (sem ela, o papel não resolve). */
+async function garantirUsuario(req: FastifyRequest): Promise<void> {
+  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 
 export async function rotasPrivacidade(app: FastifyInstance): Promise<void> {
@@ -80,7 +86,7 @@ export async function rotasPrivacidade(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { id: string }; Querystring: { cursor?: string } }>(
     '/v1/contatos/:id/avisos-privacidade',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, garantirUsuario, exigirPapel('gestor', 'admin')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(422).send({ erro: 'contato.id_invalido', mensagem: 'Contato inválido.' })
       let cursor: { em: string; id: string } | null = null

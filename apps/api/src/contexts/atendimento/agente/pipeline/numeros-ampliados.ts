@@ -86,6 +86,8 @@ export const etapaNumerosAmpliados: EtapaPosResposta = {
 
     const { gerais, percentuais, doCliente } = await fontesDoTurno(ctx)
     for (const n of entrada.numerosVistos) gerais.add(n)
+    // Memória do contato (P0c-a): peso de fala do cliente — nunca fonte geral nem de %.
+    for (const n of entrada.numerosDoCliente ?? []) doCliente.add(n)
     if (entrada.numerosVistos instanceof NumerosVistos) for (const p of entrada.numerosVistos.percentuais) percentuais.add(p)
     const semFonte: NumeroDeNegocio[] = entrada.mensagens.flatMap((m) => [...numerosSemFonte(m, { gerais, percentuais, doCliente })])
     if (semFonte.length === 0) return { mensagens: entrada.mensagens, guardrails: [] }

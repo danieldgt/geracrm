@@ -12,11 +12,12 @@ import type { CatalogoPorta, Ligacoes, PedidoParaLlm, PedidoPorta } from './ferr
 /**
  * P0c — pendências da integração da onda 1 no turno do vendedor (banco real,
  * WhatsApp falso, modelo falso):
- *   (a) quantidades do pedido aberto e memória do contato são fonte GERAL do guardrail ampliado (nunca de %);
+ *   (a) quantidades do pedido aberto são fonte GERAL do guardrail ampliado; a memória do contato
+ *       (escrita pelo modelo) só tem peso de fala do cliente — nunca bloqueante, nunca %;
  *   (c) modelo sem preço abre `preco_desconhecido` no próprio turno;
  *   (e) slots ditos no 1º turno com resposta fixa entram na sessão que ela abre;
- *   (h) turno bem-sucedido fecha `agente_llm_indisponivel`;
- *   (j) escassez só sai com saldo de ferramenta de estoque no turno;
+ *   (h) turno com resposta no formato fecha `agente_llm_indisponivel` (se nenhum OUTRO número falhou há pouco);
+ *   (j) escassez só sai com saldo BAIXO (0 < saldo ≤ LIMIAR_ESCASSEZ) de ferramenta de estoque no turno;
  *   (p) fuso inválido gravado no tenant não derruba o turno nem as ativas.
  */
 const T = 'c0c00000-0000-4000-8000-000000000001'
@@ -26,6 +27,9 @@ const MODELO = 'c0c00000-4444-4000-8000-000000000001'
 const CANAL = 'c0c00000-5555-4000-8000-000000000001'
 const CONTATO = 'c0c00000-6666-4000-8000-000000000001'
 const CONVERSA = 'c0c00000-7777-4000-8000-000000000001'
+/** Um segundo número do mesmo tenant (alerta de IA é por tenant; modelo é por número). */
+const CANAL_B = 'c0c00000-5555-4000-8000-000000000002'
+const CONVERSA_B = 'c0c00000-7777-4000-8000-000000000002'
 const SKU = 'c0c00000-9999-4000-8000-000000000001'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
@@ -67,20 +71,29 @@ const naoChamar: PortaLlmFerramentas = {
   async rodar(): Promise<ResultadoLaco> { throw new Error('a resposta fixa não chama o modelo') },
 }
 
-const configurar = (modo: string, orcamento: number | null = null) => dono`
+const configurar = (modo: string, orcamento: number | null = null, canal = CANAL) => dono`
   INSERT INTO agente_config (tenant_id, canal_id, ativo, modo, politicas, so_quando_ninguem_disponivel, exigir_ausencia_antes, persona, alcada, orcamento_dia_centavos)
-  VALUES (${T}, ${CANAL}, ${modo !== 'desligado'}, ${modo}, 'Atendimento cordial, sem pressa.', false, false,
+  VALUES (${T}, ${canal}, ${modo !== 'desligado'}, ${modo}, 'Atendimento cordial, sem pressa.', false, false,
           '{"nome":"Lia","loja":"Loja P0c"}'::jsonb, '{}'::jsonb, ${orcamento})
   ON CONFLICT (tenant_id, canal_id) DO UPDATE SET modo = EXCLUDED.modo, ativo = EXCLUDED.ativo, orcamento_dia_centavos = EXCLUDED.orcamento_dia_centavos`
 
-const tarefa = async (texto: string): Promise<Tarefa> => {
+const tarefa = async (texto: string, conversa = CONVERSA, canal = CANAL): Promise<Tarefa> => {
   const id = crypto.randomUUID()
   await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-             VALUES (${T}, ${id}, ${CONVERSA}, 'entrante', 'texto', ${JSON.stringify({ texto })}::text::jsonb, now())`
-  return { tenant_id: T, id: crypto.randomUUID(), conversa_id: CONVERSA, canal_id: CANAL, mensagens_ids: [id], tentativas: 1, executar_em: new Date() }
+             VALUES (${T}, ${id}, ${conversa}, 'entrante', 'texto', ${JSON.stringify({ texto })}::text::jsonb, now())`
+  return { tenant_id: T, id: crypto.randomUUID(), conversa_id: conversa, canal_id: canal, mensagens_ids: [id], tentativas: 1, executar_em: new Date() }
 }
 const turno = async (texto: string, modelo: PortaLlmFerramentas, extra: Partial<DepsTurno> = {}) =>
   conduzirTurnoVendedor(await tarefa(texto), { llm: modelo, ligacoes, enviar: enviarFalso, ...extra })
+const turnoNoB = async (texto: string, modelo: PortaLlmFerramentas) =>
+  conduzirTurnoVendedor(await tarefa(texto, CONVERSA_B, CANAL_B), { llm: modelo, ligacoes, enviar: enviarFalso })
+/** Modelo que responde FORA do schema (sem `mensagens`). */
+const malformado: PortaLlmFerramentas = {
+  nome: 'malformado-p0c', capacidades: { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false },
+  async rodar(): Promise<ResultadoLaco> {
+    return { ok: true, saida: { texto: 'oi' }, rastro: { chamadas: [], rodadas: 1, uso: { entrada: 10, saida: 5, cacheLeitura: 0, cacheEscrita: 0 }, modelo: 'modelo-sem-preco-p0c', latenciaMs: 1, parouPor: 'fim' } }
+  },
+}
 const ultimaDecisao = async () => (await dono<{ desfecho: string; guardrails: { etapa: string; codigo: string }[] }[]>`
   SELECT desfecho, guardrails FROM agente_decisao WHERE tenant_id = ${T} ORDER BY criado_em DESC LIMIT 1`)[0]!
 const codigos = async () => (await ultimaDecisao()).guardrails.map((g) => g.codigo)
@@ -97,6 +110,9 @@ beforeAll(async () => {
   await dono`INSERT INTO canal_configuracao (tenant_id, canal_id, horario_atendimento) VALUES (${T}, ${CANAL}, ${JSON.stringify(SEMPRE_FECHADO)}::jsonb) ON CONFLICT DO NOTHING`
   await dono`INSERT INTO contato (tenant_id, id, nome, ativo) VALUES (${T}, ${CONTATO}, 'Cliente P0c', true) ON CONFLICT DO NOTHING`
   await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${CONVERSA}, ${CANAL}, ${CONTATO}, 1) ON CONFLICT DO NOTHING`
+  await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado) VALUES (${T}, ${CANAL_B}, 'whatsapp_nao_oficial', 'Loja B', 'conectado') ON CONFLICT DO NOTHING`
+  await dono`INSERT INTO canal_configuracao (tenant_id, canal_id, horario_atendimento) VALUES (${T}, ${CANAL_B}, ${JSON.stringify(SEMPRE_FECHADO)}::jsonb) ON CONFLICT DO NOTHING`
+  await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${CONVERSA_B}, ${CANAL_B}, ${CONTATO}, 1) ON CONFLICT DO NOTHING`
 })
 beforeEach(async () => {
   enviados.length = 0; pedidoAberto = null; saldoDoCatalogo = 3
@@ -143,14 +159,26 @@ describe('(a) fontes de número de fora do laço', () => {
     expect(await codigos()).toContain('numero_sem_fonte')
   })
 
-  it('dado memória "entrega combinada em 6 dias", quando o agente repete o prazo, então sai', async () => {
+  it('⚠️ memória NÃO é fonte geral (o modelo escreve nela): "entregamos em 6 dias" vindo da memória é BLOQUEADO', async () => {
     await comTenantServico(T, (tx) => anotarMemoria(tx, { contatoId: CONTATO, tipo: 'contexto', fato: 'entrega combinada em 6 dias' }))
-    const r = await turno('e a entrega?', llm(['A entrega sai em 6 dias, como combinamos.']))
-    expect(r.desfecho).toBe('respondeu')
-    expect(enviados).toEqual(['A entrega sai em 6 dias, como combinamos.'])
+    const r = await turno('e a entrega?', llm(['Entregamos em 6 dias, como combinamos.']))
+    expect(r.desfecho).toBe('handoff')
+    expect(enviados.join(' ')).not.toContain('6 dias')
+    expect(await codigos()).toContain('numero_sem_fonte')
   })
 
-  it('⚠️ memória é fonte GERAL, nunca de %: "pediu 15% de desconto" não abona "15% de desconto"', async () => {
+  it('memória vale como fala do CLIENTE: abona número NÃO bloqueante (sem marca)', async () => {
+    const diz = ['Posso separar 40 caixas para você.']
+    await turno('pode separar?', llm(diz))
+    expect(await codigos()).toContain('numero_sem_fonte') // sem memória: ALTA registrada
+    enviados.length = 0
+    await comTenantServico(T, (tx) => anotarMemoria(tx, { contatoId: CONTATO, tipo: 'contexto', fato: 'costuma levar 40 caixas por mês' }))
+    await turno('pode separar?', llm(diz))
+    expect(enviados).toEqual(diz)
+    expect(await codigos()).not.toContain('numero_sem_fonte')
+  })
+
+  it('⚠️ memória nunca abona %: "pediu 15% de desconto" não abona "15% de desconto"', async () => {
     await comTenantServico(T, (tx) => anotarMemoria(tx, { contatoId: CONTATO, tipo: 'objecao', fato: 'pediu 15% de desconto na última compra' }))
     const r = await turno('e o desconto?', llm(['Consigo 15% de desconto para você.']))
     expect(r.desfecho).toBe('handoff')
@@ -165,6 +193,11 @@ describe('(c) custo do laço com o tenant', () => {
     await turno('oi', llm(['Oi! Como posso ajudar?'], [], 'modelo-sem-preco-p0c-caso-c'))
     const alertas = await dono<{ tipo: string }[]>`SELECT tipo FROM alerta WHERE tenant_id = ${T} AND resolvido_em IS NULL`
     expect(alertas.map((a) => a.tipo)).toContain('preco_desconhecido')
+  })
+
+  it('simulação não abre alerta de preço (o painel é da operação real)', async () => {
+    await turno('oi', llm(['Oi! Como posso ajudar?'], [], 'modelo-sem-preco-p0c-simulacao'), { simulacao: true })
+    expect(await dono`SELECT 1 FROM alerta WHERE tenant_id = ${T} AND tipo = 'preco_desconhecido'`).toHaveLength(0)
   })
 })
 
@@ -204,13 +237,39 @@ describe('(h) alerta de IA indisponível fecha quando o modelo volta', () => {
     await turno('oi', llm(['Oi! Como posso ajudar?']), { simulacao: true })
     expect(await abertos()).toBe(1)
   })
+
+  it('⚠️ modelo sempre malformado não faz o alerta piscar: segue o MESMO alerta aberto, nunca fechado', async () => {
+    await abrirAlerta()
+    await turno('oi', malformado)
+    await turno('oi de novo', malformado)
+    const todos = await dono<{ resolvido_em: Date | null }[]>`SELECT resolvido_em FROM alerta WHERE tenant_id = ${T} AND tipo = ${TIPO_ALERTA_LLM}`
+    expect(todos).toEqual([{ resolvido_em: null }])
+  })
+
+  it('⚠️ número B respondendo NÃO fecha o alerta do número A em falha; A respondendo fecha', async () => {
+    await configurar('autonomo', null, CANAL_B)
+    await turno('oi', malformado) // A falha → alerta aberto
+    expect(await abertos()).toBe(1)
+    await turnoNoB('oi', llm(['Oi! Como posso ajudar?']))
+    expect(await abertos()).toBe(1)
+    await dono`DELETE FROM atendimento WHERE tenant_id = ${T}` // a falha em autônomo entregou A à fila
+    await turno('oi', llm(['Oi! Como posso ajudar?']))
+    expect(await abertos()).toBe(0)
+  })
 })
 
-describe('(j) escassez só com saldo de estoque consultado no turno', () => {
+describe('(j) escassez só com saldo BAIXO consultado no turno', () => {
   const ESCASSEZ = 'Restam poucas unidades em estoque segundo o sistema. Quer que eu reserve?'
   const consultaSaldo = [{ nome: 'catalogo_preco_estoque', entrada: { skuIds: [SKU] } }]
 
-  it('dado saldo apurado devolvido por catalogo_preco_estoque, então "Restam poucas unidades" sai', async () => {
+  it.each([[0, 'esgotado'], [500, 'saldo alto']])('dado saldo %i (%s), então "poucas unidades" é cortada — a frase seria falsa', async (saldo) => {
+    saldoDoCatalogo = saldo
+    await turno('ainda tem?', llm([ESCASSEZ], consultaSaldo))
+    expect(enviados).toEqual(['Quer que eu reserve?'])
+    expect(await codigos()).toContain('escassez_sem_fonte')
+  })
+
+  it('dado saldo BAIXO (3) devolvido por catalogo_preco_estoque, então "Restam poucas unidades" sai', async () => {
     saldoDoCatalogo = 3
     await turno('ainda tem?', llm([ESCASSEZ], consultaSaldo))
     expect(enviados).toEqual([ESCASSEZ])

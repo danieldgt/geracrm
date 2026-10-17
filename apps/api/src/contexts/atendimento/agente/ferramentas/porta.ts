@@ -51,11 +51,11 @@ export type SaidaFerramenta =
        */
       readonly percentuais?: readonly number[] | undefined
       /**
-       * Esta chamada mostrou ao modelo um SALDO de estoque apurado (número, não
-       * `null`/'desconhecido'). É o que abona escassez ("restam poucas unidades")
-       * no filtro de saída (P2) — use `saldoApuradoEm`.
+       * Esta chamada mostrou ao modelo um saldo BAIXO apurado (0 < saldo ≤
+       * `LIMIAR_ESCASSEZ`). É o único que abona escassez ("restam poucas
+       * unidades") no filtro de saída (P2) — use `saldoBaixoEm`.
        */
-      readonly saldoVisto?: boolean | undefined
+      readonly saldoBaixoVisto?: boolean | undefined
       /** Efeito colateral que o turno precisa saber (handoff pedido, proposta enviada). */
       readonly efeito?: 'handoff' | 'proposta_enviada' | 'pedido_alterado' | undefined
       readonly handoff?: { motivo: string; resumo: string } | undefined
@@ -106,8 +106,8 @@ export interface RegistroDeFerramentas {
    * a fonte do guardrail ampliado (raia P7 preenche; P0 só abre o campo).
    */
   readonly numerosVistos: NumerosVistos
-  /** Alguma ferramenta de catálogo/estoque devolveu saldo apurado neste turno (P0c-j). */
-  readonly saldoDeEstoqueVisto: boolean
+  /** Alguma ferramenta de catálogo/estoque devolveu saldo BAIXO apurado neste turno (P0c-j). */
+  readonly saldoBaixoVisto: boolean
   readonly efeitos: { handoff: { motivo: string; resumo: string } | null; propostaEnviada: boolean; pedidoAlterado: boolean }
   executar(nome: string, entradaBruta: unknown): Promise<ResultadoExecucaoFerramenta>
 }
@@ -124,13 +124,13 @@ export function registroDeFerramentas(
   const centavosVistos = new Set<number>()
   const numerosVistos = new NumerosVistos()
   const efeitos = { handoff: null as { motivo: string; resumo: string } | null, propostaEnviada: false, pedidoAlterado: false }
-  let saldoVisto = false
+  let saldoBaixo = false
   return {
     lista: ferramentas,
     definicoes: ferramentas.map(definicaoParaLlm),
     centavosVistos,
     numerosVistos,
-    get saldoDeEstoqueVisto() { return saldoVisto },
+    get saldoBaixoVisto() { return saldoBaixo },
     efeitos,
     async executar(nome, entradaBruta) {
       const f = porNome.get(nome)
@@ -143,7 +143,7 @@ export function registroDeFerramentas(
         for (const c of r.centavos ?? []) centavosVistos.add(c)
         for (const n of r.numeros ?? []) numerosVistos.add(n)
         for (const n of r.percentuais ?? []) numerosVistos.percentuais.add(n)
-        if (r.saldoVisto) saldoVisto = true
+        if (r.saldoBaixoVisto) saldoBaixo = true
         if (r.efeito === 'handoff' && r.handoff) efeitos.handoff = r.handoff
         if (r.efeito === 'proposta_enviada') efeitos.propostaEnviada = true
         if (r.efeito === 'pedido_alterado') efeitos.pedidoAlterado = true
@@ -166,15 +166,23 @@ export function percentuaisDe(saida: unknown): number[] {
 }
 
 /**
- * A saída mostra algum saldo APURADO (campo `saldo` numérico)? `null` (não
- * controla estoque) e 'desconhecido' (ERP não informou) não contam: não dão
- * base para dizer "restam poucas unidades".
+ * Até quantas unidades um saldo conta como "poucas" (escassez). ⚠️ Saldo 0 é
+ * "esgotado", não "poucas"; saldo 500 desmente "restam poucas" — nos dois casos
+ * a frase de escassez seria falsa e o filtro a corta. 10 é o corte comum de
+ * "últimas unidades" em loja B2B; mudar aqui muda o que o agente pode afirmar.
  */
-export function saldoApuradoEm(saida: unknown): boolean {
-  if (Array.isArray(saida)) return saida.some(saldoApuradoEm)
+export const LIMIAR_ESCASSEZ = 10
+
+/**
+ * A saída mostra algum saldo BAIXO apurado (campo `saldo` numérico com
+ * 0 < saldo ≤ `LIMIAR_ESCASSEZ`)? `null` (não controla estoque),
+ * 'desconhecido' (ERP não informou), 0 e saldo alto não contam.
+ */
+export function saldoBaixoEm(saida: unknown): boolean {
+  if (Array.isArray(saida)) return saida.some(saldoBaixoEm)
   if (saida && typeof saida === 'object') {
     return Object.entries(saida as Record<string, unknown>).some(([k, v]) =>
-      (k === 'saldo' && typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'object' && saldoApuradoEm(v)))
+      (k === 'saldo' && typeof v === 'number' && v > 0 && v <= LIMIAR_ESCASSEZ) || (typeof v === 'object' && saldoBaixoEm(v)))
   }
   return false
 }

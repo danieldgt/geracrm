@@ -149,6 +149,19 @@ describe('Rotas de privacidade', () => {
     expect(validarPrivacidade({ textoPadrao: 'Seus dados ficam guardados por 5 anos, conforme a LGPD.' })).toMatchObject({ ok: true })
   })
 
+  it('avisos por contato exigem gestor/admin (prova LGPD): vendedor recebe 403, gestor lê', async () => {
+    await registrar(A, 'Esta conversa fica registrada para te atender melhor.', { ok: true, mensagemId: crypto.randomUUID() })
+    await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${U_ADMIN}, NULL, 'admin')`
+    await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${U_VENDEDOR}, NULL, 'vendedor')`
+    const negado = await pedir(A, 'GET', `/v1/contatos/${CONTATO[A]}/avisos-privacidade`)
+    expect(negado.statusCode).toBe(403)
+    expect(negado.json().erro).toBe('acesso.papel_insuficiente')
+    await dono`UPDATE usuario_filial SET papel = 'gestor' WHERE tenant_id = ${A} AND usuario_id = ${U_VENDEDOR}`
+    const ok = await pedir(A, 'GET', `/v1/contatos/${CONTATO[A]}/avisos-privacidade`)
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json().itens).toHaveLength(1)
+  })
+
   it('avisos por contato: paginados por cursor, sem repetir nem perder, e sem atravessar tenant', async () => {
     for (let i = 0; i < 23; i += 1) await registrar(A, 'Esta conversa fica registrada para te atender melhor.', { ok: true, mensagemId: crypto.randomUUID() })
     await registrar(B, 'Esta conversa fica registrada para te atender melhor.', { ok: true, mensagemId: crypto.randomUUID() })
