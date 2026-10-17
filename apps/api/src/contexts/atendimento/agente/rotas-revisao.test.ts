@@ -204,7 +204,8 @@ describe('GET /v1/agente/revisao/avaliacoes/:id — o que o revisor lê', () => 
     expect(d.transcricao.map((f: { autor: string }) => f.autor)).toEqual(['cliente', 'sugestao', 'humano'])
     expect(d.transcricao[1].texto).toBe('Temos sim, quantas caixas?')
     expect(d.violacoes).toEqual([{ regra: 'palavra_proibida', gravidade: null, trecho: 'ligue [telefone]', corrigida: false }])
-    expect(JSON.stringify(d)).not.toMatch(/99999|x@y\.com|ALTA/)
+    // Valores exatos semeados (com espaço/@): "99999" solto poderia casar com UUID aleatório.
+    expect(JSON.stringify(d)).not.toMatch(/85 99999-1234|x@y\.com|ALTA/)
     expect((await get(B, `/v1/agente/revisao/avaliacoes/${c.juiz}`)).statusCode).toBe(404)
     await post(A, { avaliacaoId: c.juiz, notas: todas(3), gravidade: 'ALTA', veredito: 'ajustar' })
     const depois = (await get(A, `/v1/agente/revisao/avaliacoes/${c.juiz}`)).json()

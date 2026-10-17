@@ -171,7 +171,10 @@ describe('GET /v1/agente/qualidade/amostra-semanal.csv', () => {
     expect(dados.slice(3, 11).every((c) => c[3] === 'alta_ou_nota_baixa' && baixas.has(c[4]!))).toBe(true)
     expect(dados.slice(11).every((c) => c[3] === 'aleatoria')).toBe(true)
     expect(dados.map((c) => c[2])).toEqual(Array.from({ length: 20 }, (_, i) => String(i + 1)))
-    expect(r.body).not.toMatch(/99999|x@y\.com|5585/)
+    // O telefone e o e-mail EXATOS que o teste semeia (com o espaço, que um UUID nunca tem):
+    // "99999" ou "5585" soltos casavam com UUID aleatório e o teste falhava ao acaso.
+    expect(r.body).not.toContain('85 99999-1234')
+    expect(r.body).not.toContain('x@y.com')
     expect(r.body).toMatch(/\[telefone\]/)
     expect(r.body).not.toContain(CANAL_B)
     // Estável: exportar de novo dá o mesmo arquivo.

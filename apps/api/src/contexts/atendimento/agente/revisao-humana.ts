@@ -21,6 +21,16 @@ import { transcricaoDaSessao } from './qualidade/avaliacao.js'
  *   detalheParaRevisar — transcrição mascarada (em sombra, a SUGESTÃO), notas e violações
  *   gravarRevisao      — upsert por (avaliação, revisor) com a concordância congelada
  *   concordancia       — a soma por número de uma ou mais semanas (a P19 consome)
+ *
+ * RISCOS ACEITOS (decisão do coordenador na revisão adversarial da P16; a P20 leva
+ * ao guia de revisão semanal):
+ *   1. A ORDEM da amostra revela a gravidade: as CRÍTICAs vêm primeiro, depois ALTA
+ *      ou nota ≤ 3. É o protocolo da revisão (ADR-031 §5) — o revisor deve
+ *      começar pelo que é grave. A cegueira cobre motivo, gravidade e notas, não
+ *      a posição na lista.
+ *   2. O CSV da aba Qualidade (P12, gestor/supervisor) traz motivo, gravidade e
+ *      justificativas do juiz da mesma semana. Ele não é a ferramenta de revisão;
+ *      o guia orienta revisar pela aba Revisão antes de abrir o CSV.
  */
 
 const peso = (col: string): string => `CASE ${col} WHEN 'CRITICA' THEN 3 WHEN 'ALTA' THEN 2 WHEN 'MEDIA' THEN 1 ELSE 0 END`
