@@ -25,7 +25,7 @@
 | P14 modo: recorte/confirmação/auditoria | 2 | 0104 | integrada (c0487fc; 2 revisões; main verde 1805 api) | | |
 | P15 evals + scripts | 2 | — | integrada (83f05bf; 2 revisões; 32 cenários B2B) | | |
 | P16 revisão humana | 3 | 0105 | integrada (86c7bef; 3 revisões; main verde 1980 api) | | |
-| P17 playbook versionado | 3 | 0106 | em andamento | | |
+| P17 playbook versionado | 3 | 0106 | integrada (8359966; 3 revisões; main verde 2018 api) | | |
 | P18 SLA do handoff | 3 | 0107 | em andamento | | fatia mínima de INB-22 (decisão padrão: fazer; ver ADR-034) |
 | P19 painel de fase | 3 | — | pendente | | |
 | P20 operação/docs/skills | 4 | — | pendente | | |
