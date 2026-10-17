@@ -394,7 +394,7 @@ PRONTO     skills descrevem o pipeline e onde estender
 - P0c (pendente, após onda 1; dono vendedor.ts): (a) fontes de números que hoje não entram no P7 — quantidades do
   pedido aberto carregado fora do laço e memória do contato (`lerMemoria`); (b) estabilizar os testes de
   fila/worker (`vendedor.test.ts` "Sequência e worker", `pipeline.test.ts` "aviso_e_reagendar") que falham
-  intermitentemente por workers de outros arquivos varrerem todos os tenants.
+  intermitentemente por workers de outros arquivos varrerem todos os tenants. [feito na P0c-b: consumo da fila nos testes via workerDoTenant]
   (c) passar `tenantId` a `custoDoLaco` em vendedor.ts (alerta `preco_desconhecido` imediato — P6);
   (d) [feito] remover `custoEstimadoCentavos`/`PRECO_USD_POR_MILHAO` de porta-llm.ts depois de P5 e P6 integradas;
   (e) slots ditos no 1º turno com resposta fixa sem sessão se perdem (P3).
