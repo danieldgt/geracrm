@@ -429,3 +429,7 @@ PRONTO     skills descrevem o pipeline e onde estender
 - Testes instáveis observados na suíte completa (passam isolados): webhook-enxuto.test.ts "Worker de pós-ingestão",
   fila.test.ts "Serialização por conversa", rotas-qualidade.test.ts regex /5585/ (P16 corrigindo). Raia P0d de
   estabilização antes do encerramento.
+- P0d (estabilização final) também: workers/qualidade.ts (P12) faz lock/unlock pelo pool — usar conexão reservada
+  como o worker de SLA (P18); `primeira_resposta_humana_em` nunca é preenchida (métrica fixa de 5 min da
+  performance sempre vazia) — preencher no envio humano; `DepsTurno.ligacoes.canalId` declarado; estilo/roteiro
+  do playbook no bloco de sistema cacheado.
