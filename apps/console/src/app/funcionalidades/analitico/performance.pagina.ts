@@ -5,6 +5,10 @@ import { firstValueFrom } from 'rxjs'
 interface Perf {
   readonly dias: number
   readonly slaMinutos: number
+  /** P18: 'handoff' = SLA configurado (cumprido dos handoffs, minutos úteis); 'fixo' = 5 min de relógio. */
+  readonly slaFonte?: 'handoff' | 'fixo'
+  readonly slaMinutosVariam?: boolean
+  readonly slaHandoff?: { medidos: number; cumpridos: number; estourados: number; pendentes: number; pctCumprido: number | null }
   readonly total: number
   readonly assumidos: number
   readonly respondidos: number
@@ -55,9 +59,14 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
                 <span class="kpi-sub">tempo até responder</span>
               </div>
               <div class="kpi">
-                <span class="txt-rotulo">Dentro do SLA</span>
+                <span class="txt-rotulo">{{ p.slaFonte === 'handoff' ? 'SLA cumprido' : 'Dentro do SLA' }}</span>
                 <span class="txt-kpi" [class.bom]="(p.pctDentroSla ?? 0) >= 80">{{ p.pctDentroSla !== null ? p.pctDentroSla + '%' : '—' }}</span>
-                <span class="kpi-sub">respondidos em até {{ p.slaMinutos }} min</span>
+                @if (p.slaFonte === 'handoff') {
+                  <span class="kpi-sub">transferidos pelo agente respondidos em até {{ p.slaMinutosVariam ? 'o SLA do número' : p.slaMinutos + ' min úteis' }}
+                    ({{ p.slaHandoff?.cumpridos ?? 0 }} de {{ p.slaHandoff?.medidos ?? 0 }})</span>
+                } @else {
+                  <span class="kpi-sub">respondidos em até {{ p.slaMinutos }} min</span>
+                }
               </div>
               <div class="kpi">
                 <span class="txt-rotulo">Atendimentos</span>

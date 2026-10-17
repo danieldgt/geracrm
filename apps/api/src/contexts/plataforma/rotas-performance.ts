@@ -12,6 +12,17 @@ import { exigirTenant } from '../../plugins/tenant.js'
  *
  * O SLA (minutos) é um limiar de leitura declarado aqui e devolvido no payload,
  * para a tela mostrar contra o quê o "% dentro do SLA" foi medido.
+ *
+ * P18 (SLA do handoff, ADR-034): quando o tenant CONFIGUROU o SLA em algum
+ * número (`atendimento_sla_config`), o "% dentro do SLA" passa a ser o SLA
+ * CUMPRIDO dos handoffs — resposta humana até `sla_vence_em`, em minutos
+ * ÚTEIS — e substitui o limiar fixo de 5 min (`slaFonte: 'handoff'`). Sem
+ * configuração, o fixo continua (`slaFonte: 'fixo'`); o bloco `slaHandoff`
+ * vem sempre, porque o SLA padrão (30 min úteis) mede os handoffs de todo jeito.
+ *
+ *   medidos  = handoffs com SLA decidido: respondidos (no prazo ou não) ou estourados;
+ *   cumpridos = resposta humana até `sla_vence_em`.
+ * Pendentes (ainda no prazo, sem resposta) não entram — não estão decididos.
  */
 const DIAS_VALIDOS = new Set([7, 30, 90])
 const SLA_MINUTOS = 5 // limiar de "resposta rápida" — declarado, não escondido.
@@ -59,18 +70,40 @@ export async function rotasPerformance(app: FastifyInstance): Promise<void> {
            GROUP BY a.primeira_resposta_por_id, u.nome
            ORDER BY count(*) DESC LIMIT 10`
 
-        return { geral, porAtendente }
+        const [handoff] = await tx<{ medidos: number; cumpridos: number; estourados: number; pendentes: number }[]>`
+          SELECT count(*) FILTER (WHERE sla_respondido_em IS NOT NULL OR sla_estourado_em IS NOT NULL)::int AS medidos,
+                 count(*) FILTER (WHERE sla_respondido_em IS NOT NULL AND sla_respondido_em <= sla_vence_em)::int AS cumpridos,
+                 count(*) FILTER (WHERE sla_estourado_em IS NOT NULL
+                                     OR (sla_respondido_em IS NOT NULL AND sla_respondido_em > sla_vence_em))::int AS estourados,
+                 count(*) FILTER (WHERE sla_respondido_em IS NULL AND sla_estourado_em IS NULL AND estado <> 'encerrado')::int AS pendentes
+            FROM atendimento
+           WHERE tenant_id = tenant_atual() AND sla_vence_em IS NOT NULL AND sla_inicio_em >= ${desde}`
+        const [cfg] = await tx<{ n: number; min: number | null; max: number | null }[]>`
+          SELECT count(*)::int AS n, min(sla_minutos) AS min, max(sla_minutos) AS max
+            FROM atendimento_sla_config WHERE tenant_id = tenant_atual()`
+        return { geral, porAtendente, handoff, cfg }
       })
 
       const g = dados.geral
+      const h = dados.handoff
+      const slaHandoff = {
+        medidos: h?.medidos ?? 0, cumpridos: h?.cumpridos ?? 0, estourados: h?.estourados ?? 0, pendentes: h?.pendentes ?? 0,
+        pctCumprido: h?.medidos ? Math.round((h.cumpridos / h.medidos) * 100) : null,
+      }
+      const configurado = (dados.cfg?.n ?? 0) > 0
       return reply.send({
         dias,
-        slaMinutos: SLA_MINUTOS,
+        slaFonte: configurado ? 'handoff' : 'fixo',
+        // Configurado: o MENOR SLA entre os números (minutos ÚTEIS); `slaMinutosVariam` diz se há números diferentes.
+        slaMinutos: configurado ? (dados.cfg?.min ?? SLA_MINUTOS) : SLA_MINUTOS,
+        slaMinutosVariam: configurado && dados.cfg?.min !== dados.cfg?.max,
         total: g?.total ?? 0,
         assumidos: g?.assumidos ?? 0,
         respondidos: g?.respondidos ?? 0,
-        dentroSla: g?.dentro_sla ?? 0,
-        pctDentroSla: g?.respondidos ? Math.round(((g.dentro_sla) / g.respondidos) * 100) : null,
+        dentroSla: configurado ? slaHandoff.cumpridos : g?.dentro_sla ?? 0,
+        pctDentroSla: configurado ? slaHandoff.pctCumprido
+          : g?.respondidos ? Math.round(((g.dentro_sla) / g.respondidos) * 100) : null,
+        slaHandoff,
         medianaRespostaSeg: g?.mediana_seg !== null && g?.mediana_seg !== undefined ? Math.round(g.mediana_seg) : null,
         porAtendente: dados.porAtendente.map((r) => ({
           usuarioId: r.usuario_id, nome: r.nome ?? 'Desconhecido',

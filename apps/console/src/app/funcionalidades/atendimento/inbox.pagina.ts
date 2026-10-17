@@ -11,6 +11,7 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
 import { SugestaoServico } from './sugestao.servico.js'
 import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo, tituloDaSugestao } from './sugestao.regras.js'
 import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.js'
+import { SlaCronometroComponente } from './sla-cronometro.componente.js'
 
 /**
  * Inbox — visual inspirado no WhatsApp (tema escuro, bolhas, avatares).
@@ -21,7 +22,7 @@ import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.
  */
 @Component({
   selector: 'app-inbox',
-  imports: [FormsModule, RouterLink, CanalSimboloComponente],
+  imports: [FormsModule, RouterLink, CanalSimboloComponente, SlaCronometroComponente],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="wa" [class.tem-conversa]="servico.selecionadaId()">
@@ -166,7 +167,8 @@ import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.
                 <div class="topo-acoes">
                   <a class="pedido-btn" routerLink="/pedido" [queryParams]="{ conversa: t.id }"
                      title="Montar um pedido para este cliente">🛒 Montar pedido</a>
-                  @if (t.atendimento) {
+                  <app-sla-cronometro [conversaId]="t.id" /><!-- P18: SLA do handoff (some sem SLA armado) -->
+                  @if (t.atendimento && t.atendimento.estado !== 'na_fila') {
                     <span class="atend-badge" [title]="'Atendimento ' + protocoloFmt(t.atendimento.protocolo)">
                       @if (t.atendimento.protocolo) { <b class="proto">{{ protocoloFmt(t.atendimento.protocolo) }}</b> }
                       👤 {{ t.atendimento.atendenteNome || 'Em atendimento' }}

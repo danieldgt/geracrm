@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { ROTULO_HANDOFF, type MotivoHandoff } from '@geracrm/shared'
 import type { Sql } from '../../../db/index.js'
 import { notificarHandoffDoAgente } from '../notificacao.js'
+import { armarSlaDoHandoff } from '../sla-handoff.js'
 
 /**
  * ENTREGA AO HUMANO — com contexto, ou não é entrega.
@@ -15,7 +16,10 @@ import { notificarHandoffDoAgente } from '../notificacao.js'
  *     que o atendente lê ao abrir;
  *  3. encerra a sessão do agente com o motivo;
  *  4. marca a conversa como conduzida por humano;
- *  5. notifica (fila ou dono da carteira) e emite o evento de tempo real.
+ *  5. ARMA O SLA (P18, ADR-034): prazos em minutos ÚTEIS do número e o
+ *     responsável roteado (dono da carteira → pool em rodízio → gestor);
+ *  6. notifica (o responsável; sem ele, a fila ou o dono da carteira) e emite
+ *     o evento de tempo real.
  *
  * Tudo numa transação só, chamada pelo turno.
  */
@@ -56,6 +60,7 @@ export async function entregarParaHumano(
     INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
     VALUES (tenant_atual(), 'agente.handoff', 'conversa', ${p.conversaId},
             ${JSON.stringify({ conversaId: p.conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
-  await notificarHandoffDoAgente(tx, p.conversaId, rotulo)
+  const rota = aberto ? await armarSlaDoHandoff(tx, { atendimentoId: aberto.id, conversaId: p.conversaId, canalId: p.canalId, agora: p.agora }) : null
+  await notificarHandoffDoAgente(tx, p.conversaId, rotulo, rota?.usuarioId ?? null)
   return { atendimentoId: aberto?.id ?? atId, criouAtendimento: !!criado }
 }

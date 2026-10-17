@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Sql } from '../../db/index.js'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { fusoSeguro } from '../plataforma/fuso.js'
+import { fragmentoNaFila } from './sla-handoff.js'
 
 /**
  * Kanban de ATENDIMENTOS com etapas configuráveis por empresa (a visão do gestor).
@@ -55,9 +57,7 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
       await garantirEtapasAtendimento(tx)
       const [fila] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM conversa cv
-         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND cv.ultima_direcao = 'entrante'
-           AND NOT EXISTS (SELECT 1 FROM atendimento a
-                            WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado <> 'encerrado')`
+         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}`
       const etapas = await tx<{ id: string; chave: string; nome: string; tipo: string; ordem: number; total: number }[]>`
         SELECT e.id, e.chave, e.nome, e.tipo, e.ordem,
                (SELECT count(*) FROM atendimento a
@@ -71,7 +71,11 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
     return reply.send({ aguardando: { total: dados.fila }, itens: dados.etapas })
   })
 
-  /** Fila derivada (conversas entrantes sem atendimento aberto). Cursor por (ultima_mensagem_em, id). */
+  /**
+   * Fila (entrantes sem atendimento aberto + handoffs do agente sem atendente — `fragmentoNaFila`).
+   * Cursor por (ultima_mensagem_em, id). P18: o card do handoff traz o SLA (instantes, sem conteúdo) e o
+   * fuso do tenant — o cronômetro anda no relógio local, sem polling.
+   */
   app.get<{ Querystring: { cursor?: string } }>(
     '/v1/atendimento-kanban/aguardando', { preHandler: exigirTenant },
     async (req, reply) => {
@@ -81,22 +85,52 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
         if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curEm = em; curId = id
       }
-      const linhas = await req.comTenant((tx) => tx<{ id: string; nome: string; ultima_mensagem_em: Date | null }[]>`
-        SELECT cv.id, ct.nome, cv.ultima_mensagem_em
+      const { linhas, fuso } = await req.comTenant(async (tx) => {
+        const linhas = await tx<{
+          id: string; nome: string; ultima_mensagem_em: Date | null
+          at_id: string | null; sla_inicio_em: Date | null; sla_vence_em: Date | null; reatribuicao_vence_em: Date | null
+          sla_estourado_em: Date | null; reatribuicao_liberada_em: Date | null; sla_respondido_em: Date | null
+          aviso_espera_em: Date | null; aviso_espera_resultado: string | null; responsavel: string | null
+        }[]>`
+        SELECT cv.id, ct.nome, cv.ultima_mensagem_em,
+               h.id AS at_id, h.sla_inicio_em, h.sla_vence_em, h.reatribuicao_vence_em, h.sla_estourado_em,
+               h.reatribuicao_liberada_em, h.sla_respondido_em, h.aviso_espera_em, h.aviso_espera_resultado, h.responsavel
           FROM conversa cv JOIN contato ct ON ct.tenant_id = cv.tenant_id AND ct.id = cv.contato_id
-         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND cv.ultima_direcao = 'entrante'
-           AND NOT EXISTS (SELECT 1 FROM atendimento a
-                            WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado <> 'encerrado')
+          LEFT JOIN LATERAL (
+            SELECT a.id, a.sla_inicio_em, a.sla_vence_em, a.reatribuicao_vence_em, a.sla_estourado_em,
+                   a.reatribuicao_liberada_em, a.sla_respondido_em, a.aviso_espera_em, a.aviso_espera_resultado,
+                   r.nome AS responsavel
+              FROM atendimento a
+              LEFT JOIN usuario r ON r.tenant_id = a.tenant_id AND r.id = a.responsavel_id
+             WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado = 'na_fila'
+               AND a.atendente_id IS NULL AND a.sla_vence_em IS NOT NULL
+             LIMIT 1
+          ) h ON true
+         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}
            AND ${curEm === null ? tx`true` : tx`(cv.ultima_mensagem_em, cv.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
          ORDER BY cv.ultima_mensagem_em DESC NULLS LAST, cv.id DESC
-         LIMIT ${PAGINA + 1}`)
+         LIMIT ${PAGINA + 1}`
+        const [t] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
+        return { linhas, fuso: fusoSeguro(t?.fuso) }
+      })
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
       const ultimo = pagina[pagina.length - 1]
       const proximoCursor = temMais && ultimo?.ultima_mensagem_em
         ? Buffer.from(`${ultimo.ultima_mensagem_em.toISOString()}§${ultimo.id}`, 'utf8').toString('base64url') : null
       return reply.send({
-        itens: pagina.map((l) => ({ conversaId: l.id, contato: l.nome, ultimaMensagemEm: l.ultima_mensagem_em })),
+        itens: pagina.map((l) => ({
+          conversaId: l.id, contato: l.nome, ultimaMensagemEm: l.ultima_mensagem_em,
+          sla: l.at_id && l.sla_inicio_em && l.sla_vence_em ? {
+            atendimentoId: l.at_id, inicioEm: l.sla_inicio_em.toISOString(), venceEm: l.sla_vence_em.toISOString(),
+            reatribuicaoVenceEm: l.reatribuicao_vence_em?.toISOString() ?? null,
+            estouradoEm: l.sla_estourado_em?.toISOString() ?? null,
+            reatribuicaoLiberadaEm: l.reatribuicao_liberada_em?.toISOString() ?? null,
+            respondidoEm: l.sla_respondido_em?.toISOString() ?? null,
+            avisoEspera: l.aviso_espera_em ? { em: l.aviso_espera_em.toISOString(), resultado: l.aviso_espera_resultado } : null,
+            responsavel: l.responsavel, fuso,
+          } : null,
+        })),
         proximoCursor,
       })
     },

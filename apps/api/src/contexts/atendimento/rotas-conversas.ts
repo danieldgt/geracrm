@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { calcularJanela, previewMensagem } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from './rotas-fila.js'
+import { fragmentoNaFila } from './sla-handoff.js'
 import { midiaHabilitada, urlAssinada, ehChaveMidia } from './midia/armazenamento.js'
 
 /**
@@ -168,9 +169,7 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
          AND ${q.canal ? tx`cv.canal_id = ${q.canal}::uuid` : tx`true`}
          AND ${
            filtro === 'fila'
-             ? tx`cv.ultima_direcao = 'entrante' AND NOT EXISTS (
-                   SELECT 1 FROM atendimento a
-                    WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado <> 'encerrado')`
+             ? fragmentoNaFila(tx)
              : filtro === 'meus'
                ? tx`EXISTS (
                      SELECT 1 FROM atendimento a

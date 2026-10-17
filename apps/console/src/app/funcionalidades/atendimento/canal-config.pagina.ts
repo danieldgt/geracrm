@@ -6,6 +6,7 @@ import { ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
 
 interface Canal { readonly id: string; readonly nomeAmigavel: string; readonly tipo: string; readonly estado: string; readonly riscoBanimento: boolean }
 import { HorarioAtendimentoComponente, somenteDiasAbertos, type Faixa } from '../../compartilhado/ui/index.js'
+import { SlaConfigComponente } from './sla-config.componente.js'
 interface Config {
   readonly canal: string
   readonly horarioAtendimento: Record<string, Faixa | null>
@@ -25,7 +26,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 @Component({
   selector: 'app-canal-config',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, HorarioAtendimentoComponente],
+  imports: [DatePipe, HorarioAtendimentoComponente, SlaConfigComponente],
   template: `
     <header class="cabecalho">
       <h1 class="txt-titulo">Configuração do Canal</h1>
@@ -89,6 +90,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                     @if (msg()) { <span class="ok">{{ msg() }}</span> }
                   </div>
                 </form>
+                <app-sla-config [canalId]="sel()!.id" /><!-- P18: SLA do handoff, salva à parte (admin, auditado) -->
               }
             </section>
           </div>

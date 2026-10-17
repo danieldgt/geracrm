@@ -162,8 +162,32 @@ async function notificar(
  */
 export async function notificarHandoffDoAgente(
   tx: Sql, conversaId: string, motivo: string,
+  // P18: o handoff ROTEADO (`rotearHandoff`) avisa só o responsável, não a fila inteira.
+  responsavelId?: string | null,
 ): Promise<void> {
   const q = await quemAvisar(tx, conversaId)
   if (!q) return
-  await notificar(tx, q.alvos, 'agente.handoff', `${q.titulo} — o agente transferiu: ${motivo}`, conversaId)
+  const alvos = responsavelId && q.tipo === 'fila.nova' ? [responsavelId] : q.alvos
+  await notificar(tx, alvos, 'agente.handoff', `${q.titulo} — o agente transferiu: ${motivo}`, conversaId)
+}
+
+/**
+ * P18 (SLA do handoff): avisa pessoas ESCOLHIDAS (gestores no estouro, o pool na
+ * reatribuição) sobre uma conversa — mesma pendência única por (usuário,
+ * conversa) e o mesmo evento sem conteúdo do resto deste módulo.
+ */
+export async function notificarPessoasDaConversa(
+  tx: Sql, usuarios: readonly string[], tipo: string, sufixo: string, conversaId: string,
+): Promise<void> {
+  if (usuarios.length === 0) return
+  const [c] = await tx<{ titulo: string }[]>`
+    SELECT ct.nome AS titulo FROM conversa c
+      JOIN contato ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contato_id
+     WHERE c.tenant_id = tenant_atual() AND c.id = ${conversaId}`
+  await notificar(tx, [...new Set(usuarios)], tipo, `${c?.titulo ?? 'Cliente'} — ${sufixo}`, conversaId)
+}
+
+/** Quem a fila do número avisaria (dono da carteira → acesso ao canal → todos). P18. */
+export async function destinatariosDaFilaDoNumero(tx: Sql, canalId: string): Promise<string[]> {
+  return destinatariosDaFila(tx, canalId, null)
 }

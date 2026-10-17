@@ -3,8 +3,10 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Sql } from '../../db/index.js'
 import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { auditar } from '../plataforma/auditoria.js'
+import { atendePapel, papeisDoUsuario } from '../plataforma/papel.js'
 import { operadorAusente, RECUSA_OPERADOR_AUSENTE } from './presenca-operador.js'
 import { garantirEtapasAtendimento } from './rotas-atendimento-kanban.js'
+import { fragmentoNaFila, respostaHumanaDoAtendimento } from './sla-handoff.js'
 
 /**
  * Fila e assunção (EP-06).
@@ -76,9 +78,7 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
     const r = await req.comTenant(async (tx) => {
       const [fila] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM conversa cv
-         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND cv.ultima_direcao = 'entrante'
-           AND NOT EXISTS (SELECT 1 FROM atendimento a
-                            WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado <> 'encerrado')`
+         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}`
       const [meus] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM atendimento a
          JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id
@@ -153,11 +153,62 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
         }
 
         // Já havia um atendimento aberto — quem tem?
-        const [aberto] = await tx<{ atendente_id: string | null; nome: string | null; protocolo: string }[]>`
-          SELECT a.atendente_id, u.nome, a.protocolo
+        const [aberto] = await tx<{
+          id: string; atendente_id: string | null; nome: string | null; protocolo: string; estado: string
+          responsavel_id: string | null; responsavel_nome: string | null
+          reatribuicao_liberada_em: Date | null; reatribuicao_vence_em: Date | null; respondido_em: Date | null
+        }[]>`
+          SELECT a.id, a.atendente_id, u.nome, a.protocolo, a.estado, a.responsavel_id, r.nome AS responsavel_nome,
+                 a.reatribuicao_liberada_em, a.reatribuicao_vence_em,
+                 ${respostaHumanaDoAtendimento(tx)} AS respondido_em
             FROM atendimento a
             LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id
+            LEFT JOIN usuario r ON r.tenant_id = a.tenant_id AND r.id = a.responsavel_id
            WHERE a.tenant_id = tenant_atual() AND a.conversa_id = ${conversaId} AND a.estado <> 'encerrado'`
+
+        // ── SLA do handoff (P18) ────────────────────────────────────────────
+        // ⚠️ O handoff ROTEADO fica reservado ao responsável até o 2º limiar
+        //    (`reatribuicao_liberada_em`); gestão (admin/gestor/supervisor) assume
+        //    sempre. Depois do limiar, qualquer um assume — inclusive de quem
+        //    assumiu e não respondeu (a REATRIBUIÇÃO). O vencedor continua
+        //    atômico: o UPDATE só pega a linha no estado lido.
+        if (aberto && aberto.atendente_id !== usuarioId) {
+          const liberada = aberto.reatribuicao_liberada_em !== null
+          const livre = aberto.atendente_id === null && aberto.estado === 'na_fila'
+          const reatribuivel = aberto.atendente_id !== null && liberada && aberto.respondido_em === null
+          if (livre || reatribuivel) {
+            const gestao = atendePapel(
+              await papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff }), ['gestor', 'supervisor'])
+            if (livre && aberto.responsavel_id && aberto.responsavel_id !== usuarioId && !liberada && !gestao) {
+              return {
+                tipo: 'reservado' as const, para: aberto.responsavel_nome,
+                ate: aberto.reatribuicao_vence_em ? aberto.reatribuicao_vence_em.toISOString() : null,
+              }
+            }
+            const [tomado] = await tx<{ protocolo: string }[]>`
+              UPDATE atendimento
+                 SET atendente_id = ${usuarioId}, estado = 'em_atendimento', assumido_em = now(),
+                     etapa_id = coalesce(${etapa?.id ?? null}::uuid, etapa_id), entrou_etapa_em = now(), versao = versao + 1
+               WHERE tenant_id = tenant_atual() AND id = ${aberto.id} AND estado <> 'encerrado'
+                 AND atendente_id IS NOT DISTINCT FROM ${aberto.atendente_id}::uuid
+              RETURNING protocolo`
+            if (tomado) {
+              if (etapa?.id) {
+                await tx`UPDATE atendimento_etapa_historico SET saiu_em = now()
+                          WHERE tenant_id = tenant_atual() AND atendimento_id = ${aberto.id} AND saiu_em IS NULL`
+                await tx`INSERT INTO atendimento_etapa_historico (tenant_id, id, atendimento_id, etapa_id, entrou_em, ator_id)
+                         VALUES (tenant_atual(), ${randomUUID()}, ${aberto.id}, ${etapa.id}, now(), ${usuarioId})`
+              }
+              await emitirEvento(tx, conversaId)
+              await auditar(tx, {
+                atorId: usuarioId, acao: livre ? 'atendimento.assumido' : 'atendimento.reatribuido', entidade: 'conversa',
+                entidadeId: conversaId,
+                dados: { protocolo: Number(tomado.protocolo), origem: 'handoff', ...(livre ? {} : { de: aberto.atendente_id }) },
+              })
+              return { tipo: 'assumido' as const, protocolo: Number(tomado.protocolo), meu: true, atendimentoId: aberto.id }
+            }
+          }
+        }
         return {
           tipo: 'ja_aberto' as const,
           meu: aberto?.atendente_id === usuarioId,
@@ -169,6 +220,12 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
       if (r.tipo === 'nao_encontrada') return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       if (r.tipo === 'operador_ausente') return reply.code(409).send(RECUSA_OPERADOR_AUSENTE)
       if (r.tipo === 'etapa_invalida') return reply.code(422).send(ETAPA_INVALIDA)
+      if (r.tipo === 'reservado') {
+        return reply.code(409).send({
+          erro: 'atendimento.reservado', para: r.para, ate: r.ate,
+          mensagem: `Este cliente foi direcionado a ${r.para ?? 'outra pessoa'}. Se ninguém responder no prazo, a fila é liberada para todos.`,
+        })
+      }
       if (r.tipo === 'assumido') return reply.code(201).send({ ok: true, protocolo: r.protocolo, meu: true, atendimentoId: r.atendimentoId })
       // Já aberto: se é meu, 200 ok; se é de outro, 409 tipificado.
       if (r.meu) return reply.code(200).send({ ok: true, protocolo: r.protocolo, meu: true })

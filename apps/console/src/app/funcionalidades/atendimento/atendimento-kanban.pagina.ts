@@ -4,6 +4,7 @@ import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, moveItemInArr
 import { AtendimentoKanbanServico, type Card, type CardAtend, type Coluna } from './atendimento-kanban.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
+import { SlaCronometroComponente } from './sla-cronometro.componente.js'
 
 /**
  * Painel de atendimentos (visão do gestor). 1ª coluna "Aguardando" derivada da
@@ -14,7 +15,7 @@ import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.j
 @Component({
   selector: 'app-atendimento-kanban',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CdkDropListGroup, CdkDropList, CdkDrag, FormsModule],
+  imports: [CdkDropListGroup, CdkDropList, CdkDrag, FormsModule, SlaCronometroComponente],
   template: `
     <header class="cabecalho">
       <div>
@@ -56,6 +57,7 @@ import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.j
                       <span class="card-aging" [class.card-aging--velho]="velho(card.entrouEtapaEm)">⏱ {{ aging(card.entrouEtapaEm) }} nesta etapa</span>
                     } @else {
                       <span class="card-aging">💬 {{ aging(card.ultimaMensagemEm) }} aguardando · arraste para assumir</span>
+                      @if (card.sla) { <app-sla-cronometro [sla]="card.sla" [compacto]="true" /> }
                     }
                   </article>
                 }

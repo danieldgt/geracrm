@@ -2,6 +2,7 @@ import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { mensagemDeErro } from '../../compartilhado/ui/index.js'
+import type { CronometroSla } from '@geracrm/shared'
 
 export interface EtapaK { readonly id: string; readonly chave: string; readonly nome: string; readonly tipo: 'atendimento' | 'encerrado'; readonly total: number }
 export interface CardAtend {
@@ -9,7 +10,11 @@ export interface CardAtend {
   readonly atendimentoId: string; readonly conversaId: string; readonly contato: string
   readonly atendente: string | null; readonly protocolo: number; readonly entrouEtapaEm: string | null; readonly versao: number
 }
-export interface CardFila { readonly kind: 'fila'; readonly conversaId: string; readonly contato: string; readonly ultimaMensagemEm: string | null }
+export interface CardFila {
+  readonly kind: 'fila'; readonly conversaId: string; readonly contato: string; readonly ultimaMensagemEm: string | null
+  /** P18: handoff do agente esperando — o SLA vem com o card (instantes); null = entrante comum. */
+  readonly sla?: CronometroSla | null
+}
 export type Card = CardAtend | CardFila
 
 export interface Coluna { etapa: EtapaK | null; chave: string; nome: string; tipo: 'atendimento' | 'encerrado' | 'fila'; total: number; cards: Card[]; proximoCursor: string | null; carregandoMais: boolean }
@@ -52,7 +57,7 @@ export class AtendimentoKanbanServico {
 
   private async buscarFila(cursor: string | null): Promise<{ itens: CardFila[]; proximoCursor: string | null }> {
     const url = cursor ? `/v1/atendimento-kanban/aguardando?cursor=${encodeURIComponent(cursor)}` : '/v1/atendimento-kanban/aguardando'
-    const r = await firstValueFrom(this.http.get<{ itens: { conversaId: string; contato: string; ultimaMensagemEm: string | null }[]; proximoCursor: string | null }>(url))
+    const r = await firstValueFrom(this.http.get<{ itens: { conversaId: string; contato: string; ultimaMensagemEm: string | null; sla?: CronometroSla | null }[]; proximoCursor: string | null }>(url))
     return { itens: r.itens.map((i) => ({ kind: 'fila', ...i })), proximoCursor: r.proximoCursor }
   }
   private async buscarColuna(etapaId: string, cursor: string | null): Promise<{ itens: CardAtend[]; proximoCursor: string | null }> {
