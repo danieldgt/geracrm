@@ -401,3 +401,6 @@ PRONTO     skills descrevem o pipeline e onde estender
   (f) `workers/transcricao.ts registrarFalha`: falha definitiva deve chamar `agendarTurno` para o "1º pede texto"
       sair sem esperar nova mensagem (P4);
   (g) lista de avisos de privacidade por contato na tela do contato (API pronta na P4).
+  (h) fechar o alerta `agente_llm_indisponivel` no turno bem-sucedido (`resolverAlertaLlm(tenantId)` em vendedor.ts — P5);
+  (i) mostrar reserva/`faltaParaReserva` na tela do agente (P14/P17).
+  Nota: a P5 isolou o worker dos testes por tenant (`workerDoTenant`), o que deve resolver o item (b).
