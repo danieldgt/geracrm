@@ -23,7 +23,7 @@
 | P12 qualidade em produção | 2 | 0102 | integrada (b5b1e87; 3 revisões) | | |
 | P13 sugestão/copiloto/edição | 2 | 0103 | integrada (8ea4144; 3 revisões; main verde 1903 api) | | |
 | P14 modo: recorte/confirmação/auditoria | 2 | 0104 | integrada (c0487fc; 2 revisões; main verde 1805 api) | | |
-| P15 evals + scripts | 2 | — | em andamento | | |
+| P15 evals + scripts | 2 | — | integrada (83f05bf; 2 revisões; 32 cenários B2B) | | |
 | P16 revisão humana | 3 | 0105 | em andamento | | |
 | P17 playbook versionado | 3 | 0106 | em andamento | | |
 | P18 SLA do handoff | 3 | 0107 | em andamento | | fatia mínima de INB-22 (decisão padrão: fazer; ver ADR-034) |
