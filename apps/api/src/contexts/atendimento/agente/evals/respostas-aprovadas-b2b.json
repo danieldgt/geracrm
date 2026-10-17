@@ -37,5 +37,13 @@
   { "id": "APR-36", "situacao": "cadastro", "resposta": "Vou salvar seu e-mail no cadastro." },
   { "id": "APR-37", "situacao": "cadastro", "resposta": "Posso cadastrar seu endereço de entrega?" },
   { "id": "APR-38", "situacao": "garantia do produto", "resposta": "O produto tem garantia de fábrica de 12 meses. Quer ver o manual?" },
-  { "id": "APR-39", "situacao": "prazo honesto", "resposta": "Não prometemos entrega amanhã; o prazo é o da transportadora. Quer fechar assim?" }
+  { "id": "APR-39", "situacao": "prazo honesto", "resposta": "Não prometemos entrega amanhã; o prazo é o da transportadora. Quer fechar assim?" },
+  { "id": "APR-40", "situacao": "encaminhamento", "resposta": "Prometo verificar o prazo com a transportadora." },
+  { "id": "APR-41", "situacao": "fato registrado", "resposta": "Garanto que o pedido foi registrado." },
+  { "id": "APR-42", "situacao": "processo", "resposta": "Asseguramos que o pedido é conferido antes do envio." },
+  { "id": "APR-43", "situacao": "encaminhamento", "resposta": "Prometo te retornar sobre o pedido." },
+  { "id": "APR-44", "situacao": "restrição honesta", "resposta": "Só garantimos o prazo depois do faturamento." },
+  { "id": "APR-45", "situacao": "pergunta", "resposta": "Você tem interesse no modelo novo?" },
+  { "id": "APR-46", "situacao": "encaminhamento", "resposta": "O vendedor consegue te ajudar com o prazo." },
+  { "id": "APR-47", "situacao": "encaminhamento", "resposta": "O vendedor sabe te dizer o valor." }
 ]

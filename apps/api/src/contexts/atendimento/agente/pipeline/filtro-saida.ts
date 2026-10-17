@@ -32,9 +32,15 @@ export const etapaFiltroSaida: EtapaPosResposta = {
   async executar(ctx, entrada) {
     const compliance = lerComplianceExtra(ctx.cfgExtra['compliance'])
     const guardrails: MarcaGuardrail[] = []
-    // Escassez ("poucas unidades") só é verdade com quantidade vinda de fonte
-    // no turno — `numerosVistos` é preenchido pelas ferramentas (raia P7).
-    const estoqueComFonte = entrada.numerosVistos.size > 0
+    // Escassez ("poucas unidades") só é verdade com SALDO de ferramenta de
+    // catálogo/estoque neste turno. ⚠️ FAIL-CLOSED: `EntradaPosResposta` ainda
+    // não diz quais ferramentas rodaram (e `numerosVistos` aceita qualquer
+    // número, não só saldo) — então a escassez é SEMPRE vetada. Pendência P0c:
+    // `EntradaPosResposta.saldoDeEstoqueVisto: boolean` (true quando uma
+    // ferramenta de catálogo/estoque devolveu saldo no turno), preenchido por
+    // vendedor.ts a partir do registro de ferramentas; aqui vira
+    // `estoqueComFonte: entrada.saldoDeEstoqueVisto === true`.
+    const estoqueComFonte = false
     let mensagens: string[] = []
     for (const m of entrada.mensagens) {
       const r = filtrarSaida(m, { extras: compliance.frasesProibidas, estoqueComFonte })

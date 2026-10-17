@@ -188,12 +188,14 @@ describe('Etapa — casos da revisão adversarial', () => {
   const rodar = (mensagens: string[], numerosVistos: ReadonlySet<number> = new Set()) =>
     etapaFiltroSaida.executar(ctx, { mensagens, handoff: null, centavosVistos: new Set(), numerosVistos, falasAnterioresDoAgente: [] })
 
-  it('escassez sai sem quantidade de fonte e fica quando o turno trouxe números de ferramenta', async () => {
-    const t = 'Restam poucas unidades em estoque segundo o sistema. Quer garantir as suas?'
-    const sem = await rodar([t])
-    expect(sem.guardrails.map((g) => g.codigo)).toContain('escassez_sem_fonte')
-    const com = await rodar(['Restam poucas unidades em estoque segundo o sistema.'], new Set([4]))
-    expect(com).toEqual({ mensagens: ['Restam poucas unidades em estoque segundo o sistema.'], guardrails: [] })
+  it('escassez é FAIL-CLOSED: sem sinal de saldo de ferramenta no contrato, sai mesmo com números de fonte no turno', async () => {
+    // Pendência P0c: EntradaPosResposta.saldoDeEstoqueVisto. Até lá, qualquer número
+    // (preço, prazo) não pode abonar "poucas unidades".
+    for (const numeros of [new Set<number>(), new Set([4])]) {
+      const r = await rodar(['Restam poucas unidades em estoque segundo o sistema. Quer que eu reserve?'], numeros)
+      expect(r.mensagens).toEqual(['Quer que eu reserve?'])
+      expect(r.guardrails.map((g) => g.codigo)).toEqual(['escassez_sem_fonte'])
+    }
   })
 
   it('hesitação sobre prazo não vira promessa: a frase sai com marca ALTA', async () => {

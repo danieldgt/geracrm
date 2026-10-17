@@ -76,6 +76,21 @@ describe('filtro de saída — promessas afirmativas saem', () => {
     expect(r.ocorrencias.map((o) => o.id)).toEqual(['garantia_sem_fonte'])
   })
 
+  it('compromisso de encaminhar, fato registrado e restrição honesta NÃO são promessa', () => {
+    for (const t of [
+      'Prometo verificar o prazo com a transportadora.',
+      'Garanto que o pedido foi registrado.',
+      'Asseguramos que o pedido é conferido antes do envio.',
+      'Prometo te retornar sobre o pedido.',
+      'Só garantimos o prazo depois do faturamento.',
+      'Apenas garantimos a entrega com o pedido faturado.',
+    ]) expect(filtrarSaida(t)).toEqual(intacto(t))
+  })
+
+  it('"só" longe do verbo não abona a promessa', () => {
+    expect(ids('Só a gente garante entrega amanhã.')).toEqual(['garantia_sem_fonte'])
+  })
+
   it('garantia do PRODUTO não é promessa de entrega', () => {
     for (const t of [
       'O produto tem garantia de fábrica de 12 meses. Quer ver o manual?',
@@ -156,6 +171,24 @@ describe('filtro de saída — consentimento, hesitação e notas', () => {
     const r = filtrarSaida(`${t} Quer que eu confira?`)
     expect(r.texto).toBe('Quer que eu confira?')
     expect(r.ocorrencias).toEqual([expect.objectContaining({ id: 'hesitacao_em_afirmacao', gravidade: 'ALTA', acao: 'removido' })])
+  })
+
+  it.each([
+    ['Quem sabe você tem interesse no modelo novo?', 'Você tem interesse no modelo novo?'],
+    ['Quem sabe o catálogo tem o que você procura?', 'O catálogo tem o que você procura?'],
+    ['Acho que o vendedor consegue te ajudar com o prazo.', 'O vendedor consegue te ajudar com o prazo.'],
+    ['Provavelmente o vendedor sabe te dizer o valor.', 'O vendedor sabe te dizer o valor.'],
+    ['Acho que chega amanhã?', 'Chega amanhã?'],
+  ])('pergunta ou encaminhamento: só a locução sai, a frase fica — %s', (t, esperado) => {
+    const r = filtrarSaida(t)
+    expect(r.texto).toBe(esperado)
+    expect(r.ocorrencias.every((o) => o.gravidade === 'INFO' && o.acao === 'reescrito')).toBe(true)
+  })
+
+  it('a transportadora como sujeito de promessa ainda é promessa', () => {
+    expect(ids('Acho que a transportadora entrega amanhã.')).toEqual(['hesitacao_em_afirmacao'])
+    expect(ids('Acredito que o prazo fica em 3 dias.')).toEqual(['hesitacao_em_afirmacao'])
+    expect(ids('Acho que temos umas 10 caixas.')).toEqual(['hesitacao_em_afirmacao'])
   })
 
   it('hesitação sem afirmação de negócio: corta a locução; "talvez" não é cortado, só registrado', () => {
