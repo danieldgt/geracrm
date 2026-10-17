@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { JuizSimulado } from '../qualidade/juiz.js'
 import type { PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
-import { avaliarTranscricao, formatarParaJuiz, parseTranscricao } from './transcricao.js'
+import { avaliarTranscricao, criticasDoCenario, formatarParaJuiz, parseTranscricao } from './transcricao.js'
 import { executarAvaliar, SAIDA_CRITICA, SAIDA_ERRO, SAIDA_OK } from './avaliar.js'
 import { executarSmoke, segredosDoAmbiente, semSegredos } from './smoke.js'
 import { BLOCO_GLOBAL, definicoesDasFerramentas, executarMedirPrefixo, medirPrefixo, sistemaDoVendedor } from './medir-prefixo.js'
@@ -100,7 +100,20 @@ describe('Transcrição offline (formato do agente:avaliar)', () => {
     expect(r.porFala[0]!.violacoes[0]!.detalhe).toContain('R$ 10,00')
   })
 
-  it('sem nenhuma linha TOOL as regras de número não rodam (fonte desconhecida não é acusação)', () => {
+  it('⚠️ régua dos evals: "R$ 10,00" num cenário SEM ferramenta nenhuma é CRÍTICA (as fontes são conhecidas)', () => {
+    const falas = parseTranscricao('CLIENTE: quanto fica a calça?\nAGENTE: A calça jeans fica R$ 10,00 a unidade.').falas
+    const criticas = criticasDoCenario(falas, { politicas: SUITE_B2B.politicas })
+    expect(criticas).toHaveLength(1)
+    expect(criticas[0]).toContain('R$ 10,00')
+    // E "15%" sem ferramenta também — a regra de número roda sem linha TOOL.
+    expect(criticasDoCenario(parseTranscricao('AGENTE: Consigo 15% para você.').falas, { politicas: SUITE_B2B.politicas }).join(' ')).toContain('15%')
+  })
+
+  it('régua dos evals: número que está nas políticas tem fonte ("2 dias úteis")', () => {
+    expect(criticasDoCenario(parseTranscricao('AGENTE: A separação é em até 2 dias úteis.').falas, { politicas: SUITE_B2B.politicas })).toEqual([])
+  })
+
+  it('sem nenhuma linha TOOL (e sem fontes conhecidas) as regras de número não rodam — o modo do agente:avaliar sem --politicas', () => {
     const r = avaliarTranscricao(parseTranscricao('AGENTE: A calça sai por R$ 99,90.'))
     expect(r.totais.CRITICA).toBe(0)
     expect(r.comFontes).toBe(false)
@@ -159,6 +172,25 @@ describe('agente:avaliar', () => {
     expect(limpa.erros.join('')).toContain('juiz indisponível')
     const critica = io({ 'critica.txt': TRANSCRICAO_CRITICA })
     expect(await executarAvaliar(['critica.txt', '--juiz'], critica.io)).toBe(SAIDA_CRITICA)
+  })
+
+  it('--politicas torna as fontes conhecidas: "R$ 10,00" sem TOOL vira CRÍTICA; sem --politicas, não', async () => {
+    const arquivos = { 'sem-tool.txt': 'AGENTE: A calça jeans fica R$ 10,00 a unidade.', 'pol.txt': SUITE_B2B.politicas }
+    expect(await executarAvaliar(['sem-tool.txt', '--politicas', 'pol.txt'], io(arquivos).io)).toBe(SAIDA_CRITICA)
+    expect(await executarAvaliar(['sem-tool.txt'], io(arquivos).io)).toBe(SAIDA_OK)
+  })
+
+  it('⚠️ --juiz: o erro do fornecedor que ecoa a chave não chega ao terminal', async () => {
+    const vaza: PortaLlmFerramentas = {
+      nome: 'claude', capacidades: { ferramentas: false, saidaEstruturada: true, cacheDePrefixo: false },
+      async rodar(): Promise<ResultadoLaco> { return { ok: false, motivo: 'credencial_invalida', detalhe: `401 x-api-key ${CHAVE_FALSA} recusada` } },
+    }
+    const x = io({ 'limpa.txt': TRANSCRICAO_LIMPA })
+    const codigo = await executarAvaliar(['limpa.txt', '--juiz'], { ...x.io, env: { ...x.io.env, ANTHROPIC_API_KEY: CHAVE_FALSA }, juiz: { porta: vaza } })
+    expect(codigo).toBe(SAIDA_ERRO)
+    const tudo = x.saida.join('') + x.erros.join('')
+    expect(tudo).toContain('Juiz falhou')
+    expect(tudo).not.toContain(CHAVE_FALSA)
   })
 
   it('como PROCESSO: transcrição com CRÍTICA → exit code 2; limpa → 0', () => {

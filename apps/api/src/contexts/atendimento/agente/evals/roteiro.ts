@@ -28,6 +28,12 @@ export interface PassoRoteiro {
   readonly chamar: (nome: string, entrada: unknown) => Promise<ResultadoExecucaoFerramenta>
   /** O que o cliente escreveu por último. */
   readonly cliente: string
+  /**
+   * A instrução do TURNO que o pipeline mandou ao modelo (mensagens de operador): dados do
+   * cliente, slots já informados, "não repita a pergunta"… — o roteiro pode conferir o que
+   * o modelo de verdade teria recebido.
+   */
+  readonly operador: string
 }
 
 export type Roteiro = (p: PassoRoteiro) => Promise<SaidaRoteiro> | SaidaRoteiro
@@ -60,7 +66,8 @@ export class LlmRoteirizado implements PortaLlmFerramentas {
       return r
     }
     const clientes = p.mensagens.filter((m) => m.papel === 'cliente')
-    const s = await this.roteiro({ chamar, cliente: clientes[clientes.length - 1]?.texto ?? '' })
+    const operador = p.mensagens.filter((m) => m.papel === 'operador').map((m) => m.texto).join('\n')
+    const s = await this.roteiro({ chamar, cliente: clientes[clientes.length - 1]?.texto ?? '', operador })
     return {
       ok: true,
       saida: { mensagens: [...s.mensagens], confianca: s.confianca ?? 0.9, ...(s.handoff ? { handoff: s.handoff } : {}) },

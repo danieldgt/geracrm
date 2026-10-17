@@ -5,6 +5,7 @@ import { CRITERIOS_RUBRICA, ROTULO_REGRA_QUALIDADE } from '@geracrm/shared'
 import { julgarTranscricao, juizDoAmbiente, type ResultadoJuiz } from '../qualidade/juiz.js'
 import type { PortaLlmFerramentas } from '../porta-llm.js'
 import { avaliarTranscricao, formatarParaJuiz, parseTranscricao } from './transcricao.js'
+import { segredosDoAmbiente, semSegredos } from './segredos.js'
 
 /**
  * `pnpm --filter @geracrm/api agente:avaliar -- <transcricao.txt> [--juiz] [--json] [--politicas arquivo.txt]`
@@ -41,7 +42,14 @@ export interface IoAvaliar {
 
 const USO = 'Uso: pnpm --filter @geracrm/api agente:avaliar -- <transcricao.txt> [--juiz] [--json] [--politicas arquivo.txt]'
 
-export async function executarAvaliar(argv: readonly string[], io: IoAvaliar): Promise<number> {
+export async function executarAvaliar(argv: readonly string[], ioBruto: IoAvaliar): Promise<number> {
+  // ⚠️ Com `--juiz`, o erro do fornecedor pode ecoar a chave: TODA saída passa por `semSegredos`.
+  const segredos = segredosDoAmbiente(ioBruto.env)
+  const io: IoAvaliar = {
+    ...ioBruto,
+    escrever: (t) => ioBruto.escrever(semSegredos(t, segredos)),
+    erro: (t) => ioBruto.erro(semSegredos(t, segredos)),
+  }
   const args = argv.filter((a) => a !== '--')
   const iPol = args.indexOf('--politicas')
   const politicasArq = iPol >= 0 ? args[iPol + 1] : undefined
@@ -62,7 +70,9 @@ export async function executarAvaliar(argv: readonly string[], io: IoAvaliar): P
   }
 
   const t = parseTranscricao(conteudo)
-  const regras = avaliarTranscricao(t, { fontesFixas: politicas ? [politicas] : [] })
+  // Com `--politicas`, as fontes são conhecidas (políticas + TOOL): as regras de número rodam
+  // mesmo sem nenhuma linha TOOL. Sem ele e sem TOOL, fonte desconhecida não vira acusação.
+  const regras = avaliarTranscricao(t, politicas ? { fontesFixas: [politicas], fontesConhecidas: true } : {})
 
   let juiz: ResultadoJuiz | null = null
   if (args.includes('--juiz')) {

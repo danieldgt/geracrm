@@ -14,12 +14,12 @@ import { MAX_TENTATIVAS_TRANSCRICAO } from '../../../../workers/transcricao.js'
 import { LlmSimulado } from '../llm-simulado.js'
 import { ligacoesPadrao } from '../ferramentas/ligacoes.js'
 import { sincronizarPoliticas } from '../conhecimento/indexador.js'
-import { llmFerramentasDoAmbiente } from '../fabrica-ferramentas.js'
+import { faltaParaLlmFerramentas, llmFerramentasDoAmbiente } from '../fabrica-ferramentas.js'
 import { VERSAO_PADRAO } from '../privacidade.js'
 import type { PortaLlmFerramentas } from '../porta-llm.js'
 import type { MotivoFalhaLlm } from '../porta.js'
 import { LlmContado, LlmQueFalha, LlmRoteirizado, type CustoRoteiro, type Roteiro } from './roteiro.js'
-import { avaliarTranscricao, type FalaTranscrita } from './transcricao.js'
+import { criticasDoCenario, type FalaTranscrita } from './transcricao.js'
 import { juizDosEvals, julgarCenario, reprovacoesDoJuiz } from './juiz.js'
 
 /**
@@ -115,6 +115,13 @@ export interface Turno {
   readonly esperadoSimulado?: Esperado
   /** Verificações extras, no banco, depois do turno. */
   readonly confere?: (c: ContextoCenario, t: ObservadoTurno) => Promise<void>
+  /**
+   * O turno EXISTE para provar a pausa por CRÍTICA da qualidade (P12): a marca
+   * `regras-qualidade` CRÍTICA é o esperado, e o que o agente produziu neste turno
+   * (a sugestão marcada "não envie") fica fora da régua 0 CRÍTICA e do juiz. Só com
+   * a marca de pausa/`nao_envie` conferida em `esperado.marcas`.
+   */
+  readonly criticaEsperada?: boolean
 }
 
 export interface ConfigCenario {
@@ -200,6 +207,19 @@ const TABELAS_DO_TENANT = [
   'tabela_preco', 'canal_configuracao', 'canal_conectado', 'alerta', 'outbox',
 ]
 
+/**
+ * `IA_E2E=1` é a rodada REAL: modelo e juiz de verdade. Com `IA_PROVEDOR=simulado` (ou sem
+ * provedor) a fábrica devolveria o vendedor de regras e o juiz de regras, e a rodada
+ * "real" sairia verde sem ter falado com modelo nenhum — recusada com o motivo.
+ */
+export function exigirAmbienteReal(env: NodeJS.ProcessEnv): void {
+  if (env.IA_PROVEDOR?.trim() === 'simulado') {
+    throw new Error('IA_E2E=1 com IA_PROVEDOR=simulado não é rodada real: configure IA_PROVEDOR (claude, openrouter, groq…) e a chave, ou rode sem IA_E2E para o modo simulado.')
+  }
+  const falta = faltaParaLlmFerramentas(env)
+  if (falta.length > 0) throw new Error(`IA_E2E=1 sem modelo real configurado. Falta: ${falta.join('; ')}`)
+}
+
 export class ExecutorDeCenarios {
   readonly real: boolean
   private readonly dono: postgres.Sql
@@ -208,6 +228,7 @@ export class ExecutorDeCenarios {
   private readonly notas: { id: string; media: number }[] = []
 
   constructor(readonly suite: Suite, o: { real: boolean }) {
+    if (o.real) exigirAmbienteReal(process.env)
     this.real = o.real
     this.dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
     this.workerDoTenant = postgres(process.env.DATABASE_URL!, { max: 2, onnotice: () => {}, connection: { 'geracrm.tenant_id': suite.tenantId } as never })
@@ -236,6 +257,12 @@ export class ExecutorDeCenarios {
     })
     await this.configurar({})
     await comTenantServico(i.tenant, (tx) => sincronizarPoliticas(tx, i.canal, this.suite.politicas))
+  }
+
+  /** Média das notas do juiz nos cenários já executados (null sem nenhuma). */
+  mediaDoJuiz(): { media: number; cenarios: number } | null {
+    if (this.notas.length === 0) return null
+    return { media: Math.round((this.notas.reduce((a, n) => a + n.media, 0) / this.notas.length) * 100) / 100, cenarios: this.notas.length }
   }
 
   async encerrar(): Promise<void> {
@@ -362,18 +389,19 @@ export class ExecutorDeCenarios {
       for (const f of ferramentas) falas.push({ autor: 'TOOL', texto: JSON.stringify({ ferramenta: f.nome, saida: f.saida }) })
       for (const m of doTurno.length ? doTurno : saida) {
         falas.push({ autor: 'AGENTE', texto: m })
-        if (m === abertura) isentas.push(m)
+        // A abertura fixa e a resposta que EXISTE para provar a pausa (criticaEsperada) ficam fora da régua e do juiz.
+        if (m === abertura || turno.criticaEsperada) isentas.push(m)
       }
 
-      // ⚠️ Nenhuma pausa por CRÍTICA da qualidade: o que chega ao fim do pipeline não pode ser crítico.
+      // ⚠️ Nenhuma pausa por CRÍTICA da qualidade: o que chega ao fim do pipeline não pode ser crítico
+      //    — a não ser no turno que existe para prová-la.
       const pausas = decisoes.flatMap((d) => d.guardrails).filter((g) => g.etapa === 'regras-qualidade' && g.gravidade === 'CRITICA')
-      expect(pausas, `${rotulo}: violação CRÍTICA chegou às regras de qualidade`).toEqual([])
+      if (turno.criticaEsperada) expect(pausas.length, `${rotulo}: a pausa por CRÍTICA era esperada`).toBeGreaterThan(0)
+      else expect(pausas, `${rotulo}: violação CRÍTICA chegou às regras de qualidade`).toEqual([])
     }
 
-    // ── 0 CRÍTICA no que o agente disse (regras da P12, ferramentas como fonte) ─
-    const regras = avaliarTranscricao({ falas }, { isentas, fontesFixas: [this.suite.politicas] })
-    const criticas = regras.porFala.flatMap((f) => f.violacoes.filter((v) => v.gravidade === 'CRITICA').map((v) => `#${f.indice + 1} ${v.regra}${v.detalhe ? ` (${v.detalhe})` : ''}: ${v.trecho}`))
-    expect(criticas, `[${c.id}] CRÍTICA na transcrição`).toEqual([])
+    // ── 0 CRÍTICA no que o agente disse (regras da P12; fontes conhecidas: ferramentas + políticas) ─
+    expect(criticasDoCenario(falas, { isentas, politicas: this.suite.politicas }), `[${c.id}] CRÍTICA na transcrição`).toEqual([])
 
     // ── juiz com a rubrica da P12 (sem a abertura fixa) ─────────────────────
     let notaJuiz: number | null = null
@@ -414,8 +442,10 @@ export class ExecutorDeCenarios {
     if (e.handoff) expect(t.decisoes.map((d) => d.handoff_motivo), rotulo).toContain(e.handoff)
     if (e.llm !== undefined) expect(t.llmChamado, `${rotulo}: modelo chamado?`).toBe(e.llm)
     for (const f of e.ferramentas ?? []) expect(t.ferramentas.map((x) => x.nome), rotulo).toContain(f)
-    for (const s of e.contem ?? []) expect(texto, rotulo).toContain(s)
-    for (const s of e.naoContem ?? []) expect(texto, rotulo).not.toContain(s)
+    // Sem caixa nos dois modos: o modelo real escreve "Sem estoque" ou "sem estoque" — o fato é o mesmo.
+    const minusculo = texto.toLocaleLowerCase('pt-BR')
+    for (const s of e.contem ?? []) expect(minusculo, rotulo).toContain(s.toLocaleLowerCase('pt-BR'))
+    for (const s of e.naoContem ?? []) expect(minusculo, rotulo).not.toContain(s.toLocaleLowerCase('pt-BR'))
     if (e.enviadas !== undefined) expect(t.enviadas.length, `${rotulo}: enviadas`).toBe(e.enviadas)
     for (const m of e.marcas ?? []) expect(temMarca(m), `${rotulo}: falta a marca ${m}`).toBe(true)
     for (const m of e.semMarcas ?? []) expect(temMarca(m), `${rotulo}: marca indevida ${m}`).toBe(false)

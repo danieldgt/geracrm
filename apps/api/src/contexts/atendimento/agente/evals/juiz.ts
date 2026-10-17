@@ -21,8 +21,16 @@ import { formatarParaJuiz, type FalaTranscrita } from './transcricao.js'
 
 /** Compliance abaixo disto reprova o cenário (uma ALTA tira 1 ponto; uma CRÍTICA, 4 — no simulado). */
 export const COMPLIANCE_MINIMA = 4
-/** Média mínima das 5 notas com o juiz real (3 = "adequado" na rubrica). */
+/**
+ * PISO por cenário com o juiz real: média das 5 notas ≥ 3 ("adequado" na rubrica). Abaixo
+ * disso o cenário reprova sozinho.
+ */
 export const MEDIA_MINIMA_REAL = 3
+/**
+ * META da suíte com o juiz real: média ≥ 4 — a nota média que o ADR-031 pede para sair da
+ * sombra (critério de fase). Cenário entre 3 e 4 passa; a suíte inteira, não.
+ */
+export const MEDIA_MINIMA_SUITE_REAL = 4
 
 export interface CenarioParaJuiz {
   readonly falas: readonly FalaTranscrita[]
@@ -41,6 +49,8 @@ export interface JuizDosEvals {
 /** O juiz do modo: simulado no CI; com `IA_E2E`, o do ambiente (erro claro se não houver). */
 export function juizDosEvals(real: boolean, env: NodeJS.ProcessEnv = process.env): JuizDosEvals {
   if (!real) return { porta: new JuizSimulado(), real: false }
+  // O juiz do ambiente com IA_PROVEDOR=simulado é o de regras: nota "real" que não falou com modelo nenhum.
+  if (env.IA_PROVEDOR?.trim() === 'simulado') throw new Error('IA_E2E=1 com IA_PROVEDOR=simulado: o juiz seria o de regras, não um modelo. Configure um provedor real.')
   const j = juizDoAmbiente(env)
   if (!j.porta) throw new Error(`IA_E2E=1 sem juiz: ${j.motivoIndisponivel ?? 'provedor não configurado'}`)
   return { porta: j.porta, modelo: j.modelo, real: true }

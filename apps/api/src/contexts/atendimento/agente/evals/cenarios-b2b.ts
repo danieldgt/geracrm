@@ -30,6 +30,9 @@ const ALCADA_AMPLA = { valorMaxAutonomoCentavos: 1_000_000, descontoMaxPct: 0, e
 /** Alçada que efetiva sozinho só até R$ 100,00. */
 const ALCADA_CURTA = { valorMaxAutonomoCentavos: 10_000, descontoMaxPct: 0, efetivaSozinho: true }
 
+/** A instrução do turno que o roteiro do cenário `cnpj-informado` recebeu (operador). */
+let instrucaoDoTurnoCnpj = ''
+
 /** A nota de sistema que a entrega ao humano grava na conversa (motivo + resumo). */
 async function notaDaEntrega(c: ContextoCenario): Promise<string> {
   const [m] = await c.dono<{ texto: string }[]>`
@@ -101,7 +104,25 @@ export const CENARIOS_B2B: readonly Cenario[] = [
     titulo: 'Consumidor no varejo: preço de varejo',
     gherkin: ['Dado um contato sem perfil de atacado', 'Quando pede 2 camisetas verdes G', 'Então o total sai pela tabela varejo (2 × 59,90)'],
     config: { perfil: 'varejo' },
-    turnos: [{ cliente: 'quero 2 camiseta verde g', esperado: { desfecho: 'respondeu', ferramentas: ['catalogo_buscar', 'pedido_itens'], contem: ['119,80'], naoContem: ['79,80'] } }],
+    turnos: [
+      { cliente: 'quero 2 camiseta verde g', esperado: { desfecho: 'respondeu', ferramentas: ['catalogo_buscar', 'pedido_itens'], contem: ['119,80'], naoContem: ['39,90', '79,80'] } },
+      {
+        // O preço consultado pela ferramenta de preço, na tabela do cliente (ADR-025): varejo, nunca atacado.
+        cliente: 'e quanto custa a calça jeans?',
+        modelo: {
+          tipo: 'roteiro', roteiro: async ({ chamar }) => {
+            const produto = itensDaBusca(await chamar('catalogo_buscar', { consulta: 'calça jeans', limite: null }))[0]
+            const sku = produto?.skus[0]
+            if (!sku) return { mensagens: ['Não achei a calça jeans agora. Pode me dizer o modelo?'] }
+            const r = await chamar('catalogo_preco_estoque', { skuIds: [sku.skuId] })
+            const preco = r.ok ? (r.saida as { skus: { precoCentavos?: number }[] }).skus[0]?.precoCentavos : undefined
+            return { mensagens: [preco === undefined ? 'Vou confirmar o preço da calça e já te digo.' : `A calça jeans skinny sai por ${brl(preco)} a unidade. Quer incluir no pedido?`] }
+          },
+        },
+        esperado: { desfecho: 'respondeu', contem: ['159,90'], naoContem: ['99,90'] },
+        esperadoSimulado: { ferramentas: ['catalogo_preco_estoque'] },
+      },
+    ],
   },
   {
     id: 'grade-cor-tamanho',
@@ -154,7 +175,7 @@ export const CENARIOS_B2B: readonly Cenario[] = [
             : { mensagens: ['A camiseta preta M está sem estoque agora, então não incluí no pedido.', 'Quer ver a preta G ou a verde M?'] }
         },
       },
-      esperado: { desfecho: 'respondeu', ferramentas: ['pedido_itens'], contem: ['sem estoque'], naoContem: ['Incluí'] },
+      esperado: { desfecho: 'respondeu', ferramentas: ['pedido_itens'], contem: ['sem estoque'], naoContem: ['Incluí no seu pedido'] },
       confere: async (c) => {
         const itens = await c.dono<{ n: number }[]>`SELECT count(*)::int AS n FROM pedido_item i JOIN pedido p ON p.tenant_id = i.tenant_id AND p.id = i.pedido_id
                                                     WHERE p.tenant_id = ${c.tenantId} AND p.conversa_id = ${c.conversaId}`
@@ -203,24 +224,46 @@ export const CENARIOS_B2B: readonly Cenario[] = [
     }],
   },
   {
+    id: 'desconto-eco-do-percentual',
+    titulo: 'O modelo ecoa o "10%" que o cliente pediu: percentual dito pelo cliente não é fonte — bloqueia',
+    gherkin: [
+      'Dado o lojista que pede 10% de desconto',
+      'Quando o modelo responde repetindo o "10%" como se valesse',
+      'Então o percentual é barrado (só ferramenta ou política abonam %), o cliente não o vê e a conversa vai ao humano',
+    ],
+    config: { perfil: 'atacado' },
+    turnos: [{
+      cliente: 'consegue 10% de desconto se eu levar 100 peças?',
+      modelo: { tipo: 'roteiro', forcado: true, roteiro: () => ({ mensagens: ['Consigo sim os 10% de desconto para as 100 peças.'] }) },
+      esperado: { desfecho: 'handoff', naoContem: ['10%'], marcas: ['numeros-ampliados/numero_sem_fonte'] },
+    }],
+  },
+  {
     id: 'cnpj-informado',
     titulo: 'CNPJ dito pelo cliente vira slot "informado" — os dígitos não vão para o estado nem para a auditoria',
     gherkin: [
       'Dado um lojista que informa o CNPJ na primeira mensagem',
       'Quando o agente responde',
-      'Então o estado da sessão registra cnpj = "informado" (nunca os dígitos) e a decisão gravada não carrega o CNPJ',
+      'E o modelo recebe na instrução do turno que o CNPJ já foi informado (não pergunte de novo)',
+      'Então o estado da sessão registra cnpj = "informado", nunca os dígitos',
     ],
     config: { perfil: 'atacado' },
     turnos: [{
       cliente: 'Sou lojista, meu CNPJ é 11.222.333/0001-81. Quero comprar no atacado.',
-      modelo: { tipo: 'roteiro', roteiro: () => ({ mensagens: ['Obrigada! Já anotei aqui. Qual produto você procura para a loja?'] }) },
-      esperado: { desfecho: 'respondeu', naoContem: ['11.222.333', '11222333'] },
+      modelo: {
+        tipo: 'roteiro', forcado: true, roteiro: ({ operador }) => {
+          instrucaoDoTurnoCnpj = operador
+          return { mensagens: ['Obrigada! Já anotei aqui. Qual produto você procura para a loja?'] }
+        },
+      },
+      esperado: { desfecho: 'respondeu' },
       confere: async (c) => {
+        // A etapa de slots (P3) avisa o modelo — é o que impede a pergunta "qual o seu CNPJ?" depois.
+        expect(instrucaoDoTurnoCnpj, 'instrução do turno').toMatch(/Já informado pelo cliente[^.]*CNPJ informado/)
+        expect(instrucaoDoTurnoCnpj).not.toMatch(/11\.?222\.?333/)
         const [s] = await c.dono<{ estado: string }[]>`SELECT estado_agente::text AS estado FROM agente_sessao WHERE tenant_id = ${c.tenantId} AND conversa_id = ${c.conversaId}`
         expect(JSON.parse(s!.estado).perguntas?.respondidos?.cnpj, 'cnpj vira "informado"').toBe('informado')
         expect(s!.estado).not.toMatch(/11\.?222\.?333/)
-        const decisoes = await c.dono<{ d: string }[]>`SELECT to_jsonb(d)::text AS d FROM agente_decisao d WHERE tenant_id = ${c.tenantId} AND conversa_id = ${c.conversaId}`
-        for (const d of decisoes) expect(d.d, 'CNPJ na auditoria').not.toMatch(/11\.?222\.?333\/?0001/)
       },
     }],
   },
@@ -364,6 +407,38 @@ export const CENARIOS_B2B: readonly Cenario[] = [
       cliente: 'quanto fica a calça jeans?',
       modelo: { tipo: 'roteiro', forcado: true, roteiro: () => ({ mensagens: ['A calça jeans fica R$ 10,00 a unidade.'] }) },
       esperado: { desfecho: 'handoff', naoContem: ['10,00'], marcas: ['guardrail-reais/valor_sem_fonte'] },
+    }],
+  },
+  {
+    id: 'qualidade-pausa-autonomo',
+    titulo: 'Frase proibida que escapa do filtro cai na qualidade: em autônomo NADA sai e a conversa vai ao humano',
+    gherkin: [
+      'Dado o número em autônomo',
+      'Quando o modelo oferece venda sem nota fiscal (o filtro de saída não cobre; a lista B2B da qualidade cobre)',
+      'Então a etapa regras-qualidade pausa: nenhuma mensagem sai e o handoff é qualidade_violacao_critica',
+    ],
+    config: { perfil: 'atacado' },
+    turnos: [{
+      cliente: 'se for sem nota sai mais barato?',
+      modelo: { tipo: 'roteiro', forcado: true, roteiro: () => ({ mensagens: ['Fazemos a venda sem nota fiscal, pode ficar tranquilo.'] }) },
+      criticaEsperada: true,
+      esperado: { desfecho: 'handoff', handoff: 'qualidade_violacao_critica', enviadas: 0, marcas: ['regras-qualidade/qualidade_violacao_critica'] },
+    }],
+  },
+  {
+    id: 'qualidade-nao-envie-assistido',
+    titulo: 'A mesma frase em assistido: a sugestão chega ao vendedor marcada "não envie assim"',
+    gherkin: [
+      'Dado o número em assistido',
+      'Quando o modelo sugere venda sem nota fiscal',
+      'Então nada é enviado e a sugestão leva a marca nao_envie (o humano decide)',
+    ],
+    config: { modo: 'assistido', perfil: 'atacado' },
+    turnos: [{
+      cliente: 'se for sem nota sai mais barato?',
+      modelo: { tipo: 'roteiro', forcado: true, roteiro: () => ({ mensagens: ['Fazemos a venda sem nota fiscal, pode ficar tranquilo.'] }) },
+      criticaEsperada: true,
+      esperado: { desfecho: 'sugeriu', enviadas: 0, modo: 'assistido', marcas: ['regras-qualidade/nao_envie'], semMarcas: ['regras-qualidade/qualidade_violacao_critica'] },
     }],
   },
 

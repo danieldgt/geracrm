@@ -111,6 +111,12 @@ export interface OpcoesAvaliacao {
   readonly isentas?: readonly string[] | undefined
   /** Textos que valem como fonte de número desde o início (políticas da loja). */
   readonly fontesFixas?: readonly string[] | undefined
+  /**
+   * As fontes são CONHECIDAS por inteiro (os evals sabem cada ferramenta que rodou): as regras
+   * de número rodam mesmo sem linha TOOL — "R$ 10,00" sem ferramenta nenhuma é CRÍTICA. Sem
+   * isto (transcrição colada de fora, sem TOOL), fonte desconhecida não vira acusação.
+   */
+  readonly fontesConhecidas?: boolean | undefined
 }
 
 /**
@@ -121,7 +127,7 @@ export interface OpcoesAvaliacao {
  *   - R$ sem fonte em ferramenta = CRÍTICA (a mesma rede do pipeline, `verificarNumerosNaResposta`).
  */
 export function avaliarTranscricao(t: Transcricao, o: OpcoesAvaliacao = {}): ResultadoTranscricao {
-  const comFontes = t.falas.some((f) => f.autor === 'TOOL')
+  const comFontes = o.fontesConhecidas === true || t.falas.some((f) => f.autor === 'TOOL')
   const isentas = new Set((o.isentas ?? []).map((x) => x.trim()))
   const gerais = new Set<number>()
   const percentuais = new Set<number>()
@@ -177,6 +183,20 @@ export function avaliarTranscricao(t: Transcricao, o: OpcoesAvaliacao = {}): Res
     historico.push({ de: 'nos', texto: f.texto })
   })
   return { porFala, totais, falasDoAgente, comFontes }
+}
+
+// ── a régua "0 CRÍTICA" dos evals ───────────────────────────────────────────
+
+/**
+ * As violações CRÍTICAS do que o agente disse num cenário dos evals, prontas para
+ * mensagem de erro. As fontes são conhecidas por inteiro (cada saída de ferramenta
+ * está na transcrição como TOOL; as políticas entram como fonte fixa), então as
+ * regras de número SEMPRE rodam — inclusive no cenário sem ferramenta nenhuma.
+ */
+export function criticasDoCenario(falas: readonly FalaTranscrita[], o: { isentas?: readonly string[]; politicas: string }): string[] {
+  const r = avaliarTranscricao({ falas }, { isentas: o.isentas, fontesFixas: [o.politicas], fontesConhecidas: true })
+  return r.porFala.flatMap((f) => f.violacoes.filter((v) => v.gravidade === 'CRITICA')
+    .map((v) => `#${f.indice + 1} ${v.regra}${v.detalhe ? ` (${v.detalhe})` : ''}: ${v.trecho}`))
 }
 
 // ── formato para o juiz ─────────────────────────────────────────────────────

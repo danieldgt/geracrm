@@ -3,6 +3,9 @@ import {
   faltaParaLlmFerramentas, faltaParaReserva, llmFerramentasDoAmbiente, reservaDoAmbiente,
 } from '../fabrica-ferramentas.js'
 import type { PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
+import { limparSegredos, segredosDoAmbiente, semSegredos } from './segredos.js'
+
+export { segredosDoAmbiente, semSegredos }
 
 /**
  * `pnpm --filter @geracrm/api agente:smoke [-- --reserva]`
@@ -25,28 +28,9 @@ import type { PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
  * Saída 0 = respondeu; 1 = falta configuração ou o provedor falhou.
  */
 
-const NOME_DE_SEGREDO = /(KEY|TOKEN|SECRET|SENHA|PASSWORD|PASSWD|CREDENCIAL)/i
 const VARIAVEIS_DE_CHAVE: Readonly<Record<string, string>> = {
   claude: 'ANTHROPIC_API_KEY', openrouter: 'OPENROUTER_API_KEY', groq: 'GROQ_API_KEY', gemini: 'GEMINI_API_KEY',
   cerebras: 'CEREBRAS_API_KEY', maritaca: 'MARITACA_API_KEY',
-}
-
-/** Valores de variáveis com cara de segredo (≥ 6 caracteres). */
-export function segredosDoAmbiente(env: NodeJS.ProcessEnv): string[] {
-  return Object.entries(env)
-    .filter(([k, v]) => NOME_DE_SEGREDO.test(k) && typeof v === 'string' && v.trim().length >= 6)
-    .map(([, v]) => v!.trim())
-    .sort((a, b) => b.length - a.length)
-}
-
-/** Apaga segredos de um texto antes de imprimir. */
-export function semSegredos(texto: string, segredos: readonly string[]): string {
-  let t = texto
-  for (const s of segredos) t = t.split(s).join('***')
-  return t
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, 'Bearer ***')
-    .replace(/\b(sk|rk|pk)-[A-Za-z0-9_-]{8,}/g, '$1-***')
-    .replace(/\b(gsk|AIza)[A-Za-z0-9_-]{8,}/g, '$1***')
 }
 
 /** O provedor pedido (ou inferido pela chave presente, na mesma ordem da fábrica). */
@@ -69,12 +53,9 @@ export interface IoSmoke {
 export async function executarSmoke(argv: readonly string[], io: IoSmoke): Promise<number> {
   const { env } = io
   const segredos = segredosDoAmbiente(env)
-  // Limpa cada texto ANTES de serializar (o JSON escaparia aspas/barras de um segredo) e o JSON inteiro depois.
-  const limpar = (v: unknown): unknown => typeof v === 'string' ? semSegredos(v, segredos)
-    : Array.isArray(v) ? v.map(limpar)
-      : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, limpar(x)])) : v
-  const imprimir = (o: unknown) => io.escrever(`${semSegredos(JSON.stringify(limpar(o), null, 2), segredos)}\n`)
-  const falhar = (o: unknown) => io.erro(`${semSegredos(JSON.stringify(limpar(o)), segredos)}\n`)
+  // Limpa cada texto ANTES de serializar e o JSON inteiro depois.
+  const imprimir = (o: unknown) => io.escrever(`${semSegredos(JSON.stringify(limparSegredos(o, segredos), null, 2), segredos)}\n`)
+  const falhar = (o: unknown) => io.erro(`${semSegredos(JSON.stringify(limparSegredos(o, segredos)), segredos)}\n`)
   const reserva = argv.includes('--reserva')
 
   const provedor = reserva ? env.IA_RESERVA_PROVEDOR?.trim() || '(nenhum)' : provedorPrincipal(env)

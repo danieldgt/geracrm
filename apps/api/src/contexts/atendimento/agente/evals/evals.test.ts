@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { encerrarBanco } from '../../../../db/index.js'
-import { ExecutorDeCenarios, type Cenario, type ProdutoDoCatalogo, type Suite } from './executar-cenario.js'
+import { ExecutorDeCenarios, exigirAmbienteReal, type Cenario, type ProdutoDoCatalogo, type Suite } from './executar-cenario.js'
+import { juizDosEvals, MEDIA_MINIMA_SUITE_REAL } from './juiz.js'
 import { CENARIOS_B2B, SUITE_B2B } from './cenarios-b2b.js'
 
 /**
@@ -62,6 +63,8 @@ describe('Cenários B2B: o catálogo de comportamento não encolhe em silêncio'
       'robo-duas-vezes', 'audio-sem-transcricao', 'pergunta-repetida', 'percentual-sem-fonte', 'promessa-filtrada', 'acima-da-alcada',
       'proposta-confirmada', 'sombra-nao-envia', 'assistido-sugere', 'teto-antes-do-modelo', 'teto-depois-do-turno',
       'falha-transitoria', 'falha-fatal', 'fora-do-recorte',
+      // Da revisão adversarial: eco do % do cliente e a pausa da qualidade nos dois modos.
+      'desconto-eco-do-percentual', 'qualidade-pausa-autonomo', 'qualidade-nao-envie-assistido',
     ]
     expect(CENARIOS_B2B.map((c) => c.id)).toEqual(expect.arrayContaining(exigidos))
   })
@@ -76,5 +79,27 @@ for (const [suite, cenarios] of [[SUITE_B2B, CENARIOS_B2B], [SUITE_DOURADAS, CEN
     cenarios.forEach((c, n) => {
       it(`${c.id} — ${c.titulo}`, async () => { await executor.executar(c, n) }, TEMPO)
     })
+
+    // Meta de fase (ADR-031): média do juiz ≥ 4 na suíte. Por cenário o piso é 3 (`MEDIA_MINIMA_REAL`).
+    it.skipIf(!real)(`média do juiz real na suíte ≥ ${MEDIA_MINIMA_SUITE_REAL} (meta de fase)`, () => {
+      const m = executor.mediaDoJuiz()
+      expect(m, 'nenhum cenário foi julgado').not.toBeNull()
+      expect(m!.media, `média ${m!.media} em ${m!.cenarios} cenário(s)`).toBeGreaterThanOrEqual(MEDIA_MINIMA_SUITE_REAL)
+    })
   })
 }
+
+describe('IA_E2E: a rodada real recusa o que não é real', () => {
+  it('dado IA_E2E com IA_PROVEDOR=simulado, então recusa com mensagem que diz o porquê', () => {
+    expect(() => exigirAmbienteReal({ IA_PROVEDOR: 'simulado' })).toThrow(/IA_PROVEDOR=simulado não é rodada real/)
+    expect(() => juizDosEvals(true, { IA_PROVEDOR: 'simulado' })).toThrow(/IA_PROVEDOR=simulado/)
+  })
+
+  it('dado IA_E2E sem chave nenhuma, então recusa dizendo a variável que falta', () => {
+    expect(() => exigirAmbienteReal({})).toThrow(/ANTHROPIC_API_KEY/)
+  })
+
+  it('dado um provedor real configurado, então segue', () => {
+    expect(() => exigirAmbienteReal({ IA_PROVEDOR: 'claude', ANTHROPIC_API_KEY: 'chave-de-teste' })).not.toThrow()
+  })
+})
