@@ -384,7 +384,7 @@ PRONTO     skills descrevem o pipeline e onde estender
 - CTWA: já existe na aquisição. Exclusão do titular/retenção: R10d. Throttle INV-23: R10e.
 
 ## 4. Notas de integração
-- P0 (revisão, baixos não bloqueantes → raia P0b, onda 1): rede final de R$ deve rodar ANTES de `fatiarMensagem`;
+- [integrada c5eb01d] P0 (revisão, baixos não bloqueantes → raia P0b, onda 1): rede final de R$ deve rodar ANTES de `fatiarMensagem`;
   `avisoCliente` de `handoffSemModelo`/`avisarCliente` também passa pela rede.
 - P3/P4: uma etapa pré-LLM que devolve estado e silencia no 1º turno abre sessão `ativa` com 0 turnos
   (`sessaoParaEstado`) — conta como `sessaoAtiva` no portão seguinte.
