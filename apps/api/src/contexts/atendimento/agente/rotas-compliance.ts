@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import {
-  BASE_B2B_DESCRITA, LIMITES_COMPLIANCE, complianceExtra, lerComplianceExtra, semDuplicatas, type ComplianceExtra,
+  BASE_B2B_DESCRITA, LIMITES_COMPLIANCE, complianceExtraCompleto, lerComplianceExtra, semDuplicatas, type ComplianceExtra,
 } from '@geracrm/shared'
 import { exigirTenant } from '../../../plugins/tenant.js'
 import { exigirPapel, temPapel } from '../../plataforma/papel.js'
@@ -23,6 +23,13 @@ import { garantirUsuarioId } from '../rotas-fila.js'
  */
 
 const UUID = /^[0-9a-f-]{36}$/i
+
+/** Nome do campo como a tela o mostra (a 422 fala a língua de quem configura). */
+const ROTULO_CAMPO: Readonly<Record<string, string>> = {
+  frasesProibidas: 'Frases proibidas extras',
+  gatilhosHandoff: 'Gatilhos de transferência extras',
+  corpo: 'Pedido',
+}
 
 export async function rotasCompliance(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
@@ -51,11 +58,15 @@ export async function rotasCompliance(app: FastifyInstance): Promise<void> {
     '/v1/canais/:id/agente/compliance', { preHandler: [exigirTenant, exigirPapel('admin')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
-      const parse = complianceExtra.strict().safeParse(req.body ?? {})
+      // ⚠️ Os DOIS campos são obrigatórios: corpo parcial não apaga a outra lista por default.
+      const parse = complianceExtraCompleto.safeParse(req.body ?? {})
       if (!parse.success) {
         const i = parse.error.issues[0]!
-        const campo = i.path.join('.')
-        return reply.code(422).send({ erro: 'compliance.campo_invalido', mensagem: `${campo || 'corpo'}: ${i.message}`, campos: [String(i.path[0] ?? 'corpo')] })
+        const campo = typeof i.path[0] === 'string' && i.path[0] in ROTULO_CAMPO ? i.path[0] : 'corpo'
+        const item = typeof i.path[1] === 'number' ? ` (item ${i.path[1] + 1})` : ''
+        const motivo = i.code === 'unrecognized_keys' ? 'só são aceitas as frases proibidas e os gatilhos de transferência.'
+          : i.code === 'invalid_type' && i.path.length === 1 ? 'envie a lista (pode ser vazia).' : i.message
+        return reply.code(422).send({ erro: 'compliance.campo_invalido', mensagem: `${ROTULO_CAMPO[campo]}${item}: ${motivo}`, campos: [campo] })
       }
       const depois: ComplianceExtra = {
         frasesProibidas: semDuplicatas(parse.data.frasesProibidas),

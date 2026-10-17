@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   COMPLIANCE_VAZIO, LIMITES_COMPLIANCE, TEXTO_RETOMADA, TEXTO_SEGURO,
-  ajustarMensagemHandoff, aplicarLimitesMensagem, complianceExtra, filtrarSaida, lerComplianceExtra,
+  ajustarMensagemHandoff, aplicarLimitesMensagem, complianceExtra, complianceExtraCompleto, filtrarSaida, lerComplianceExtra,
   regexLiteral, semDuplicatas, termoNegado,
 } from './agente-filtro.js'
 
@@ -48,7 +48,7 @@ describe('filtro de saída — promessas afirmativas saem', () => {
     ['Consigo um descontinho para você. Fechamos?', 'oferece_desconto'],
     ['Não dou desconto, mas consigo melhorar o preço. Fechamos?', 'baixa_preco'],
     ['Faço por menos se levar duas caixas. Fechamos?', 'baixa_preco'],
-    ['São as últimas unidades! Fechamos?', 'urgencia_falsa'],
+    ['São as últimas unidades! Fechamos?', 'escassez_sem_fonte'],
     ['Essa condição é só hoje. Fechamos?', 'urgencia_falsa'],
     ['Aproveita agora antes que acabe. Fechamos?', 'urgencia_falsa'],
     ['Não sou um robô, sou a Lia. Fechamos?', 'nega_ser_ia'],
@@ -60,6 +60,36 @@ describe('filtro de saída — promessas afirmativas saem', () => {
     expect(r.ocorrencias.find((o) => o.id === id)).toMatchObject({ gravidade: 'CRITICA', acao: 'removido' })
     expect(r.texto).toMatch(/^(Fechamos\?|Posso fechar\?|Bora\?)$/)
     expect(r.texto).not.toMatch(/garant|desconto|certeza|sem falta|barat|melhor pre|congelad|robô|pessoa de verdade|unidades|só hoje/i)
+  })
+
+  it.each([
+    'Garantimos que chega amanhã. Fechamos?',
+    'Te garanto que chega sexta. Fechamos?',
+    'Garantimos que não vai faltar estoque. Fechamos?',
+    'Asseguramos a entrega amanhã. Fechamos?',
+    'Prometemos entrega amanhã. Fechamos?',
+    'Prometo que chega amanhã. Fechamos?',
+    'Eu garanto o seu pedido na sexta. Fechamos?',
+  ])('promessa com "que", te/lhe, assegurar ou prometer também sai: %s', (t) => {
+    const r = filtrarSaida(t)
+    expect(r.texto).toBe('Fechamos?')
+    expect(r.ocorrencias.map((o) => o.id)).toEqual(['garantia_sem_fonte'])
+  })
+
+  it('garantia do PRODUTO não é promessa de entrega', () => {
+    for (const t of [
+      'O produto tem garantia de fábrica de 12 meses. Quer ver o manual?',
+      'A garantia do fabricante cobre defeito de fabricação. Posso ajudar com mais algo?',
+      'Não prometemos entrega amanhã; o prazo é o da transportadora. Fechamos?',
+    ]) expect(filtrarSaida(t)).toEqual(intacto(t))
+  })
+
+  it('escassez só passa com estoque de fonte no turno', () => {
+    const t = 'Restam poucas unidades em estoque segundo o sistema.'
+    expect(ids(t)).toEqual(['escassez_sem_fonte'])
+    expect(filtrarSaida(t, { estoqueComFonte: true })).toEqual(intacto(t))
+    // urgência de tempo continua vetada mesmo com estoque de fonte
+    expect(filtrarSaida('Essa condição é só hoje.', { estoqueComFonte: true }).ocorrencias.map((o) => o.id)).toEqual(['urgencia_falsa'])
   })
 
   it('a negação olha só a oração do termo', () => {
@@ -99,7 +129,7 @@ describe('filtro de saída — promessas afirmativas saem', () => {
 
 describe('filtro de saída — consentimento, hesitação e notas', () => {
   it('pedido de consentimento sai (ALTA) com a confirmação solta que sobra', () => {
-    const r = filtrarSaida('Anotei o pedido. Posso guardar seu CNPJ no cadastro? Tudo bem pra você? Qual a quantidade?')
+    const r = filtrarSaida('Anotei o pedido. Posso guardar seus dados no sistema? Tudo bem pra você? Qual a quantidade?')
     expect(r.texto).toBe('Anotei o pedido. Qual a quantidade?')
     expect(r.ocorrencias).toEqual([expect.objectContaining({ id: 'pede_consentimento', gravidade: 'ALTA', acao: 'removido' })])
   })
@@ -108,12 +138,37 @@ describe('filtro de saída — consentimento, hesitação e notas', () => {
     expect(ids('Oi! Você autoriza que eu te atenda por aqui? Qual produto procura?')).toEqual(['pede_consentimento'])
   })
 
-  it('hesitação é cortada no lugar (INFO, reescrito)', () => {
-    const r = filtrarSaida('Talvez o modelo de 2 litros sirva. Eu acho que temos.')
-    expect(r.texto).toBe('O modelo de 2 litros sirva. Temos.')
-    expect(r.ocorrencias.map((o) => [o.id, o.gravidade, o.acao])).toEqual([
-      ['hesitacao_talvez', 'INFO', 'reescrito'], ['hesitacao_acho_que', 'INFO', 'reescrito'],
-    ])
+  it('coletar dado de cadastro B2B NÃO é pedido de consentimento', () => {
+    for (const t of [
+      'Para fechar o pedido, posso anotar seu CNPJ?',
+      'Vou cadastrar seu CNPJ e já te mando a proposta.',
+      'Vou salvar seu e-mail no cadastro.',
+      'Posso cadastrar seu endereço de entrega?',
+    ]) expect(filtrarSaida(t)).toEqual(intacto(t))
+  })
+
+  it.each([
+    'Provavelmente chega amanhã.',
+    'Acho que temos em estoque.',
+    'Acredito que o preço é esse.',
+    'Quem sabe sai ainda esta semana.',
+  ])('hesitação + afirmação de negócio: a frase INTEIRA sai (ALTA) — %s', (t) => {
+    const r = filtrarSaida(`${t} Quer que eu confira?`)
+    expect(r.texto).toBe('Quer que eu confira?')
+    expect(r.ocorrencias).toEqual([expect.objectContaining({ id: 'hesitacao_em_afirmacao', gravidade: 'ALTA', acao: 'removido' })])
+  })
+
+  it('hesitação sem afirmação de negócio: corta a locução; "talvez" não é cortado, só registrado', () => {
+    const r = filtrarSaida('Eu acho que esse modelo combina com a sua loja.')
+    expect(r.texto).toBe('Esse modelo combina com a sua loja.')
+    expect(r.ocorrencias.map((o) => [o.id, o.gravidade, o.acao])).toEqual([['hesitacao_acho_que', 'INFO', 'reescrito']])
+
+    const talvez = 'Talvez o modelo de 2 litros sirva.'
+    expect(filtrarSaida(talvez)).toEqual({
+      texto: talvez, alterado: false, esvaziado: false,
+      ocorrencias: [{ id: 'hesitacao_talvez', gravidade: 'INFO', acao: 'registrado', trecho: 'Talvez' }],
+    })
+    expect(filtrarSaida('Talvez.')).toMatchObject({ texto: 'Talvez.', alterado: false, esvaziado: false })
   })
 
   it('"frete grátis" sem condição ganha a ressalva; com condição ou negado, não', () => {
@@ -122,6 +177,11 @@ describe('filtro de saída — consentimento, hesitação e notas', () => {
     expect(r.ocorrencias).toEqual([expect.objectContaining({ id: 'frete_gratis_sem_condicao', gravidade: 'MEDIA', acao: 'anexado' })])
     const c = 'Frete grátis para pedidos acima do mínimo da política. Fechamos?'
     expect(filtrarSaida(c)).toEqual(intacto(c))
+  })
+
+  it('a ressalva vale por frase: condição em outra frase não cobre o "frete grátis"', () => {
+    const r = filtrarSaida('Tem pedido mínimo de R$ 300,00. O frete grátis é para você. Consulte o vendedor.')
+    expect(r.texto).toBe('Tem pedido mínimo de R$ 300,00. O frete grátis (conforme a política de frete) é para você. Consulte o vendedor.')
   })
 })
 
@@ -189,14 +249,19 @@ describe('ajustarMensagemHandoff', () => {
 
 describe('ComplianceExtra', () => {
   it('valida limites: ≤50 itens, cada um ≤80 caracteres', () => {
-    expect(complianceExtra.safeParse({ frasesProibidas: Array(LIMITES_COMPLIANCE.maxItens + 1).fill('xx') }).success).toBe(false)
+    expect(complianceExtra.safeParse({ frasesProibidas: Array(LIMITES_COMPLIANCE.maxItens + 1).fill('xxx') }).success).toBe(false)
     expect(complianceExtra.safeParse({ frasesProibidas: ['x'.repeat(81)] }).success).toBe(false)
     expect(complianceExtra.parse({})).toEqual(COMPLIANCE_VAZIO)
+    expect(complianceExtra.safeParse({ frasesProibidas: ['ab'] }).success).toBe(false) // mínimo de 3
+    // PUT: os dois campos obrigatórios (corpo parcial não apaga o outro por default)
+    expect(complianceExtraCompleto.safeParse({ frasesProibidas: [] }).success).toBe(false)
+    expect(complianceExtraCompleto.safeParse({ frasesProibidas: [], gatilhosHandoff: [], x: 1 }).success).toBe(false)
+    expect(complianceExtraCompleto.safeParse({ frasesProibidas: [], gatilhosHandoff: [] }).success).toBe(true)
   })
 
   it('leitura tolerante descarta item inválido e duplicado, nunca lança', () => {
     expect(lerComplianceExtra(null)).toEqual(COMPLIANCE_VAZIO)
-    expect(lerComplianceExtra({ frasesProibidas: ['Consignação', 'consignacao', 3, 'x'.repeat(200)], gatilhosHandoff: 'oi' }))
+    expect(lerComplianceExtra({ frasesProibidas: ['Consignação', 'consignacao', 3, 'x'.repeat(200), 'ab'], gatilhosHandoff: 'oi' }))
       .toEqual({ frasesProibidas: ['Consignação'], gatilhosHandoff: [] })
   })
 

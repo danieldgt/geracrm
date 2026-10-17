@@ -183,6 +183,37 @@ describe('Extras do número (agente_config.compliance) — só acrescentam', () 
   })
 })
 
+describe('Etapa — casos da revisão adversarial', () => {
+  const ctx = { cfgExtra: {} } as unknown as ContextoPipeline
+  const rodar = (mensagens: string[], numerosVistos: ReadonlySet<number> = new Set()) =>
+    etapaFiltroSaida.executar(ctx, { mensagens, handoff: null, centavosVistos: new Set(), numerosVistos, falasAnterioresDoAgente: [] })
+
+  it('escassez sai sem quantidade de fonte e fica quando o turno trouxe números de ferramenta', async () => {
+    const t = 'Restam poucas unidades em estoque segundo o sistema. Quer garantir as suas?'
+    const sem = await rodar([t])
+    expect(sem.guardrails.map((g) => g.codigo)).toContain('escassez_sem_fonte')
+    const com = await rodar(['Restam poucas unidades em estoque segundo o sistema.'], new Set([4]))
+    expect(com).toEqual({ mensagens: ['Restam poucas unidades em estoque segundo o sistema.'], guardrails: [] })
+  })
+
+  it('hesitação sobre prazo não vira promessa: a frase sai com marca ALTA', async () => {
+    const r = await rodar(['Provavelmente chega amanhã. Quer que eu confira na transportadora?'])
+    expect(r.mensagens).toEqual(['Quer que eu confira na transportadora?'])
+    expect(r.guardrails).toEqual([expect.objectContaining({ codigo: 'hesitacao_em_afirmacao', gravidade: 'ALTA', acao: 'removido' })])
+  })
+
+  it('"talvez" fica no texto e é só registrado (INFO)', async () => {
+    const r = await rodar(['Talvez o modelo de 2 litros sirva.'])
+    expect(r.mensagens).toEqual(['Talvez o modelo de 2 litros sirva.'])
+    expect(r.guardrails).toEqual([expect.objectContaining({ codigo: 'hesitacao_talvez', gravidade: 'INFO', acao: 'registrado' })])
+  })
+
+  it('coleta de cadastro passa intacta, sem marca', async () => {
+    const r = await rodar(['Para fechar o pedido, posso anotar seu CNPJ?', 'Posso cadastrar seu endereço de entrega?'])
+    expect(r).toEqual({ mensagens: ['Para fechar o pedido, posso anotar seu CNPJ?', 'Posso cadastrar seu endereço de entrega?'], guardrails: [] })
+  })
+})
+
 describe('Respostas aprovadas B2B — o filtro não vira censura', () => {
   const aprovadas = JSON.parse(readFileSync(path.resolve(import.meta.dirname, '../evals/respostas-aprovadas-b2b.json'), 'utf8')) as Array<{ id: string; resposta: string }>
 

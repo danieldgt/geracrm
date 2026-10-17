@@ -94,13 +94,25 @@ describe('Compliance do número — rotas', () => {
     const muitos = await put(A, CANAL_A, { frasesProibidas: Array.from({ length: 51 }, (_, i) => `frase ${i}`), gatilhosHandoff: [] })
     expect(muitos.statusCode).toBe(422)
     expect(muitos.json()).toMatchObject({ erro: 'compliance.campo_invalido', campos: ['frasesProibidas'] })
-    expect((await put(A, CANAL_A, { frasesProibidas: ['x'.repeat(81)] })).statusCode).toBe(422)
-    expect((await put(A, CANAL_A, { frasesProibidas: [], desligarBase: true })).statusCode).toBe(422)
+    expect(muitos.json().mensagem).toMatch(/^Frases proibidas extras: /)
+    const longa = await put(A, CANAL_A, { frasesProibidas: ['ok ok', 'x'.repeat(81)], gatilhosHandoff: [] })
+    expect(longa.json()).toMatchObject({ campos: ['frasesProibidas'], mensagem: 'Frases proibidas extras (item 2): Use no máximo 80 caracteres.' })
+    expect((await put(A, CANAL_A, { frasesProibidas: ['ab'], gatilhosHandoff: [] })).statusCode).toBe(422)
+    const estranho = await put(A, CANAL_A, { frasesProibidas: [], gatilhosHandoff: [], desligarBase: true })
+    expect(estranho.statusCode).toBe(422)
+    expect(estranho.json().campos).toEqual(['corpo'])
+  })
+
+  it('dado corpo com só uma das listas, então 422 — nunca apaga a outra por default', async () => {
+    const r = await put(A, CANAL_A, { frasesProibidas: ['outra'] })
+    expect(r.statusCode).toBe(422)
+    expect(r.json()).toMatchObject({ campos: ['gatilhosHandoff'], mensagem: 'Gatilhos de transferência extras: envie a lista (pode ser vazia).' })
+    expect((await get(A, CANAL_A)).json()).toMatchObject({ gatilhosHandoff: ['advogado'] })
   })
 
   it('dado número de outro tenant, então 404 na leitura e na gravação — e nada muda lá', async () => {
     expect((await get(A, CANAL_B)).statusCode).toBe(404)
-    expect((await put(A, CANAL_B, { frasesProibidas: ['invasão'] })).statusCode).toBe(404)
+    expect((await put(A, CANAL_B, { frasesProibidas: ['invasão'], gatilhosHandoff: [] })).statusCode).toBe(404)
     expect((await get(B, CANAL_B)).json()).toMatchObject({ frasesProibidas: [] })
     expect((await get(B, CANAL_A)).statusCode).toBe(404)
   })
@@ -109,7 +121,7 @@ describe('Compliance do número — rotas', () => {
     await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${U_A_ADMIN}, NULL, 'admin')`
     await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${U_A}, NULL, 'vendedor')`
     expect((await get(A, CANAL_A)).json()).toMatchObject({ podeEditar: false })
-    const r = await put(A, CANAL_A, { frasesProibidas: [] })
+    const r = await put(A, CANAL_A, { frasesProibidas: [], gatilhosHandoff: [] })
     expect(r.statusCode).toBe(403)
     expect(r.json()).toMatchObject({ erro: 'acesso.papel_insuficiente' })
     expect((await get(A, CANAL_A)).json()).toMatchObject({ frasesProibidas: ['Consignação', 'pronta entrega'] })

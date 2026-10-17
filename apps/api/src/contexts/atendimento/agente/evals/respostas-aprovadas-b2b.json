@@ -31,5 +31,11 @@
   { "id": "APR-30", "situacao": "garantia de produto honesta", "resposta": "Nunca garantimos estoque sem conferir no sistema. Quer que eu confira agora?" },
   { "id": "APR-31", "situacao": "consulta de prazo", "resposta": "Ninguém consegue garantir prazo de entrega nessa época do ano. Posso ver a previsão da transportadora?" },
   { "id": "APR-32", "situacao": "encerramento", "resposta": "Obrigada pelo pedido! Qualquer coisa, é só chamar por aqui." },
-  { "id": "APR-33", "situacao": "condição especial encaminhada", "resposta": "Posso pedir ao vendedor uma condição especial para esse volume. Quer que eu peça?" }
+  { "id": "APR-33", "situacao": "condição especial encaminhada", "resposta": "Posso pedir ao vendedor uma condição especial para esse volume. Quer que eu peça?" },
+  { "id": "APR-34", "situacao": "cadastro", "resposta": "Para fechar o pedido, posso anotar seu CNPJ?" },
+  { "id": "APR-35", "situacao": "cadastro", "resposta": "Vou cadastrar seu CNPJ e já te mando a proposta." },
+  { "id": "APR-36", "situacao": "cadastro", "resposta": "Vou salvar seu e-mail no cadastro." },
+  { "id": "APR-37", "situacao": "cadastro", "resposta": "Posso cadastrar seu endereço de entrega?" },
+  { "id": "APR-38", "situacao": "garantia do produto", "resposta": "O produto tem garantia de fábrica de 12 meses. Quer ver o manual?" },
+  { "id": "APR-39", "situacao": "prazo honesto", "resposta": "Não prometemos entrega amanhã; o prazo é o da transportadora. Quer fechar assim?" }
 ]

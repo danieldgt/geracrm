@@ -26,7 +26,7 @@ import type { GravidadeGuardrail } from './agente-vendedor.js'
 export interface OcorrenciaFiltro {
   readonly id: string
   readonly gravidade: GravidadeGuardrail
-  readonly acao: 'removido' | 'reescrito' | 'anexado'
+  readonly acao: 'removido' | 'reescrito' | 'anexado' | 'registrado'
   /** A frase/trecho afetado (sem máscara — quem grava mascara). */
   readonly trecho?: string | undefined
 }
@@ -51,11 +51,17 @@ export interface OpcoesFiltroSaida {
   /** Frases proibidas extras (literais, sem acento/caixa) — só acrescentam. */
   readonly extras?: readonly string[] | undefined
   readonly limites?: LimitesMensagem | undefined
+  /**
+   * Houve saldo/quantidade vinda de fonte (ferramenta) neste turno: escassez
+   * ("poucas unidades em estoque") pode ser verdade e deixa de ser vetada.
+   * Sem fonte, continua urgência falsa.
+   */
+  readonly estoqueComFonte?: boolean | undefined
 }
 
 // ── configuração do número: só acrescenta ───────────────────────────────────
 
-export const LIMITES_COMPLIANCE = { maxItens: 50, maxCaracteres: 80, minCaracteres: 2 } as const
+export const LIMITES_COMPLIANCE = { maxItens: 50, maxCaracteres: 80, minCaracteres: 3 } as const
 
 const itemCompliance = z.string().trim()
   .min(LIMITES_COMPLIANCE.minCaracteres, `Use ao menos ${LIMITES_COMPLIANCE.minCaracteres} caracteres.`)
@@ -74,6 +80,14 @@ export const complianceExtra = z.object({
   gatilhosHandoff: listaCompliance.default([]),
 })
 export type ComplianceExtra = z.output<typeof complianceExtra>
+/**
+ * Corpo do PUT: os DOIS campos obrigatórios e nada além deles — um corpo com
+ * só um campo não pode apagar o outro por default.
+ */
+export const complianceExtraCompleto = z.object({
+  frasesProibidas: listaCompliance,
+  gatilhosHandoff: listaCompliance,
+}).strict()
 export type ComplianceExtraEntrada = z.input<typeof complianceExtra>
 export const COMPLIANCE_VAZIO: ComplianceExtra = { frasesProibidas: [], gatilhosHandoff: [] }
 
@@ -190,14 +204,19 @@ export interface ProibidaBase {
   readonly re: RegExp
   /** A negação faz parte da afirmação vetada ("não sou um robô", "nunca falta estoque"). */
   readonly ignoraNegacao?: boolean
+  /** Deixa de valer quando o turno trouxe estoque de fonte (`estoqueComFonte`). */
+  readonly liberadaComEstoqueDeFonte?: boolean
 }
 
-const GARANTIR = `garant(?:o|e|em|imos|ir|iremos)`
+/** Verbos de promessa. ⚠️ "garantia" (substantivo) fica de fora: "garantia de fábrica" é fato do produto. */
+const GARANTIR = `(?:garant(?:o|e|em|imos|ir|iremos)|assegur(?:o|a|am|amos|ar|aremos)|promet(?:o|e|em|emos|er|eremos))`
 /** O que o agente nunca garante: entrega, prazo, estoque, preço, crédito. */
 const OBJETO_GARANTIA = [
   'entrega', 'entregar', 'prazo', 'chegada', 'estoque', 'disponibilidade', 'pre[cç]o', 'valor',
   'cr[eé]dito', 'limite', 'aprova[cç][aã]o', 'aprovad[oa]', 'frete', 'reposi[cç][aã]o',
 ].join('|')
+/** O que vem depois do verbo de promessa: os objetos acima e o que descreve entrega/estoque. */
+const OBJETO_PROMESSA = `${OBJETO_GARANTIA}|cheg\\p{L}*|entreg\\p{L}*|sai|saem|pedido|tem|temos|faltar|falta`
 const VERBO_OFERTA = [
   'posso', 'podemos', 'consigo', 'conseguimos', 'vou', 'vamos', 'dou', 'damos', 'fa[cç]o', 'fazemos',
   'libero', 'liberamos', 'ofere[cç]o', 'oferecemos', 'aplico', 'aplicamos', 'deixo', 'deixamos',
@@ -222,7 +241,8 @@ export const PROIBIDAS_BASE_B2B: readonly ProibidaBase[] = [
   // Garantir entrega, prazo, estoque, preço ou crédito.
   {
     id: 'garantia_sem_fonte', gravidade: 'CRITICA',
-    re: re(`${B}${GARANTIR}${E}\\s+${palavras(3)}(?:${OBJETO_GARANTIA})${E}`),
+    // "garantimos entrega amanhã", "te garanto que chega sexta", "prometemos que não vai faltar estoque".
+    re: re(`${B}${GARANTIR}${E}\\s+${palavras(4)}(?:${OBJETO_PROMESSA})${E}`),
   },
   {
     // ⚠️ `termo`: a negação conta a partir de "garantido", não do objeto ("o prazo NÃO é garantido").
@@ -271,13 +291,19 @@ export const PROIBIDAS_BASE_B2B: readonly ProibidaBase[] = [
   {
     id: 'urgencia_falsa', gravidade: 'CRITICA',
     re: re([
-      `${B}(?:${fuzzy('últimas')}|${fuzzy('última')}|poucas)\\s+unidades${E}`,
       `${B}${fuzzy('só')}\\s+(?:hoje|${fuzzy('até')}\\s+(?:hoje|${fuzzy('amanhã')}))${E}`,
       `${B}(?:${fuzzy('promoção')}|oferta|${fuzzy('preço')}|${fuzzy('condição')})\\s+${palavras(2)}(?:acaba|termina|vence|expira)\\s+(?:hoje|${fuzzy('amanhã')}|em\\s+breve|logo)${E}`,
       `${B}corre\\s+que${E}`,
       `${B}antes\\s+que\\s+(?:acabe|esgote|termine)${E}`,
       `${B}(?:vai|${fuzzy('vão')}|pode)\\s+(?:acabar|esgotar)\\s+(?:logo|${fuzzy('rápido')}|hoje)${E}`,
       `${B}aproveit[ae]\\s+(?:agora|enquanto|${fuzzy('já')})${E}`,
+    ].join('|')),
+  },
+  // Escassez: só é verdade com saldo de ferramenta no turno.
+  {
+    id: 'escassez_sem_fonte', gravidade: 'CRITICA', liberadaComEstoqueDeFonte: true,
+    re: re([
+      `${B}(?:${fuzzy('últimas')}|${fuzzy('última')}|poucas)\\s+unidades${E}`,
       `${B}estoque\\s+(?:${fuzzy('está')}\\s+)?(?:acabando|no\\s+fim|${fuzzy('limitadíssimo')})${E}`,
     ].join('|')),
   },
@@ -289,15 +315,15 @@ export const PROIBIDAS_BASE_B2B: readonly ProibidaBase[] = [
  */
 export const BASE_B2B_DESCRITA: ReadonlyArray<{ readonly id: string; readonly rotulo: string; readonly exemplo: string }> = [
   { id: 'nega_ser_ia', rotulo: 'Negar ser assistente virtual ou fingir ser humano', exemplo: 'não sou um robô' },
-  { id: 'garantia_sem_fonte', rotulo: 'Garantir entrega, prazo, estoque, preço ou crédito', exemplo: 'garantimos entrega amanhã' },
+  { id: 'garantia_sem_fonte', rotulo: 'Garantir ou prometer entrega, prazo, estoque, preço ou crédito', exemplo: 'te garanto que chega sexta' },
   { id: 'entrega_sem_falta', rotulo: 'Prometer entrega "sem falta" ou "com certeza"', exemplo: 'chega amanhã sem falta' },
   { id: 'estoque_infinito', rotulo: 'Afirmar que nunca falta estoque', exemplo: 'sempre temos estoque' },
   { id: 'preco_congelado', rotulo: 'Prometer preço congelado', exemplo: 'o preço fica congelado' },
   { id: 'melhor_preco_do_mercado', rotulo: '"Melhor preço do mercado" e afins', exemplo: 'cobrimos qualquer oferta' },
   { id: 'oferece_desconto', rotulo: 'Oferecer desconto ou baixar preço por conta própria', exemplo: 'posso te dar um desconto' },
-  { id: 'urgencia_falsa', rotulo: 'Urgência falsa', exemplo: 'últimas unidades, só hoje' },
-  { id: 'pede_consentimento', rotulo: 'Pedir consentimento para atender ou guardar dados', exemplo: 'posso guardar seu CNPJ?' },
-  { id: 'hesitacao', rotulo: 'Hesitações (cortadas da frase)', exemplo: 'talvez, acho que' },
+  { id: 'urgencia_falsa', rotulo: 'Urgência falsa e escassez sem saldo do sistema', exemplo: 'só hoje, últimas unidades' },
+  { id: 'pede_consentimento', rotulo: 'Pedir consentimento para atender ou guardar dados', exemplo: 'posso guardar seus dados?' },
+  { id: 'hesitacao', rotulo: 'Hesitação sobre prazo, estoque ou preço (a frase sai)', exemplo: 'acho que chega amanhã' },
 ]
 
 /**
@@ -305,12 +331,14 @@ export const BASE_B2B_DESCRITA: ReadonlyArray<{ readonly id: string; readonly ro
  * atendimento B2B não é consentimento (o aviso de privacidade sai na abertura,
  * P4). Removido junto com a confirmação solta que sobra ("Tudo bem?").
  */
-const DADOS_PESSOAIS = String.raw`(?:o\s+|os\s+|a\s+|as\s+)?(?:seu|seus|sua|suas)\s+(?:nome|telefone|dados|contato|n[uú]mero|cnpj|cpf|e-?mail|endere\p{L}*|informa\p{L}*)`
-const VERBO_GUARDAR = String.raw`(?:guard|registr|salv|armazen|anot|cadastr|mant)\p{L}*`
+// ⚠️ Coletar CNPJ, e-mail e endereço para faturar é parte da venda B2B
+//    ("posso anotar seu CNPJ?", "vou cadastrar seu e-mail") — NÃO é pedido de
+//    consentimento. Só pedir permissão para GUARDAR dados genéricos é.
+const DADOS_GUARDADOS = String.raw`(?:o\s+|os\s+|a\s+|as\s+)?(?:seu|seus|sua|suas)\s+(?:dados|contato|telefone|informa\p{L}*)`
+const VERBO_GUARDAR = String.raw`(?:guard|armazen|salv|mant)\p{L}*`
 export const PEDIDO_CONSENTIMENTO_RE = new RegExp(
   [
-    String.raw`(?:posso|podemos|tudo\s+bem|autoriza|permite|concorda|consente|me\s+d[aá]\s+permiss)[^.!?\n]{0,60}?${VERBO_GUARDAR}\s+${DADOS_PESSOAIS}`,
-    String.raw`(?:vou|vamos|preciso|precisamos|gostaria\s+de)\s+${VERBO_GUARDAR}\s+${DADOS_PESSOAIS}`,
+    String.raw`(?:posso|podemos|tudo\s+bem|autoriza|permite|concorda|consente|me\s+d[aá]\s+permiss)[^.!?\n]{0,60}?${VERBO_GUARDAR}\s+${DADOS_GUARDADOS}`,
     String.raw`${B}(?:seu\s+)?consentimento${E}|${B}voc[eê]\s+consente${E}|autoriza\p{L}*\s+(?:para|pra)\s+(?:usar|tratar|guardar|registrar)`,
     String.raw`${B}(?:voc[eê]\s+)?(?:autoriza|permite|aceita|concorda\s+(?:que|em))\s+(?:que\s+)?(?:eu\s+)?(?:te\s+|lhe\s+|o\s+|a\s+)?(?:atend|continu\p{L}*\s+(?:o\s+|seu\s+)?atendimento)`,
     String.raw`${B}posso\s+(?:te\s+|lhe\s+)?atender\s*\?`,
@@ -320,9 +348,21 @@ export const PEDIDO_CONSENTIMENTO_RE = new RegExp(
 const CONFIRMACAO_SOLTA_RE =
   /^\s*(?:tudo\s+bem|pode\s+ser|ok|combinado|posso|beleza|certo|fechado)\b[^.!?\n]{0,30}\?\s*$/iu
 
-/** Hesitações: o agente afirma o que a ferramenta disse ou não afirma. */
+/**
+ * Hesitações. ⚠️ Cortar a hesitação de uma afirmação de negócio FABRICA
+ * promessa ("Provavelmente chega amanhã" → "Chega amanhã"): nesse caso a FRASE
+ * inteira sai (`hesitacao_em_afirmacao`, ALTA). Fora disso, cortamos só as
+ * locuções que não deixam a frase quebrada; "talvez" não é cortado (a frase
+ * quebraria) — fica registrado.
+ */
+const HESITACAO_RE = new RegExp(`${B}(?:talvez|provavelmente|quem\\s+sabe|acho\\s+que|acredito\\s+que)${E}`, 'iu')
+const AFIRMACAO_NEGOCIO_RE = new RegExp(
+  `${B}(?:estoque|entreg\\p{L}*|cheg\\p{L}*|prazo|${fuzzy('preço')}s?|valor(?:es)?|dispon\\p{L}*|${fuzzy('crédito')}|frete|sai|saem|tem|temos|${fuzzy('há')})${E}`,
+  'iu',
+)
+const TALVEZ_RE = new RegExp(`${B}talvez${E}`, 'iu')
+
 export const PROIBIDAS_REESCRITA_B2B: ReadonlyArray<{ readonly id: string; readonly re: RegExp; readonly por: string }> = [
-  { id: 'hesitacao_talvez', re: re(`${B}talvez,?\\s*`), por: '' },
   { id: 'hesitacao_provavelmente', re: re(`${B}provavelmente,?\\s*`), por: '' },
   { id: 'hesitacao_quem_sabe', re: re(`${B}quem\\s+sabe,?\\s*`), por: '' },
   { id: 'hesitacao_acho_que', re: re(`${B}(?:eu\\s+)?acho\\s+que\\s*`), por: '' },
@@ -340,7 +380,7 @@ export const NOTAS_OBRIGATORIAS_B2B: ReadonlyArray<{
   {
     id: 'frete_gratis_sem_condicao',
     re: re(`${B}frete\\s+(?:${fuzzy('grátis')}|gratuito|free|zero|por\\s+nossa\\s+conta)${E}`),
-    ressalva: /pol[ií]tica|acima\s+de|a\s+partir\s+de|para\s+pedidos|conforme|regi[aã]o|consult|condi[cç]|m[ií]nimo/iu,
+    ressalva: /pol[ií]tica|acima\s+de|a\s+partir\s+de|para\s+pedidos|conforme|regi[aã]o|condi[cç][õoã]|m[ií]nimo/iu,
     nota: '(conforme a política de frete)',
   },
 ]
@@ -365,8 +405,11 @@ function inicioDoTermo(m: RegExpMatchArray): number {
 }
 
 /** Primeira expressão proibida NÃO negada na frase. */
-function proibidaNaFrase(frase: string, extras: readonly ProibidaExtra[]): { id: string; gravidade: GravidadeGuardrail } | null {
+function proibidaNaFrase(
+  frase: string, extras: readonly ProibidaExtra[], estoqueComFonte: boolean,
+): { id: string; gravidade: GravidadeGuardrail } | null {
   for (const p of PROIBIDAS_BASE_B2B) {
+    if (p.liberadaComEstoqueDeFonte && estoqueComFonte) continue
     p.re.lastIndex = 0
     for (const m of frase.matchAll(p.re)) {
       if (p.ignoraNegacao || !termoNegado(frase, inicioDoTermo(m))) return { id: p.id, gravidade: p.gravidade }
@@ -439,63 +482,73 @@ export function aplicarLimitesMensagem(texto: string, limites: LimitesMensagem =
 /** O que sai quando o filtro removeu tudo. Sem prazo, sem número. */
 export const TEXTO_SEGURO = 'Deixa eu confirmar essa informação com a equipe para te responder com segurança.'
 
-/** Remove frases proibidas, reescreve hesitações, anexa notas obrigatórias e aplica limites. */
+/** Remove frases proibidas, trata hesitações, anexa notas obrigatórias e aplica limites. */
 export function filtrarSaida(texto: string, opcoes: OpcoesFiltroSaida = {}): ResultadoFiltroSaida {
   const ocorrencias: OcorrenciaFiltro[] = []
   const extras = compilarExtras(opcoes.extras)
+  const estoqueComFonte = opcoes.estoqueComFonte === true
   let pediuConsentimento = false
-  const mantidas = frasesDe(texto).filter((f) => {
+  const mantidas: string[] = []
+  for (const original of frasesDe(texto)) {
+    let f = original
     if (PEDIDO_CONSENTIMENTO_RE.test(f)) {
       ocorrencias.push({ id: 'pede_consentimento', gravidade: 'ALTA', acao: 'removido', trecho: f.trim() })
       pediuConsentimento = true
-      return false
+      continue
     }
-    if (pediuConsentimento && CONFIRMACAO_SOLTA_RE.test(f)) return false
+    if (pediuConsentimento && CONFIRMACAO_SOLTA_RE.test(f)) continue
     if (f.trim()) pediuConsentimento = false
-    const hit = proibidaNaFrase(f, extras)
-    if (hit) ocorrencias.push({ ...hit, acao: 'removido', trecho: f.trim() })
-    return !hit
-  })
-  let out = mantidas.join('')
-  for (const p of PROIBIDAS_REESCRITA_B2B) {
-    p.re.lastIndex = 0
-    const m = p.re.exec(out)
-    if (m) {
-      ocorrencias.push({ id: p.id, gravidade: 'INFO', acao: 'reescrito', trecho: m[0].trim() })
-      p.re.lastIndex = 0
-      out = out.replace(p.re, p.por)
+    const hit = proibidaNaFrase(f, extras, estoqueComFonte)
+    if (hit) { ocorrencias.push({ ...hit, acao: 'removido', trecho: f.trim() }); continue }
+    if (HESITACAO_RE.test(f)) {
+      // Hesitação + afirmação de negócio: cortar a hesitação viraria promessa.
+      if (AFIRMACAO_NEGOCIO_RE.test(f)) {
+        ocorrencias.push({ id: 'hesitacao_em_afirmacao', gravidade: 'ALTA', acao: 'removido', trecho: f.trim() })
+        continue
+      }
+      for (const p of PROIBIDAS_REESCRITA_B2B) {
+        p.re.lastIndex = 0
+        const m = p.re.exec(f)
+        if (!m) continue
+        ocorrencias.push({ id: p.id, gravidade: 'INFO', acao: 'reescrito', trecho: m[0].trim() })
+        p.re.lastIndex = 0
+        f = f.replace(p.re, p.por)
+      }
+      const t = TALVEZ_RE.exec(f)
+      if (t) ocorrencias.push({ id: 'hesitacao_talvez', gravidade: 'INFO', acao: 'registrado', trecho: t[0] })
     }
-  }
-  for (const n of NOTAS_OBRIGATORIAS_B2B) {
-    if (n.ressalva.test(out)) continue
-    n.re.lastIndex = 0
-    for (const m of out.matchAll(n.re)) {
-      const ini = m.index ?? 0
-      if (termoNegado(out, ini)) continue
-      const fim = ini + m[0].length
-      ocorrencias.push({ id: n.id, gravidade: 'MEDIA', acao: 'anexado', trecho: m[0] })
-      out = `${out.slice(0, fim)} ${n.nota}${out.slice(fim)}`
-      break
+    // Nota obrigatória, por frase: a ressalva tem de estar na MESMA frase.
+    for (const n of NOTAS_OBRIGATORIAS_B2B) {
+      if (n.ressalva.test(f)) continue
+      n.re.lastIndex = 0
+      for (const m of f.matchAll(n.re)) {
+        const ini = m.index ?? 0
+        if (termoNegado(f, ini)) continue
+        const fimTermo = ini + m[0].length
+        ocorrencias.push({ id: n.id, gravidade: 'MEDIA', acao: 'anexado', trecho: m[0] })
+        f = `${f.slice(0, fimTermo)} ${n.nota}${f.slice(fimTermo)}`
+        break
+      }
     }
+    mantidas.push(f)
   }
+  const mexeu = ocorrencias.some((o) => o.acao !== 'registrado')
+  let out = texto
   let esvaziado = false
-  if (ocorrencias.length) {
-    out = out
+  if (mexeu) {
+    out = mantidas.join('')
       .replace(/[ \t]{2,}/g, ' ')
       .replace(/ +([,.!?])/g, '$1')
       .replace(/(^|[.!?]\s+|\n)([a-zà-ú])/g, (_m, pre: string, ch: string) => pre + ch.toUpperCase())
       .replace(/\n{3,}/g, '\n\n')
       .trim()
     if (!/[\p{L}\p{N}]/u.test(out)) { out = TEXTO_SEGURO; esvaziado = true }
-  } else {
-    out = texto
   }
   if (opcoes.limites && !esvaziado) {
     const l = aplicarLimitesMensagem(out, opcoes.limites)
     if (l.ocorrencias.length) { ocorrencias.push(...l.ocorrencias); out = l.texto }
   }
-  if (!ocorrencias.length) return { texto, alterado: false, ocorrencias, esvaziado: false }
-  return { texto: out, alterado: true, ocorrencias, esvaziado }
+  return { texto: out, alterado: out !== texto, ocorrencias, esvaziado }
 }
 
 // ── mensagem de handoff ─────────────────────────────────────────────────────

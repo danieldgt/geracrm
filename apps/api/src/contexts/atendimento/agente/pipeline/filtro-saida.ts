@@ -14,7 +14,8 @@ export const MENSAGEM_FILTRO_ESVAZIOU =
  * Para cada mensagem: `filtrarSaida` com a lista BASE B2B do código +
  * as frases EXTRAS do número (`agente_config.compliance`, lido a cada turno —
  * mudou na tela, vale no turno seguinte). Frase proibida → removida (marca
- * CRITICA 'removido'); hesitação → 'reescrito'; nota obrigatória → 'anexado'.
+ * CRITICA 'removido'); hesitação em afirmação de negócio → frase removida (ALTA);
+ * outras hesitações → 'reescrito'/'registrado'; nota obrigatória → 'anexado'.
  *
  * - Mensagem que ficou vazia sai do lote. Se TODAS ficaram vazias, a cadeia
  *   BLOQUEIA: nada do que o modelo escreveu sobrou, então a conversa vai ao
@@ -31,9 +32,12 @@ export const etapaFiltroSaida: EtapaPosResposta = {
   async executar(ctx, entrada) {
     const compliance = lerComplianceExtra(ctx.cfgExtra['compliance'])
     const guardrails: MarcaGuardrail[] = []
+    // Escassez ("poucas unidades") só é verdade com quantidade vinda de fonte
+    // no turno — `numerosVistos` é preenchido pelas ferramentas (raia P7).
+    const estoqueComFonte = entrada.numerosVistos.size > 0
     let mensagens: string[] = []
     for (const m of entrada.mensagens) {
-      const r = filtrarSaida(m, { extras: compliance.frasesProibidas })
+      const r = filtrarSaida(m, { extras: compliance.frasesProibidas, estoqueComFonte })
       for (const o of r.ocorrencias) guardrails.push(marca(ETAPA, o.id, o.gravidade, o.acao, o.trecho))
       if (!r.esvaziado) mensagens.push(r.texto)
     }
