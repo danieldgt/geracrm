@@ -87,6 +87,11 @@ export function criarEtapaPerguntaRepetida(deps: DepsPerguntaRepetida = {}): Eta
         for (const p of r.removidas) guardrails.push(marca('pergunta-repetida', 'pergunta_repetida', 'MEDIA', 'substituido', p))
       }
 
+      // ⚠️ `ultima` é calculada AQUI, antes de `qualidade` e da rede final de R$ em `vendedor.ts`:
+      //    se uma etapa posterior barrar ou trocar o texto, o estado guarda uma pergunta que não
+      //    saiu. Efeito limitado — `ultima` só vale quando o histórico não tem o turno anterior, e
+      //    nesse caso o histórico real (com o texto que saiu) manda. Rever na P12 / P0c, quando a
+      //    gravação do estado puder olhar as mensagens finais.
       let ultima: UltimaPergunta | null = est.ultima
       if (ctx.modo === 'autonomo') {
         const p = mensagens.flatMap((m) => perguntasDe(m)).at(-1)

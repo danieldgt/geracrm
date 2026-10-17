@@ -160,6 +160,24 @@ describe('Caso real (AM §12 #3) portado ao B2B: a mesma pergunta não sai em do
     expect((await ultimaDecisao()).guardrails).toEqual([])
   })
 
+  // Revisão adversarial da P3 (ALTA): a trava trocava a confirmação do pedido por pergunta de revenda.
+  it('confirmação de pedido ajustada sai intacta, sem marca', async () => {
+    await configurar('autonomo', ['tipoCompra', 'volume'])
+    const llm = llmEmSequencia([
+      'Confirma 10 caixas do sabão neutro?',
+      'Ok, ajustei. Confirma 20 caixas do sabão neutro?',
+      'Adicionei as 2 caixas. Posso fechar o pedido?',
+      'Adicionei mais 2 caixas. Posso fechar o pedido?',
+    ])
+    await turno('quero sabão neutro', { llm })
+    await turno('na verdade são 20', { llm })
+    expect(enviados.at(-1)).toBe('Ok, ajustei. Confirma 20 caixas do sabão neutro?')
+    await turno('põe mais 2 caixas', { llm })
+    await turno('e mais 2', { llm })
+    expect(enviados.at(-1)).toBe('Adicionei mais 2 caixas. Posso fechar o pedido?')
+    expect((await ultimaDecisao()).guardrails).toEqual([])
+  })
+
   it('sem slot aberto no canal: a repetida sai e entra a pergunta neutra', async () => {
     await configurar('autonomo', [])
     const llm = llmEmSequencia([PERGUNTA_TIPO, `Anotado! ${PERGUNTA_TIPO}`])
@@ -259,7 +277,7 @@ describe('etapas isoladas', () => {
   })
 
   it('slots: sem sessão devolve instrução mas não estado; com sessão devolve os dois', async () => {
-    const entrantes = [{ id: 'm', tipo: 'texto', texto: 'é pra revenda, 30 caixas', transcricaoPendente: false, transcricaoFalhou: false }]
+    const entrantes = [{ id: 'm', tipo: 'texto', texto: 'é pra revenda, quero 30 caixas', transcricaoPendente: false, transcricaoFalhou: false }]
     const sem = await etapaSlotsDoCliente.executar(ctxBase({ entrantes }))
     expect(sem).toEqual({ tipo: 'segue', instrucoes: [expect.stringContaining('compra para revenda; volume: 30 caixas')] })
     const com = await etapaSlotsDoCliente.executar(ctxBase({ entrantes, sessaoId: 'b3b30000-9999-4000-8000-000000000003' }))

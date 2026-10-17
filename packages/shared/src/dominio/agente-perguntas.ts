@@ -32,9 +32,20 @@ export function normalizarPergunta(t: string): string {
     .trim()
 }
 
-/** Perguntas de um texto (cada trecho terminado em "?"). */
+/**
+ * Perguntas de um texto (cada trecho terminado em "?"), recortadas do texto ORIGINAL.
+ * ⚠️ URL não é pergunta: o "?" de `https://loja.com/p?id=1` não abre nem fecha pergunta — a URL
+ *    vira um separador (mesmo tamanho) antes de procurar, e a pergunta começa depois dela. Assim
+ *    a remoção nunca corta um link ao meio.
+ */
 export function perguntasDe(texto: string): string[] {
-  return (texto.match(/[^.!?\n]*\?+/gu) ?? []).map((p) => p.trim()).filter((p) => p.length > 1)
+  const mascarado = texto.replace(/https?:\/\/\S+/giu, (u) => '.'.repeat(u.length))
+  const r: string[] = []
+  for (const m of mascarado.matchAll(/[^.!?\n]*\?+/gu)) {
+    const p = texto.slice(m.index, m.index + m[0].length).trim()
+    if (p.length > 1) r.push(p)
+  }
+  return r
 }
 
 const STOP = new Set(
@@ -44,9 +55,16 @@ const STOP = new Set(
     .split(' '),
 )
 
-/** Palavras significativas (sem acento, sem stopwords, 3+ letras). */
+/**
+ * Palavras significativas (sem acento, sem stopwords, 3+ letras) e TODOS os números.
+ * ⚠️ O número fica: "Confirma 10 caixas?" e "Confirma 20 caixas?" são perguntas diferentes.
+ */
 export function tokensPergunta(t: string): Set<string> {
-  return new Set(normalizarPergunta(t).split(' ').filter((w) => w.length > 2 && !STOP.has(w)))
+  return new Set(normalizarPergunta(t).split(' ').filter((w) => (/^\d+$/.test(w) || w.length > 2) && !STOP.has(w)))
+}
+
+function numerosDe(t: string): string {
+  return [...new Set(normalizarPergunta(t).split(' ').filter((w) => /^\d+$/.test(w)))].sort().join(',')
 }
 
 /** Jaccard entre dois conjuntos de palavras. */
@@ -60,8 +78,12 @@ export function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number 
 /** Limiar da trava (o mesmo da AM; a regra de qualidade da P12 usa este). */
 export const LIMIAR_PERGUNTA_REPETIDA = 0.7
 
-/** Mesma pergunta: idêntica depois de normalizada ou com as mesmas palavras (Jaccard ≥ 0,7). */
+/**
+ * Mesma pergunta: idêntica depois de normalizada ou com as mesmas palavras (Jaccard ≥ 0,7).
+ * Conjuntos de números diferentes nunca são a mesma pergunta.
+ */
 export function mesmaPergunta(a: string, b: string): boolean {
+  if (numerosDe(a) !== numerosDe(b)) return false
   const na = normalizarPergunta(a)
   if (na && na === normalizarPergunta(b)) return true
   const ta = tokensPergunta(a)
@@ -109,6 +131,28 @@ export function slotDaPergunta(pergunta: string): SlotQualificacao | null {
   const t = normalizarPergunta(pergunta)
   for (const [slot, re] of PISTAS_DO_SLOT) if (re.test(t)) return slot
   return null
+}
+
+/**
+ * Pergunta de PEDIDO (confirmar, fechar, incluir, ajustar, proposta…): a trava nunca a remove.
+ * Repetir "Posso fechar o pedido?" depois de mudar o pedido é o fluxo certo — trocá-la por uma
+ * pergunta de qualificação desmontaria a confirmação (revisão adversarial da P3, achado ALTA).
+ */
+const PISTAS_DE_PEDIDO = /\b(?:confirm\w*|fech\w*|pedido\w*|inclu\w*|adicion\w*|acrescent\w*|proposta\w*|carrinho|finaliz\w*|ajust\w*|remov\w*|tir\w+|troc\w*|or[cç]ament\w* do pedido)\b/
+export function ehPerguntaDePedido(pergunta: string): boolean {
+  return PISTAS_DE_PEDIDO.test(normalizarPergunta(pergunta))
+}
+
+/**
+ * A trava pode tirar `p`? Só se repete uma pergunta do turno anterior E é de qualificação
+ * (mapeada a slot, comparada por Jaccard) ou idêntica depois de normalizada. Pergunta de pedido,
+ * nunca; números diferentes, nunca (já em `mesmaPergunta`).
+ */
+export function perguntaRemovivel(p: string, anteriores: readonly string[]): boolean {
+  if (ehPerguntaDePedido(p)) return false
+  const np = normalizarPergunta(p)
+  const deSlot = slotDaPergunta(p) !== null
+  return anteriores.some((a) => mesmaPergunta(p, a) && (deSlot || np === normalizarPergunta(a)))
 }
 
 /** Primeiro slot do canal sem resposta, pulando os de `excluir`. */
@@ -159,7 +203,7 @@ export interface ResultadoPerguntaRepetidaMensagens {
 export function temPerguntaRepetida(mensagens: readonly string[], perguntasAnteriores: readonly string[]): boolean {
   const antes = perguntasAnteriores.flatMap((a) => perguntasDe(a))
   if (!antes.length) return false
-  return mensagens.some((m) => perguntasDe(m).some((p) => antes.some((a) => mesmaPergunta(p, a))))
+  return mensagens.some((m) => perguntasDe(m).some((p) => perguntaRemovivel(p, antes)))
 }
 
 function limpar(t: string): string {
@@ -186,7 +230,7 @@ export function evitarPerguntaRepetidaNasMensagens(
   const removidas: string[] = []
   const saida: string[] = []
   for (const m of mensagens) {
-    const daqui = perguntasDe(m).filter((p) => antes.some((a) => mesmaPergunta(p, a)))
+    const daqui = perguntasDe(m).filter((p) => perguntaRemovivel(p, antes))
     if (!daqui.length) { saida.push(m); continue }
     removidas.push(...daqui)
     let t = m
@@ -210,6 +254,8 @@ export function evitarPerguntaRepetidaNasMensagens(
       saida.push(ultima ? `${ultima}${/[.!?…]$/u.test(ultima) ? '' : '.'} ${substituta}` : substituta)
     }
   }
+  // Nada sobrou (handoff só com a repetida, neutras esgotadas): melhor a original que bolha vazia.
+  if (!saida.length) return intacto
   return { mensagens: saida, removidas, substituta }
 }
 
@@ -242,26 +288,56 @@ function dobrar(t: string): string {
   return s
 }
 
-const NUM = String.raw`(?:\d+(?:[.,]\d+)?|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|doze|quinze|vinte|trinta|cinquenta|cem|duzentos|duzentas|quinhentos|quinhentas|mil)`
+// ⚠️ NA DÚVIDA, NÃO EXTRAI: slot extraído fica na sessão e o agente para de perguntar aquilo.
+//    Um falso positivo ("galão de 5 litros" como volume) é pior que deixar o modelo perguntar.
+
+/** Sem "um/uma": "tem uma caixa com 12?" não é volume. */
+const NUM = String.raw`(?:\d+(?:[.,]\d+)?|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|doze|quinze|vinte|trinta|cinquenta|cem|duzentos|duzentas|quinhentos|quinhentas|mil)`
 const UNIDADES = String.raw`(?:caixas?|cx|unidades?|und|un|pecas?|pcs?|pares?|fardos?|pacotes?|sacos?|sacas?|kg|quilos?|litros?|lts?|duzias?|paletes?|pallets?|rolos?|metros?|galoes?|latas?|frascos?|garrafas?|cartelas?|displays?|kits?|grades?|bobinas?|resmas?|toneladas?)`
 /** "comprei 10 caixas", "da outra vez 20 caixas": passado não é o volume de agora. */
-const PASSADO = /\b(?:comprei|comprou|compramos|comprava|pedi|pedimos|recebi|recebemos|chegaram|chegou|sobrou|sobraram|faltou|faltaram|ultima vez|da outra vez|mes passado|semana passada)\b[^.!?\n]{0,25}$/
+const PASSADO = /\b(?:comprei|comprou|compramos|comprava|pedi|pedimos|recebi|recebemos|chegaram|chegou|sobrou|sobraram|faltou|faltaram|ultima vez|da outra vez|mes passado|semana passada)\b/
+/** Volume só com intenção de compra antes da quantidade, na mesma frase. */
+const INTENCAO_VOLUME = /\b(?:preciso|precisamos|precisaria|necessito|quero|queremos|queria|gostaria|vou querer|vamos querer|levar|manda|mande|separa|separe|separar|pedir|encomendar|comprar|fecha|fechar|fechamos)\b/
+/** Embalagem logo antes: "galão de 5 litros", "saco de 25 kg", "caixa com 12" — é tamanho, não volume. */
+const EMBALAGEM_ANTES = /\b(?:galao|galoes|saco|sacos|saca|sacas|caixa|caixas|cx|pacote|pacotes|fardo|fardos|frasco|frascos|garrafa|garrafas|lata|latas|balde|baldes|embalagem|embalagens|pote|potes|rolo|rolos|bobina|bobinas|kit|kits|display|displays|refil|tambor|bombona|tamanho)\s+(?:de|com)\s+$/
 
-const DIA_SEMANA = String.raw`(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)(?:[- ]feira)?`
-const PRAZOS: readonly RegExp[] = [
-  /\b(?:sem pressa|nao tenho pressa|sem urgencia|nao e urgente|com calma)\b/,
-  /\b(?:urgente|o quanto antes|o mais rapido(?: possivel)?|pra ja|para ja|pra ontem|(?:pra|para) hoje|ainda hoje|hoje ainda)\b/,
-  new RegExp(String.raw`\b(?:ate|pra|para|antes d[aeo]|na|no)\s+(?:a\s+|o\s+)?(?:proxim[ao]\s+|essa\s+|esta\s+)?${DIA_SEMANA}\b`),
-  /\b(?:ate|pra|para)?\s*(?:amanha|depois de amanha)\b/,
-  /\b(?:(?:ate|pra|para|na)\s+)?(?:semana que vem|proxima semana|essa semana|esta semana|fim de semana|final de semana)\b/,
+const DIA = String.raw`(?:segunda|terca|quarta|quinta|sexta|sabado|domingo)`
+/** Valem sozinhos: o cliente falou de urgência ou da falta dela. */
+const PRAZOS_DIRETOS: readonly RegExp[] = [
+  /\b(?:sem pressa|nao tenho pressa|sem urgencia|nao e urgente)\b/,
+  /\b(?:urgente|o quanto antes|o mais rapido(?: possivel)?|pra ontem)\b/,
+]
+/** Só contam numa frase com intenção de prazo e numa oração sem despedida. */
+const PRAZOS_COM_INTENCAO: readonly RegExp[] = [
+  // Dia da semana com "até/para" antes ou com "feira": "vou na segunda opção" não é prazo.
+  new RegExp(String.raw`\b(?:ate|pra|para|antes d[aeo])\s+(?:a\s+|o\s+)?(?:proxim[ao]\s+)?${DIA}(?:[- ]feira)?\b`),
+  new RegExp(String.raw`\b${DIA}[- ]feira\b`),
+  /\b(?:(?:ate|pra|para)\s+)?(?:depois de amanha|amanha)\b/,
+  /\b(?:(?:ate|pra|para|na)\s+)?(?:semana que vem|proxima semana|essa semana|esta semana)\b/,
   /\b(?:(?:ate|pra|para|no)\s+)?(?:mes que vem|proximo mes|fim do mes|final do mes|inicio do mes)\b/,
+  /\b(?:pra|para) hoje\b|\bainda hoje\b|\bhoje ainda\b/,
   /\bate (?:o )?dia \d{1,2}(?:\/\d{1,2})?\b/,
   /\bate \d{1,2}\/\d{1,2}\b/,
   new RegExp(String.raw`\b(?:em|dentro de|daqui a|nos proximos)\s+${NUM}\s+(?:dias?(?: uteis)?|semanas?|meses?)\b`),
 ]
+const INTENCAO_PRAZO = /\b(?:preciso|precisamos|precisa|necessito|quero|queremos|entrega\w*|entregar|receber|chegar|chegue|pode ser|consegue\w*|prazo|tem que|tenho que)\b/
+/** "obrigado, até amanhã!", "te retorno amanhã", "falo com você segunda-feira". */
+const DESPEDIDA = /\b(?:obrigad\w*|valeu|tchau|abraco|retorno|falo|falamos|aviso|chamo|ate mais|ate logo)\b/
 
-const DINHEIRO = /\br\$\s?\d|\b\d[\d.,]*\s?(?:mil\s+)?reais\b/
+/** Orçamento só com a palavra que diz que é orçamento — "vi por R$ 50 no concorrente" não é. */
 const ORCAMENTO_CONTEXTO = new RegExp(String.raw`\b(?:orcamento|verba|budget|gastar|investir)\b[^.!?\n]{0,30}?(?:\b\d[\d.,]*|\b${NUM}\s+mil)\b(?!\s*(?:mil\s+)?${UNIDADES}\b)`)
+const ORCAMENTO_DEPOIS = /\d[\d.,]*(?:\s*mil)?(?:\s*reais)?\s+(?:pra|para|de)\s+(?:gastar|investir|orcamento)\b/
+
+/** Trecho de `t` em volta de [ini, fim), cortado nos separadores `sep`. */
+function trechoEntre(t: string, ini: number, fim: number, sep: RegExp): string {
+  let a = ini
+  while (a > 0 && !sep.test(t[a - 1]!)) a--
+  let b = fim
+  while (b < t.length && !sep.test(t[b]!)) b++
+  return t.slice(a, b)
+}
+const FIM_DE_FRASE = /[.!?\n]/
+const FIM_DE_ORACAO = /[.!?\n,;]/
 
 export function extrairSlotsDoCliente(texto: string): SlotsDoCliente {
   const r: SlotsDoCliente = {}
@@ -272,8 +348,8 @@ export function extrairSlotsDoCliente(texto: string): SlotsDoCliente {
     if (validarCnpj(m[0])) r.cnpj = 'informado'
     base = base.slice(0, m.index) + ' '.repeat(m[0].length) + base.slice(m.index + m[0].length)
   }
-  // Telefone/CPF também não são volume nem prazo.
-  base = base.replace(/\b\d{9,}\b|\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/g, (s) => ' '.repeat(s.length))
+  // URL, telefone e CPF também não são volume nem prazo.
+  base = base.replace(/https?:\/\/\S+|\b\d{9,}\b|\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/gi, (s) => ' '.repeat(s.length))
   const t = dobrar(base)
 
   // tipoCompra: "não é pra revenda" é consumo — a negação vem antes.
@@ -283,23 +359,30 @@ export function extrairSlotsDoCliente(texto: string): SlotsDoCliente {
     r.tipoCompra = 'revenda'
   }
 
+  // Volume: intenção antes, na mesma frase; nem passado, nem tamanho de embalagem.
   const reVolume = new RegExp(String.raw`\b${NUM}(?:\s+mil)?\s+(?:de\s+)?${UNIDADES}\b`, 'g')
   for (const m of t.matchAll(reVolume)) {
-    if (PASSADO.test(t.slice(Math.max(0, m.index - 40), m.index))) continue
+    const antes = trechoEntre(t, m.index, m.index, FIM_DE_FRASE)
+    if (!INTENCAO_VOLUME.test(antes) || PASSADO.test(antes)) continue
+    if (EMBALAGEM_ANTES.test(t.slice(Math.max(0, m.index - 20), m.index))) continue
     r.volume = base.slice(m.index, m.index + m[0].length).trim().slice(0, 60)
     break
   }
 
-  for (const re of PRAZOS) {
+  const lerPrazo = (re: RegExp, comIntencao: boolean): string | null => {
     const m = re.exec(t)
-    if (!m) continue
-    const antes = t.slice(Math.max(0, m.index - 12), m.index)
-    if (/\b(?:ha|faz|desde)\s*$/.test(antes)) continue
-    const trecho = base.slice(m.index, m.index + m[0].length).trim()
-    if (trecho) { r.prazo = trecho.slice(0, 60); break }
+    if (!m) return null
+    const fim = m.index + m[0].length
+    if (/\b(?:ha|faz|desde)\s*$/.test(t.slice(Math.max(0, m.index - 12), m.index))) return null
+    if (comIntencao && (!INTENCAO_PRAZO.test(trechoEntre(t, m.index, fim, FIM_DE_FRASE)) ||
+      DESPEDIDA.test(trechoEntre(t, m.index, fim, FIM_DE_ORACAO)))) return null
+    return base.slice(m.index, fim).trim().slice(0, 60) || null
   }
+  const prazo = PRAZOS_DIRETOS.map((re) => lerPrazo(re, false)).find(Boolean)
+    ?? PRAZOS_COM_INTENCAO.map((re) => lerPrazo(re, true)).find(Boolean)
+  if (prazo) r.prazo = prazo
 
-  if (DINHEIRO.test(t) || ORCAMENTO_CONTEXTO.test(t)) r.orcamento = 'informado'
+  if (ORCAMENTO_CONTEXTO.test(t) || ORCAMENTO_DEPOIS.test(t)) r.orcamento = 'informado'
   return r
 }
 

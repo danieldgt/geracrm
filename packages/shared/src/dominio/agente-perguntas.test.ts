@@ -63,18 +63,34 @@ describe('extrairSlotsDoCliente', () => {
   })
 
   it('orçamento vira "informado", sem o valor; quantidade não é orçamento', () => {
-    expect(extrairSlotsDoCliente('tenho uns R$ 3.000 pra isso')).toEqual({ orcamento: 'informado' })
+    expect(extrairSlotsDoCliente('meu orçamento é R$ 3.000')).toEqual({ orcamento: 'informado' })
     expect(extrairSlotsDoCliente('meu orçamento é de 5 mil')).toEqual({ orcamento: 'informado' })
+    expect(extrairSlotsDoCliente('tenho 2 mil pra gastar')).toEqual({ orcamento: 'informado' })
     expect(extrairSlotsDoCliente('quero investir em 20 fardos')).toEqual({ volume: '20 fardos' })
   })
 
-  it('prazos em várias formas', () => {
+  it('prazos em várias formas, sempre com intenção', () => {
     expect(extrairSlotsDoCliente('preciso pra amanhã').prazo).toBe('pra amanhã')
     expect(extrairSlotsDoCliente('é urgente').prazo).toBe('urgente')
     expect(extrairSlotsDoCliente('pode ser semana que vem').prazo).toBe('semana que vem')
-    expect(extrairSlotsDoCliente('até o dia 20').prazo).toBe('até o dia 20')
-    expect(extrairSlotsDoCliente('dentro de 10 dias').prazo).toBe('dentro de 10 dias')
+    expect(extrairSlotsDoCliente('preciso até o dia 20').prazo).toBe('até o dia 20')
+    expect(extrairSlotsDoCliente('consegue entregar dentro de 10 dias?').prazo).toBe('dentro de 10 dias')
+    expect(extrairSlotsDoCliente('preciso receber na sexta-feira').prazo).toBe('sexta-feira')
     expect(extrairSlotsDoCliente('sem pressa').prazo).toBe('sem pressa')
+  })
+
+  // Revisão adversarial da P3 (MÉDIA): slot falso fica na sessão e o agente nunca pergunta aquilo.
+  it.each([
+    ['galão de 5 litros, quanto custa?', {}],
+    ['quero o saco de 25 kg', {}],
+    ['tem uma caixa com 12?', {}],
+    ['obrigado, até amanhã!', {}],
+    ['te retorno amanhã', {}],
+    ['vou na segunda opção', {}],
+    ['vi por R$ 50 no concorrente', {}],
+    ['quero 10 galões de 5 litros', { volume: '10 galões' }],
+  ])('falso positivo não vira slot: %s', (texto, esperado) => {
+    expect(extrairSlotsDoCliente(texto)).toEqual(esperado)
   })
 
   it('não confunde passado, telefone nem conversa à toa', () => {
@@ -117,6 +133,35 @@ describe('evitarPerguntaRepetida (trava antes do envio)', () => {
     const txt = 'Que bom! Qual a cidade da entrega?'
     expect(evitarPerguntaRepetida(txt, ctx)).toEqual({ texto: txt, removidas: [], substituta: null })
     expect(evitarPerguntaRepetida(PERGUNTA_TIPO, { ...ctx, perguntasAnteriores: [] }).removidas).toEqual([])
+  })
+
+  // Revisão adversarial da P3 (ALTA): a trava desmontava a confirmação do pedido.
+  it('números diferentes não são a mesma pergunta; pergunta de pedido nunca sai', () => {
+    expect(mesmaPergunta('Confirma 10 caixas do sabão neutro?', 'Confirma 20 caixas do sabão neutro?')).toBe(false)
+    const ajuste = evitarPerguntaRepetida('Ok, ajustei. Confirma 20 caixas do sabão neutro?', { ...ctx, perguntasAnteriores: ['Confirma 10 caixas do sabão neutro?'] })
+    expect(ajuste).toEqual({ texto: 'Ok, ajustei. Confirma 20 caixas do sabão neutro?', removidas: [], substituta: null })
+    const fechar = evitarPerguntaRepetida('Adicionei as 2 caixas. Posso fechar o pedido?', { ...ctx, perguntasAnteriores: ['Posso fechar o pedido?'] })
+    expect(fechar.texto).toBe('Adicionei as 2 caixas. Posso fechar o pedido?')
+    expect(fechar.removidas).toEqual([])
+  })
+
+  it('pergunta sem slot só sai se for idêntica; parecida mas não idêntica fica', () => {
+    expect(evitarPerguntaRepetida('Faz sentido para você?', { ...ctx, perguntasAnteriores: ['Faz sentido para você?'] }).removidas).toHaveLength(1)
+    expect(evitarPerguntaRepetida('E isso faz sentido para você agora?', { ...ctx, perguntasAnteriores: ['Faz sentido para você?'] }).removidas).toEqual([])
+  })
+
+  // Revisão adversarial da P3 (MÉDIA): o "?" da URL virava pergunta e o link quebrava.
+  it('URL com "?" não é pergunta e sai inteira', () => {
+    const url = 'https://loja.com.br/p?id=10&cor=azul'
+    expect(perguntasDe(`Veja aqui: ${url} . Gostou?`)).toEqual(['Gostou?'])
+    const r = evitarPerguntaRepetida(`Segue o link ${url} ${PERGUNTA_TIPO}`, ctx)
+    expect(r.texto).toBe(`Segue o link ${url}. ${PERGUNTA_DO_SLOT.cidade}`)
+  })
+
+  // Revisão adversarial da P3 (BAIXA): nunca devolver o turno sem mensagem.
+  it('se nada sobrar (handoff só com a repetida), fica a original', () => {
+    const r = evitarPerguntaRepetidaNasMensagens([PERGUNTA_TIPO], { ...ctx, proximoPasso: false })
+    expect(r).toEqual({ mensagens: [PERGUNTA_TIPO], removidas: [], substituta: null })
   })
 
   it('em várias bolhas: bolha que esvazia sai, a substituta vai na última; proximoPasso=false não acrescenta', () => {
