@@ -140,6 +140,65 @@ export function inicioDaFasePorAuditoria(
   return null
 }
 
+// ── playground (pura) ───────────────────────────────────────────────────────
+
+/** Um reinício do playground: quando, quantas decisões a conversa teve e quantas com CRÍTICA que escapou. */
+export interface EntradaPlayground {
+  readonly em: string
+  readonly turnos: number
+  readonly criticas: number
+}
+
+/**
+ * Soma o playground: só as entradas dos últimos 30 dias E depois do `corte`
+ * (última publicação de playbook ou mudança de configuração do número — teste
+ * de uma versão anterior não vale para a atual). Conversa só conta com ≥ 3
+ * decisões; CRÍTICA conta em qualquer conversa depois do corte.
+ */
+export function somarPlayground(
+  entradas: readonly EntradaPlayground[], p: { readonly agora: string; readonly corte: string | null },
+): { readonly conversas: number; readonly criticas: number } {
+  const ate = Date.parse(p.agora)
+  const limite = Math.max(ate - VALIDADE_CONFERENCIA_DIAS * 86_400_000, p.corte ? Date.parse(p.corte) : -Infinity)
+  const validas = entradas.filter((e) => Date.parse(e.em) >= limite && Date.parse(e.em) <= ate)
+  return {
+    conversas: validas.filter((e) => e.turnos >= PLAYGROUND_MIN_DECISOES).length,
+    criticas: validas.reduce((n, e) => n + e.criticas, 0),
+  }
+}
+
+// ── dias pausados pelo teto do tenant (pura) ────────────────────────────────
+
+/** Mudança auditada do teto do tenant (`agente_tenant.modo_maximo`): o teto ANTES dela; null = sem teto. */
+export interface MudancaDeTeto {
+  readonly em: string
+  readonly antes: ModoAgente | null
+}
+
+/**
+ * Milissegundos de [inicio, agora) em que o teto do tenant segurou o número
+ * abaixo do modo dele (kill switch). Esses dias NÃO contam como dias na fase:
+ * pausado, o agente não estava sendo testado no modo da fase.
+ * `mudancas` vêm da mais NOVA para a mais antiga; `tetoAtual` é o de agora.
+ * ⚠️ Dentro de uma fase o modo do número é constante (a fase vem do modo).
+ */
+export function msPausadosPeloTeto(p: {
+  readonly inicio: string; readonly agora: string; readonly modoNumero: ModoAgente
+  readonly tetoAtual: ModoAgente | null; readonly mudancas: readonly MudancaDeTeto[]
+}): number {
+  const ini = Date.parse(p.inicio)
+  let fim = Date.parse(p.agora), teto = p.tetoAtual, total = 0
+  for (const m of p.mudancas) {
+    const em = Date.parse(m.em)
+    if (em <= ini) break
+    if (em < fim && pausadoPeloTeto(p.modoNumero, teto)) total += fim - em
+    fim = Math.min(fim, em)
+    teto = m.antes
+  }
+  if (fim > ini && pausadoPeloTeto(p.modoNumero, teto)) total += fim - ini
+  return total
+}
+
 // ── alvos (⚠️ PROPOSTA — ADR-031) ───────────────────────────────────────────
 
 /** PROPOSTA. Homologação: conversas douradas (evals P15) sem CRÍTICA. */
@@ -148,6 +207,10 @@ export const ALVO_DOURADAS_MIN = 25
 export const ALVO_PLAYGROUND_CONVERSAS_MIN = 30
 /** Validade de uma conferência de homologação (douradas, smoke, playground). */
 export const VALIDADE_CONFERENCIA_DIAS = 30
+/** Conversa de playground só conta como testada com ≥ 3 decisões (um "oi" não testa nada). */
+export const PLAYGROUND_MIN_DECISOES = 3
+/** Teto de entradas guardadas por número (os reinícios de mais de 30 dias são descartados antes). */
+export const PLAYGROUND_MAX_ENTRADAS = 500
 /** PROPOSTA. Sombra: duração e volume mínimos. */
 export const ALVO_SOMBRA_DIAS_UTEIS_MIN = 10
 export const ALVO_SOMBRA_TURNOS_MIN = 150
@@ -248,11 +311,14 @@ export function indisponivel(motivo: string): { readonly disponivel: false; read
 
 export interface MedidasFase {
   /** Conferência registrada da última rodada das douradas (P15). */
-  readonly douradas: Medida<{ readonly cenarios: number; readonly criticas: number; readonly em: string }>
-  /** Conferência registrada do smoke do provedor. */
-  readonly smoke: Medida<{ readonly ok: boolean; readonly em: string }>
-  /** Playground: conversas testadas (acumuladas nos reinícios + a aberta) e as CRÍTICAs que escaparam nelas. */
-  readonly playground: Medida<{ readonly conversas: number; readonly criticas: number }>
+  readonly douradas: Medida<{ readonly cenarios: number; readonly criticas: number; readonly em: string; readonly por: string | null }>
+  /** Conferência registrada do smoke do provedor (quem declarou e quando). */
+  readonly smoke: Medida<{ readonly ok: boolean; readonly em: string; readonly por: string | null }>
+  /**
+   * Playground (`somarPlayground`): conversas testadas com ≥ 3 decisões e CRÍTICAs que escaparam,
+   * só depois do `corte` (última publicação de playbook ou mudança de configuração do número).
+   */
+  readonly playground: Medida<{ readonly conversas: number; readonly criticas: number; readonly corte: string | null }>
   /** Decisões no modo da fase, na janela (sem silêncio). */
   readonly volume: Medida<{ readonly turnos: number; readonly conversas: number }>
   /** CRÍTICAs que ESCAPARAM (P12, `agente_avaliacao.pior_gravidade`), na janela da fase. */
@@ -272,7 +338,7 @@ export interface MedidasFase {
     readonly geradas: number; readonly usadas: number; readonly taxaUso: number | null; readonly taxaSemEdicao: number | null
   }>
   /** p95 do cliente falar até a 1ª mensagem do agente na sessão, ms. */
-  readonly latenciaPrimeira: Medida<{ readonly p95Ms: number | null; readonly amostras: number }>
+  readonly latenciaPrimeira: Medida<{ readonly p95Ms: number | null; readonly amostras: number; readonly semMedida: number }>
   readonly handoff: Medida<{ readonly conversas: number; readonly comHandoff: number }>
   /** Opt-out pedido ao agente (P4). */
   readonly optOut: Medida<{ readonly conversas: number; readonly comOptOut: number }>
@@ -353,7 +419,11 @@ export function formatarCentavos(c: number): string {
 }
 const fmtMs = (ms: number) => `${virgula((Math.round(ms / 100) / 10).toFixed(1))} s`
 const fmtNota = (n: number) => virgula(n.toFixed(2))
-const pp = (x: number) => `${virgula((Math.round(x * 1000) / 10).toFixed(1))} p.p.`
+/** Pontos percentuais com o sinal de menos tipográfico (−), como os alvos. */
+const pp = (x: number) => {
+  const v = Math.round(Math.abs(x) * 1000) / 10
+  return `${x < 0 && v > 0 ? '−' : ''}${virgula(v.toFixed(1))} p.p.`
+}
 const fmtData = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
 
 // ── construção dos critérios ────────────────────────────────────────────────
@@ -382,6 +452,11 @@ const FONTE = {
 interface Juizo { readonly valor: string | null; readonly ok: boolean | null; readonly motivo?: string; readonly alerta?: string }
 
 type Avaliador = (e: EntradaFase) => CriterioFase
+
+const declarado = (v: { readonly em: string; readonly por: string | null }) =>
+  `Declarado ${v.por ? `por ${v.por} ` : ''}em ${fmtData(v.em)} (vale 30 dias).`
+const cortePlayground = (corte: string | null) =>
+  corte ? `Contam só os testes depois de ${fmtData(corte)} (última publicação do playbook ou mudança na configuração do número).` : 'Contam os testes dos últimos 30 dias.'
 
 function semMedida(id: string, rotulo: string, alvo: string, fonte: string, motivo: string): CriterioFase {
   return { id, rotulo, alvo, valor: null, ok: null, fonte, indisponivel: true, motivo }
@@ -421,13 +496,16 @@ const criticaZero = (id: string, rotulo: string): Avaliador => (e) =>
 
 const C = {
   douradas: (e: EntradaFase) => com(e, 'douradas', 'douradas', 'Conversas douradas sem CRÍTICA', `≥ ${ALVO_DOURADAS_MIN} cenários, 0 CRÍTICA`, FONTE.douradas,
-    (v) => ({ valor: `${v.cenarios} cenários, ${v.criticas} CRÍTICA (em ${fmtData(v.em)})`, ok: v.cenarios >= ALVO_DOURADAS_MIN && v.criticas === 0 })),
+    (v) => ({ valor: `${v.cenarios} cenários, ${v.criticas} CRÍTICA`, ok: v.cenarios >= ALVO_DOURADAS_MIN && v.criticas === 0, motivo: declarado(v) })),
   smoke: (e: EntradaFase) => com(e, 'smoke', 'smoke', 'Smoke do provedor de IA', 'ok', FONTE.smoke,
-    (v) => ({ valor: `${v.ok ? 'ok' : 'falhou'} (em ${fmtData(v.em)})`, ok: v.ok })),
-  playgroundVolume: (e: EntradaFase) => com(e, 'playground', 'playground_conversas', 'Conversas testadas no playground', `≥ ${ALVO_PLAYGROUND_CONVERSAS_MIN}`, FONTE.playground,
-    (v) => ({ valor: String(v.conversas), ok: v.conversas >= ALVO_PLAYGROUND_CONVERSAS_MIN })),
+    (v) => ({ valor: v.ok ? 'ok' : 'falhou', ok: v.ok, motivo: declarado(v) })),
+  playgroundVolume: (e: EntradaFase) => com(e, 'playground', 'playground_conversas', 'Conversas testadas no playground',
+    `≥ ${ALVO_PLAYGROUND_CONVERSAS_MIN} (com ≥ ${PLAYGROUND_MIN_DECISOES} turnos)`, FONTE.playground,
+    (v) => ({ valor: String(v.conversas), ok: v.conversas >= ALVO_PLAYGROUND_CONVERSAS_MIN, motivo: cortePlayground(v.corte) })),
   playgroundCritica: (e: EntradaFase) => com(e, 'playground', 'playground_critica', 'CRÍTICA no playground', '0', FONTE.playground,
-    (v) => v.conversas === 0 ? semAmostra('Nenhuma conversa testada no playground ainda.') : { valor: String(v.criticas), ok: v.criticas === 0 }),
+    (v) => v.conversas === 0 && v.criticas === 0
+      ? semAmostra(`Nenhuma conversa testada no playground ainda. ${cortePlayground(v.corte)}`)
+      : { valor: String(v.criticas), ok: v.criticas === 0, motivo: cortePlayground(v.corte) }),
   turnos: (min: number): Avaliador => (e) => com(e, 'volume', 'turnos', 'Turnos na fase', `≥ ${min}`, FONTE.decisao,
     (v) => ({ valor: String(v.turnos), ok: v.turnos >= min })),
   conversas: (min: number): Avaliador => (e) => com(e, 'volume', 'conversas', 'Conversas na fase', `≥ ${min}`, FONTE.decisao,
@@ -491,7 +569,8 @@ const C = {
     (v) => v.p95Ms === null || v.amostras === 0
       ? semAmostra('Nenhuma 1ª resposta enviada pelo agente na janela.')
       : { valor: `${fmtMs(v.p95Ms)} (${v.amostras} sessões)`, ok: v.p95Ms <= ALVO_P95_PRIMEIRA_RESPOSTA_MAX_MS,
-        motivo: 'Medido da 1ª mensagem do cliente que o turno respondeu até a 1ª mensagem do agente — inclui a espera da fila (debounce).' }),
+        motivo: 'Medido da 1ª mensagem do cliente que o turno respondeu até a 1ª mensagem do agente — inclui a espera da fila (debounce).'
+          + (v.semMedida > 0 ? ` ${v.semMedida} ${v.semMedida === 1 ? 'sessão ficou' : 'sessões ficaram'} sem medida (mensagens não encontradas).` : '') }),
   handoff: (e: EntradaFase) => com(e, 'handoff', 'handoff', 'Conversas passadas para humano',
     `entre ${formatarPct(ALVO_HANDOFF_TAXA_MIN)} e ${formatarPct(ALVO_HANDOFF_TAXA_MAX)}`, FONTE.handoff,
     (v) => {
@@ -526,7 +605,17 @@ const C = {
 
 const VIES_DE_SELECAO = 'Coortes não aleatorizadas: o agente atende o recorte (horário, segmento) e o humano o resto — clientes e momentos diferentes (viés de seleção). Leia como indício, não como prova.'
 
-/** Não-inferioridade da conversão (M2): Newcombe/Wilson, coortes maduras, poder mínimo. */
+/**
+ * Não-inferioridade da conversão: Newcombe/Wilson, coortes maduras.
+ *
+ *   coorte vazia                  → sem medida (não há leitura nenhuma);
+ *   intervalo inteiro < −margem   → REPROVA (inferioridade clara, com qualquer n);
+ *   n abaixo do poder de 80%      → cumpre COM ALERTA: "amostra sem poder; leitura
+ *                                   indicativa" — no B2B o n do poder (~5 mil por
+ *                                   coorte) quase nunca chega, e bloquear até lá
+ *                                   seria nunca avançar;
+ *   n com poder                   → cumpre se o limite inferior ≥ −margem.
+ */
 export function julgarConversao(
   a: { readonly conversas: number; readonly convertidas: number }, h: { readonly conversas: number; readonly convertidas: number },
 ): Juizo {
@@ -535,14 +624,17 @@ export function julgarConversao(
   }
   const pa = a.convertidas / a.conversas, ph = h.convertidas / h.conversas
   const ic = diferencaNewcombe({ x: a.convertidas, n: a.conversas }, { x: h.convertidas, n: h.conversas })
-  const valor = `agente ${formatarPct(pa)} (${a.conversas}) × humano ${formatarPct(ph)} (${h.conversas}); diferença ${pp(ic.diferenca)}, limite inferior ${pp(ic.inf)}`
-  const precisa = amostraParaNaoInferioridade(ph)
+  const valor = `agente ${formatarPct(pa)} (n ${a.conversas}) × humano ${formatarPct(ph)} (n ${h.conversas}); diferença ${pp(ic.diferenca)}, limite inferior ${pp(ic.inf)}`
+  const margem = pp(ALVO_CONVERSAO_MARGEM)
   if (ic.sup < -ALVO_CONVERSAO_MARGEM) {
-    // Mesmo com pouca amostra, o intervalo inteiro abaixo da margem é inferioridade clara.
-    return { valor, ok: false, motivo: `O intervalo inteiro fica abaixo de −${pp(ALVO_CONVERSAO_MARGEM)}. ${VIES_DE_SELECAO}` }
+    return { valor, ok: false, motivo: `O intervalo inteiro fica abaixo de −${margem}: inferioridade clara. ${VIES_DE_SELECAO}` }
   }
+  const precisa = amostraParaNaoInferioridade(ph)
   if (a.conversas < precisa || h.conversas < precisa) {
-    return semAmostra(`Amostra abaixo do poder de 80%: são precisas ~${precisa} conversas maduras em cada coorte para julgar −${pp(ALVO_CONVERSAO_MARGEM)}. ${VIES_DE_SELECAO}`, valor)
+    return {
+      valor, ok: true, motivo: VIES_DE_SELECAO,
+      alerta: `Amostra sem poder para −${margem}; leitura indicativa (limite inferior ${pp(ic.inf)}, n ${a.conversas} × ${h.conversas}; o poder de 80% pede ~${precisa} por coorte).`,
+    }
   }
   return { valor, ok: ic.inf >= -ALVO_CONVERSAO_MARGEM, motivo: VIES_DE_SELECAO }
 }
@@ -659,7 +751,7 @@ export type CorpoConferenciaGoLive = z.input<typeof corpoConferenciaGoLive>
 export interface GoLiveDto extends ResultadoFase {
   readonly canalId: string
   readonly rotuloFase: string
-  /** Dias corridos completos desde o início da fase. */
+  /** Dias corridos completos desde o início da fase, SEM os dias pausados pelo teto. */
   readonly dias: number
   readonly diasUteis: number
   /** ISO; null quando não há registro nenhum. */
@@ -672,6 +764,10 @@ export interface GoLiveDto extends ResultadoFase {
   readonly modoNumero: ModoAgente
   /** O teto do tenant segura o número abaixo do modo dele (kill switch): a fase não muda. */
   readonly pausadoPeloTeto: boolean
+  /** Dias (1 casa) em que o teto pausou o número desde o início da fase — descontados de `dias`. */
+  readonly diasPausados: number
+  /** Quem pede pode registrar conferência (admin): a tela só mostra o formulário então. */
+  readonly podeConferir: boolean
   /** O modo efetivo AGORA (P14), só informativo: fora do recorte ele cai. */
   readonly modoAgora: { readonly modo: ModoAgente; readonly origem: string; readonly motivo: string | null }
   /** Sempre true enquanto os alvos forem a PROPOSTA do ADR-031. */

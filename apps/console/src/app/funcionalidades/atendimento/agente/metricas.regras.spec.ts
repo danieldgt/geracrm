@@ -12,7 +12,7 @@ const base: GoLiveDto = {
   canalId: 'c', fase: 'sombra', rotuloFase: 'Sombra', proximaFase: 'assistido', criterios: [], podeAvancar: false,
   recomendacao: 'manter', voltarPara: null, pendencias: { reprovados: [], indisponiveis: [], alertas: [] },
   dias: 16, diasUteis: 12, inicioFase: '2026-10-01T00:00:00Z', inicioEstimado: false, janelaDias: 16,
-  modoNumero: 'sombra', pausadoPeloTeto: false,
+  modoNumero: 'sombra', pausadoPeloTeto: false, diasPausados: 0, podeConferir: false,
   modoAgora: { modo: 'sombra', origem: 'numero', motivo: null }, alvosProposta: true,
 }
 
@@ -74,6 +74,8 @@ describe('Veredito do topo — só informa; aponta a Configuração para mudar o
   it('tempo na fase diz quando o início é estimado', () => {
     expect(tempoNaFase(base)).toBe('há 16 dias (12 úteis)')
     expect(tempoNaFase({ ...base, inicioEstimado: true })).toMatch(/estimado/)
+    expect(tempoNaFase({ ...base, diasPausados: 5 })).toBe('há 16 dias (12 úteis); 5 dias pausados pelo teto da conta não contam')
+    expect(tempoNaFase({ ...base, diasPausados: 1.5 })).toMatch(/1,5 dias pausados/)
     expect(tempoNaFase({ ...base, inicioFase: null })).toMatch(/sem atividade/)
   })
 })

@@ -1,14 +1,14 @@
 import {
   avaliarFase, diasUteisEntre, ehModoAgente, faseDoModo, indisponivel, inicioDaFasePorAuditoria, janelaDaFase, medido,
-  pausadoPeloTeto, semanaDaData, deslocarSemana, somarConcordancia, taxaSombra, taxasDaSugestao,
+  msPausadosPeloTeto, pausadoPeloTeto, semanaDaData, deslocarSemana, somarConcordancia, somarPlayground, taxaSombra, taxasDaSugestao,
   CONVERSAO_MATURACAO_DIAS, CRITERIOS_RUBRICA, FONTES_DA_FASE, LIMIAR_SIMILARIDADE_SOMBRA, MODO_DA_FASE, ROTULO_FASE,
   type FaseAgente, type FonteMedida, type GoLiveDto, type MedidasFase, type ModoAgente, type MotivoAmostra,
-  type MudancaDeConfig, type RevisaoParaSomar,
+  type MudancaDeConfig, type MudancaDeTeto, type RevisaoParaSomar,
 } from '@geracrm/shared'
 import { emSavepoint, type Sql } from '../../../db/index.js'
 import { momentoNoFuso } from '../../plataforma/fuso.js'
 import { metricaSlaHandoff } from '../sla-metrica.js'
-import { conferenciaVigente, decisaoTemCritica } from './homologacao.js'
+import { conferenciaVigente, cortePlayground, decisaoTemCritica, entradasPlayground } from './homologacao.js'
 import { lerFatosDoModo, modoEfetivoDoCanal } from './pipeline/modo-efetivo.js'
 
 /**
@@ -55,27 +55,33 @@ export const COLETORES: Coletores = {
   async douradas(tx, c) {
     const conf = await conferenciaVigente(tx, c.canalId, 'douradas', c.agora)
     if (!conf) return semConferencia('das conversas douradas', 'Rode pnpm agente:avaliar e registre cenários e CRÍTICAs no painel (administrador).')
-    return medido({ cenarios: Number(conf.resultado['cenarios']), criticas: Number(conf.resultado['criticas']), em: conf.atualizadoEm.toISOString() })
+    return medido({
+      cenarios: Number(conf.resultado['cenarios']), criticas: Number(conf.resultado['criticas']), em: conf.atualizadoEm.toISOString(), por: conf.por,
+    })
   },
 
   async smoke(tx, c) {
     const conf = await conferenciaVigente(tx, c.canalId, 'smoke', c.agora)
     if (!conf) return semConferencia('do smoke', 'Rode pnpm agente:smoke e registre o resultado no painel (administrador).')
-    return medido({ ok: conf.resultado['ok'] === true, em: conf.atualizadoEm.toISOString() })
+    return medido({ ok: conf.resultado['ok'] === true, em: conf.atualizadoEm.toISOString(), por: conf.por })
   },
 
   async playground(tx, c) {
-    // Acumulado nos reinícios (0109) + a conversa de teste ainda aberta.
-    const conf = await conferenciaVigente(tx, c.canalId, 'playground', c.agora)
-    const aberta = await tx<{ conversa_id: string; guardrails: unknown }[]>`
-      SELECT d.conversa_id, d.guardrails FROM agente_decisao d
+    // Uma entrada por reinício (0109) + a conversa de teste ainda aberta (como se reiniciasse agora).
+    // Só depois do corte (última publicação de playbook ou mudança na configuração do número).
+    const corte = await cortePlayground(tx, c.canalId, c.agora)
+    const entradas = await entradasPlayground(tx, c.canalId)
+    const aberta = await tx<{ guardrails: unknown; criado_em: Date }[]>`
+      SELECT d.guardrails, d.criado_em FROM agente_decisao d
        WHERE d.tenant_id = tenant_atual() AND d.canal_id = ${c.canalId} AND d.modo = 'simulacao'
+         AND d.criado_em < ${c.agora}
+         ${corte ? tx`AND d.criado_em >= ${corte}` : tx``}
        ORDER BY d.criado_em DESC LIMIT 500`
-    const conversasAbertas = new Set(aberta.map((d) => d.conversa_id)).size
-    return medido({
-      conversas: Number(conf?.resultado['conversas'] ?? 0) + conversasAbertas,
-      criticas: Number(conf?.resultado['criticas'] ?? 0) + aberta.filter((d) => decisaoTemCritica(d.guardrails)).length,
-    })
+    const todas = aberta.length > 0
+      ? [...entradas, { em: c.agora.toISOString(), turnos: aberta.length, criticas: aberta.filter((d) => decisaoTemCritica(d.guardrails)).length }]
+      : entradas
+    const soma = somarPlayground(todas, { agora: c.agora.toISOString(), corte: corte ? corte.toISOString() : null })
+    return medido({ ...soma, corte: corte ? corte.toISOString() : null })
   },
 
   async volume(tx, c) {
@@ -185,24 +191,27 @@ export const COLETORES: Coletores = {
     // Do cliente falar até o cliente ler: 1ª mensagem do agente (mensagens_saida_ids)
     // − a mensagem mais antiga que o turno respondeu (mensagens_ids), na 1ª resposta
     // enviada de cada sessão. Inclui o debounce da fila — é o que o cliente sente.
-    // `mensagem` é particionada por criado_em: a busca fica limitada a ±1 dia da decisão.
-    const [r] = await tx<{ p95: number | null; n: number }[]>`
-      SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY s.ms)::int AS p95, count(*)::int AS n
+    // `mensagem` é particionada por criado_em: a busca fica entre 7 dias antes e 1 dia depois
+    // da decisão (o cliente pode ter falado dias antes de um turno reagendado). Sessão cujas
+    // mensagens não aparecem conta em `semMedida`, à vista na tela.
+    const [r] = await tx<{ p95: number | null; n: number; sem: number }[]>`
+      SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY s.ms) FILTER (WHERE s.ms IS NOT NULL AND s.ms >= 0)::int AS p95,
+             count(*) FILTER (WHERE s.ms IS NOT NULL AND s.ms >= 0)::int AS n,
+             count(*) FILTER (WHERE s.ms IS NULL OR s.ms < 0)::int AS sem
         FROM (SELECT DISTINCT ON (d.sessao_id)
                      EXTRACT(EPOCH FROM (
                        (SELECT min(m.criado_em) FROM mensagem m
                          WHERE m.tenant_id = d.tenant_id AND m.conversa_id = d.conversa_id AND m.id = ANY(d.mensagens_saida_ids)
-                           AND m.criado_em BETWEEN d.criado_em - interval '1 day' AND d.criado_em + interval '1 day')
+                           AND m.criado_em BETWEEN d.criado_em - interval '7 days' AND d.criado_em + interval '1 day')
                      - (SELECT min(m.criado_em) FROM mensagem m
                          WHERE m.tenant_id = d.tenant_id AND m.conversa_id = d.conversa_id AND m.id = ANY(d.mensagens_ids)
-                           AND m.criado_em BETWEEN d.criado_em - interval '1 day' AND d.criado_em + interval '1 day')
+                           AND m.criado_em BETWEEN d.criado_em - interval '7 days' AND d.criado_em + interval '1 day')
                      )) * 1000 AS ms
                 FROM agente_decisao d
                WHERE d.tenant_id = tenant_atual() AND d.canal_id = ${c.canalId} AND d.modo = 'autonomo'
                  AND d.enviada AND d.sessao_id IS NOT NULL AND d.criado_em >= ${c.desde} AND d.criado_em < ${c.agora}
-               ORDER BY d.sessao_id, d.criado_em) s
-       WHERE s.ms IS NOT NULL AND s.ms >= 0`
-    return medido({ p95Ms: r?.p95 ?? null, amostras: r?.n ?? 0 })
+               ORDER BY d.sessao_id, d.criado_em) s`
+    return medido({ p95Ms: r?.p95 ?? null, amostras: r?.n ?? 0, semMedida: r?.sem ?? 0 })
   },
 
   async handoff(tx, c) {
@@ -293,7 +302,7 @@ export const COLETORES: Coletores = {
 
   async slaHandoff(tx, c) {
     // A MESMA régua de /v1/performance (`metricaSlaHandoff`), só deste número.
-    return medido(await metricaSlaHandoff(tx, { desde: c.desde, canalId: c.canalId }))
+    return medido(await metricaSlaHandoff(tx, { desde: c.desde, agora: c.agora, canalId: c.canalId }))
   },
 }
 
@@ -341,11 +350,31 @@ async function inicioDaFase(
 }
 
 /**
+ * Quanto do tempo desde o início da fase o teto do tenant pausou o número
+ * (kill switch abaixo do modo dele): esse tempo não conta como dias na fase.
+ */
+async function msPausados(
+  tx: Sql, p: { inicio: Date; agora: Date; modoNumero: ModoAgente; tetoAtual: ModoAgente | null },
+): Promise<number> {
+  const linhas = await tx<{ criado_em: Date; dados: { antes?: { modoMaximo?: unknown } } }[]>`
+    SELECT criado_em, dados FROM auditoria
+     WHERE tenant_id = tenant_atual() AND entidade = 'agente_tenant' AND acao = 'agente.config_alterada'
+       AND criado_em > ${p.inicio} AND criado_em <= ${p.agora}
+     ORDER BY criado_em DESC LIMIT ${MAX_MUDANCAS_AUDITADAS}`
+  // Sem linha em agente_tenant o teto é autônomo (= sem teto): o PUT audita 'autonomo' nesse caso.
+  const mudancas: MudancaDeTeto[] = linhas.map((l) => {
+    const antes = l.dados.antes?.modoMaximo
+    return { em: new Date(l.criado_em).toISOString(), antes: ehModoAgente(antes) ? antes : null }
+  })
+  return msPausadosPeloTeto({ inicio: p.inicio.toISOString(), agora: p.agora.toISOString(), modoNumero: p.modoNumero, tetoAtual: p.tetoAtual, mudancas })
+}
+
+/**
  * O painel de go-live de um número. null = número inexistente (ou de outro
- * tenant: invisível pelo RLS).
+ * tenant: invisível pelo RLS). `podeConferir` vem de quem pede (admin).
  */
 export async function coletarGoLive(
-  tx: Sql, p: { canalId: string; agora: Date }, coletores: Coletores = COLETORES,
+  tx: Sql, p: { canalId: string; agora: Date; podeConferir?: boolean }, coletores: Coletores = COLETORES,
 ): Promise<GoLiveDto | null> {
   const [canal] = await tx<{ id: string; fuso: string | null }[]>`
     SELECT cc.id, (SELECT fuso FROM tenant WHERE id = tenant_atual()) AS fuso
@@ -362,8 +391,11 @@ export async function coletarGoLive(
 
   const modo = MODO_DA_FASE[fase]
   const { inicio, estimado } = await inicioDaFase(tx, { canalId: p.canalId, modoNumero, recorte, modo, agora: p.agora })
-  const dias = inicio ? Math.max(0, Math.floor((p.agora.getTime() - inicio.getTime()) / DIA_MS)) : 0
-  const diasUteis = inicio ? diasUteisEntre(momentoNoFuso(inicio, canal.fuso).data, momentoNoFuso(p.agora, canal.fuso).data) : 0
+  // Dias pausados pelo teto não contam: a contagem anda como se a fase tivesse começado depois.
+  const pausadoMs = inicio ? await msPausados(tx, { inicio, agora: p.agora, modoNumero, tetoAtual: fatos.modoTenant }) : 0
+  const inicioEfetivo = inicio ? new Date(inicio.getTime() + pausadoMs) : null
+  const dias = inicioEfetivo ? Math.max(0, Math.floor((p.agora.getTime() - inicioEfetivo.getTime()) / DIA_MS)) : 0
+  const diasUteis = inicioEfetivo ? diasUteisEntre(momentoNoFuso(inicioEfetivo, canal.fuso).data, momentoNoFuso(p.agora, canal.fuso).data) : 0
   const janela = janelaDaFase(fase, dias)
   const ctx: ContextoColeta = {
     canalId: p.canalId, agora: p.agora, fuso: canal.fuso, modo,
@@ -389,6 +421,7 @@ export async function coletarGoLive(
     dias, diasUteis, inicioFase: inicio ? inicio.toISOString() : null, inicioEstimado: estimado,
     janelaDias: janela.dias,
     modoNumero, pausadoPeloTeto: pausadoPeloTeto(modoNumero, fatos.modoTenant),
+    diasPausados: Math.round((pausadoMs / DIA_MS) * 10) / 10, podeConferir: p.podeConferir ?? false,
     modoAgora: { modo: agora.modo, origem: agora.origem, motivo: agora.motivo },
     alvosProposta: true,
   }

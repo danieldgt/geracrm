@@ -28,7 +28,7 @@ import {
 } from './playbook/simulacao.js'
 import { ligacoesPadrao } from './ferramentas/ligacoes.js'
 import { sincronizarPoliticas } from './conhecimento/indexador.js'
-import { acumularPlayground, atorSemCriar } from './homologacao.js'
+import { atorSemCriar, registrarReinicioPlayground } from './homologacao.js'
 
 /**
  * A superfície do AGENTE VENDEDOR: configurar (modo, persona, alçada, regras,
@@ -683,9 +683,12 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
            WHERE cv.tenant_id = tenant_atual() AND cv.canal_id = ${req.params.id}
              AND ie.sistema = 'simulacao' AND ie.id_externo = ${`sim:${req.params.id}`}`
         if (!c) return 0
-        // P19: a conversa testada entra na conta da homologação ANTES de as decisões sumirem.
-        await acumularPlayground(tx, { canalId: req.params.id, conversaId: c.id, atorId: await atorSemCriar(tx, subDoUsuario(req)) })
-        await tx`DELETE FROM agente_decisao WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`
+        // P19: o reinício vira uma entrada da homologação, contada das decisões que ele mesmo apaga.
+        const decisoes = await tx<{ guardrails: unknown }[]>`
+          DELETE FROM agente_decisao WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id} RETURNING guardrails`
+        await registrarReinicioPlayground(tx, {
+          canalId: req.params.id, apagadas: decisoes, atorId: await atorSemCriar(tx, subDoUsuario(req)), agora: new Date(),
+        })
         await tx`DELETE FROM agente_sessao WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`
         await tx`DELETE FROM pedido WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`
         const r = await tx`DELETE FROM mensagem WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`

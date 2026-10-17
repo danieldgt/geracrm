@@ -6,14 +6,17 @@
 --     douradas   — a última rodada das conversas douradas (evals P15), DIGITADA
 --                  por um admin no painel: {cenarios, criticas};
 --     smoke      — o último smoke do provedor, digitado: {ok};
---     playground — ACUMULADO pelo sistema a cada "Reiniciar" da simulação
---                  (DELETE /v1/canais/:id/agente/simular), antes de apagar as
---                  decisões: {conversas, criticas, desde}. A CRÍTICA vem das
---                  marcas do turno pela régua da P12 (`avaliacaoDasMarcas`).
---     Uma linha por (tenant, número, item): é o estado VIGENTE da conferência.
---     A trilha de quem registrou o quê fica na `auditoria`
---     (`agente.go_live_conferencia`), como as demais mudanças de governança.
---     O painel só considera a linha atualizada nos últimos 30 dias.
+--     playground — gravado pelo sistema a cada "Reiniciar" da simulação
+--                  (DELETE /v1/canais/:id/agente/simular): UMA ENTRADA por
+--                  reinício, {entradas: [{em, turnos, criticas}]}, contada das
+--                  decisões que o próprio reinício apaga (DELETE … RETURNING).
+--                  A CRÍTICA vem das marcas do turno pela régua da P12
+--                  (`avaliacaoDasMarcas`). A soma usa só os últimos 30 dias depois
+--                  da última publicação de playbook ou mudança de configuração
+--                  do número, e só conversa com ≥ 3 decisões.
+--     Uma linha por (tenant, número, item). douradas/smoke: a conferência
+--     VIGENTE (vale 30 dias); a trilha de quem registrou o quê fica na
+--     `auditoria` (`agente.go_live_conferencia`).
 --
 --   Índice parcial em `pedido` por conversa, só dos pedidos que contam como
 --   conversão (confirmado ou efetivado): o painel testa EXISTS por conversa da
@@ -43,8 +46,8 @@ CREATE TABLE agente_homologacao (
 SELECT aplicar_rls('agente_homologacao');
 
 COMMENT ON TABLE agente_homologacao IS
-    'Conferência vigente de homologação do agente por número (P19): douradas e smoke '
-    'digitadas por admin; playground acumulado nos reinícios da simulação. Vale por 30 dias.';
+    'Homologação do agente por número (P19): douradas e smoke digitadas por admin (valem 30 dias); '
+    'playground com uma entrada por reinício da simulação.';
 
 CREATE INDEX pedido_conversao_por_conversa
     ON pedido (tenant_id, conversa_id)

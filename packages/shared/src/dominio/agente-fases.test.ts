@@ -2,15 +2,15 @@ import { describe, it, expect } from 'vitest'
 import {
   avaliarFase, faseDoModo, pausadoPeloTeto, proximaFase, faseAnterior, diasUteisEntre, janelaDaFase, formatarPct, formatarCentavos,
   medido, indisponivel, wilson, diferencaNewcombe, amostraParaNaoInferioridade, julgarConversao, inicioDaFasePorAuditoria,
-  corpoConferenciaGoLive, CRITERIOS_DA_FASE, FONTES_DA_FASE, FASES_AGENTE,
+  corpoConferenciaGoLive, somarPlayground, msPausadosPeloTeto, CRITERIOS_DA_FASE, FONTES_DA_FASE, FASES_AGENTE,
   type EntradaFase, type MedidasFase, type FaseAgente, type MudancaDeConfig,
 } from './agente-fases.js'
 
 /** Medidas que cumprem TODOS os alvos, com amostra suficiente — cada caso estraga uma. */
 const BOAS: MedidasFase = {
-  douradas: medido({ cenarios: 25, criticas: 0, em: '2026-10-15T12:00:00.000Z' }),
-  smoke: medido({ ok: true, em: '2026-10-15T12:00:00.000Z' }),
-  playground: medido({ conversas: 30, criticas: 0 }),
+  douradas: medido({ cenarios: 25, criticas: 0, em: '2026-10-15T12:00:00.000Z', por: 'Ada' }),
+  smoke: medido({ ok: true, em: '2026-10-15T12:00:00.000Z', por: null }),
+  playground: medido({ conversas: 30, criticas: 0, corte: null }),
   volume: medido({ turnos: 150, conversas: 50 }),
   criticas: medido(0),
   notaJuiz: medido({ media: 4.2, avaliadas: 40 }),
@@ -19,7 +19,7 @@ const BOAS: MedidasFase = {
   custoPorConversa: medido({ centavos: 150, conversas: 50, juizCentavos: 30 }),
   numerosBloqueados: medido({ turnos: 100, comBloqueio: 2 }),
   sugestoes: medido({ geradas: 100, usadas: 50, taxaUso: 0.5, taxaSemEdicao: 0.7 }),
-  latenciaPrimeira: medido({ p95Ms: 6000, amostras: 80 }),
+  latenciaPrimeira: medido({ p95Ms: 6000, amostras: 80, semMedida: 0 }),
   handoff: medido({ conversas: 100, comHandoff: 10 }),
   optOut: medido({ conversas: 100, comOptOut: 1 }),
   // ~4950 por coorte é o poder de 80% para −2 p.p. com p = 20%.
@@ -112,11 +112,11 @@ describe('avaliarFase — com tudo nos alvos', () => {
 
 describe('avaliarFase — REPROVA só com medida e amostra (ok = false)', () => {
   it.each<[FaseAgente, string, Partial<MedidasFase>]>([
-    ['homologacao', 'douradas', { douradas: medido({ cenarios: 24, criticas: 0, em: '2026-10-15T00:00:00Z' }) }],
-    ['homologacao', 'douradas', { douradas: medido({ cenarios: 25, criticas: 1, em: '2026-10-15T00:00:00Z' }) }],
-    ['homologacao', 'smoke', { smoke: medido({ ok: false, em: '2026-10-15T00:00:00Z' }) }],
-    ['homologacao', 'playground_conversas', { playground: medido({ conversas: 29, criticas: 0 }) }],
-    ['homologacao', 'playground_critica', { playground: medido({ conversas: 30, criticas: 1 }) }],
+    ['homologacao', 'douradas', { douradas: medido({ cenarios: 24, criticas: 0, em: '2026-10-15T00:00:00Z', por: null }) }],
+    ['homologacao', 'douradas', { douradas: medido({ cenarios: 25, criticas: 1, em: '2026-10-15T00:00:00Z', por: null }) }],
+    ['homologacao', 'smoke', { smoke: medido({ ok: false, em: '2026-10-15T00:00:00Z', por: null }) }],
+    ['homologacao', 'playground_conversas', { playground: medido({ conversas: 29, criticas: 0, corte: null }) }],
+    ['homologacao', 'playground_critica', { playground: medido({ conversas: 30, criticas: 1, corte: null }) }],
     ['sombra', 'turnos', { volume: medido({ turnos: 149, conversas: 50 }) }],
     ['sombra', 'conversas', { volume: medido({ turnos: 150, conversas: 49 }) }],
     ['sombra', 'similaridade_sombra', { similaridadeSombra: medido({ comparados: 100, taxaAcima: 0.59 }) }],
@@ -129,7 +129,7 @@ describe('avaliarFase — REPROVA só com medida e amostra (ok = false)', () => 
     ['assistido', 'sugestoes', { sugestoes: medido({ geradas: 99, usadas: 50, taxaUso: 0.5, taxaSemEdicao: 0.7 }) }],
     ['assistido', 'uso_sugestao', { sugestoes: medido({ geradas: 100, usadas: 39, taxaUso: 0.39, taxaSemEdicao: 0.9 }) }],
     ['assistido', 'sem_edicao', { sugestoes: medido({ geradas: 100, usadas: 50, taxaUso: 0.5, taxaSemEdicao: 0.69 }) }],
-    ['autonomo_recorte', 'p95_primeira', { latenciaPrimeira: medido({ p95Ms: 6001, amostras: 80 }) }],
+    ['autonomo_recorte', 'p95_primeira', { latenciaPrimeira: medido({ p95Ms: 6001, amostras: 80, semMedida: 0 }) }],
     ['autonomo_recorte', 'handoff', { handoff: medido({ conversas: 100, comHandoff: 9 }) }],
     ['autonomo_recorte', 'handoff', { handoff: medido({ conversas: 100, comHandoff: 41 }) }],
     ['autonomo_recorte', 'opt_out', { optOut: medido({ conversas: 100, comOptOut: 2 }) }],
@@ -170,7 +170,7 @@ describe('avaliarFase — REPROVA só com medida e amostra (ok = false)', () => 
 
 describe('A1 — falta de AMOSTRA é "sem medida" (ok = null) com motivo, nunca reprovação', () => {
   it.each<[FaseAgente, string, Partial<MedidasFase>, RegExp]>([
-    ['homologacao', 'playground_critica', { playground: medido({ conversas: 0, criticas: 0 }) }, /Nenhuma conversa/],
+    ['homologacao', 'playground_critica', { playground: medido({ conversas: 0, criticas: 0, corte: null }) }, /Nenhuma conversa/],
     ['sombra', 'similaridade_sombra', { similaridadeSombra: medido({ comparados: 0, taxaAcima: null }) }, /nada para comparar/],
     ['sombra', 'nota_juiz', { notaJuiz: medido({ media: null, avaliadas: 0 }) }, /Nenhuma conversa avaliada/],
     ['sombra', 'concordancia', { concordancia: medido({ valor: 1, comparaveis: 19, falsosNegativosCritica: 0 }) }, /19 de 20/],
@@ -178,11 +178,10 @@ describe('A1 — falta de AMOSTRA é "sem medida" (ok = null) com motivo, nunca 
     ['sombra', 'numeros_bloqueados', { numerosBloqueados: medido({ turnos: 0, comBloqueio: 0 }) }, /Nenhum turno/],
     ['assistido', 'uso_sugestao', { sugestoes: medido({ geradas: 0, usadas: 0, taxaUso: null, taxaSemEdicao: null }) }, /Nenhuma sugestão/],
     ['assistido', 'sem_edicao', { sugestoes: medido({ geradas: 100, usadas: 49, taxaUso: 0.49, taxaSemEdicao: 1 }) }, /49 de 50/],
-    ['autonomo_recorte', 'p95_primeira', { latenciaPrimeira: medido({ p95Ms: null, amostras: 0 }) }, /Nenhuma 1ª resposta/],
+    ['autonomo_recorte', 'p95_primeira', { latenciaPrimeira: medido({ p95Ms: null, amostras: 0, semMedida: 0 }) }, /Nenhuma 1ª resposta/],
     ['autonomo_recorte', 'handoff', { handoff: medido({ conversas: 0, comHandoff: 0 }) }, /Nenhuma conversa/],
     ['autonomo_recorte', 'opt_out', { optOut: medido({ conversas: 0, comOptOut: 0 }) }, /Nenhuma conversa/],
     ['autonomo_recorte', 'conversao', { conversao: medido({ agente: { conversas: 40, convertidas: 8 }, humano: { conversas: 0, convertidas: 0 } }) }, /coorte madura/],
-    ['autonomo_recorte', 'conversao', { conversao: medido({ agente: { conversas: 40, convertidas: 8 }, humano: { conversas: 40, convertidas: 8 } }) }, /poder de 80%/],
     ['autonomo_recorte', 'pedido_errado', { pedidosErrados: medido({ confirmados: 0, cancelados: 0 }) }, /Nenhum pedido/],
     ['autonomo_recorte', 'sla_handoff', { slaHandoff: medido({ medidos: 0, cumpridos: 0, estourados: 0, pendentes: 3, respondidos: 0, pctCumprido: null }) }, /3 ainda no prazo/],
   ])('%s · %s → sem medida', (fase, id, m, motivo) => {
@@ -201,7 +200,7 @@ describe('A1 — falta de AMOSTRA é "sem medida" (ok = null) com motivo, nunca 
 
   it('amplo com todas as amostras vazias → mantém', () => {
     const r = avaliarFase(entrada('autonomo_amplo', {
-      criticas: medido(0), latenciaPrimeira: medido({ p95Ms: null, amostras: 0 }), handoff: medido({ conversas: 0, comHandoff: 0 }),
+      criticas: medido(0), latenciaPrimeira: medido({ p95Ms: null, amostras: 0, semMedida: 0 }), handoff: medido({ conversas: 0, comHandoff: 0 }),
       optOut: medido({ conversas: 0, comOptOut: 0 }), conversao: medido({ agente: { conversas: 0, convertidas: 0 }, humano: { conversas: 0, convertidas: 0 } }),
       pedidosErrados: medido({ confirmados: 0, cancelados: 0 }),
       slaHandoff: medido({ medidos: 0, cumpridos: 0, estourados: 0, pendentes: 0, respondidos: 0, pctCumprido: null }),
@@ -247,6 +246,61 @@ describe('Degradação: fonte indisponível NÃO conta como cumprida', () => {
   })
 })
 
+describe('Final A — conversão sem poder estatístico NÃO bloqueia: cumpre com alerta', () => {
+  it('recorte com 200 conversas por coorte e diferença pequena → pode avançar, com alerta mostrando limite inferior e n', () => {
+    const r = avaliarFase(entrada('autonomo_recorte', {
+      ...BOAS, conversao: medido({ agente: { conversas: 200, convertidas: 38 }, humano: { conversas: 200, convertidas: 40 } }),
+    }))
+    const c = r.criterios.find((x) => x.id === 'conversao')!
+    expect(c.ok).toBe(true)
+    expect(c.alerta).toMatch(/Amostra sem poder para −2,0 p\.p\.; leitura indicativa \(limite inferior −?\d+,\d p\.p\., n 200 × 200/)
+    expect(r).toMatchObject({ podeAvancar: true, recomendacao: 'avancar', pendencias: { alertas: ['conversao'], reprovados: [] } })
+  })
+
+  it('nenhum texto da conversão tem "p.p.." (ponto duplo)', () => {
+    for (const [a, h] of [[[200, 38], [200, 40]], [[300, 15], [300, 90]], [[6000, 1190], [6000, 1200]]] as const) {
+      const j = julgarConversao({ conversas: a[0], convertidas: a[1] }, { conversas: h[0], convertidas: h[1] })
+      for (const t of [j.valor, j.motivo, j.alerta]) expect(t ?? '').not.toMatch(/p\.p\.\./)
+    }
+    const alvo = CRITERIOS_DA_FASE.autonomo_recorte.map((f) => f(entrada('autonomo_recorte'))).find((c) => c.id === 'conversao')!.alvo
+    expect(alvo).not.toMatch(/p\.p\.\./)
+  })
+})
+
+describe('Final B — playground: entradas por reinício, corte e mínimo de 3 decisões', () => {
+  const agora = '2026-10-17T12:00:00.000Z'
+  const e = (dias: number, turnos: number, criticas: number) => ({ em: new Date(Date.parse(agora) - dias * 86_400_000).toISOString(), turnos, criticas })
+  it('conversa com < 3 decisões não conta; CRÍTICA conta; mais de 30 dias não conta', () => {
+    expect(somarPlayground([e(1, 3, 0), e(2, 2, 1), e(31, 5, 1)], { agora, corte: null })).toEqual({ conversas: 1, criticas: 1 })
+  })
+  it('CRÍTICA antiga deixa de contar depois do corte (nova publicação do playbook)', () => {
+    const entradas = [e(5, 4, 1), e(1, 4, 0)]
+    expect(somarPlayground(entradas, { agora, corte: null })).toEqual({ conversas: 2, criticas: 1 })
+    expect(somarPlayground(entradas, { agora, corte: new Date(Date.parse(agora) - 3 * 86_400_000).toISOString() })).toEqual({ conversas: 1, criticas: 0 })
+  })
+})
+
+describe('Baixa — dias pausados pelo teto não contam na fase', () => {
+  const inicio = '2026-10-01T00:00:00.000Z', agora = '2026-10-21T00:00:00.000Z'
+  const D = 86_400_000
+  it('pausa de 5 dias no meio (teto sombra sobre número autônomo) → 5 dias', () => {
+    // 10/10 o teto foi a sombra (antes: sem teto); 15/10 voltou (antes: sombra).
+    const ms = msPausadosPeloTeto({ inicio, agora, modoNumero: 'autonomo', tetoAtual: null, mudancas: [
+      { em: '2026-10-15T00:00:00.000Z', antes: 'sombra' }, { em: '2026-10-10T00:00:00.000Z', antes: null },
+    ] })
+    expect(ms).toBe(5 * D)
+  })
+  it('pausado até agora conta até agora; teto igual ou acima do número não pausa', () => {
+    expect(msPausadosPeloTeto({ inicio, agora, modoNumero: 'autonomo', tetoAtual: 'sombra', mudancas: [{ em: '2026-10-18T00:00:00.000Z', antes: null }] })).toBe(3 * D)
+    expect(msPausadosPeloTeto({ inicio, agora, modoNumero: 'sombra', tetoAtual: 'sombra', mudancas: [] })).toBe(0)
+  })
+  it('pausa que começou antes da fase só conta a parte dentro dela', () => {
+    expect(msPausadosPeloTeto({ inicio, agora, modoNumero: 'assistido', tetoAtual: null, mudancas: [
+      { em: '2026-10-03T00:00:00.000Z', antes: 'sombra' }, { em: '2026-09-20T00:00:00.000Z', antes: null },
+    ] })).toBe(2 * D)
+  })
+})
+
 describe('M2 — estatística da conversão', () => {
   it('Wilson: 0 de 10 não dá intervalo degenerado; n = 0 é [0, 1]', () => {
     const w = wilson(0, 10)
@@ -271,6 +325,16 @@ describe('M2 — estatística da conversão', () => {
     const r = julgarConversao({ conversas: 300, convertidas: 15 }, { conversas: 300, convertidas: 90 })
     expect(r.ok).toBe(false)
     expect(r.motivo).toMatch(/viés de seleção/)
+  })
+
+  it('critério manual mostra quem declarou e quando', () => {
+    const c = avaliarFase(entrada('homologacao')).criterios.find((x) => x.id === 'douradas')!
+    expect(c.motivo).toBe('Declarado por Ada em 15/10 (vale 30 dias).')
+  })
+
+  it('p95 expõe quantas sessões ficaram sem medida', () => {
+    const c = avaliarFase(entrada('autonomo_recorte', { ...BOAS, latenciaPrimeira: medido({ p95Ms: 2000, amostras: 10, semMedida: 2 }) })).criterios.find((x) => x.id === 'p95_primeira')!
+    expect(c.motivo).toMatch(/2 sessões ficaram sem medida/)
   })
 
   it('não-inferior com poder: cumpre, e ainda avisa do viés', () => {

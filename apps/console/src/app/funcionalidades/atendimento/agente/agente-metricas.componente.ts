@@ -107,7 +107,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
             </ul>
             }
 
-            @if (g.fase === 'homologacao') {
+            @if (g.fase === 'homologacao' && g.podeConferir) {
               <section class="conferencia" aria-labelledby="conf-titulo">
                 <h4 id="conf-titulo" class="sub">Registrar conferência <span class="escopo">· administrador</span></h4>
                 <p class="dica">Os evals e o smoke rodam por script. Registre aqui a última rodada; vale 30 dias. O playground conta sozinho a cada "Reiniciar".</p>

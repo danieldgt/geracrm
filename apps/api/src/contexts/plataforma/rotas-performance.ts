@@ -72,7 +72,8 @@ export async function rotasPerformance(app: FastifyInstance): Promise<void> {
            ORDER BY count(*) DESC LIMIT 10`
 
         // A régua do SLA do handoff é UMA, compartilhada com o painel de fase (P19).
-        const slaHandoff = await metricaSlaHandoff(tx, { desde: new Date(Date.now() - dias * 86_400_000) })
+        const agora = new Date()
+        const slaHandoff = await metricaSlaHandoff(tx, { desde: new Date(agora.getTime() - dias * 86_400_000), agora })
         const [cfg] = await tx<{ n: number; min: number | null; max: number | null }[]>`
           SELECT count(*)::int AS n, min(sla_minutos) AS min, max(sla_minutos) AS max
             FROM atendimento_sla_config WHERE tenant_id = tenant_atual()`

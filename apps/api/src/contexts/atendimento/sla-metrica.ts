@@ -18,20 +18,24 @@ import { respostaHumanaDoAtendimento } from './sla-handoff.js'
  *    pelo carimbo do worker: cobre o encerrado antes da passada e o respondido
  *    nos últimos 30 s. Sem resposta e com o prazo vencido conta como estourado
  *    mesmo que o worker não tenha passado.
+ * ⚠️ Janela [desde, agora) e "venceu?" contra o `agora` de quem chama — não o
+ *    relógio do banco: a mesma chamada dá o mesmo número no teste e na tela.
  * Sob RLS do tenant (tx de `req.comTenant`).
  */
-export async function metricaSlaHandoff(tx: Sql, p: { readonly desde: Date; readonly canalId?: string | null }): Promise<MetricaSlaHandoff> {
+export async function metricaSlaHandoff(
+  tx: Sql, p: { readonly desde: Date; readonly agora: Date; readonly canalId?: string | null },
+): Promise<MetricaSlaHandoff> {
   const [h] = await tx<{ medidos: number; cumpridos: number; estourados: number; pendentes: number; respondidos: number }[]>`
-    SELECT count(*) FILTER (WHERE resp IS NOT NULL OR estourado_em IS NOT NULL OR vence <= now())::int AS medidos,
+    SELECT count(*) FILTER (WHERE resp IS NOT NULL OR estourado_em IS NOT NULL OR vence <= ${p.agora})::int AS medidos,
            count(*) FILTER (WHERE resp IS NOT NULL AND resp <= vence)::int AS cumpridos,
            count(*) FILTER (WHERE (resp IS NOT NULL AND resp > vence)
-                               OR (resp IS NULL AND (estourado_em IS NOT NULL OR vence <= now())))::int AS estourados,
-           count(*) FILTER (WHERE resp IS NULL AND estourado_em IS NULL AND vence > now() AND estado <> 'encerrado')::int AS pendentes,
+                               OR (resp IS NULL AND (estourado_em IS NOT NULL OR vence <= ${p.agora})))::int AS estourados,
+           count(*) FILTER (WHERE resp IS NULL AND estourado_em IS NULL AND vence > ${p.agora} AND estado <> 'encerrado')::int AS pendentes,
            count(*) FILTER (WHERE resp IS NOT NULL)::int AS respondidos
       FROM (SELECT a.sla_vence_em AS vence, a.sla_estourado_em AS estourado_em, a.estado,
                    coalesce(a.sla_respondido_em, ${respostaHumanaDoAtendimento(tx)}) AS resp
               FROM atendimento a
-             WHERE a.tenant_id = tenant_atual() AND a.sla_vence_em IS NOT NULL AND a.sla_inicio_em >= ${p.desde}
+             WHERE a.tenant_id = tenant_atual() AND a.sla_vence_em IS NOT NULL AND a.sla_inicio_em >= ${p.desde} AND a.sla_inicio_em < ${p.agora}
                ${p.canalId ? tx`AND a.canal_id = ${p.canalId}` : tx``}) s`
   const m = {
     medidos: h?.medidos ?? 0, cumpridos: h?.cumpridos ?? 0, estourados: h?.estourados ?? 0,

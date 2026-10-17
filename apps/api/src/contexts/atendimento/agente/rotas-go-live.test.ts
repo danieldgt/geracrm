@@ -62,6 +62,22 @@ async function auditou(t: string, canal: string, dias: number, antes: Record<str
                      ${JSON.stringify({ antes, depois, campos: Object.keys({ ...antes, ...depois }).sort(), criacao })}::text::jsonb,
                      now() - make_interval(days => ${dias}))`
 }
+/** Mudança auditada do teto do tenant (kill switch), como o PUT /v1/agente/tenant grava. */
+async function tetoMudouHa(t: string, dias: number, antes: string, depois: string): Promise<void> {
+  await dono`INSERT INTO auditoria (tenant_id, id, acao, entidade, dados, criado_em)
+             VALUES (${t}, ${crypto.randomUUID()}, 'agente.config_alterada', 'agente_tenant',
+                     ${JSON.stringify({ antes: { modoMaximo: antes }, depois: { modoMaximo: depois }, campos: ['modo_maximo'] })}::text::jsonb,
+                     now() - make_interval(days => ${dias}))`
+}
+
+/** Uma versão de playbook publicada agora para o número (P17). */
+async function publicouPlaybook(t: string, canal: string): Promise<void> {
+  const [n] = await dono<{ n: number }[]>`SELECT coalesce(max(numero), 0)::int + 1 AS n FROM agente_playbook_versao WHERE tenant_id = ${t} AND canal_id = ${canal}`
+  await dono`UPDATE agente_playbook_versao SET arquivada_em = now() WHERE tenant_id = ${t} AND canal_id = ${canal} AND publicada_em IS NOT NULL AND arquivada_em IS NULL`
+  await dono`INSERT INTO agente_playbook_versao (tenant_id, id, canal_id, numero, conteudo, origem, observacao, publicada_em)
+             VALUES (${t}, ${crypto.randomUUID()}, ${canal}, ${n!.n}, '{}'::jsonb, 'manual', 'nova versão do teste', now())`
+}
+
 /** A troca de modo auditada que inicia a fase. */
 const trocouModoHa = (t: string, canal: string, dias: number, de: string, para: string) => auditou(t, canal, dias, { modo: de }, { modo: para })
 
@@ -207,6 +223,11 @@ async function conversaDeSimulacao(t: string, canal: string, decisoes: number, c
 }
 
 async function limpar(t: string): Promise<void> {
+  // Versão publicada é imutável por trigger (P17): a limpeza do teste desliga os triggers, como o playbook.test.ts.
+  await dono.begin(async (tx) => {
+    await tx`SET LOCAL session_replication_role = replica`
+    await tx`DELETE FROM agente_playbook_versao WHERE tenant_id = ${t}`
+  })
   for (const tab of ['agente_homologacao', 'agente_revisao', 'agente_avaliacao', 'agente_decisao', 'agente_sessao', 'atendimento', 'pedido', 'mensagem',
     'conversa', 'contato_identidade_externa', 'contato', 'agente_config', 'agente_tenant', 'auditoria']) await dono.unsafe(`DELETE FROM ${tab} WHERE tenant_id = '${t}'`)
 }
@@ -329,6 +350,20 @@ describe('Fase vem do modo do NÚMERO (P14); o painel só informa', () => {
     expect(b.modoAgora).toMatchObject({ modo: 'sombra', origem: 'tenant' })
   })
 
+  it('dias pausados pelo teto NÃO contam na fase e aparecem descontados', async () => {
+    await config(A, CANAL_A, 'autonomo', RECORTE); await trocouModoHa(A, CANAL_A, 22, 'assistido', 'autonomo')
+    await tetoMudouHa(A, 10, 'autonomo', 'sombra') // pausou
+    await tetoMudouHa(A, 5, 'sombra', 'autonomo')  // liberou
+    const b = (await goLive(A, CANAL_A)).json() as GoLiveDto
+    expect(b).toMatchObject({ fase: 'autonomo_recorte', dias: 17, diasPausados: 5, pausadoPeloTeto: false })
+    expect(crit(b, 'dias')).toMatchObject({ valor: '17 dias', ok: false })
+  })
+
+  it('só admin vê o formulário de conferência (podeConferir)', async () => {
+    expect(((await goLive(A, CANAL_A)).json() as GoLiveDto).podeConferir).toBe(false) // gestora
+    expect(((await goLive(A, CANAL_A, SUB_ADMIN)).json() as GoLiveDto).podeConferir).toBe(true)
+  })
+
   it('M4: mudança auditada que não troca a fase (horário do recorte) não reinicia a contagem', async () => {
     await config(A, CANAL_A, 'autonomo', { ...RECORTE, foraDoRecorte: 'assistido' })
     await trocouModoHa(A, CANAL_A, 25, 'assistido', 'autonomo')
@@ -379,7 +414,7 @@ describe('A2 — homologação medida: conferência digitada (douradas, smoke) e
     expect((await conferir(A, { item: 'smoke', canalId: CANAL_A, ok: true })).statusCode).toBe(200)
 
     const b = (await goLive(A, CANAL_A)).json() as GoLiveDto
-    expect(crit(b, 'douradas')).toMatchObject({ ok: true, valor: expect.stringMatching(/^32 cenários, 0 CRÍTICA/) })
+    expect(crit(b, 'douradas')).toMatchObject({ ok: true, valor: '32 cenários, 0 CRÍTICA', motivo: expect.stringMatching(/^Declarado por Ada em \d\d\/\d\d/) })
     expect(crit(b, 'smoke')).toMatchObject({ ok: true })
 
     const aud = await dono<{ dados: { item: string; antes: unknown; depois: unknown }; ator_id: string }[]>`
@@ -422,42 +457,77 @@ describe('A2 — homologação medida: conferência digitada (douradas, smoke) e
     })).rejects.toThrow()
   })
 
-  it('playground: cada "Reiniciar" (DELETE …/agente/simular) soma a conversa e as CRÍTICAs que escaparam ANTES de apagar', async () => {
-    await conversaDeSimulacao(A, CANAL_A, 3, 1) // 1 CRÍTICA que escapou + 2 corrigidas pelo pipeline
-    expect((await app.inject({ method: 'DELETE', url: `/v1/canais/${CANAL_A}/agente/simular`, headers: h(A, SUB_ADMIN) })).statusCode).toBe(200)
-    await conversaDeSimulacao(A, CANAL_A, 2, 0)
-    expect((await app.inject({ method: 'DELETE', url: `/v1/canais/${CANAL_A}/agente/simular`, headers: h(A, SUB_ADMIN) })).statusCode).toBe(200)
-    // Reiniciar sem decisões não conta conversa.
-    await app.inject({ method: 'DELETE', url: `/v1/canais/${CANAL_A}/agente/simular`, headers: h(A, SUB_ADMIN) })
-    // A conversa aberta (ainda não reiniciada) também conta.
-    await conversaDeSimulacao(A, CANAL_A, 1, 0)
+  const reiniciar = (sub = SUB_ADMIN) => app.inject({ method: 'DELETE', url: `/v1/canais/${CANAL_A}/agente/simular`, headers: h(A, sub) })
+  type Entrada = { em: string; turnos: number; criticas: number }
+  const entradas = async (): Promise<Entrada[]> => {
+    const [l] = await dono<{ resultado: { entradas: Entrada[] }; ator_id: string | null }[]>`SELECT resultado, ator_id FROM agente_homologacao WHERE tenant_id = ${A} AND item = 'playground'`
+    return l?.resultado.entradas ?? []
+  }
 
-    const [l] = await dono<{ resultado: { conversas: number; criticas: number }; ator_id: string | null }[]>`
-      SELECT resultado, ator_id FROM agente_homologacao WHERE tenant_id = ${A} AND item = 'playground'`
-    expect(l!.resultado).toMatchObject({ conversas: 2, criticas: 1 })
+  it('playground: cada "Reiniciar" grava UMA entrada {em, turnos, criticas} contada das decisões apagadas', async () => {
+    await conversaDeSimulacao(A, CANAL_A, 3, 1) // 1 CRÍTICA que escapou + 2 corrigidas pelo pipeline
+    expect((await reiniciar()).statusCode).toBe(200)
+    await conversaDeSimulacao(A, CANAL_A, 2, 0) // só 2 decisões: não conta como conversa testada
+    expect((await reiniciar()).statusCode).toBe(200)
+    await reiniciar() // sem decisões: nenhuma entrada
+    await conversaDeSimulacao(A, CANAL_A, 4, 0) // a aberta (ainda não reiniciada) também conta
+
+    const es = await entradas()
+    expect(es.map((e) => [e.turnos, e.criticas])).toEqual([[3, 1], [2, 0]])
+    const [l] = await dono<{ ator_id: string | null }[]>`SELECT ator_id FROM agente_homologacao WHERE tenant_id = ${A} AND item = 'playground'`
     expect(l!.ator_id).toBe(U_ADMIN)
     const [d] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM usuario WHERE tenant_id = ${A}`
     expect(d!.n).toBe(3) // o reinício não cria usuário (Gina, Ada e Vito já existiam)
 
     const b = (await goLive(A, CANAL_A)).json() as GoLiveDto
-    expect(crit(b, 'playground_conversas')).toMatchObject({ valor: '3', ok: false })
+    expect(crit(b, 'playground_conversas')).toMatchObject({ valor: '2', ok: false })
     expect(crit(b, 'playground_critica')).toMatchObject({ valor: '1', ok: false })
   })
 
-  it('playground acumulado há mais de 30 dias recomeça a soma', async () => {
-    await conversaDeSimulacao(A, CANAL_A, 1, 1)
-    await app.inject({ method: 'DELETE', url: `/v1/canais/${CANAL_A}/agente/simular`, headers: h(A) })
-    await dono`UPDATE agente_homologacao SET atualizado_em = now() - interval '31 days' WHERE tenant_id = ${A}`
-    await conversaDeSimulacao(A, CANAL_A, 1, 0)
-    await app.inject({ method: 'DELETE', url: `/v1/canais/${CANAL_A}/agente/simular`, headers: h(A) })
-    const [l] = await dono<{ resultado: { conversas: number; criticas: number } }[]>`SELECT resultado FROM agente_homologacao WHERE tenant_id = ${A} AND item = 'playground'`
-    expect(l!.resultado).toMatchObject({ conversas: 1, criticas: 0 })
+  it('dois "Reiniciar" simultâneos contam a conversa UMA vez (DELETE … RETURNING)', async () => {
+    await conversaDeSimulacao(A, CANAL_A, 3, 0)
+    const rs = await Promise.all([reiniciar(), reiniciar()])
+    expect(rs.map((r) => r.statusCode)).toEqual([200, 200])
+    expect(await entradas()).toHaveLength(1)
+  })
+
+  it('CRÍTICA antiga deixa de contar depois de publicar uma versão nova do playbook', async () => {
+    await conversaDeSimulacao(A, CANAL_A, 3, 1)
+    await reiniciar()
+    expect(crit((await goLive(A, CANAL_A)).json() as GoLiveDto, 'playground_critica')).toMatchObject({ valor: '1', ok: false })
+    await new Promise((r) => setTimeout(r, 20))
+    await publicouPlaybook(A, CANAL_A)
+    const b = (await goLive(A, CANAL_A)).json() as GoLiveDto
+    expect(crit(b, 'playground_critica')).toMatchObject({ ok: null, motivo: expect.stringMatching(/Contam só os testes depois de/) })
+    expect(crit(b, 'playground_conversas')).toMatchObject({ valor: '0' })
+    // Teste novo, depois da publicação, volta a contar.
+    await conversaDeSimulacao(A, CANAL_A, 3, 0)
+    await reiniciar()
+    expect(crit((await goLive(A, CANAL_A)).json() as GoLiveDto, 'playground_critica')).toMatchObject({ valor: '0', ok: true })
+  })
+
+  it('mudança na configuração do número também corta o playground', async () => {
+    await conversaDeSimulacao(A, CANAL_A, 3, 1)
+    await reiniciar()
+    await new Promise((r) => setTimeout(r, 20))
+    await dono`INSERT INTO auditoria (tenant_id, id, acao, entidade, entidade_id, dados) VALUES (${A}, ${crypto.randomUUID()}, 'agente.config_alterada', 'agente_config', ${CANAL_A}, '{"antes":{"persona":1},"depois":{"persona":2},"campos":["persona"]}')`
+    expect(crit((await goLive(A, CANAL_A)).json() as GoLiveDto, 'playground_critica')).toMatchObject({ ok: null })
+  })
+
+  it('reinícios de mais de 30 dias saem da soma e da linha', async () => {
+    await dono`INSERT INTO agente_homologacao (tenant_id, canal_id, item, resultado) VALUES (${A}, ${CANAL_A}, 'playground',
+               ${JSON.stringify({ entradas: [{ em: new Date(Date.now() - 31 * DIA).toISOString(), turnos: 5, criticas: 1 }] })}::text::jsonb)`
+    expect(crit((await goLive(A, CANAL_A)).json() as GoLiveDto, 'playground_critica')).toMatchObject({ ok: null })
+    await conversaDeSimulacao(A, CANAL_A, 3, 0)
+    await reiniciar()
+    expect((await entradas()).map((e) => e.criticas)).toEqual([0])
   })
 
   it('homologação verde de ponta a ponta → pode avançar para sombra', async () => {
     await conferir(A, { item: 'douradas', canalId: CANAL_A, cenarios: 39, criticas: 0 })
     await conferir(A, { item: 'smoke', canalId: CANAL_A, ok: true })
-    await dono`INSERT INTO agente_homologacao (tenant_id, canal_id, item, resultado) VALUES (${A}, ${CANAL_A}, 'playground', '{"conversas":30,"criticas":0}')`
+    const trinta = Array.from({ length: 30 }, (_, i) => ({ em: new Date(Date.now() - (i + 1) * 3_600_000).toISOString(), turnos: 3, criticas: 0 }))
+    await dono`INSERT INTO agente_homologacao (tenant_id, canal_id, item, resultado) VALUES (${A}, ${CANAL_A}, 'playground', ${JSON.stringify({ entradas: trinta })}::text::jsonb)`
     const b = (await goLive(A, CANAL_A)).json() as GoLiveDto
     expect(b).toMatchObject({ fase: 'homologacao', podeAvancar: true, recomendacao: 'avancar' })
   })
@@ -595,6 +665,15 @@ describe('Autônomo num recorte — latência (M1), handoff, opt-out (P4), conve
     expect(crit(b, 'p95_primeira')).toMatchObject({ valor: '8,0 s (4 sessões)', ok: false })
   })
 
+  it('p95 expõe as sessões sem medida (mensagens que não aparecem)', async () => {
+    await config(A, CANAL_A, 'autonomo')
+    const convs = await conversas(A, CANAL_A, 3)
+    await decidir(A, CANAL_A, convs.slice(0, 2), { modo: 'autonomo', desfecho: 'respondeu', enviada: true, respostaMs: 3000, comSessao: true })
+    await decidir(A, CANAL_A, convs.slice(2), { modo: 'autonomo', desfecho: 'respondeu', enviada: true, comSessao: true }) // sem mensagens
+    const b = (await goLive(A, CANAL_A)).json() as GoLiveDto
+    expect(crit(b, 'p95_primeira')).toMatchObject({ valor: '3,0 s (2 sessões)', motivo: expect.stringMatching(/1 sessão ficou sem medida/) })
+  })
+
   it('M2: só coortes maduras (≥ 14 dias) entram; inferioridade clara reprova mesmo com pouca amostra', async () => {
     await config(A, CANAL_A, 'autonomo'); await trocouModoHa(A, CANAL_A, 40, 'assistido', 'autonomo')
     const ag = await conversas(A, CANAL_A, 40)
@@ -607,7 +686,7 @@ describe('Autônomo num recorte — latência (M1), handoff, opt-out (P4), conve
     // Sem resposta de ninguém (nem agente, nem pessoa): fora das duas coortes.
     for (const c of await conversas(A, CANAL_A, 5)) await entrante(A, c, 20 * 24)
     const b = (await goLive(A, CANAL_A)).json() as GoLiveDto
-    expect(crit(b, 'conversao')).toMatchObject({ ok: false, valor: expect.stringMatching(/^agente 0% \(40\) × humano 100% \(40\)/) })
+    expect(crit(b, 'conversao')).toMatchObject({ ok: false, valor: expect.stringMatching(/^agente 0% \(n 40\) × humano 100% \(n 40\)/) })
     expect(b).toMatchObject({ recomendacao: 'voltar' })
   })
 
@@ -656,11 +735,14 @@ describe('B1 — SLA do handoff: a mesma função mede o tenant (/v1/performance
     await handoffComSla(A, CANAL_A, cs[9]!, 'estourado')
     const [cb] = await conversas(B, CANAL_B, 1)
     await handoffComSla(B, CANAL_B, cb!, 'estourado')
-    const desde = new Date(Date.now() - 7 * DIA)
-    const doNumero = await comTenantServico(A, (tx) => metricaSlaHandoff(tx, { desde, canalId: CANAL_A }))
+    const desde = new Date(Date.now() - 7 * DIA), agora = new Date()
+    const doNumero = await comTenantServico(A, (tx) => metricaSlaHandoff(tx, { desde, agora, canalId: CANAL_A }))
     expect(doNumero).toMatchObject({ medidos: 10, cumpridos: 9, estourados: 1, pctCumprido: 90 })
-    const doTenantB = await comTenantServico(B, (tx) => metricaSlaHandoff(tx, { desde }))
+    const doTenantB = await comTenantServico(B, (tx) => metricaSlaHandoff(tx, { desde, agora }))
     expect(doTenantB).toMatchObject({ medidos: 1, cumpridos: 0, pctCumprido: 0 })
+    // Limite superior e "venceu?" contra o agora de quem chama: 3 h atrás nenhum SLA tinha começado.
+    const antes = await comTenantServico(A, (tx) => metricaSlaHandoff(tx, { desde, agora: new Date(Date.now() - 3 * 3_600_000), canalId: CANAL_A }))
+    expect(antes).toMatchObject({ medidos: 0, pendentes: 0, pctCumprido: null })
   })
 })
 

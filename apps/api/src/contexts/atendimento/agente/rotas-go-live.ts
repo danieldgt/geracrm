@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { corpoConferenciaGoLive } from '@geracrm/shared'
 import { exigirTenant } from '../../../plugins/tenant.js'
-import { exigirPapel } from '../../plataforma/papel.js'
+import { exigirPapel, temPapel } from '../../plataforma/papel.js'
 import { auditar } from '../../plataforma/auditoria.js'
 import { garantirUsuarioId } from '../rotas-fila.js'
 import { coletarGoLive } from './go-live.js'
@@ -34,7 +34,9 @@ export async function rotasGoLive(app: FastifyInstance): Promise<void> {
       if (!canalId || !UUID.test(canalId)) {
         return reply.code(422).send({ erro: 'go_live.campo_invalido', mensagem: 'canalId: informe o número (UUID).', campos: ['canalId'] })
       }
-      const r = await req.comTenant((tx) => coletarGoLive(tx, { canalId, agora: new Date() }))
+      // Só admin registra conferência: a tela esconde o formulário dos demais.
+      const podeConferir = await temPapel(req)
+      const r = await req.comTenant((tx) => coletarGoLive(tx, { canalId, agora: new Date(), podeConferir }))
       if (!r) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
       return reply.send(r)
     },

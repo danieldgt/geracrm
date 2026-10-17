@@ -102,7 +102,9 @@ export function semAtividade(g: GoLiveDto): boolean {
 export function tempoNaFase(g: GoLiveDto): string {
   if (!g.inicioFase) return 'sem atividade registrada nesta fase'
   const d = `${g.dias} ${g.dias === 1 ? 'dia' : 'dias'} (${g.diasUteis} ${g.diasUteis === 1 ? 'útil' : 'úteis'})`
-  return g.inicioEstimado ? `há cerca de ${d} — início estimado pela 1ª decisão` : `há ${d}`
+  const pausa = g.diasPausados > 0
+    ? `; ${String(g.diasPausados).replace('.', ',')} ${g.diasPausados === 1 ? 'dia pausado' : 'dias pausados'} pelo teto da conta não ${g.diasPausados === 1 ? 'conta' : 'contam'}` : ''
+  return (g.inicioEstimado ? `há cerca de ${d} — início estimado pela 1ª decisão` : `há ${d}`) + pausa
 }
 
 export const JANELAS_METRICAS = [7, 30, 90] as const
