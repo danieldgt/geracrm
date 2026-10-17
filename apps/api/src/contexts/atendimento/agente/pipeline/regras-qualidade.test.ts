@@ -108,15 +108,18 @@ afterAll(async () => {
 })
 
 describe('Etapa isolada: mesmo estoqueComFonte do P2', () => {
-  it('"poucas unidades" com saldo consultado no turno não é CRÍTICA; sem saldo, é', async () => {
+  it('"poucas unidades" com saldo BAIXO visto no turno (saldoBaixoVisto, P0c) não é CRÍTICA; sem ele, é', async () => {
     const ctx = { tenantId: T, conversaId: CONVERSA, canalId: CANAL, contatoId: CONTATO, sessaoId: null, modo: 'assistido', agora: new Date(),
       cfgExtra: {}, persona: {} as never, estado: {}, historico: [], entrantes: [], primeiraResposta: false, foraDoExpediente: false } as const
     const base = { handoff: null, centavosVistos: new Set<number>(), numerosVistos: new Set<number>(), falasAnterioresDoAgente: [] }
     const msg = ['Temos sim, restam poucas unidades em estoque.']
-    const com = await etapaRegrasQualidade.executar(ctx as never, { ...base, mensagens: msg, saldoDeEstoqueVisto: true } as never)
+    const com = await etapaRegrasQualidade.executar(ctx as never, { ...base, mensagens: msg, saldoBaixoVisto: true } as never)
     expect(com.guardrails.filter((g) => g.gravidade === 'CRITICA')).toEqual([])
     const sem = await etapaRegrasQualidade.executar(ctx as never, { ...base, mensagens: msg } as never)
     expect(sem.guardrails.some((g) => g.gravidade === 'CRITICA')).toBe(true)
+    // Saldo visto mas NÃO baixo (ou o nome antigo do campo) não abona a escassez.
+    const naoBaixo = await etapaRegrasQualidade.executar(ctx as never, { ...base, mensagens: msg, saldoBaixoVisto: false, saldoDeEstoqueVisto: true } as never)
+    expect(naoBaixo.guardrails.some((g) => g.gravidade === 'CRITICA')).toBe(true)
     await dono`DELETE FROM alerta WHERE tenant_id = ${T}`
   })
 })
