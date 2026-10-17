@@ -72,6 +72,9 @@ async function executarUma(dono: Sql, tarefa: Tarefa, deps: DepsTurno, agora: Da
   //    a tarefa em `executando` até a recuperação e pararia as outras conversas.
   try {
     if (resultado.desfecho === 'superada') await reagendarTarefa(dono, tarefa, agora)
+    // A política de falha (P5) pediu nova tentativa: a tarefa volta à fila com o
+    // atraso pedido, cobrindo as MESMAS mensagens.
+    else if (resultado.reagendarEmMs !== undefined) await reagendarTarefa(dono, tarefa, agora, resultado.reagendarEmMs)
     else await concluirTarefa(dono, tarefa, agora)
   } catch (e) {
     await falharTarefa(dono, tarefa, e instanceof Error ? e.message : String(e), agora).catch(() => undefined)

@@ -17,7 +17,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "oxlint src",
-    "plugzapi:validar": "tsx src/contexts/atendimento/canais/plugzapi-validar.ts"
+    "plugzapi:validar": "tsx src/contexts/atendimento/canais/plugzapi-validar.ts",
+    "agente:smoke": "tsx --env-file-if-exists=../../.env src/contexts/atendimento/agente/evals/smoke.ts",
+    "agente:avaliar": "tsx --env-file-if-exists=../../.env src/contexts/atendimento/agente/evals/avaliar.ts",
+    "agente:medir-prefixo": "tsx --env-file-if-exists=../../.env src/contexts/atendimento/agente/evals/medir-prefixo.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",

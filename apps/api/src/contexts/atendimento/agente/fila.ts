@@ -129,9 +129,15 @@ async function voltarParaFila(dono: Sql, t: Pick<Tarefa, 'tenant_id' | 'id'>, ex
   return r?.estado === 'cancelada' ? 'cancelada' : 'pendente'
 }
 
-/** Reagenda a tarefa: chegou mensagem nova enquanto o turno rodava (ou cancela, se a nova já tem tarefa). */
-export async function reagendarTarefa(dono: Sql, t: Pick<Tarefa, 'tenant_id' | 'id'>, agora: Date): Promise<'pendente' | 'cancelada'> {
-  return voltarParaFila(dono, t, new Date(agora.getTime() + DEBOUNCE_MS), null)
+/**
+ * Reagenda a tarefa: chegou mensagem nova enquanto o turno rodava, ou a
+ * política de falha pediu outra tentativa daqui a `atrasoMs` (ou cancela, se a
+ * nova já tem tarefa).
+ */
+export async function reagendarTarefa(
+  dono: Sql, t: Pick<Tarefa, 'tenant_id' | 'id'>, agora: Date, atrasoMs: number = DEBOUNCE_MS,
+): Promise<'pendente' | 'cancelada'> {
+  return voltarParaFila(dono, t, new Date(agora.getTime() + atrasoMs), null)
 }
 
 /**

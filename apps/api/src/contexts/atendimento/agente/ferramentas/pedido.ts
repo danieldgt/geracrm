@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { MOTIVOS_HANDOFF } from '@geracrm/shared'
+import { MOTIVOS_HANDOFF_DO_MODELO } from '@geracrm/shared'
 import type { Ferramenta } from './porta.js'
 import type { PedidoPorta } from './ligacoes-porta.js'
 import { centavosDe } from './porta.js'
@@ -57,11 +57,11 @@ export function ferramentasDePedido(ped: PedidoPorta): Ferramenta<never>[] {
       return { ok: true, efeito: 'proposta_enviada', saida: { situacao: 'ok', resumo: r.resumo, totalCentavos: r.totalCentavos, expiraEm: r.expiraEm }, centavos: [r.totalCentavos] }
     },
   }
-  const transferir: Ferramenta<{ motivo: (typeof MOTIVOS_HANDOFF)[number]; resumo: string }> = {
+  const transferir: Ferramenta<{ motivo: (typeof MOTIVOS_HANDOFF_DO_MODELO)[number]; resumo: string }> = {
     nome: 'atendimento_transferir',
     descricao: 'Transfere a conversa para uma pessoa da equipe, com o motivo e um resumo do que o cliente quer. Use quando as regras de escalonamento mandarem. Depois de chamar, despeça-se em uma frase.',
     entrada: z.object({
-      motivo: z.enum(MOTIVOS_HANDOFF),
+      motivo: z.enum(MOTIVOS_HANDOFF_DO_MODELO),
       resumo: z.string().min(1).max(600).describe('O que o cliente quer e o que já foi feito, em 1–3 frases.'),
     }),
     async executar(_ctx, e) {

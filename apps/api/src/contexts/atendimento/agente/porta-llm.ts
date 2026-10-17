@@ -83,6 +83,11 @@ export interface RastroDoLaco {
   readonly rodadas: number
   readonly uso: UsoDoLaco
   readonly modelo: string
+  /**
+   * Fornecedor que de fato respondeu (claude, openrouter, groq…) — com reserva
+   * de provedor (P5) pode não ser o configurado. Ausente = o da porta.
+   */
+  readonly provedor?: string | undefined
   readonly latenciaMs: number
   readonly parouPor: 'fim' | 'max_rodadas' | 'prazo' | 'max_tokens'
 }

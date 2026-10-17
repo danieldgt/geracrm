@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto'
 import {
   ALCADA_PADRAO, PERFIL_PRECO_PADRAO, REGRAS_AGENTE_PADRAO, alcadaAgente, persona as personaSchema,
   perfilDeCotacao, respostaDoAgente, verificarNumerosNaResposta, fatiarMensagem,
-  type AlcadaAgente, type ModoAgente, type PersonaResolvida, type RegrasDoAgente, type RespostaDoAgente,
-  type SlotQualificacao, type MotivoHandoff,
+  type AlcadaAgente, type ModoAgente, type ModoDoTurno, type PersonaResolvida, type RegrasDoAgente, type RespostaDoAgente,
+  type SlotQualificacao, type MotivoHandoff, type MarcaGuardrail,
 } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../../../db/index.js'
 import { enviarTextoNaConversa } from '../envio-conversa.js'
@@ -12,7 +12,7 @@ import { fragmentoAtendentePresente } from '../presenca-atendente.js'
 import { carregarContextoDoLead } from './contexto-lead.js'
 import { portaoDoAgente, type MotivoNaoEntra } from './portao.js'
 import { recadoDaFalha, type Fala } from './porta.js'
-import { custoEstimadoCentavos, type PortaLlmFerramentas, type MensagemLlm, type RastroDoLaco } from './porta-llm.js'
+import type { PortaLlmFerramentas, MensagemLlm, RastroDoLaco } from './porta-llm.js'
 import { registroDeFerramentas, type ContextoFerramenta } from './ferramentas/porta.js'
 import { montarFerramentas } from './ferramentas/montar.js'
 import { lerMemoria } from './memoria/memoria.js'
@@ -23,19 +23,35 @@ import { entregarParaHumano } from './handoff.js'
 import { chegouMensagemNova, type Tarefa } from './fila.js'
 import { llmFerramentasDoAmbiente, criarLlmDoCatalogo } from './fabrica-ferramentas.js'
 import { resolverModelo } from './modelos.js'
+import { custoDoLaco } from './custo.js'
+import { lerEstado, patchEstado, juntarPatches } from './estado-agente.js'
+import {
+  montarPipeline, rodarPreLlm, rodarPosResposta, marca, mascararTexto,
+  type ClasseFalha, type ContextoPipeline, type DecisaoFalha, type EntranteDoTurno, type PatchEstado, type PipelineDoTurno,
+} from './pipeline/index.js'
 import { efetivarSeDentroDaAlcada } from '../../pedido/alcada.js'
+import { MAX_TENTATIVAS_TRANSCRICAO } from '../../../workers/transcricao.js'
 
 /**
  * UM TURNO DO VENDEDOR (ADR-023) — roda no worker, nunca no webhook.
  *
- *   contexto → portão → ferramentas → laço → validação → guardrail →
+ * É um PIPELINE de etapas determinísticas em volta do modelo (ADR-029). A
+ * ordem é fixa e mora em `pipeline/index.ts`:
+ *
+ *   contexto → modoEfetivo → portão → alçada do pedido confirmado →
+ *   gatilhos → slots → teto(pré) → LLM (laço com ferramentas) → validação →
+ *   guardrail R$ → números → filtro → pergunta → qualidade →
  *   verificação de sequência → modo (sombra/assistido/autônomo) → envio →
- *   auditoria (agente_decisao) → sessão
+ *   auditoria (agente_decisao, com as marcas de guardrail) → sessão → teto(pós)
+ *
+ * Cada etapa do pipeline tem um arquivo e uma raia dona em `pipeline/`;
+ * estendê-las não exige tocar aqui. Falha do provedor passa pela política de
+ * `pipeline/falha-llm.ts`.
  *
  * ⚠️ Tudo que o modelo diz passa por `respostaDoAgente` (shared) e pelo
  * guardrail numérico: valor que não veio de ferramenta neste turno não sai.
- * ⚠️ Falha do modelo NÃO é silêncio: vira handoff `modelo_indisponivel`, com
- * atendimento na fila e notificação (invariante 5 do escopo).
+ * ⚠️ Falha do modelo NÃO é silêncio: em autônomo vira handoff
+ * `modelo_indisponivel`, com atendimento na fila e notificação (invariante 5).
  */
 
 export type DesfechoTurno = 'respondeu' | 'sugeriu' | 'handoff' | 'silencio' | 'falha' | 'superada'
@@ -48,6 +64,11 @@ export interface ResultadoTurnoVendedor {
   readonly decisaoId?: string | undefined
   readonly rastro?: RastroDoLaco | undefined
   readonly detalhe?: string | undefined
+  /**
+   * Devolver a tarefa à fila daqui a N ms em vez de concluí-la (política de
+   * falha transitória, P5). O worker respeita; ausente = concluir.
+   */
+  readonly reagendarEmMs?: number | undefined
 }
 
 interface ConfigVendedor {
@@ -63,22 +84,50 @@ interface ConfigVendedor {
   readonly maxRodadas: number
   readonly prazoTurnoMs: number
   readonly orcamentoDiaCentavos: number | null
+  /**
+   * A linha inteira (`to_jsonb(ac.*)`). ⚠️ Leitura TOLERANTE: cada raia lê aqui
+   * as suas colunas novas, e coluna ausente vale o padrão — assim uma raia
+   * adiciona coluna sem tocar neste SELECT.
+   */
+  readonly extra: Readonly<Record<string, unknown>>
 }
 
 export interface DepsTurno {
   readonly llm?: PortaLlmFerramentas | undefined
-  readonly ligacoes: (cfg: { tenantId: string; politicas: string; modo: ModoAgente | 'simulacao' }) => Promise<Ligacoes> | Ligacoes
+  readonly ligacoes: (cfg: { tenantId: string; politicas: string; modo: ModoDoTurno }) => Promise<Ligacoes> | Ligacoes
   readonly enviar?: typeof enviarTextoNaConversa | undefined
   readonly equipe?: QuemAtende | undefined
   readonly agora?: Date | undefined
   /** Simulação (playground): nunca envia, grava decisão com modo 'simulacao'. */
   readonly simulacao?: boolean | undefined
+  /**
+   * Copiloto (P13): o vendedor humano pede uma sugestão numa conversa real.
+   * Só leitura — sem portão, sem envio, sem sessão, sem entrega; grava a
+   * decisão com modo 'copiloto'.
+   */
+  readonly copiloto?: boolean | undefined
+  /** Troca etapas do pipeline (testes). Em produção, sempre o padrão. */
+  readonly pipeline?: Partial<PipelineDoTurno> | undefined
+}
+
+/** Resposta que vai para `agente_decisao.resposta`: a do modelo ou a fixa de uma etapa. */
+type RespostaRegistrada = Pick<RespostaDoAgente, 'confianca'> & {
+  readonly mensagens: readonly string[]
+  readonly handoff?: { readonly motivo: string; readonly resumo: string } | undefined
+  readonly fase?: RespostaDoAgente['fase']
+  readonly slots?: RespostaDoAgente['slots']
+  /** 'fixa' = texto de uma etapa do pipeline, sem modelo. */
+  readonly origem?: 'fixa' | undefined
 }
 
 export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Promise<ResultadoTurnoVendedor> {
   const agora = deps.agora ?? new Date()
   const { tenant_id: tenantId, conversa_id: conversaId, canal_id: canalId } = tarefa
   const inicio = Date.now()
+  const pipeline = montarPipeline(deps.pipeline)
+  /** Simulação e copiloto: nada chega ao cliente, nada muda na sessão real. */
+  const semEfeito = !!(deps.simulacao || deps.copiloto)
+  const enviar = deps.enviar ?? enviarTextoNaConversa
 
   // ── 1. Contexto, numa transação curta ───────────────────────────────────
   const dados = await comTenantServico(tenantId, async (tx) => {
@@ -120,17 +169,22 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   if (dados.tipo === 'desligado') return silencio(tenantId, tarefa, 'agente_desligado', 'desligado', agora)
   if (dados.tipo === 'sem_conversa') return { desfecho: 'silencio', motivo: 'conversa_inexistente' }
   const { cfg, conv, reuniao, equipe, custoHoje, perfil, ausenciaRecemEnviada, fuso, modeloEscolhido } = dados
-  const modo: ModoAgente | 'simulacao' = deps.simulacao ? 'simulacao' : cfg.modo
+
+  // ── 1.5 Modo efetivo: o mais restritivo entre tenant, número e recorte (P14) ─
+  const modoDoNumero: ModoAgente = semEfeito ? cfg.modo : (await pipeline.modoEfetivo.decidir({
+    tenantId, canalId, contatoId: conv.contato_id, modoDoNumero: cfg.modo, cfgExtra: cfg.extra, agora,
+  })).modo
+  const modo: ModoDoTurno = deps.simulacao ? 'simulacao' : deps.copiloto ? 'copiloto' : modoDoNumero
 
   // ── 2. Portão ───────────────────────────────────────────────────────────
-  if (!deps.simulacao) {
+  if (!semEfeito) {
     if (conv.humano_assumiu) return silencio(tenantId, tarefa, 'humano_assumiu', modo, agora)
     // ⚠️ A ausência acabou de responder ESTAS mensagens: com "esperar o cliente
     //    insistir" ligado, o agente fica para a próxima — duas automáticas
     //    seguidas, a primeira dizendo "não há ninguém", é a contradição do §4.3.1.
     if (cfg.regras.exigirAusenciaAntes && ausenciaRecemEnviada) return silencio(tenantId, tarefa, 'ausencia_recem_enviada', modo, agora)
     const decisao = portaoDoAgente({
-      agenteAtivo: cfg.modo !== 'desligado',
+      agenteAtivo: modoDoNumero !== 'desligado',
       ninguemDisponivel: ninguemDisponivel(equipe),
       ausenciaJaEnviada: reuniao.ausencia_ja_enviada,
       atendentePresente: reuniao.atendente_presente,
@@ -159,7 +213,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   //    nasce um atendimento na fila com o resumo. Nunca o modelo.
   let avisoDoPedido: string | null = null
   const centavosDoPedidoConfirmado: number[] = []
-  if (!deps.simulacao) {
+  if (!semEfeito) {
     const confirmado = await comTenantServico(tenantId, async (tx) => {
       const [p] = await tx<{ id: string; total_centavos: string }[]>`
         SELECT id, total_centavos::text FROM pedido
@@ -172,7 +226,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       const r = await efetivarSeDentroDaAlcada(tenantId, confirmado.id, cfg.alcada, agora)
       if (r.decisao.acao === 'aguardar_vendedor') {
         if (modo === 'autonomo') {
-          await (deps.enviar ?? enviarTextoNaConversa)(tenantId, conversaId,
+          await enviar(tenantId, conversaId,
             'Perfeito, pedido confirmado! Nossa equipe vai finalizar e te retorna em breve com os próximos passos.',
             null, agora, { ehDisparo: false, marcador: 'agente' })
         }
@@ -188,7 +242,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
           //    o pedido ficaria `confirmado` para sempre e o agente agradeceria
           //    de novo a cada mensagem. Vira entrega à fila, com o cliente avisado.
           if (modo === 'autonomo') {
-            await (deps.enviar ?? enviarTextoNaConversa)(tenantId, conversaId,
+            await enviar(tenantId, conversaId,
               'Perfeito, pedido confirmado! Nossa equipe vai finalizar e te retorna em breve com os próximos passos.',
               null, agora, { ehDisparo: false, marcador: 'agente' })
           }
@@ -202,23 +256,136 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     }
   }
 
-  // ── 3. Lead, histórico, ferramentas ─────────────────────────────────────
-  const [lead, historico, memoria] = await comTenantServico(tenantId, async (tx) => [
+  // ── 3. Lead, histórico, estado, entrantes ───────────────────────────────
+  const [lead, historico, memoria, estado, entrantes] = await comTenantServico(tenantId, async (tx) => [
     await carregarContextoDoLead(tx, conversaId),
     await carregarHistorico(tx, conversaId, cfg.regras.falasDeContexto),
     // Memória de longo prazo do cliente (R3): preferências, objeções, restrições — nunca PII.
     await lerMemoria(tx, conv.contato_id).catch(() => [] as string[]),
+    await lerEstado(tx, reuniao.sessao_id),
+    await carregarEntrantes(tx, conversaId, tarefa.mensagens_ids),
   ] as const)
   if (!lead) return { desfecho: 'silencio', motivo: 'sem_lead' }
 
   const sessaoId = reuniao.sessao_id ?? randomUUID()
+  const ctx: ContextoPipeline = {
+    tenantId, conversaId, canalId, contatoId: conv.contato_id, sessaoId: reuniao.sessao_id, modo, agora,
+    cfgExtra: cfg.extra, persona: cfg.persona, estado, historico, entrantes,
+    primeiraResposta: !historico.some((h) => h.de === 'nos'), foraDoExpediente: equipe.foraDoExpediente,
+  }
+
+  // ── 4. Antes do modelo: gatilhos → slots → teto(pré) ────────────────────
+  const pre = await rodarPreLlm(pipeline, ctx)
+  if (pre.decisao.tipo === 'silencio') {
+    return silencio(tenantId, tarefa, pre.decisao.motivo, modo, agora, { guardrails: pre.guardrails, sessaoId: semEfeito ? null : reuniao.sessao_id, estado: pre.estado })
+  }
+  if (pre.decisao.tipo === 'handoff') {
+    return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, pre.decisao.motivo, pre.decisao.resumo, modo, agora, undefined, {
+      avisoCliente: pre.decisao.avisoCliente, enviar, guardrails: pre.guardrails, estado: pre.estado,
+    })
+  }
+
+  // Ferramentas e mensagens do laço (também montadas para a resposta fixa:
+  // o pedido aberto entra na sessão do mesmo jeito).
   const ctxFerr: ContextoFerramenta = { tenantId, conversaId, contatoId: conv.contato_id, canalId, perfil, sessaoId: reuniao.sessao_id, modo, agora, enviar: deps.enviar }
-  const ligacoesBase = await deps.ligacoes({ tenantId, politicas: cfg.politicas, modo })
-  const ligacoes: Ligacoes = ligacoesBase
+  const ligacoes: Ligacoes = await deps.ligacoes({ tenantId, politicas: cfg.politicas, modo })
   const { ferramentas, capacidades } = montarFerramentas(ligacoes)
   const registro = registroDeFerramentas(ctxFerr, ferramentas)
   const pedidoAberto = ligacoes.pedido ? await ligacoes.pedido.ver(ctxFerr).catch(() => null) : null
 
+  /**
+   * O RABO DO TURNO, comum à resposta do modelo e à resposta fixa:
+   * sequência → modo → envio → persistência → teto(pós).
+   */
+  const concluir = async (p: {
+    resposta: RespostaRegistrada; mensagensFinais: readonly string[]; handoff: { motivo: string; resumo: string } | null
+    rastro?: RastroDoLaco | undefined; custo: number; bloqueados: number[]; guardrails: readonly MarcaGuardrail[]; estado: PatchEstado
+  }): Promise<ResultadoTurnoVendedor> => {
+    const { resposta, mensagensFinais, handoff, rastro, custo, bloqueados, guardrails } = p
+
+    // ── Sequência: chegou mensagem nova enquanto pensávamos? ──────────────
+    if (!semEfeito && await comTenantServico(tenantId, (tx) => chegouMensagemNova(tx, conversaId, tarefa.mensagens_ids))) {
+      const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'superada', rastro, custo, resposta, bloqueados, guardrails, agora, latenciaMs: Date.now() - inicio }))
+      return { desfecho: 'superada', mensagens: mensagensFinais, decisaoId, rastro }
+    }
+
+    // ── Modo: envia, sugere ou só registra ────────────────────────────────
+    const envia = modo === 'autonomo'
+    const idsSaida: string[] = []
+    if (envia) {
+      for (const texto of mensagensFinais) {
+        const e = await enviar(tenantId, conversaId, texto, null, agora, { ehDisparo: false, marcador: 'agente' })
+        if (!e.ok) {
+          const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro, custo, resposta, guardrails, erro: `envio recusado: ${e.motivo}`, agora, latenciaMs: Date.now() - inicio }))
+          return { desfecho: 'falha', motivo: 'envio_recusado', detalhe: e.motivo, decisaoId, rastro }
+        }
+        idsSaida.push(e.mensagemId)
+      }
+    }
+
+    // ── Persistência: sessão + decisão + handoff ──────────────────────────
+    let desfecho: DesfechoTurno = handoff ? 'handoff' : envia ? 'respondeu' : 'sugeriu'
+    const uso = rastro?.uso ?? { entrada: 0, saida: 0, cacheLeitura: 0, cacheEscrita: 0 }
+    const decisaoId = await comTenantServico(tenantId, async (tx) => {
+      if (!semEfeito) {
+        await garantirSessao(tx, { sessaoId, existente: !!reuniao.sessao_id, conversaId, canalId, modo: modoDoNumero, agora, porQue: motivoDisponibilidade(equipe) })
+        await tx`
+          UPDATE agente_sessao
+             SET turnos = turnos + 1,
+                 fase = ${resposta.fase ?? (handoff ? 'handoff' : registro.efeitos.propostaEnviada ? 'proposta' : 'descoberta')},
+                 slots = slots || ${JSON.stringify(resposta.slots ?? {})}::text::jsonb,
+                 tokens_entrada = tokens_entrada + ${uso.entrada + uso.cacheLeitura + uso.cacheEscrita},
+                 tokens_saida = tokens_saida + ${uso.saida},
+                 custo_centavos = custo_centavos + ${custo},
+                 pedido_id = coalesce(${pedidoAberto?.pedidoId ?? null}::uuid, pedido_id)
+           WHERE tenant_id = tenant_atual() AND id = ${sessaoId}`
+        await patchEstado(tx, sessaoId, p.estado)
+        if (envia) await tx`UPDATE conversa SET conduzida_por = 'ia' WHERE tenant_id = tenant_atual() AND id = ${conversaId} AND conduzida_por <> 'ia'`
+        // Resumo extrativo a cada 10 turnos: é o que deixa retomar amanhã sem reler tudo (R3).
+        const [sessao] = await tx<{ turnos: number }[]>`SELECT turnos FROM agente_sessao WHERE tenant_id = tenant_atual() AND id = ${sessaoId}`
+        if (sessao && sessao.turnos % 10 === 0) await resumirSessao(tx, sessaoId).catch(() => undefined)
+      }
+      const id = await registrarDecisao(tx, { tarefa, sessaoId: semEfeito ? null : sessaoId, modo, desfecho, rastro, custo, resposta, bloqueados, guardrails, enviada: envia, idsSaida, handoff, agora, latenciaMs: Date.now() - inicio })
+      if (handoff) {
+        if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: handoff.motivo as MotivoHandoff, resumo: handoff.resumo, agora })
+        else if (!semEfeito) await encerrarSessaoSemEntrega(tx, sessaoId, `${handoff.motivo}: ${handoff.resumo}`, agora)
+      }
+      if (desfecho === 'sugeriu' && !semEfeito) {
+        await tx`
+          INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+          VALUES (tenant_atual(), 'agente.sugestao', 'conversa', ${conversaId}, ${JSON.stringify({ conversaId, decisaoId: id })}::text::jsonb)`
+      }
+      return id
+    })
+
+    // ── Teto(pós): respondeu e estourou o teto da conversa → transfere em silêncio (P6) ─
+    let handoffFinal = handoff
+    if (!semEfeito && !handoff) {
+      const pos = await pipeline.teto.depois({ ...ctx, sessaoId, estado: { ...ctx.estado, ...p.estado } }, { custoCentavos: custo })
+      if (pos.tipo === 'handoff') {
+        handoffFinal = { motivo: pos.motivo, resumo: pos.resumo }
+        desfecho = 'handoff'
+        await comTenantServico(tenantId, async (tx) => {
+          if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: pos.motivo, resumo: pos.resumo, agora })
+          else await encerrarSessaoSemEntrega(tx, sessaoId, `${pos.motivo}: ${pos.resumo}`, agora)
+        })
+      }
+    }
+
+    return { desfecho, mensagens: mensagensFinais, handoff: handoffFinal ?? undefined, decisaoId, rastro }
+  }
+
+  // ── 4b. Resposta fixa de uma etapa: sem modelo, mesmo rabo ───────────────
+  if (pre.decisao.tipo === 'resposta_fixa') {
+    const d = pre.decisao
+    return concluir({
+      resposta: { mensagens: d.mensagens, confianca: 1, handoff: d.handoff, origem: 'fixa' },
+      mensagensFinais: d.mensagens.flatMap((m) => fatiarMensagem(m, cfg.regras.maxCaracteres * 4)),
+      handoff: d.handoff ?? null, custo: 0, bloqueados: [], guardrails: pre.guardrails, estado: pre.estado,
+    })
+  }
+
+  // ── 5. O laço ───────────────────────────────────────────────────────────
   const sistema = montarSistema({ persona: cfg.persona, politicas: cfg.politicas, objetivo: cfg.objetivo, slots: cfg.slots, alcada: cfg.alcada, capacidades })
   const mensagens: MensagemLlm[] = [
     ...historico.map((f): MensagemLlm => ({ papel: f.de === 'cliente' ? 'cliente' : 'nos', texto: f.texto })),
@@ -227,14 +394,13 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       texto: instrucaoDoTurno({
         lead, slots: reuniao.slots, resumo: reuniao.resumo, memoria,
         pedido: pedidoAberto ? { itens: pedidoAberto.itens.length, totalCentavos: pedidoAberto.totalCentavos, estado: pedidoAberto.estado } : null,
-        horaLocal: horaLocalDe(agora, fuso), primeiraResposta: !historico.some((h) => h.de === 'nos'),
-      }) + (avisoDoPedido ? `\n${avisoDoPedido}` : ''),
+        horaLocal: horaLocalDe(agora, fuso), primeiraResposta: ctx.primeiraResposta,
+      }) + (avisoDoPedido ? `\n${avisoDoPedido}` : '') + (pre.instrucoes.length ? `\n${pre.instrucoes.join('\n')}` : ''),
     },
   ]
   if (pedidoAberto) for (const c of [pedidoAberto.totalCentavos, ...pedidoAberto.itens.flatMap((i) => [i.valorUnitarioCentavos, i.subtotalCentavos])]) registro.centavosVistos.add(c)
   for (const c of centavosDoPedidoConfirmado) registro.centavosVistos.add(c)
 
-  // ── 4. O laço ───────────────────────────────────────────────────────────
   const llm = deps.llm ?? (modeloEscolhido ? criarLlmDoCatalogo(modeloEscolhido) : llmFerramentasDoAmbiente())
   const r = await llm.rodar({
     sistema, mensagens, ferramentas: registro.definicoes, executar: registro.executar,
@@ -242,37 +408,55 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     limites: { maxRodadas: cfg.maxRodadas, maxTokensSaida: 1500, prazoMs: cfg.prazoTurnoMs },
     esforco: 'low',
   })
-  const custo = r.rastro ? custoEstimadoCentavos(r.rastro.modelo, r.rastro.uso) : 0
+  const custo = r.rastro ? await custoDoLaco({ provedor: r.rastro.provedor ?? llm.nome, modelo: r.rastro.modelo, uso: r.rastro.uso }) : 0
 
   if (!r.ok) {
     const recado = recadoDaFalha(r.motivo, r.detalhe)
+    const falha = await pipeline.falha.decidir(ctx, { motivo: r.motivo, detalhe: recado, executouFerramentas: (r.rastro?.chamadas.length ?? 0) > 0, estado })
+    const aviso = await avisarCliente(falha, modo, () => enviar(tenantId, conversaId, falha.avisoCliente ?? '', null, agora, { ehDisparo: false, marcador: 'agente' }))
+    const entrega = falha.acao === 'handoff' && modo === 'autonomo'
     const decisaoId = await comTenantServico(tenantId, async (tx) => {
-      const id = await registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, agora, latenciaMs: Date.now() - inicio })
-      if (!deps.simulacao) await garantirSessao(tx, { sessaoId, existente: !!reuniao.sessao_id, conversaId, canalId, modo: cfg.modo, agora, porQue: motivoDisponibilidade(equipe) })
+      const id = await registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, falhaTipo: falha.classe, idsSaida: aviso, enviada: aviso.length > 0, agora, latenciaMs: Date.now() - inicio })
+      if (!semEfeito) await garantirSessao(tx, { sessaoId, existente: !!reuniao.sessao_id, conversaId, canalId, modo: modoDoNumero, agora, porQue: motivoDisponibilidade(equipe) })
       // ⚠️ Só em AUTÔNOMO a falha vira entrega real: em sombra/assistido o robô
       //    não estava falando com o cliente, então não há vácuo a cobrir — e
       //    criar atendimento poluiria a fila e calaria a própria coleta.
-      if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: 'modelo_indisponivel', resumo: recado, agora })
-      else if (!deps.simulacao) await encerrarSessaoSemEntrega(tx, sessaoId, recado, agora)
+      if (entrega) await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: 'modelo_indisponivel', resumo: recado, agora })
+      else if (!semEfeito && falha.acao !== 'aviso_e_reagendar') await encerrarSessaoSemEntrega(tx, sessaoId, recado, agora)
       return id
     })
-    return { desfecho: modo === 'autonomo' ? 'handoff' : 'falha', motivo: 'modelo_indisponivel', detalhe: recado, decisaoId, rastro: r.rastro }
+    return {
+      desfecho: entrega ? 'handoff' : 'falha', motivo: 'modelo_indisponivel', detalhe: recado, decisaoId, rastro: r.rastro,
+      ...(falha.acao === 'aviso_e_reagendar' && falha.reagendarEmMs !== undefined ? { reagendarEmMs: falha.reagendarEmMs } : {}),
+    }
   }
 
-  // ── 5. Validação + guardrail ────────────────────────────────────────────
+  // ── 6. Validação ────────────────────────────────────────────────────────
   const parse = respostaDoAgente.safeParse(r.saida)
   if (!parse.success) {
     const amostra = JSON.stringify(mascarar(r.saida) ?? null).slice(0, 220)
     const recado = `a IA respondeu fora do formato: ${parse.error.issues[0]?.path.join('.') ?? ''} ${parse.error.issues[0]?.message ?? ''} — recebido: ${amostra}`
-    const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, agora, latenciaMs: Date.now() - inicio }))
-    if (deps.simulacao) return { desfecho: 'falha', motivo: 'resposta_inesperada', detalhe: recado, decisaoId, rastro: r.rastro }
-    return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'modelo_indisponivel', recado, modo, agora, decisaoId)
+    const falha = await pipeline.falha.decidir(ctx, { motivo: 'formato', detalhe: recado, executouFerramentas: r.rastro.chamadas.length > 0, estado })
+    const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, falhaTipo: falha.classe, agora, latenciaMs: Date.now() - inicio }))
+    if (falha.acao === 'handoff') {
+      return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'modelo_indisponivel', recado, modo, agora, decisaoId, { avisoCliente: falha.avisoCliente, enviar })
+    }
+    await avisarCliente(falha, modo, () => enviar(tenantId, conversaId, falha.avisoCliente ?? '', null, agora, { ehDisparo: false, marcador: 'agente' }))
+    if (falha.acao === 'registrar' && !semEfeito) await comTenantServico(tenantId, (tx) => encerrarSessaoSemEntrega(tx, reuniao.sessao_id, recado, agora))
+    return {
+      desfecho: 'falha', motivo: 'resposta_inesperada', detalhe: recado, decisaoId, rastro: r.rastro,
+      ...(falha.acao === 'aviso_e_reagendar' && falha.reagendarEmMs !== undefined ? { reagendarEmMs: falha.reagendarEmMs } : {}),
+    }
   }
+
+  // ── 7. Guardrail R$ (o original, inegociável) ───────────────────────────
   let resposta: RespostaDoAgente = parse.data
+  const guardrails: MarcaGuardrail[] = [...pre.guardrails]
   const bloqueados = resposta.mensagens.flatMap((m) => verificarNumerosNaResposta(m, registro.centavosVistos))
   if (bloqueados.length > 0) {
     // ⚠️ Número sem origem em ferramenta: a resposta NÃO sai como está. Remove
     //    os valores e pede confirmação humana — nunca "corrige" o número.
+    guardrails.push(marca('guardrail-reais', 'valor_sem_fonte', 'CRITICA', 'substituido', resposta.mensagens.join(' ')))
     resposta = {
       ...resposta,
       mensagens: ['Vou confirmar os valores certinhos com a equipe e já te retorno.'],
@@ -283,78 +467,75 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   if (resposta.confianca < cfg.limiarConfianca && !resposta.handoff) {
     resposta = { ...resposta, handoff: { motivo: 'incerteza', resumo: `Confiança ${resposta.confianca.toFixed(2)} abaixo do limiar ${cfg.limiarConfianca}.` } }
   }
-  const handoff = registro.efeitos.handoff ?? resposta.handoff ?? null
-  const mensagensFinais = resposta.mensagens.flatMap((m) => fatiarMensagem(m, cfg.regras.maxCaracteres * 4))
+  let handoff: { motivo: string; resumo: string } | null = registro.efeitos.handoff ?? resposta.handoff ?? null
 
-  // ── 6. Sequência: chegou mensagem nova enquanto pensávamos? ─────────────
-  if (!deps.simulacao && await comTenantServico(tenantId, (tx) => chegouMensagemNova(tx, conversaId, tarefa.mensagens_ids))) {
-    const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'superada', rastro: r.rastro, custo, resposta, bloqueados, agora, latenciaMs: Date.now() - inicio }))
-    return { desfecho: 'superada', mensagens: mensagensFinais, decisaoId, rastro: r.rastro }
-  }
-
-  // ── 7. Modo: envia, sugere ou só registra ───────────────────────────────
-  const envia = modo === 'autonomo'
-  const idsSaida: string[] = []
-  if (envia) {
-    const enviar = deps.enviar ?? enviarTextoNaConversa
-    for (const texto of mensagensFinais) {
-      const e = await enviar(tenantId, conversaId, texto, null, agora, { ehDisparo: false, marcador: 'agente' })
-      if (!e.ok) {
-        const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, resposta, erro: `envio recusado: ${e.motivo}`, agora, latenciaMs: Date.now() - inicio }))
-        return { desfecho: 'falha', motivo: 'envio_recusado', detalhe: e.motivo, decisaoId, rastro: r.rastro }
-      }
-      idsSaida.push(e.mensagemId)
-    }
-  }
-
-  // ── 8. Persistência: sessão + decisão + handoff ─────────────────────────
-  const desfecho: DesfechoTurno = handoff ? 'handoff' : envia ? 'respondeu' : 'sugeriu'
-  const decisaoId = await comTenantServico(tenantId, async (tx) => {
-    if (!deps.simulacao) {
-      await garantirSessao(tx, { sessaoId, existente: !!reuniao.sessao_id, conversaId, canalId, modo: cfg.modo, agora, porQue: motivoDisponibilidade(equipe) })
-      await tx`
-        UPDATE agente_sessao
-           SET turnos = turnos + 1,
-               fase = ${resposta.fase ?? (handoff ? 'handoff' : registro.efeitos.propostaEnviada ? 'proposta' : 'descoberta')},
-               slots = slots || ${JSON.stringify(resposta.slots ?? {})}::text::jsonb,
-               tokens_entrada = tokens_entrada + ${r.rastro.uso.entrada + r.rastro.uso.cacheLeitura + r.rastro.uso.cacheEscrita},
-               tokens_saida = tokens_saida + ${r.rastro.uso.saida},
-               custo_centavos = custo_centavos + ${custo},
-               pedido_id = coalesce(${pedidoAberto?.pedidoId ?? null}::uuid, pedido_id)
-         WHERE tenant_id = tenant_atual() AND id = ${sessaoId}`
-      if (envia) await tx`UPDATE conversa SET conduzida_por = 'ia' WHERE tenant_id = tenant_atual() AND id = ${conversaId} AND conduzida_por <> 'ia'`
-      // Resumo extrativo a cada 10 turnos: é o que deixa retomar amanhã sem reler tudo (R3).
-      const [sessao] = await tx<{ turnos: number }[]>`SELECT turnos FROM agente_sessao WHERE tenant_id = tenant_atual() AND id = ${sessaoId}`
-      if (sessao && sessao.turnos % 10 === 0) await resumirSessao(tx, sessaoId).catch(() => undefined)
-    }
-    const id = await registrarDecisao(tx, { tarefa, sessaoId: deps.simulacao ? null : sessaoId, modo, desfecho, rastro: r.rastro, custo, resposta, bloqueados, enviada: envia, idsSaida, handoff, agora, latenciaMs: Date.now() - inicio })
-    if (handoff) {
-      if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: handoff.motivo as MotivoHandoff, resumo: handoff.resumo, agora })
-      else if (!deps.simulacao) await encerrarSessaoSemEntrega(tx, sessaoId, `${handoff.motivo}: ${handoff.resumo}`, agora)
-    }
-    if (desfecho === 'sugeriu' && !deps.simulacao) {
-      await tx`
-        INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
-        VALUES (tenant_atual(), 'agente.sugestao', 'conversa', ${conversaId}, ${JSON.stringify({ conversaId, decisaoId: id })}::text::jsonb)`
-    }
-    return id
+  // ── 8. Depois do modelo: números → filtro → pergunta → qualidade ────────
+  const cadeia = await rodarPosResposta(pipeline, ctx, {
+    mensagens: resposta.mensagens, handoff, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
+    falasAnterioresDoAgente: historico.filter((h) => h.de === 'nos').map((h) => h.texto),
   })
+  guardrails.push(...cadeia.guardrails)
+  if (cadeia.bloqueio) handoff = { motivo: cadeia.bloqueio.motivo, resumo: cadeia.bloqueio.resumo }
 
-  return { desfecho, mensagens: mensagensFinais, handoff: handoff ?? undefined, decisaoId, rastro: r.rastro }
+  return concluir({
+    resposta, mensagensFinais: cadeia.mensagens.flatMap((m) => fatiarMensagem(m, cfg.regras.maxCaracteres * 4)),
+    handoff, rastro: r.rastro, custo, bloqueados, guardrails, estado: juntarPatches([pre.estado, cadeia.estado]),
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function silencio(tenantId: string, tarefa: Tarefa, motivo: string, modo: string, agora: Date): Promise<ResultadoTurnoVendedor> {
-  const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: null, modo, desfecho: 'silencio', portaoMotivo: motivo, agora, latenciaMs: 0 }))
+/**
+ * Envia o aviso da política de falha — só em AUTÔNOMO e só se houver texto.
+ * Devolve os ids enviados (vazio quando não enviou ou o gateway recusou).
+ */
+async function avisarCliente(
+  falha: DecisaoFalha, modo: ModoDoTurno,
+  enviarAviso: () => ReturnType<typeof enviarTextoNaConversa>,
+): Promise<string[]> {
+  if (modo !== 'autonomo' || !falha.avisoCliente) return []
+  const e = await enviarAviso()
+  return e.ok ? [e.mensagemId] : []
+}
+
+async function silencio(
+  tenantId: string, tarefa: Tarefa, motivo: string, modo: string, agora: Date,
+  extra: { guardrails?: readonly MarcaGuardrail[]; sessaoId?: string | null; estado?: PatchEstado } = {},
+): Promise<ResultadoTurnoVendedor> {
+  const decisaoId = await comTenantServico(tenantId, async (tx) => {
+    if (extra.estado) await patchEstado(tx, extra.sessaoId ?? null, extra.estado)
+    return registrarDecisao(tx, { tarefa, sessaoId: null, modo, desfecho: 'silencio', portaoMotivo: motivo, guardrails: extra.guardrails, agora, latenciaMs: 0 })
+  })
   return { desfecho: 'silencio', motivo, decisaoId }
 }
 
+/**
+ * Entrega ao humano SEM chamar o modelo (portão, alçada, gatilho, falha).
+ *
+ * `avisoCliente` sai pelo gateway SÓ em autônomo — nos outros modos o robô não
+ * estava falando com o cliente. Simulação e copiloto só registram: nunca
+ * encerram sessão real nem abrem atendimento.
+ */
 async function handoffSemModelo(
-  tenantId: string, tarefa: Tarefa, sessaoId: string | null, motivo: MotivoHandoff, resumo: string, modo: string, agora: Date, decisaoId?: string,
+  tenantId: string, tarefa: Tarefa, sessaoId: string | null, motivo: MotivoHandoff, resumo: string, modo: ModoDoTurno | 'desligado', agora: Date, decisaoId?: string,
+  extra: {
+    avisoCliente?: string | null | undefined; enviar?: typeof enviarTextoNaConversa | undefined
+    guardrails?: readonly MarcaGuardrail[] | undefined; estado?: PatchEstado | undefined; falhaTipo?: ClasseFalha | undefined
+  } = {},
 ): Promise<ResultadoTurnoVendedor> {
+  const idsAviso: string[] = []
+  if (modo === 'autonomo' && extra.avisoCliente) {
+    const e = await (extra.enviar ?? enviarTextoNaConversa)(tenantId, tarefa.conversa_id, extra.avisoCliente, null, agora, { ehDisparo: false, marcador: 'agente' })
+    if (e.ok) idsAviso.push(e.mensagemId)
+  }
+  const semEfeito = modo === 'simulacao' || modo === 'copiloto'
   const id = await comTenantServico(tenantId, async (tx) => {
-    const d = decisaoId ?? await registrarDecisao(tx, { tarefa, sessaoId, modo, desfecho: 'handoff', handoff: { motivo, resumo }, agora, latenciaMs: 0 })
+    const d = decisaoId ?? await registrarDecisao(tx, {
+      tarefa, sessaoId: semEfeito ? null : sessaoId, modo, desfecho: 'handoff', handoff: { motivo, resumo }, guardrails: extra.guardrails, falhaTipo: extra.falhaTipo,
+      enviada: idsAviso.length > 0, idsSaida: idsAviso, agora, latenciaMs: 0,
+    })
+    if (semEfeito) return d
+    if (extra.estado) await patchEstado(tx, sessaoId, extra.estado)
     if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId: tarefa.conversa_id, canalId: tarefa.canal_id, sessaoId, motivo, resumo, agora })
     else await encerrarSessaoSemEntrega(tx, sessaoId, `${motivo}: ${resumo}`, agora)
     return d
@@ -369,13 +550,15 @@ async function lerConfig(tx: Sql, canalId: string): Promise<ConfigVendedor | nul
     orcamento_dia_centavos: string | null
     so_quando_ninguem_disponivel: boolean; exigir_ausencia_antes: boolean; horas_desde_ausencia: number
     reabrir_apos_encerrada: boolean; horas_para_reabrir: number; minutos_presenca: number; max_turnos: number
-    max_caracteres: number; falas_de_contexto: number
+    max_caracteres: number; falas_de_contexto: number; extra: Record<string, unknown> | null
   }[]>`
-    SELECT modo, politicas, persona, objetivo, alcada, qualificacao, modelo, limiar_confianca, max_rodadas, prazo_turno_ms,
-           orcamento_dia_centavos,
-           so_quando_ninguem_disponivel, exigir_ausencia_antes, horas_desde_ausencia, reabrir_apos_encerrada,
-           horas_para_reabrir, minutos_presenca, max_turnos, max_caracteres, falas_de_contexto
-      FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}`
+    SELECT ac.modo, ac.politicas, ac.persona, ac.objetivo, ac.alcada, ac.qualificacao, ac.modelo, ac.limiar_confianca,
+           ac.max_rodadas, ac.prazo_turno_ms, ac.orcamento_dia_centavos,
+           ac.so_quando_ninguem_disponivel, ac.exigir_ausencia_antes, ac.horas_desde_ausencia, ac.reabrir_apos_encerrada,
+           ac.horas_para_reabrir, ac.minutos_presenca, ac.max_turnos, ac.max_caracteres, ac.falas_de_contexto,
+           -- Leitura tolerante (plano-port-playbook-am §2.1): colunas novas das raias chegam aqui.
+           to_jsonb(ac.*) AS extra
+      FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${canalId}`
   if (!l) return null
   const p = REGRAS_AGENTE_PADRAO
   const alc = alcadaAgente.safeParse(l.alcada)
@@ -404,6 +587,7 @@ async function lerConfig(tx: Sql, canalId: string): Promise<ConfigVendedor | nul
       maxCaracteres: l.max_caracteres ?? p.maxCaracteres,
       falasDeContexto: l.falas_de_contexto ?? p.falasDeContexto,
     },
+    extra: l.extra ?? {},
   }
 }
 
@@ -449,6 +633,27 @@ async function carregarHistorico(tx: Sql, conversaId: string, falas: number): Pr
      ORDER BY criado_em DESC LIMIT ${falas}`
   return linhas.reverse().map((l) => ({ de: l.direcao === 'entrante' ? 'cliente' : 'nos', texto: textoDaMensagem(l.tipo, l.conteudo) } as const))
     .filter((f) => f.texto)
+}
+
+/**
+ * As mensagens entrantes DESTE turno (as da tarefa), com o estado da
+ * transcrição — gatilhos de entrada decidem sobre áudio pendente ou perdido.
+ */
+async function carregarEntrantes(tx: Sql, conversaId: string, ids: readonly string[]): Promise<readonly EntranteDoTurno[]> {
+  if (ids.length === 0) return []
+  const linhas = await tx<{ id: string; tipo: string; conteudo: Record<string, unknown> }[]>`
+    SELECT id, tipo, conteudo FROM mensagem
+     WHERE tenant_id = tenant_atual() AND conversa_id = ${conversaId} AND direcao = 'entrante'
+       AND id = ANY(${[...ids]}::uuid[])
+     ORDER BY criado_em`
+  return linhas.map((l) => {
+    const audioSemTexto = l.tipo === 'audio' && typeof l.conteudo['transcricao'] !== 'string'
+    const desistiu = Number(l.conteudo['transcricao_tentativas'] ?? 0) >= MAX_TENTATIVAS_TRANSCRICAO
+    return {
+      id: l.id, tipo: l.tipo, texto: textoDaMensagem(l.tipo, l.conteudo),
+      transcricaoPendente: audioSemTexto && !desistiu, transcricaoFalhou: audioSemTexto && desistiu,
+    }
+  })
 }
 
 function horaLocalDe(agora: Date, fuso: string): string {
@@ -497,9 +702,13 @@ async function garantirSessao(tx: Sql, p: { sessaoId: string; existente: boolean
 
 async function registrarDecisao(tx: Sql, p: {
   tarefa: Tarefa; sessaoId: string | null; modo: string; desfecho: DesfechoTurno
-  rastro?: RastroDoLaco | undefined; custo?: number; resposta?: RespostaDoAgente; bloqueados?: number[]
+  rastro?: RastroDoLaco | undefined; custo?: number; resposta?: RespostaRegistrada; bloqueados?: number[]
   enviada?: boolean; idsSaida?: string[]; handoff?: { motivo: string; resumo: string } | null; erro?: string
   portaoMotivo?: string; agora: Date; latenciaMs: number
+  /** Marcas das etapas do pipeline (0096). */
+  guardrails?: readonly MarcaGuardrail[] | undefined
+  /** Classe da falha do provedor (0096), quando o turno falhou no modelo. */
+  falhaTipo?: ClasseFalha | undefined
 }): Promise<string> {
   const id = randomUUID()
   const ferramentas = (p.rastro?.chamadas ?? []).map((c) => ({
@@ -509,7 +718,7 @@ async function registrarDecisao(tx: Sql, p: {
     INSERT INTO agente_decisao (
       tenant_id, id, conversa_id, canal_id, sessao_id, tarefa_id, mensagens_ids, modo, desfecho, portao_motivo,
       modelo, effort, ferramentas, resposta, confianca, handoff_motivo, numeros_bloqueados, uso, custo_centavos,
-      latencia_ms, rodadas, enviada, mensagens_saida_ids, erro, criado_em)
+      latencia_ms, rodadas, enviada, mensagens_saida_ids, erro, guardrails, falha_tipo, criado_em)
     VALUES (
       tenant_atual(), ${id}, ${p.tarefa.conversa_id}, ${p.tarefa.canal_id}, ${p.sessaoId}, ${p.tarefa.id},
       ${[...p.tarefa.mensagens_ids]}::uuid[], ${p.modo}, ${p.desfecho}, ${p.portaoMotivo ?? null},
@@ -517,13 +726,14 @@ async function registrarDecisao(tx: Sql, p: {
       ${p.resposta ? JSON.stringify(p.resposta) : null}::text::jsonb, ${p.resposta?.confianca ?? null},
       ${p.handoff?.motivo ?? p.resposta?.handoff?.motivo ?? null}, ${JSON.stringify(p.bloqueados ?? [])}::text::jsonb,
       ${JSON.stringify(p.rastro?.uso ?? {})}::text::jsonb, ${p.custo ?? 0}, ${p.latenciaMs}, ${p.rastro?.rodadas ?? 0},
-      ${p.enviada ?? false}, ${p.idsSaida ?? []}::uuid[], ${p.erro ?? null}, ${p.agora})`
+      ${p.enviada ?? false}, ${p.idsSaida ?? []}::uuid[], ${p.erro ?? null},
+      ${JSON.stringify(p.guardrails ?? [])}::text::jsonb, ${p.falhaTipo ?? null}, ${p.agora})`
   return id
 }
 
 /** Mascara CPF/CNPJ/telefone em qualquer string de um objeto antes de gravar. */
 export function mascarar(v: unknown): unknown {
-  if (typeof v === 'string') return v.replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, '***').replace(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, '***').replace(/\b55\d{10,11}\b/g, '55***')
+  if (typeof v === 'string') return mascararTexto(v)
   if (Array.isArray(v)) return v.map(mascarar)
   if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, mascarar(x)]))
   return v

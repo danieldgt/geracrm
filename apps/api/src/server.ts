@@ -20,6 +20,10 @@ import { processarRetornos, INTERVALO_RETORNOS_MS } from './contexts/atendimento
 import { passadaDeEmbedding } from './contexts/atendimento/agente/conhecimento/embutir-pendentes.js'
 import { embeddingDoAmbiente, faltaParaEmbedding } from './contexts/catalogo/porta-embedding.js'
 import { ligacoesPadrao } from './contexts/atendimento/agente/ferramentas/ligacoes.js'
+import { batimento } from './contexts/plataforma/batimento.js'
+import { processarQualidade, INTERVALO_QUALIDADE_MS } from './workers/qualidade.js'
+import { processarSla, INTERVALO_SLA_MS } from './workers/sla.js'
+import { processarPosIngestao, INTERVALO_POS_INGESTAO_MS } from './workers/pos-ingestao.js'
 
 const porta = Number(process.env.PORT ?? 3000)
 
@@ -49,7 +53,7 @@ if (process.env.DATABASE_ADMIN_URL) {
     despachando = true
     void despacharTodos(donoWebhook as never, entregar, new Date())
       .catch((e) => app.log.warn({ erro: e }, 'despacho de webhooks de saída falhou'))
-      .finally(() => { despachando = false })
+      .finally(() => { despachando = false; batimento('webhookSaida') })
   }, 20_000)
 }
 
@@ -64,7 +68,7 @@ if (process.env.DATABASE_ADMIN_URL) {
     varrendo = true
     void varrerAgendado(new Date())
       .catch((e) => app.log.warn({ erro: e }, 'varredura de automações falhou'))
-      .finally(() => { varrendo = false })
+      .finally(() => { varrendo = false; batimento('automacao') })
   }, 300_000) // 5 min
 }
 
@@ -99,7 +103,7 @@ if (process.env.DATABASE_ADMIN_URL) {
         }
       })
       .catch((e) => app.log.warn({ erro: e }, 'sincronização de mídia falhou'))
-      .finally(() => { sincronizando = false })
+      .finally(() => { sincronizando = false; batimento('sincronizacaoMidia') })
   }, INTERVALO_SINCRONIZACAO_MS)
 
   let convertendo = false
@@ -113,7 +117,7 @@ if (process.env.DATABASE_ADMIN_URL) {
         }
       })
       .catch((e) => app.log.warn({ erro: e }, 'varredura de conversões falhou'))
-      .finally(() => { convertendo = false })
+      .finally(() => { convertendo = false; batimento('conversoesMidia') })
   }, INTERVALO_CONVERSOES_MS)
   intervalosAquisicao.push(sincronizacaoMidia, conversoesMidia)
 
@@ -132,7 +136,7 @@ if (process.env.DATABASE_ADMIN_URL) {
         if (r.abertos > 0 || r.resolvidos > 0) app.log.info(r, 'vigia de mídia')
       })
       .catch((e) => app.log.warn({ erro: e }, 'vigia de mídia falhou'))
-      .finally(() => { vigiando = false })
+      .finally(() => { vigiando = false; batimento('vigiaMidia') })
   }, 60 * 60 * 1000)
   intervalosAquisicao.push(vigiaMidia)
 
@@ -151,7 +155,7 @@ if (process.env.DATABASE_ADMIN_URL) {
         if (r.caiu > 0 || r.voltou > 0) app.log.warn(r, 'conexão de canal mudou')
       })
       .catch((e) => app.log.warn({ erro: e }, 'vigia de conexão de canal falhou'))
-      .finally(() => { vigiandoCanal = false })
+      .finally(() => { vigiandoCanal = false; batimento('vigiaCanal') })
   }, 5 * 60 * 1000)
   intervalosAquisicao.push(vigiaCanal)
 
@@ -170,7 +174,7 @@ if (process.env.DATABASE_ADMIN_URL) {
         if (r.entregues > 0) app.log.info({ ...r, hora: HORA_RESUMO_LOCAL }, 'resumo diário de mídia entregue')
       })
       .catch((e) => app.log.warn({ erro: e }, 'resumo diário de mídia falhou'))
-      .finally(() => { resumindo = false })
+      .finally(() => { resumindo = false; batimento('resumoMidia') })
   }, 15 * 60 * 1000)
   intervalosAquisicao.push(resumoMidia)
 
@@ -189,7 +193,7 @@ if (process.env.DATABASE_ADMIN_URL) {
         }
       })
       .catch((e) => app.log.warn({ erro: e }, 'despacho de campanha falhou'))
-      .finally(() => { despachandoCampanha = false })
+      .finally(() => { despachandoCampanha = false; batimento('campanha') })
   }, 30_000)
   intervalosAquisicao.push(campanhaIntervalo)
 
@@ -206,7 +210,7 @@ if (process.env.DATABASE_ADMIN_URL) {
         if (r.processadas > 0 || r.recuperadas > 0) app.log.info(r, 'turnos do agente')
       })
       .catch((e) => app.log.warn({ erro: e }, 'worker do agente falhou'))
-      .finally(() => { processandoAgente = false })
+      .finally(() => { processandoAgente = false; batimento('workerAgente') })
   }, INTERVALO_WORKER_MS)
   intervalosAquisicao.push(agenteIntervalo)
 
@@ -224,7 +228,7 @@ if (process.env.DATABASE_ADMIN_URL) {
           if (r.candidatas > 0) app.log.info(r, 'transcrição de áudio')
         })
         .catch((e) => app.log.warn({ erro: e }, 'worker de transcrição falhou'))
-        .finally(() => { transcrevendo = false })
+        .finally(() => { transcrevendo = false; batimento('transcricao') })
     }, INTERVALO_TRANSCRICAO_MS)
     intervalosAquisicao.push(transcricaoIntervalo)
   } else {
@@ -242,9 +246,29 @@ if (process.env.DATABASE_ADMIN_URL) {
         if (r.vencidos > 0) app.log.info(r, 'retornos do agente')
       })
       .catch((e) => app.log.warn({ erro: e }, 'worker de retorno falhou'))
-      .finally(() => { retornando = false })
+      .finally(() => { retornando = false; batimento('retornos') })
   }, INTERVALO_RETORNOS_MS)
   intervalosAquisicao.push(retornoIntervalo)
+
+  // ⚠️ WORKERS DAS RAIAS do plano-port-playbook-am, agendados pela P0 e vazios
+  //    até a raia dona preencher: pós-ingestão do webhook (P11), qualidade em
+  //    produção (P12) e SLA do handoff (P18). Mesmo molde dos de cima: guarda
+  //    anti-sobreposição, log só quando há trabalho, batimento a cada passada.
+  for (const [nome, intervalo, passada] of [
+    ['posIngestao', INTERVALO_POS_INGESTAO_MS, () => processarPosIngestao(donoAquisicao as never, {}, new Date())],
+    ['qualidade', INTERVALO_QUALIDADE_MS, () => processarQualidade(donoAquisicao as never, {}, new Date())],
+    ['sla', INTERVALO_SLA_MS, () => processarSla(donoAquisicao as never, {}, new Date())],
+  ] as const) {
+    let rodando = false
+    intervalosAquisicao.push(setInterval(() => {
+      if (rodando) return
+      rodando = true
+      void passada()
+        .then((r) => { if (r.processadas > 0) app.log.info({ ...r, worker: nome }, 'worker das raias do agente') })
+        .catch((e) => app.log.warn({ erro: e, worker: nome }, 'worker das raias do agente falhou'))
+        .finally(() => { rodando = false; batimento(nome) })
+    }, intervalo))
+  }
 
   // Push nativo (PLT-07) — a notificação que chega com o navegador fechado.
   // ⚠️ 20s: é a mesma ordem de grandeza do despachante de webhooks. Push de
@@ -264,7 +288,7 @@ if (process.env.DATABASE_ADMIN_URL) {
           if (r.enviados > 0 || r.removidos > 0) app.log.info(r, 'push nativo')
         })
         .catch((e) => app.log.warn({ erro: e }, 'despacho de push falhou'))
-        .finally(() => { empurrando = false })
+        .finally(() => { empurrando = false; batimento('push') })
     }, 20_000)
     intervalosAquisicao.push(pushIntervalo)
   } else {
@@ -293,7 +317,7 @@ if (process.env.DATABASE_ADMIN_URL) {
           if (typeof r === 'object' && (r.produtos > 0 || r.trechos > 0 || r.parou)) app.log.info(r, 'embeddings pendentes')
         })
         .catch((e) => app.log.warn({ erro: e }, 'worker de embeddings falhou'))
-        .finally(() => { embutindo = false })
+        .finally(() => { embutindo = false; batimento('embeddings') })
     }, 60_000)
   } else {
     app.log.info({ falta: faltaParaEmbedding() }, 'busca semântica desligada — falta variável de embedding')

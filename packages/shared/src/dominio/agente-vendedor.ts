@@ -17,6 +17,13 @@ export const ROTULO_MODO: Readonly<Record<ModoAgente, string>> = {
   autonomo: 'Autônomo — responde sozinho',
 }
 
+/**
+ * Em que modo UM TURNO roda: o modo do número, ou uma das execuções sem efeito
+ * no cliente — `simulacao` (playground) e `copiloto` (o vendedor humano pede
+ * uma sugestão sob demanda; só leitura). Os dois últimos nunca enviam.
+ */
+export type ModoDoTurno = ModoAgente | 'simulacao' | 'copiloto'
+
 export const OBJETIVOS_AGENTE = ['vender', 'qualificar'] as const
 export type ObjetivoAgente = (typeof OBJETIVOS_AGENTE)[number]
 
@@ -47,11 +54,28 @@ export type SlotQualificacao = (typeof SLOTS_QUALIFICACAO)[number]
 export const FASES_VENDA = ['descoberta', 'recomendacao', 'proposta', 'fechamento', 'handoff', 'encerrada'] as const
 export type FaseDaVenda = (typeof FASES_VENDA)[number]
 
-export const MOTIVOS_HANDOFF = [
+/**
+ * Motivos que o MODELO pode escolher (enum da saída estruturada e da ferramenta
+ * `transferir`). ⚠️ Mudar esta lista muda o JSON Schema enviado ao fornecedor —
+ * é mudança de comportamento do agente (changelog + evals).
+ */
+export const MOTIVOS_HANDOFF_DO_MODELO = [
   'pedido_de_humano', 'reclamacao', 'desconto_fora_da_politica', 'incerteza',
   'sentimento_negativo', 'fora_do_escopo', 'acima_da_alcada', 'modelo_indisponivel',
   'limite_de_turnos', 'qualificado', 'limite_de_custo', 'ferramenta_indisponivel',
 ] as const
+
+/**
+ * Motivos que só o PIPELINE decide, em código, antes ou depois do modelo
+ * (gatilhos de entrada, teto por conversa, regras de qualidade, playbook).
+ * Ficam fora do enum do modelo de propósito: o modelo não "decide" opt-out.
+ */
+export const MOTIVOS_HANDOFF_DO_PIPELINE = [
+  'qualidade_violacao_critica', 'limite_de_custo_conversa', 'opt_out',
+  'audio_sem_transcricao', 'pergunta_robo', 'gatilho_playbook',
+] as const
+
+export const MOTIVOS_HANDOFF = [...MOTIVOS_HANDOFF_DO_MODELO, ...MOTIVOS_HANDOFF_DO_PIPELINE] as const
 export type MotivoHandoff = (typeof MOTIVOS_HANDOFF)[number]
 
 export const ROTULO_HANDOFF: Readonly<Record<MotivoHandoff, string>> = {
@@ -67,6 +91,12 @@ export const ROTULO_HANDOFF: Readonly<Record<MotivoHandoff, string>> = {
   qualificado: 'lead qualificado — pronto para o vendedor',
   limite_de_custo: 'limite de custo do dia',
   ferramenta_indisponivel: 'ferramenta necessária não disponível',
+  qualidade_violacao_critica: 'resposta barrada por violação crítica de qualidade',
+  limite_de_custo_conversa: 'limite de custo desta conversa',
+  opt_out: 'o cliente pediu para não receber mais mensagens',
+  audio_sem_transcricao: 'áudio que não deu para transcrever',
+  pergunta_robo: 'o cliente insistiu em saber se fala com um robô',
+  gatilho_playbook: 'gatilho de transferência do playbook',
 }
 
 /**
@@ -84,7 +114,7 @@ export const respostaDoAgente = z.object({
   /** 0..1 — abaixo do limiar do canal vira handoff por incerteza. */
   confianca: z.number().min(0).max(1),
   fase: z.enum(FASES_VENDA).optional(),
-  handoff: z.object({ motivo: z.enum(MOTIVOS_HANDOFF), resumo: z.string().trim().max(600) }).optional(),
+  handoff: z.object({ motivo: z.enum(MOTIVOS_HANDOFF_DO_MODELO), resumo: z.string().trim().max(600) }).optional(),
   /**
    * Slots que o cliente DISSE neste turno. Ainda passam por validação.
    * ⚠️ Objeto plano com cada slot opcional — nunca `z.record`/`z.partialRecord`:
@@ -95,6 +125,40 @@ export const respostaDoAgente = z.object({
   slots: slotsDaResposta.optional(),
 })
 export type RespostaDoAgente = z.infer<typeof respostaDoAgente>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARCAS DE GUARDRAIL (pipeline do agente, ADR-029)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const GRAVIDADES_GUARDRAIL = ['CRITICA', 'ALTA', 'MEDIA', 'INFO'] as const
+export type GravidadeGuardrail = (typeof GRAVIDADES_GUARDRAIL)[number]
+
+export const ACOES_GUARDRAIL = ['removido', 'reescrito', 'anexado', 'substituido', 'bloqueado', 'handoff', 'registrado'] as const
+export type AcaoGuardrail = (typeof ACOES_GUARDRAIL)[number]
+
+/** Tamanho máximo do trecho citado numa marca (sempre mascarado antes). */
+export const MAX_TRECHO_GUARDRAIL = 160
+
+/**
+ * O que uma etapa do pipeline fez com a resposta de um turno. Grava em
+ * `agente_decisao.guardrails`; a tela de decisões e a de qualidade leem daqui.
+ * `trecho` nunca carrega PII crua (≤160, mascarado por quem cria a marca).
+ */
+export interface MarcaGuardrail {
+  readonly etapa: string
+  readonly codigo: string
+  readonly gravidade: GravidadeGuardrail
+  readonly acao: AcaoGuardrail
+  readonly trecho?: string | undefined
+}
+
+export const marcaGuardrail = z.object({
+  etapa: z.string().min(1).max(60),
+  codigo: z.string().min(1).max(80),
+  gravidade: z.enum(GRAVIDADES_GUARDRAIL),
+  acao: z.enum(ACOES_GUARDRAIL),
+  trecho: z.string().max(MAX_TRECHO_GUARDRAIL).optional(),
+})
 
 /**
  * GUARDRAIL NUMÉRICO: todo valor monetário citado na resposta precisa ter vindo

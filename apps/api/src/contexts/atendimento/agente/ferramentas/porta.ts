@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ModoAgente, PerfilPreco } from '@geracrm/shared'
+import type { ModoDoTurno, PerfilPreco } from '@geracrm/shared'
 import type { DefinicaoFerramentaLlm, ResultadoExecucaoFerramenta } from '../porta-llm.js'
 import type { enviarTextoNaConversa } from '../../envio-conversa.js'
 
@@ -24,7 +24,7 @@ export interface ContextoFerramenta {
   readonly canalId: string
   readonly perfil: PerfilPreco
   readonly sessaoId: string | null
-  readonly modo: ModoAgente | 'simulacao'
+  readonly modo: ModoDoTurno
   readonly agora: Date
   /** O envio pelo gateway que o turno usa — injetável em teste; a proposta sai por ele. */
   readonly enviar?: typeof enviarTextoNaConversa | undefined
@@ -81,6 +81,11 @@ export interface RegistroDeFerramentas {
   readonly definicoes: readonly DefinicaoFerramentaLlm[]
   /** Centavos acumulados em todas as chamadas do turno. */
   readonly centavosVistos: Set<number>
+  /**
+   * Números de negócio (%, quantidade, prazo) vistos em ferramenta neste turno —
+   * a fonte do guardrail ampliado (raia P7 preenche; P0 só abre o campo).
+   */
+  readonly numerosVistos: Set<number>
   readonly efeitos: { handoff: { motivo: string; resumo: string } | null; propostaEnviada: boolean; pedidoAlterado: boolean }
   executar(nome: string, entradaBruta: unknown): Promise<ResultadoExecucaoFerramenta>
 }
@@ -95,11 +100,13 @@ export function registroDeFerramentas(
 ): RegistroDeFerramentas {
   const porNome = new Map(ferramentas.map((f) => [f.nome, f]))
   const centavosVistos = new Set<number>()
+  const numerosVistos = new Set<number>()
   const efeitos = { handoff: null as { motivo: string; resumo: string } | null, propostaEnviada: false, pedidoAlterado: false }
   return {
     lista: ferramentas,
     definicoes: ferramentas.map(definicaoParaLlm),
     centavosVistos,
+    numerosVistos,
     efeitos,
     async executar(nome, entradaBruta) {
       const f = porNome.get(nome)

@@ -9,17 +9,34 @@ import { AgentePlaygroundComponente } from './agente-playground.componente.js'
 import { AgenteDecisoesComponente } from './agente-decisoes.componente.js'
 import { AgenteSessoesComponente } from './agente-sessoes.componente.js'
 import { AgenteConhecimentoComponente } from './agente-conhecimento.componente.js'
+import { AgenteProtecoesComponente, ABA_PROTECOES_PRONTA } from './agente-protecoes.componente.js'
+import { AgenteQualidadeComponente, ABA_QUALIDADE_PRONTA } from './agente-qualidade.componente.js'
+import { AgenteRevisaoComponente, ABA_REVISAO_PRONTA } from './agente-revisao.componente.js'
+import { AgenteMetricasComponente, ABA_METRICAS_PRONTA } from './agente-metricas.componente.js'
+import { AgentePlaybookComponente, ABA_PLAYBOOK_PRONTA } from './agente-playbook.componente.js'
 
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
-type Aba = 'configuracao' | 'conhecimento' | 'playground' | 'decisoes' | 'sessoes'
+type Aba = 'configuracao' | 'conhecimento' | 'protecoes' | 'playbook' | 'playground' | 'decisoes' | 'qualidade'
+  | 'revisao' | 'metricas' | 'sessoes'
 
-const ABAS: readonly { readonly id: Aba; readonly rotulo: string }[] = [
-  { id: 'configuracao', rotulo: 'Configuração' },
-  { id: 'conhecimento', rotulo: 'Conhecimento' },
-  { id: 'playground', rotulo: 'Playground' },
-  { id: 'decisoes', rotulo: 'Decisões' },
-  { id: 'sessoes', rotulo: 'Sessões' },
+/**
+ * As abas, na ordem da tela. ⚠️ As das raias do plano-port-playbook-am entram
+ * pela constante `ABA_*_PRONTA` do PRÓPRIO componente: a raia liga a sua aba
+ * sem editar esta página (dona: P0).
+ */
+const TODAS_AS_ABAS: readonly { readonly id: Aba; readonly rotulo: string; readonly pronta: boolean }[] = [
+  { id: 'configuracao', rotulo: 'Configuração', pronta: true },
+  { id: 'conhecimento', rotulo: 'Conhecimento', pronta: true },
+  { id: 'protecoes', rotulo: 'Proteções', pronta: ABA_PROTECOES_PRONTA },
+  { id: 'playbook', rotulo: 'Playbook', pronta: ABA_PLAYBOOK_PRONTA },
+  { id: 'playground', rotulo: 'Playground', pronta: true },
+  { id: 'decisoes', rotulo: 'Decisões', pronta: true },
+  { id: 'qualidade', rotulo: 'Qualidade', pronta: ABA_QUALIDADE_PRONTA },
+  { id: 'revisao', rotulo: 'Revisão', pronta: ABA_REVISAO_PRONTA },
+  { id: 'metricas', rotulo: 'Métricas', pronta: ABA_METRICAS_PRONTA },
+  { id: 'sessoes', rotulo: 'Sessões', pronta: true },
 ]
+const ABAS = TODAS_AS_ABAS.filter((a) => a.pronta)
 
 /**
  * O agente vendedor como PRODUTO: escolher o número, configurar, conversar com
@@ -36,7 +53,8 @@ const ABAS: readonly { readonly id: Aba; readonly rotulo: string }[] = [
   imports: [
     RouterLink, BotaoComponente, CabecalhoTelaComponente, PainelComponente, EsqueletoComponente, EstadoComponente,
     AgenteConfigComponente, AgenteConhecimentoComponente, AgentePlaygroundComponente, AgenteDecisoesComponente,
-    AgenteSessoesComponente,
+    AgenteSessoesComponente, AgenteProtecoesComponente, AgenteQualidadeComponente, AgenteRevisaoComponente,
+    AgenteMetricasComponente, AgentePlaybookComponente,
   ],
   template: `
     <ui-cabecalho-tela titulo="Agente vendedor"
@@ -89,6 +107,11 @@ const ABAS: readonly { readonly id: Aba; readonly rotulo: string }[] = [
               @case ('playground') { <app-agente-playground [canalId]="canalId()" /> }
               @case ('decisoes') { <app-agente-decisoes [canalId]="canalId()" /> }
               @case ('sessoes') { <app-agente-sessoes /> }
+              @case ('protecoes') { <app-agente-protecoes [canalId]="canalId()" /> }
+              @case ('playbook') { <app-agente-playbook [canalId]="canalId()" /> }
+              @case ('qualidade') { <app-agente-qualidade [canalId]="canalId()" /> }
+              @case ('revisao') { <app-agente-revisao [canalId]="canalId()" /> }
+              @case ('metricas') { <app-agente-metricas [canalId]="canalId()" /> }
             }
           </div>
         }

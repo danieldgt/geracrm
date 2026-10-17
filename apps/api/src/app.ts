@@ -54,6 +54,18 @@ import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
 import { rotasLpPublica } from './contexts/aquisicao/rotas-lp-publica.js'
 import { rotasPush } from './contexts/plataforma/rotas-push.js'
 import { rotasAuth } from './contexts/identidade/rotas-auth.js'
+// Raias do plano-port-playbook-am: registradas pela P0, preenchidas cada uma no seu arquivo.
+import { rotasCompliance } from './contexts/atendimento/agente/rotas-compliance.js'
+import { rotasCusto } from './contexts/atendimento/agente/rotas-custo.js'
+import { rotasPrivacidade } from './contexts/atendimento/agente/rotas-privacidade.js'
+import { rotasAtivas } from './contexts/atendimento/agente/rotas-ativas.js'
+import { rotasQualidade } from './contexts/atendimento/agente/rotas-qualidade.js'
+import { rotasRevisao } from './contexts/atendimento/agente/rotas-revisao.js'
+import { rotasSugestao } from './contexts/atendimento/agente/rotas-sugestao.js'
+import { rotasPlaybook } from './contexts/atendimento/agente/rotas-playbook.js'
+import { rotasGoLive } from './contexts/atendimento/agente/rotas-go-live.js'
+import { rotasSaudeDetalhada } from './contexts/plataforma/rotas-saude-detalhada.js'
+import { rotasSla } from './contexts/atendimento/rotas-sla.js'
 
 /**
  * Builds the app without listening — so tests can use `app.inject()`
@@ -149,6 +161,20 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasLpPublica)
   await app.register(rotasPush)
   await app.register(rotasAuth)
+  // ⚠️ Pontos de extensão das raias P2–P19 (plano-port-playbook-am, P0): cada
+  //    plugin começa vazio e a raia dona preenche o seu arquivo — ninguém mais
+  //    precisa editar este bloco.
+  await app.register(rotasCompliance)
+  await app.register(rotasCusto)
+  await app.register(rotasPrivacidade)
+  await app.register(rotasAtivas)
+  await app.register(rotasQualidade)
+  await app.register(rotasRevisao)
+  await app.register(rotasSugestao)
+  await app.register(rotasPlaybook)
+  await app.register(rotasGoLive)
+  await app.register(rotasSaudeDetalhada)
+  await app.register(rotasSla)
 
   /** Liveness — no database. Answers even with the bank down, on purpose. */
   /**
