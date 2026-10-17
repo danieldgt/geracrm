@@ -336,6 +336,7 @@ describe('Sequência e worker', () => {
     expect(enviados.length).toBeGreaterThan(0)
     const [t] = await dono<{ estado: string }[]>`SELECT estado FROM agente_tarefa WHERE tenant_id = ${T}`
     expect(t!.estado).toBe('concluida')
-    expect(await pegarProximaTarefa(dono as never, new Date(Date.now() + 10))).toBeNull()
+    // ⚠️ Sob o tenant, nunca o dono: o dono pegaria (e travaria) a tarefa de outro arquivo de teste.
+    expect(await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10))).toBeNull()
   })
 })

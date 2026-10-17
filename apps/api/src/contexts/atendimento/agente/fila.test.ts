@@ -21,6 +21,16 @@ const CONVERSA = 'b1f10000-7777-4000-8000-000000000001'
 const CONVERSA2 = 'b1f10000-7777-4000-8000-000000000002'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
+/**
+ * ⚠️ QUEM CONSOME A FILA NO TESTE NUNCA É O DONO. `pegarProximaTarefa` e
+ *    `recuperarTravadas` varrem TODOS os tenants, e os arquivos de teste rodam em
+ *    paralelo no mesmo banco: com o dono, este arquivo pegava (e marcava
+ *    `executando`) a tarefa de pipeline.test/vendedor.test — que então falhavam
+ *    de forma intermitente. Sob o papel da aplicação com o tenant fixo na
+ *    conexão, o RLS restringe o consumo às tarefas deste arquivo. O dono fica só
+ *    para arrumar o cenário e conferir o estado.
+ */
+const workerDoTenant = postgres(process.env.DATABASE_URL!, { max: 2, onnotice: () => {}, connection: { 'geracrm.tenant_id': T } as never })
 const agora = () => new Date()
 
 beforeAll(async () => {
@@ -46,7 +56,7 @@ afterAll(async () => {
   await dono`DELETE FROM contato WHERE tenant_id = ${T}`
   await dono`DELETE FROM canal_conectado WHERE tenant_id = ${T}`
   await dono`DELETE FROM tenant WHERE id = ${T}`
-  await encerrarBanco(); await dono.end()
+  await encerrarBanco(); await dono.end(); await workerDoTenant.end()
 })
 
 const agendar = (conversaId: string, mensagemId?: string, atrasoMs?: number) =>
@@ -75,9 +85,9 @@ describe('Debounce — uma pendente por conversa', () => {
 
   it('a tarefa só vence depois do debounce', async () => {
     await agendar(CONVERSA)
-    expect(await pegarProximaTarefa(dono as never, agora())).toBeNull()
+    expect(await pegarProximaTarefa(workerDoTenant as never, agora())).toBeNull()
     const depois = new Date(Date.now() + DEBOUNCE_MS + 10)
-    const t = await pegarProximaTarefa(dono as never, depois)
+    const t = await pegarProximaTarefa(workerDoTenant as never, depois)
     expect(t?.conversa_id).toBe(CONVERSA)
   })
 })
@@ -85,32 +95,32 @@ describe('Debounce — uma pendente por conversa', () => {
 describe('Serialização por conversa', () => {
   it('dado uma executando, quando nasce outra pendente da MESMA conversa, então o worker não a pega', async () => {
     await agendar(CONVERSA, undefined, 0)
-    const primeira = await pegarProximaTarefa(dono as never, new Date(Date.now() + 10))
+    const primeira = await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10))
     expect(primeira).not.toBeNull()
     await agendar(CONVERSA, undefined, 0)
-    expect(await pegarProximaTarefa(dono as never, new Date(Date.now() + 10))).toBeNull()
-    await concluirTarefa(dono as never, primeira!, agora())
-    const segunda = await pegarProximaTarefa(dono as never, new Date(Date.now() + 10))
+    expect(await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10))).toBeNull()
+    await concluirTarefa(workerDoTenant as never, primeira!, agora())
+    const segunda = await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10))
     expect(segunda?.conversa_id).toBe(CONVERSA)
   })
 
   it('⚠️ reagendar/falhar quando já nasceu outra pendente CANCELA a antiga em vez de violar o índice', async () => {
     await agendar(CONVERSA, undefined, 0)
-    const antiga = (await pegarProximaTarefa(dono as never, new Date(Date.now() + 10)))!
+    const antiga = (await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10)))!
     const nova = await agendar(CONVERSA, undefined, 0) // chegou mensagem durante o turno
     expect(nova.tarefaId).not.toBe(antiga.id)
-    expect(await reagendarTarefa(dono as never, antiga, agora())).toBe('cancelada')
+    expect(await reagendarTarefa(workerDoTenant as never, antiga, agora())).toBe('cancelada')
     const [l] = await dono<{ estado: string }[]>`SELECT estado FROM agente_tarefa WHERE id = ${antiga.id}`
     expect(l!.estado).toBe('cancelada')
     // A nova é pega normalmente: nada ficou executando.
-    const proxima = await pegarProximaTarefa(dono as never, new Date(Date.now() + 10))
+    const proxima = await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10))
     expect(proxima?.id).toBe(nova.tarefaId)
-    await concluirTarefa(dono as never, proxima!, agora())
+    await concluirTarefa(workerDoTenant as never, proxima!, agora())
     // E o mesmo vale para falhar.
     await agendar(CONVERSA, undefined, 0)
-    const t2 = (await pegarProximaTarefa(dono as never, new Date(Date.now() + 10)))!
+    const t2 = (await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10)))!
     await agendar(CONVERSA, undefined, 0)
-    await expect(falharTarefa(dono as never, t2, 'boom', agora())).resolves.toBe('reagendada')
+    await expect(falharTarefa(workerDoTenant as never, t2, 'boom', agora())).resolves.toBe('reagendada')
     const [l2] = await dono<{ estado: string }[]>`SELECT estado FROM agente_tarefa WHERE id = ${t2.id}`
     expect(l2!.estado).toBe('cancelada')
   })
@@ -118,8 +128,8 @@ describe('Serialização por conversa', () => {
   it('outra conversa não espera', async () => {
     await agendar(CONVERSA, undefined, 0)
     await agendar(CONVERSA2, undefined, 0)
-    const a = await pegarProximaTarefa(dono as never, new Date(Date.now() + 10))
-    const b = await pegarProximaTarefa(dono as never, new Date(Date.now() + 10))
+    const a = await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10))
+    const b = await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10))
     expect(new Set([a?.conversa_id, b?.conversa_id])).toEqual(new Set([CONVERSA, CONVERSA2]))
   })
 })
@@ -127,22 +137,22 @@ describe('Serialização por conversa', () => {
 describe('Falha e recuperação', () => {
   it('falha reagenda com backoff até o teto; no teto marca falhou com o erro', async () => {
     await agendar(CONVERSA, undefined, 0)
-    let t = (await pegarProximaTarefa(dono as never, new Date(Date.now() + 10)))!
+    let t = (await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10)))!
     for (let i = 1; i < MAX_TENTATIVAS; i++) {
-      expect(await falharTarefa(dono as never, t, 'boom', agora())).toBe('reagendada')
-      t = (await pegarProximaTarefa(dono as never, new Date(Date.now() + 60_000 * i)))!
+      expect(await falharTarefa(workerDoTenant as never, t, 'boom', agora())).toBe('reagendada')
+      t = (await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 60_000 * i)))!
       expect(t).not.toBeNull()
     }
-    expect(await falharTarefa(dono as never, t, 'boom final', agora())).toBe('desistiu')
+    expect(await falharTarefa(workerDoTenant as never, t, 'boom final', agora())).toBe('desistiu')
     const [l] = await dono<{ estado: string; ultimo_erro: string }[]>`SELECT estado, ultimo_erro FROM agente_tarefa WHERE tenant_id = ${T}`
     expect(l).toMatchObject({ estado: 'falhou', ultimo_erro: 'boom final' })
   })
 
   it('executando há muito tempo volta para a fila (processo morreu)', async () => {
     await agendar(CONVERSA, undefined, 0)
-    const t = (await pegarProximaTarefa(dono as never, new Date(Date.now() + 10)))!
+    const t = (await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10)))!
     await dono`UPDATE agente_tarefa SET iniciada_em = now() - interval '10 minutes' WHERE id = ${t.id}`
-    expect(await recuperarTravadas(dono as never, agora())).toBe(1)
+    expect(await recuperarTravadas(workerDoTenant as never, agora())).toBe(1)
     const [l] = await dono<{ estado: string }[]>`SELECT estado FROM agente_tarefa WHERE id = ${t.id}`
     expect(l!.estado).toBe('pendente')
   })
