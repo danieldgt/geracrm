@@ -71,7 +71,7 @@ describe('Configuração do agente', () => {
 
   it('salva e relê', async () => {
     expect((await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, {
-      ativo: true, politicas: POLITICAS, maxTurnos: 4,
+      ativo: true, politicas: POLITICAS, confirmacao: 'autonomo', maxTurnos: 4,
     })).statusCode).toBe(200)
     const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as
       { ativo: boolean; politicas: string; regras: RegrasDoAgente }
@@ -86,7 +86,7 @@ describe('Configuração do agente', () => {
    */
   it('salva e relê as regras de entrada', async () => {
     expect((await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, {
-      ativo: true, politicas: POLITICAS,
+      ativo: true, politicas: POLITICAS, confirmacao: 'autonomo',
       soQuandoNinguemDisponivel: false, exigirAusenciaAntes: false, reabrirAposEncerrada: true,
       horasDesdeAusencia: 24, horasParaReabrir: 48, minutosPresenca: 15, maxTurnos: 8,
       maxCaracteres: 500, falasDeContexto: 20,
@@ -226,7 +226,7 @@ describe('Prazo para reabrir conversa encerrada', () => {
 
   it('salva e relê o prazo', async () => {
     expect((await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, {
-      ativo: true, politicas: POLITICAS, ...REGRAS_AGENTE_PADRAO, horasParaReabrir: 72,
+      ativo: true, politicas: POLITICAS, confirmacao: 'autonomo', ...REGRAS_AGENTE_PADRAO, horasParaReabrir: 72,
     })).statusCode).toBe(200)
     const r = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { regras: RegrasDoAgente }
     expect(r.regras.horasParaReabrir).toBe(72)
@@ -234,7 +234,7 @@ describe('Prazo para reabrir conversa encerrada', () => {
 
   it('fora da faixa é recusado com a frase corretiva, antes do CHECK', async () => {
     const r = await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, {
-      ativo: true, politicas: POLITICAS, horasParaReabrir: 5000,
+      ativo: true, politicas: POLITICAS, confirmacao: 'autonomo', horasParaReabrir: 5000,
     })
     expect(r.statusCode).toBe(422)
     expect(r.json().mensagem).toContain('entre 1 e 720')

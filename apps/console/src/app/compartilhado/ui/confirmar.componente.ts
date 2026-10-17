@@ -2,7 +2,7 @@ import {
   ChangeDetectionStrategy, Component, ElementRef, Injectable, afterRenderEffect, inject, signal, viewChild,
 } from '@angular/core'
 import {
-  FECHADO, abrir, normalizarPedido, responder, type EstadoConfirmacao,
+  FECHADO, abrir, normalizarPedido, podeConfirmar, responder, type EstadoConfirmacao,
 } from './confirmacao.estado.js'
 
 /**
@@ -11,6 +11,10 @@ import {
  *   const ok = await confirmacao.confirmar({ titulo: 'Excluir meta?', mensagem: '…', acao: 'Excluir' })
  *   if (!ok) return
  *
+ * CONFIRMAÇÃO DIGITADA (ADR-028): com `digitar: 'autonomo'`, o botão só
+ * destrava quando a pessoa digita a palavra (sem acento nem caixa) — para o
+ * clique que solta o robô para todos os clientes não sair por reflexo.
+ *
  * ⚠️ Substitui o `confirm()` nativo e, principalmente, o botão que apaga sem
  * perguntar. A máquina de estados (confirmacao.estado.ts) é pura e testada; aqui
  * só mora a cola com o Angular: o signal, as promessas pendentes e o foco.
@@ -18,18 +22,25 @@ import {
 @Injectable({ providedIn: 'root' })
 export class ConfirmacaoServico {
   readonly estado = signal<EstadoConfirmacao>(FECHADO)
+  /** O que a pessoa digitou no campo de confirmação (zera a cada pedido). */
+  readonly digitado = signal('')
   private serie = 0
   private readonly pendentes = new Map<number, (r: boolean) => void>()
 
-  confirmar(p: { titulo: string; mensagem: string; acao?: string; cancelar?: string; perigo?: boolean }): Promise<boolean> {
+  confirmar(p: { titulo: string; mensagem: string; acao?: string; cancelar?: string; perigo?: boolean; digitar?: string | null }): Promise<boolean> {
     const serie = ++this.serie
+    this.digitado.set('')
     const t = abrir(this.estado(), normalizarPedido(p), serie)
     this.aplicar(t.respostas)
     this.estado.set(t.estado)
     return new Promise<boolean>((resolve) => this.pendentes.set(serie, resolve))
   }
 
+  podeConfirmar(): boolean { return podeConfirmar(this.estado(), this.digitado()) }
+
   responder(resposta: boolean): void {
+    // ⚠️ "Sim" sem o texto conferido é ignorado — Enter no campo não fura a regra.
+    if (resposta && !this.podeConfirmar()) return
     const t = responder(this.estado(), resposta)
     this.aplicar(t.respostas)
     this.estado.set(t.estado)
@@ -56,10 +67,18 @@ export class ConfirmacaoServico {
                (click)="$event.stopPropagation()" (keydown.escape)="servico.responder(false)">
             <h2 id="ui-confirmar-titulo" class="txt-secao">{{ e.pedido.titulo }}</h2>
             <p id="ui-confirmar-msg" class="txt-corpo">{{ e.pedido.mensagem }}</p>
+            @if (e.pedido.digitar; as palavra) {
+              <label class="digitar">
+                <span class="txt-corpo">Para confirmar, digite <strong class="txt-dados">{{ palavra }}</strong></span>
+                <input #campo type="text" autocomplete="off" spellcheck="false" [value]="servico.digitado()"
+                       (input)="servico.digitado.set($any($event.target).value)"
+                       (keydown.enter)="servico.responder(true)" />
+              </label>
+            }
             <div class="acoes">
               <button type="button" class="btn btn--secundario" (click)="servico.responder(false)">{{ e.pedido.cancelar }}</button>
               <button #primario type="button" class="btn" [class.btn--perigo]="e.pedido.perigo" [class.btn--primario]="!e.pedido.perigo"
-                      (click)="servico.responder(true)">{{ e.pedido.acao }}</button>
+                      [disabled]="!servico.podeConfirmar()" (click)="servico.responder(true)">{{ e.pedido.acao }}</button>
             </div>
           </div>
         </div>
@@ -82,12 +101,18 @@ export class ConfirmacaoServico {
     .btn--primario { background: var(--acao); color: var(--acao-texto); }
     .btn--perigo { background: var(--erro); color: var(--acao-texto); }
     .btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .digitar { display: grid; gap: var(--espacamento-2); margin: 0; padding: var(--espacamento-3) 0 var(--espacamento-4); }
+    .digitar input { font: inherit; min-height: var(--densidade-alvo-clique-console); padding: var(--espacamento-1) var(--espacamento-2);
+      border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); }
+    .digitar input:focus-visible { outline: none; border-color: var(--borda-foco); box-shadow: 0 0 0 2px var(--borda-foco); }
   `,
 })
 export class ConfirmarComponente {
   readonly servico = inject(ConfirmacaoServico)
   private readonly caixa = viewChild<ElementRef<HTMLElement>>('caixa')
   private readonly primario = viewChild<ElementRef<HTMLButtonElement>>('primario')
+  private readonly campo = viewChild<ElementRef<HTMLInputElement>>('campo')
 
   constructor() {
     // ⚠️ Foco entra no diálogo ao abrir (o leitor de tela anuncia e o teclado
@@ -95,7 +120,8 @@ export class ConfirmarComponente {
     //    ainda, o próprio modal (tabindex=-1).
     afterRenderEffect(() => {
       if (!this.servico.estado().aberto) return
-      const alvo = this.primario()?.nativeElement ?? this.caixa()?.nativeElement
+      // Com confirmação digitada, o foco vai para o CAMPO (o botão nasce travado).
+      const alvo = this.campo()?.nativeElement ?? this.primario()?.nativeElement ?? this.caixa()?.nativeElement
       if (alvo && document.activeElement !== alvo && !alvo.contains(document.activeElement)) alvo.focus()
     })
   }

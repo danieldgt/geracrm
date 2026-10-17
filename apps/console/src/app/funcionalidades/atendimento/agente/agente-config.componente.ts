@@ -2,11 +2,12 @@ import { Component, ChangeDetectionStrategy, computed, effect, inject, input, ou
 import { RouterLink } from '@angular/router'
 import {
   MODOS_AGENTE, ROTULO_MODO, OBJETIVOS_AGENTE, TONS, SLOTS_QUALIFICACAO, REGRAS_AGENTE_PADRAO,
-  avisosDasRegras, type ModoAgente, type RegrasDoAgente,
+  avisosDasRegras, type ModoAgente, type RegrasDoAgente, type SegmentoRecorte,
 } from '@geracrm/shared'
 import {
   BotaoComponente, CampoComponente, PainelComponente, EsqueletoComponente, EstadoComponente, BadgeComponente,
-  QualidadeComponente, ToastServico, agruparPorPreco, linhaDeCusto, rotuloProvedor, type ModeloIa,
+  QualidadeComponente, ToastServico, ConfirmacaoServico, HorarioAtendimentoComponente,
+  agruparPorPreco, linhaDeCusto, rotuloProvedor, type HorarioAtendimento, type ModeloIa,
 } from '../../../compartilhado/ui/index.js'
 import { AgenteServico, ehSemPermissao, type ConfigAgente } from './agente.servico.js'
 import {
@@ -18,6 +19,11 @@ import {
   MODELO_PADRAO_DO_SERVIDOR, escolhaForaDaLista, opcaoPadraoDoServidor, podeEscolher, type CatalogoDoTenant,
 } from './modelos.regras.js'
 import { ConhecimentoServico } from './conhecimento.servico.js'
+import { ModoServico } from './modo.servico.js'
+import {
+  MODOS_FORA, ROTULO_FORA, ROTULO_SEGMENTO, SEGMENTOS, erroDoRecorte, fraseOrigem, fraseReserva, pedidoDeConfirmacao,
+  recorteParaFormulario, recorteParaSalvar, type FormularioRecorte, type ModoNaConfig, type TetoDoTenant,
+} from './modo.regras.js'
 import { fraseCapacidade } from './conhecimento.regras.js'
 
 type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
@@ -38,7 +44,7 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterLink, BotaoComponente, CampoComponente, PainelComponente, EsqueletoComponente, EstadoComponente,
-    BadgeComponente, QualidadeComponente,
+    BadgeComponente, QualidadeComponente, HorarioAtendimentoComponente,
   ],
   template: `
     @switch (estado()) {
@@ -74,10 +80,22 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
             }
             @if (erroGeral(); as g) { <div class="aviso aviso--erro" role="alert">{{ g }}</div> }
 
-            <!-- (a) Modo -->
+            @if (podeConfigurar() === false) {
+              <div class="aviso" role="status">Só um <strong>administrador</strong> muda a configuração do agente. Você está vendo em modo leitura.</div>
+            }
+
+            <!-- (a) Modo — o selo mostra o modo EFETIVO agora e de onde veio a restrição (ADR-028). -->
             <ui-painel>
               <h2 class="txt-secao secao">Modo</h2>
-              <p class="dica topo">Comece em sombra, passe para assistido e só então deixe autônomo — por número.</p>
+              @if (modoEfetivo(); as e) {
+                <div class="selo" role="status" aria-live="polite">
+                  <span class="txt-rotulo">Agora</span>
+                  <ui-badge [tom]="badge(e.modo).tom">{{ badge(e.modo).rotulo }}</ui-badge>
+                  @if (e.origem !== 'numero') { <ui-badge tom="atencao">{{ e.origem === 'tenant' ? 'teto da conta' : 'fora do recorte' }}</ui-badge> }
+                  <span class="selo-frase encolhe">{{ frase(e) }}</span>
+                </div>
+              }
+              <p class="dica topo">Comece em sombra, passe para assistido e só então deixe autônomo — por número. Autônomo e desligado pedem que você digite o nome do modo para confirmar.</p>
               <div class="modos" role="radiogroup" aria-label="Modo do agente">
                 @for (m of modos; track m) {
                   <label class="modo" [class.sel]="f().modo === m" [class.off]="bloqueiaModo(m)">
@@ -90,6 +108,87 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
                   </label>
                 }
               </div>
+            </ui-painel>
+
+            <!-- (a1) Recorte — onde o modo do número vale; fora dele CAI, nunca sobe. -->
+            <ui-painel>
+              <h2 class="txt-secao secao">Recorte</h2>
+              <p class="dica topo">Limite o modo deste número a um horário e a segmentos de cliente. Fora do recorte o agente cai para o modo escolhido abaixo — nunca sobe.</p>
+              @if (cfgModo()?.recorteInvalido) {
+                <div class="aviso" role="alert">O recorte salvo está inválido e o agente atua em sombra por segurança. Ajuste abaixo e salve.</div>
+              }
+              <label class="chk">
+                <input type="checkbox" [checked]="rf().ativo" (change)="mudarRecorte('ativo', $any($event.target).checked)" />
+                Usar recorte neste número
+              </label>
+              @if (rf().ativo) {
+                <div class="recorte">
+                  <label class="chk">
+                    <input type="checkbox" [checked]="rf().usaHorario" (change)="mudarRecorte('usaHorario', $any($event.target).checked)" />
+                    Só em um horário
+                  </label>
+                  @if (rf().usaHorario) {
+                    <ui-horario-atendimento legenda="Horário do recorte (fuso da loja)" [horario]="rf().horario" (horarioChange)="mudarHorarioRecorte($event)" />
+                  }
+                  <fieldset class="segmentos">
+                    <legend class="txt-rotulo">Segmentos de cliente (RFV) — nenhum marcado = todos</legend>
+                    <div class="slots">
+                      @for (sg of segmentos; track sg) {
+                        <label class="chk">
+                          <input type="checkbox" [checked]="rf().segmentos.includes(sg)" (change)="alternarSegmento(sg, $any($event.target).checked)" />
+                          {{ rotuloSegmento[sg] }}
+                        </label>
+                      }
+                    </div>
+                  </fieldset>
+                  <fieldset class="segmentos">
+                    <legend class="txt-rotulo">Fora do recorte</legend>
+                    <div class="fora" role="radiogroup" aria-label="Modo fora do recorte">
+                      @for (m of modosFora; track m) {
+                        <label class="chk">
+                          <input type="radio" name="foraDoRecorte" [value]="m" [checked]="rf().foraDoRecorte === m" (change)="mudarRecorte('foraDoRecorte', m)" />
+                          {{ rotuloFora[m] }}
+                        </label>
+                      }
+                    </div>
+                  </fieldset>
+                  @if (erroRecorte(); as e) { <span class="msg-erro" role="alert">{{ e }}</span> }
+                  @if (erroDe('recorte'); as e) { <span class="msg-erro" role="alert">{{ e }}</span> }
+                </div>
+              }
+            </ui-painel>
+
+            <!-- (a1b) Teto da conta — o kill switch geral (vale para todos os números). -->
+            <ui-painel>
+              <h2 class="txt-secao secao">Teto da conta</h2>
+              <p class="dica topo">O modo mais solto que <strong>qualquer</strong> número pode ter. “Desligado” cala o agente em todos os números de uma vez, sem mexer na configuração de cada um — as mensagens continuam gravadas.</p>
+              @switch (estadoTeto()) {
+                @case ('carregando') { <ui-esqueleto altura="40px" largura="60%" /> }
+                @case ('erro') {
+                  <div class="aviso aviso--erro" role="alert">Não foi possível ler o teto da conta.
+                    <div class="topo-2"><ui-botao variante="secundario" (click)="carregarTeto()">Tentar de novo</ui-botao></div></div>
+                }
+                @case ('pronto') {
+                  @if (teto(); as t) {
+                    <div class="teto">
+                      <label class="campo teto-campo">
+                        <span>Modo máximo da conta</span>
+                        <select [value]="tetoEscolhido()" [disabled]="!t.podeConfigurar || salvandoTeto()"
+                                (change)="tetoEscolhido.set($any($event.target).value)">
+                          @for (m of modos; track m) { <option [value]="m" [selected]="tetoEscolhido() === m">{{ badge(m).rotulo }}</option> }
+                        </select>
+                      </label>
+                      @if (t.podeConfigurar) {
+                        <ui-botao variante="secundario" [carregando]="salvandoTeto()" [desabilitado]="tetoEscolhido() === t.modoMaximo"
+                                  (click)="aplicarTeto()">Aplicar a todos os números</ui-botao>
+                      }
+                    </div>
+                    @if (t.atualizadoEm) {
+                      <p class="dica">Alterado {{ t.atualizadoPor ? 'por ' + t.atualizadoPor + ' ' : '' }}em <span class="txt-dados">{{ dataHora(t.atualizadoEm) }}</span>.</p>
+                    }
+                  }
+                }
+              }
             </ui-painel>
 
             <!-- (a2) Modelo de IA — o cliente escolhe o modelo; a chave é do servidor e nunca aparece.
@@ -175,6 +274,9 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
                     </div>
                     @if (erroDe('modelo'); as e) { <span class="msg-erro" id="erro-modelo" role="alert">{{ e }}</span> }
                     <p class="dica">Trocar de modelo vale a partir da próxima mensagem. Cada decisão registra qual modelo respondeu.</p>
+                    @if (reserva(); as r) {
+                      <p class="reserva"><ui-badge [tom]="r.tom">reserva</ui-badge> <span class="encolhe">{{ r.texto }}</span></p>
+                    }
                   }
                 }
               }
@@ -201,11 +303,8 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
                 <input type="checkbox" [checked]="f().persona.usaEmojis" (change)="mudarPersona('usaEmojis', $any($event.target).checked)" />
                 Usa emojis
               </label>
-              <label class="chk">
-                <input type="checkbox" [checked]="f().persona.identificaComoRobo" (change)="mudarPersona('identificaComoRobo', $any($event.target).checked)" />
-                Se apresenta como atendimento automatizado
-              </label>
-              <p class="dica">A Meta exige que o cliente saiba quando fala com um robô. Desligar isto no canal oficial pode custar a qualidade do número.</p>
+              <!-- Sem opção de desligar (ADR-028/029): identificar-se é regra, não preferência. -->
+              <p class="dica">O agente <strong>sempre</strong> se apresenta como assistente virtual da loja — é regra (exigência da Meta e do produto), não uma opção.</p>
             </ui-painel>
 
             <!-- (c) Objetivo + qualificação -->
@@ -420,7 +519,7 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
             </ui-painel>
 
             <div class="acoes">
-              <ui-botao tipo="submit" [carregando]="salvando()">{{ salvando() ? 'Salvando…' : 'Salvar' }}</ui-botao>
+              <ui-botao tipo="submit" [carregando]="salvando()" [desabilitado]="podeConfigurar() === false">{{ salvando() ? 'Salvando…' : 'Salvar' }}</ui-botao>
               @if (temErros()) { <span class="msg-erro">Corrija os campos destacados.</span> }
             </div>
           </form>
@@ -485,6 +584,19 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
     .avancado summary { cursor: pointer; color: var(--texto); }
     .avancado[open] summary { margin-bottom: var(--espacamento-3); }
     .acoes { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; }
+    .selo { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; min-width: 0;
+      padding: var(--espacamento-2) var(--espacamento-3); margin-bottom: var(--espacamento-3);
+      border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--fundo); }
+    .selo-frase { color: var(--texto-secundario); font-size: 13px; flex: 1 1 260px; }
+    .recorte { display: grid; gap: var(--espacamento-3); margin-top: var(--espacamento-2); min-width: 0; }
+    .segmentos { border: 1px solid var(--borda); border-radius: var(--raio-painel); margin: 0;
+      padding: var(--espacamento-2) var(--espacamento-4) var(--espacamento-3); min-width: 0; }
+    .segmentos legend { padding: 0 var(--espacamento-1); }
+    .fora { display: grid; gap: 0; }
+    .teto { display: flex; align-items: end; gap: var(--espacamento-3); flex-wrap: wrap; }
+    .teto-campo { display: grid; gap: var(--espacamento-1); min-width: 220px; }
+    .reserva { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; margin: var(--espacamento-2) 0 0;
+      color: var(--texto-secundario); font-size: 12px; }
     @media (max-width: 640px) { .grade-2 { grid-template-columns: 1fr; } }
   `,
 })
@@ -496,6 +608,26 @@ export class AgenteConfigComponente {
   private readonly api = inject(AgenteServico)
   private readonly conhecimento = inject(ConhecimentoServico)
   private readonly toast = inject(ToastServico)
+  private readonly modoApi = inject(ModoServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
+
+  // ─── Modo efetivo, recorte e teto da conta (ADR-028, P14) ───
+  readonly segmentos = SEGMENTOS
+  readonly rotuloSegmento = ROTULO_SEGMENTO
+  readonly modosFora = MODOS_FORA
+  readonly rotuloFora = ROTULO_FORA
+  /** O GET com os campos do modo (opcionais: a API anterior não manda). */
+  readonly cfgModo = computed(() => this.cfg() as (ConfigAgente & ModoNaConfig) | null)
+  readonly modoEfetivo = computed(() => this.cfgModo()?.modoEfetivo ?? null)
+  /** `undefined` = API anterior (não sabe) — trata como pode. */
+  readonly podeConfigurar = computed(() => this.cfgModo()?.podeConfigurar)
+  readonly reserva = computed(() => fraseReserva(this.cfgModo()?.reservaLlm))
+  readonly rf = signal<FormularioRecorte>(recorteParaFormulario(null))
+  readonly erroRecorte = computed(() => (this.tentou() ? erroDoRecorte(this.rf()) : null))
+  readonly estadoTeto = signal<'carregando' | 'pronto' | 'erro'>('carregando')
+  readonly teto = signal<TetoDoTenant | null>(null)
+  readonly tetoEscolhido = signal<ModoAgente>('autonomo')
+  readonly salvandoTeto = signal(false)
 
   readonly modos = MODOS_AGENTE
   readonly rotuloModo = ROTULO_MODO
@@ -545,6 +677,52 @@ export class AgenteConfigComponente {
     // O catálogo é do tenant, não do número: uma carga por tela.
     void this.carregarModelos()
     void this.carregarBuscaConhecimento()
+    void this.carregarTeto()
+  }
+
+  badge(m: string): { rotulo: string; tom: 'neutro' | 'sucesso' | 'atencao' | 'erro' | 'info' } { return badgeModo(m) }
+  frase(e: NonNullable<ModoNaConfig['modoEfetivo']>): string { return fraseOrigem(e, this.cfg()?.modo ?? 'desligado') }
+  dataHora(iso: string): string { return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) }
+
+  mudarRecorte<K extends 'ativo' | 'usaHorario' | 'foraDoRecorte'>(campo: K, valor: FormularioRecorte[K]): void {
+    this.rf.update((r) => ({ ...r, [campo]: valor }))
+    this.limparErro('recorte')
+  }
+  mudarHorarioRecorte(h: HorarioAtendimento): void { this.rf.update((r) => ({ ...r, horario: h })); this.limparErro('recorte') }
+  alternarSegmento(sg: SegmentoRecorte, ligado: boolean): void {
+    this.rf.update((r) => ({ ...r, segmentos: ligado ? [...new Set([...r.segmentos, sg])] : r.segmentos.filter((x) => x !== sg) }))
+    this.limparErro('recorte')
+  }
+
+  async carregarTeto(): Promise<void> {
+    this.estadoTeto.set('carregando')
+    try {
+      const t = await this.modoApi.carregarTeto()
+      this.teto.set(t); this.tetoEscolhido.set(t.modoMaximo)
+      this.estadoTeto.set('pronto')
+    } catch {
+      // Parcial: o formulário do número segue de pé; só o painel do teto mostra o erro.
+      this.estadoTeto.set('erro')
+    }
+  }
+
+  async aplicarTeto(): Promise<void> {
+    const t = this.teto()
+    if (!t || this.salvandoTeto()) return
+    const novo = this.tetoEscolhido()
+    const pedido = pedidoDeConfirmacao(t.modoMaximo, novo, 'conta')
+    if (pedido && !(await this.confirmacao.confirmar({ ...pedido, perigo: true }))) { this.tetoEscolhido.set(t.modoMaximo); return }
+    this.salvandoTeto.set(true)
+    try {
+      const r = await this.modoApi.salvarTeto(novo, pedido ? this.confirmacao.digitado() : null)
+      if (!r.ok) {
+        this.toast.erro(r.status === 403 ? 'Só um administrador muda o teto da conta.' : (r.erro.mensagem ?? 'Não foi possível aplicar o teto.'))
+        this.tetoEscolhido.set(t.modoMaximo)
+        return
+      }
+      this.toast.sucesso(`Teto da conta: ${badgeModo(novo).rotulo.toLowerCase()} — vale para todos os números.`)
+      await Promise.all([this.carregarTeto(), this.carregar()])
+    } finally { this.salvandoTeto.set(false) }
   }
 
   /** Uma linha sob as políticas dizendo se a base busca só por palavras ou também por sentido. Falhou? Não aparece. */
@@ -586,6 +764,7 @@ export class AgenteConfigComponente {
       const c = await this.api.carregarConfig(this.canalId())
       this.cfg.set(c)
       this.f.set(formularioDe(c))
+      this.rf.set(recorteParaFormulario((c as ConfigAgente & ModoNaConfig).recorte ?? null))
       this.estado.set('pronto')
     } catch (e) {
       this.estado.set(ehSemPermissao(e) ? 'sem_permissao' : 'erro')
@@ -628,13 +807,22 @@ export class AgenteConfigComponente {
     ev.preventDefault()
     if (this.salvando()) return
     this.tentou.set(true); this.errosServidor.set({}); this.erroGeral.set(null)
-    if (Object.keys(validarFormulario(this.f())).length > 0) {
+    if (Object.keys(validarFormulario(this.f())).length > 0 || erroDoRecorte(this.rf()) !== null) {
       this.toast.erro('Corrija os campos destacados antes de salvar.')
       return
     }
+    // ⚠️ Autônomo e desligado pedem o nome do modo DIGITADO (ADR-028). A API
+    //    confere de novo — a tela só evita a ida e volta.
+    const pedido = pedidoDeConfirmacao(this.cfg()?.modo ?? null, this.f().modo, 'numero')
+    if (pedido && !(await this.confirmacao.confirmar({ ...pedido, perigo: true }))) return
     this.salvando.set(true)
     try {
-      const r = await this.api.salvarConfig(this.canalId(), corpoParaSalvar(this.f()))
+      const corpo = {
+        ...corpoParaSalvar(this.f()),
+        recorte: recorteParaSalvar(this.rf()),
+        ...(pedido ? { confirmacao: this.confirmacao.digitado() } : {}),
+      }
+      const r = await this.api.salvarConfig(this.canalId(), corpo)
       if (r.ok) {
         this.toast.sucesso(`Salvo — agente ${badgeModo(r.modo).rotulo.toLowerCase()} neste número.`)
         await this.carregar()
@@ -642,6 +830,7 @@ export class AgenteConfigComponente {
       }
       if (r.status === 403) { this.estado.set('sem_permissao'); return }
       if (r.status === 404) { this.erroGeral.set('Este número não existe mais. Recarregue a lista de números.'); return }
+      if (r.erro.erro === 'agente.confirmacao_necessaria') { this.erroGeral.set(r.erro.mensagem ?? 'Confirme a troca de modo digitando o nome do modo.'); return }
       const mapeado = errosDoServidor(r.erro)
       this.errosServidor.set(mapeado.campos)
       this.erroGeral.set(mapeado.geral)

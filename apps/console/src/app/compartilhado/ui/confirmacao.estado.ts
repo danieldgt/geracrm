@@ -1,3 +1,5 @@
+import { normalizarConfirmacao } from '@geracrm/shared'
+
 /**
  * Máquina de estados do diálogo de confirmação — PURA, sem Angular.
  *
@@ -16,6 +18,11 @@ export interface PedidoConfirmacao {
   readonly cancelar: string
   /** Ação destrutiva pinta o botão de perigo. */
   readonly perigo: boolean
+  /**
+   * CONFIRMAÇÃO DIGITADA (ADR-028): o texto que a pessoa tem de digitar para o
+   * botão destravar — aceito sem acento e sem caixa. null = basta o clique.
+   */
+  readonly digitar: string | null
 }
 
 export type EstadoConfirmacao =
@@ -31,15 +38,23 @@ export interface Transicao {
 export const FECHADO: EstadoConfirmacao = { aberto: false }
 
 export function normalizarPedido(p: {
-  titulo: string; mensagem: string; acao?: string; cancelar?: string; perigo?: boolean
+  titulo: string; mensagem: string; acao?: string; cancelar?: string; perigo?: boolean; digitar?: string | null
 }): PedidoConfirmacao {
+  const digitar = p.digitar?.trim() || null
   return {
+    digitar,
     titulo: p.titulo.trim(),
     mensagem: p.mensagem.trim(),
     acao: (p.acao ?? 'Confirmar').trim() || 'Confirmar',
     cancelar: (p.cancelar ?? 'Cancelar').trim() || 'Cancelar',
     perigo: p.perigo ?? true,
   }
+}
+
+/** O botão de confirmar destrava? Sem `digitar`, sempre; com ele, só quando o texto confere. */
+export function podeConfirmar(estado: EstadoConfirmacao, digitado: string): boolean {
+  if (!estado.aberto) return false
+  return estado.pedido.digitar === null || normalizarConfirmacao(digitado) === normalizarConfirmacao(estado.pedido.digitar)
 }
 
 /** Abre um pedido. Um pedido já aberto é resolvido como "não" antes do novo. */

@@ -3,12 +3,20 @@ import type { FastifyInstance } from 'fastify'
 import {
   REGRAS_AGENTE_PADRAO, validarRegrasAgente, MODOS_AGENTE, OBJETIVOS_AGENTE, SLOTS_QUALIFICACAO,
   persona as personaSchema, alcadaAgente, ALCADA_PADRAO, PERSONA_PADRAO,
+  recorteAgente, exigeConfirmacao, confirmacaoConfere, textoDeConfirmacao, decidirModoEfetivo, ehModoAgente,
   type RegrasDoAgente, type ModoAgente,
 } from '@geracrm/shared'
 import { z } from 'zod'
+import type { FastifyReply, FastifyRequest } from 'fastify'
 import { exigirTenant } from '../../../plugins/tenant.js'
 import { comTenantServico } from '../../../db/index.js'
-import { faltaParaLlmFerramentas } from './fabrica-ferramentas.js'
+import { exigirPapel, temPapel } from '../../plataforma/papel.js'
+import { auditar } from '../../plataforma/auditoria.js'
+import { garantirUsuarioId } from '../rotas-fila.js'
+import { faltaParaLlmFerramentas, faltaParaReserva } from './fabrica-ferramentas.js'
+import { estadoDoLlm } from './llm-estado.js'
+import { lerFatosDoModo } from './pipeline/modo-efetivo.js'
+import { diferencaDeConfig } from './auditoria-config.js'
 import { modelosPermitidos } from './modelos.js'
 import { conduzirTurnoVendedor } from './vendedor.js'
 import { ligacoesPadrao } from './ferramentas/ligacoes.js'
@@ -22,7 +30,49 @@ import { sincronizarPoliticas } from './conhecimento/indexador.js'
  * ⚠️ `ativo` continua na resposta e no corpo por compatibilidade de um deploy
  * com o console anterior: `ativo: true` sem `modo` vira `autonomo`, que é o que
  * "ligado" sempre significou. A tela nova fala em `modo`.
+ *
+ * ⚠️ MODO (ADR-028, raia P14): escrever exige papel ADMIN; mudar para
+ *    `autonomo` ou `desligado` exige CONFIRMAÇÃO DIGITADA (`confirmacao` no
+ *    corpo, o nome do modo sem acento nem caixa) — sem ela, 422
+ *    `agente.confirmacao_necessaria`; e todo PUT deixa auditoria
+ *    `agente.config_alterada` com `{antes, depois}` do que mudou. O GET mostra o
+ *    modo EFETIVO agora e de onde veio a restrição (tenant, número ou recorte).
+ *    `GET/PUT /v1/agente/tenant` é o teto do tenant — o kill switch geral.
  */
+
+/**
+ * `exigirPapel` lê o papel pela linha de `usuario`, que nasce no batimento de
+ * presença do console: garantir a linha ANTES evita 403 para quem abriu a tela
+ * direto (nota de integração do plano, §4 P14 — mesmo padrão de rotas-custo).
+ */
+async function garantirUsuario(req: FastifyRequest): Promise<void> {
+  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+}
+
+function pedirConfirmacao(reply: FastifyReply, modo: ModoAgente, alvo: string): FastifyReply {
+  const texto = textoDeConfirmacao(modo)
+  return reply.code(422).send({
+    erro: 'agente.confirmacao_necessaria',
+    mensagem: `Para deixar ${alvo} ${modo === 'desligado' ? 'desligado' : 'autônomo'}, digite "${texto}" para confirmar.`,
+    confirmar: texto,
+    campos: ['confirmacao'],
+  })
+}
+
+/** O que a tela mostra da reserva de LLM (P5): pronta, o que falta e se está em uso agora. */
+function situacaoDaReserva() {
+  const pedida = process.env.IA_RESERVA_PROVEDOR?.trim() || null
+  const falta = faltaParaReserva()
+  const e = estadoDoLlm()
+  return {
+    provedor: pedida,
+    configurada: !!pedida && falta.length === 0,
+    faltaParaReserva: falta,
+    situacao: e.situacao,
+    reservaAteEm: e.reservaAteEm,
+    modelosBloqueados: e.modelosBloqueados.length,
+  }
+}
 
 const PAGINA = 20
 const UUID = /^[0-9a-f-]{36}$/i
@@ -40,13 +90,22 @@ const corpoConfig = z.object({
   maxRodadas: z.number().int().min(1).max(12).optional(),
   prazoTurnoMs: z.number().int().min(3000).max(60000).optional(),
   orcamentoDiaCentavos: z.number().int().nonnegative().nullable().optional(),
+  /** Ausente = mantém; null = sem recorte. */
+  recorte: recorteAgente.nullable().optional(),
+  /** O nome do modo digitado, quando a troca é para autônomo ou desligado. */
+  confirmacao: z.string().max(40).optional(),
 }).passthrough()
+
+const corpoTenant = z.object({
+  modoMaximo: z.enum(MODOS_AGENTE),
+  confirmacao: z.string().max(40).optional(),
+}).strict()
 
 export async function rotasAgente(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
     '/v1/canais/:id/agente', { preHandler: exigirTenant },
     async (req, reply) => {
-      const { cfg, temMensagemAusencia } = await req.comTenant(async (tx) => {
+      const { cfg, temMensagemAusencia, fatos } = await req.comTenant(async (tx) => {
         const [linha] = await tx<{
           ativo: boolean; modo: ModoAgente; politicas: string | null; persona: unknown; objetivo: string; alcada: unknown
           qualificacao: unknown; modelo: string | null; limiar_confianca: string; max_rodadas: number; prazo_turno_ms: number
@@ -54,20 +113,29 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           so_quando_ninguem_disponivel: boolean; exigir_ausencia_antes: boolean
           horas_desde_ausencia: number; reabrir_apos_encerrada: boolean; horas_para_reabrir: number
           minutos_presenca: number; max_turnos: number; max_caracteres: number; falas_de_contexto: number
+          recorte: unknown
         }[]>`
           SELECT ativo, modo, politicas, persona, objetivo, alcada, qualificacao, modelo, limiar_confianca, max_rodadas,
                  prazo_turno_ms, orcamento_dia_centavos,
                  so_quando_ninguem_disponivel, exigir_ausencia_antes,
                  horas_desde_ausencia, reabrir_apos_encerrada, horas_para_reabrir,
-                 minutos_presenca, max_turnos, max_caracteres, falas_de_contexto
+                 minutos_presenca, max_turnos, max_caracteres, falas_de_contexto, recorte
             FROM agente_config
            WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
         const [canal] = await tx<{ tem: boolean }[]>`
           SELECT btrim(coalesce(mensagem_ausencia, '')) <> '' AS tem
             FROM canal_configuracao
            WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
-        return { cfg: linha, temMensagemAusencia: canal?.tem ?? false }
+        await garantirUsuarioId(tx, req)
+        return { cfg: linha, temMensagemAusencia: canal?.tem ?? false, fatos: await lerFatosDoModo(tx, new Date()) }
       })
+      const podeConfigurar = await temPapel(req, 'admin')
+      const modoDoNumero: ModoAgente = cfg?.modo ?? 'desligado'
+      const recorteBruto = cfg?.recorte ?? null
+      const recorteLido = recorteBruto === null ? null : recorteAgente.safeParse(recorteBruto)
+      // ⚠️ Sem contato não há segmento: a tela mostra o efetivo por tenant e horário
+      //    e avisa que o segmento decide conversa a conversa.
+      const efetivo = decidirModoEfetivo({ modoTenant: fatos.modoTenant, modoNumero: modoDoNumero, recorte: recorteBruto, momento: fatos.momento })
 
       const p = REGRAS_AGENTE_PADRAO
       const per = personaSchema.safeParse(cfg?.persona ?? {})
@@ -102,12 +170,23 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         temMensagemAusencia,
         modos: MODOS_AGENTE,
         slotsDisponiveis: SLOTS_QUALIFICACAO,
+        recorte: recorteLido?.success ? recorteLido.data : null,
+        recorteInvalido: recorteLido !== null && !recorteLido.success,
+        tenant: { modoMaximo: fatos.modoTenant ?? 'autonomo' },
+        modoEfetivo: {
+          modo: efetivo.modo, origem: efetivo.origem, motivo: efetivo.motivo, foraDoRecorte: efetivo.foraDoRecorte,
+          /** O recorte usa segmento: o efetivo de cada conversa depende do contato. */
+          dependeDoContato: recorteLido?.success === true && recorteLido.data.segmentosRfv.length > 0,
+          momento: fatos.momento,
+        },
+        podeConfigurar,
+        reservaLlm: situacaoDaReserva(),
       })
     },
   )
 
   app.put<{ Params: { id: string }; Body: Record<string, unknown> }>(
-    '/v1/canais/:id/agente', { preHandler: exigirTenant },
+    '/v1/canais/:id/agente', { preHandler: [exigirTenant, garantirUsuario, exigirPapel('admin')] },
     async (req, reply) => {
       const parse = corpoConfig.safeParse(req.body ?? {})
       if (!parse.success) {
@@ -151,27 +230,36 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
       if (ativo && falta.length > 0 && !modeloCodigo) {
         return reply.code(422).send({ erro: 'agente.sem_chave', mensagem: `Falta configurar ${falta.join(', ')} no servidor.` })
       }
-      const personaFinal = personaSchema.parse({ ...PERSONA_PADRAO, ...corpo.persona })
+      // ⚠️ Confirmação digitada por ÚLTIMO: a pessoa só digita "autonomo" depois
+      //    de o resto estar válido — senão confirma, erra a política e digita de novo.
+      if (exigeConfirmacao(atual, modo) && !confirmacaoConfere(corpo.confirmacao, modo)) {
+        return pedirConfirmacao(reply, modo, 'o agente deste número')
+      }
+      // ⚠️ Identificar-se como assistente é REGRA, não preferência (ADR-028/029):
+      //    a tela não oferece mais a opção e a API não aceita desligá-la.
+      const personaFinal = personaSchema.parse({ ...PERSONA_PADRAO, ...corpo.persona, identificaComoRobo: true })
       const alcadaFinal = alcadaAgente.parse({ ...ALCADA_PADRAO, ...corpo.alcada })
 
       const gravado = await req.comTenant(async (tx) => {
         const [canal] = await tx<{ id: string }[]>`
           SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!canal) return null
+        const [antes] = await tx<{ linha: Record<string, unknown> }[]>`
+          SELECT to_jsonb(ac.*) AS linha FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${req.params.id}`
         await tx`
           INSERT INTO agente_config (
             tenant_id, canal_id, ativo, modo, politicas, max_turnos,
             so_quando_ninguem_disponivel, exigir_ausencia_antes, horas_desde_ausencia,
             reabrir_apos_encerrada, horas_para_reabrir, minutos_presenca, max_caracteres, falas_de_contexto,
             persona, objetivo, alcada, qualificacao, modelo, limiar_confianca, max_rodadas, prazo_turno_ms, orcamento_dia_centavos,
-            atualizado_em)
+            recorte, atualizado_em)
           VALUES (tenant_atual(), ${req.params.id}, ${ativo}, ${modo}, ${politicas || null}, ${r.maxTurnos},
                   ${r.soQuandoNinguemDisponivel}, ${r.exigirAusenciaAntes}, ${r.horasDesdeAusencia},
                   ${r.reabrirAposEncerrada}, ${r.horasParaReabrir}, ${r.minutosPresenca}, ${r.maxCaracteres}, ${r.falasDeContexto},
                   ${JSON.stringify(personaFinal)}::text::jsonb, ${corpo.objetivo ?? 'vender'}, ${JSON.stringify(alcadaFinal)}::text::jsonb,
                   ${JSON.stringify(corpo.qualificacao ?? [])}::text::jsonb, ${corpo.modelo === undefined ? null : modeloCodigo},
                   ${corpo.limiarConfianca ?? 0.6}, ${corpo.maxRodadas ?? 6}, ${corpo.prazoTurnoMs ?? 20000}, ${corpo.orcamentoDiaCentavos ?? null},
-                  now())
+                  ${corpo.recorte ? JSON.stringify(corpo.recorte) : null}::text::jsonb, now())
           ON CONFLICT (tenant_id, canal_id) DO UPDATE SET
             ativo = EXCLUDED.ativo, modo = EXCLUDED.modo, politicas = EXCLUDED.politicas,
             max_turnos = EXCLUDED.max_turnos,
@@ -192,13 +280,80 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
             max_rodadas = ${corpo.maxRodadas !== undefined ? tx`EXCLUDED.max_rodadas` : tx`agente_config.max_rodadas`},
             prazo_turno_ms = ${corpo.prazoTurnoMs !== undefined ? tx`EXCLUDED.prazo_turno_ms` : tx`agente_config.prazo_turno_ms`},
             orcamento_dia_centavos = ${corpo.orcamentoDiaCentavos !== undefined ? tx`EXCLUDED.orcamento_dia_centavos` : tx`agente_config.orcamento_dia_centavos`},
+            recorte = ${corpo.recorte !== undefined ? tx`EXCLUDED.recorte` : tx`agente_config.recorte`},
             atualizado_em = now()`
         // A base de conhecimento espelha as políticas na MESMA transação (R3).
         if (corpo.politicas !== undefined) await sincronizarPoliticas(tx, req.params.id, politicas)
+        // Auditoria na MESMA transação: configuração gravada sem rastro não existe.
+        const [depois] = await tx<{ linha: Record<string, unknown> }[]>`
+          SELECT to_jsonb(ac.*) AS linha FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${req.params.id}`
+        const dif = diferencaDeConfig(antes?.linha ?? null, depois?.linha ?? {})
+        await auditar(tx, {
+          atorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+          acao: 'agente.config_alterada', entidade: 'agente_config', entidadeId: req.params.id,
+          dados: { antes: dif.antes, depois: dif.depois, campos: dif.campos, criacao: !antes },
+        })
         return canal
       })
       if (!gravado) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
       return reply.send({ ok: true, modo })
+    },
+  )
+
+  /**
+   * TETO DO TENANT — o kill switch geral (ADR-028). `modoMaximo` é o modo mais
+   * solto que QUALQUER número pode ter: `desligado` cala o agente em todos os
+   * números sem mexer na configuração de cada um (e sem parar o worker — o
+   * registro das mensagens não depende do agente). Sem linha = `autonomo`.
+   */
+  app.get('/v1/agente/tenant', { preHandler: exigirTenant }, async (req, reply) => {
+    const l = await req.comTenant(async (tx) => {
+      await garantirUsuarioId(tx, req)
+      const [t] = await tx<{ modo_maximo: string; atualizado_em: Date; por: string | null }[]>`
+        SELECT at.modo_maximo, at.atualizado_em, u.nome AS por
+          FROM agente_tenant at
+          LEFT JOIN usuario u ON u.tenant_id = at.tenant_id AND u.id = at.atualizado_por
+         WHERE at.tenant_id = tenant_atual()`
+      return t ?? null
+    })
+    return reply.send({
+      modoMaximo: l && ehModoAgente(l.modo_maximo) ? l.modo_maximo : 'autonomo',
+      atualizadoEm: l?.atualizado_em ?? null,
+      atualizadoPor: l?.por ?? null,
+      podeConfigurar: await temPapel(req, 'admin'),
+    })
+  })
+
+  app.put<{ Body: unknown }>(
+    '/v1/agente/tenant', { preHandler: [exigirTenant, garantirUsuario, exigirPapel('admin')] },
+    async (req, reply) => {
+      const p = corpoTenant.safeParse(req.body ?? {})
+      if (!p.success) {
+        const i = p.error.issues[0]!
+        return reply.code(422).send({ erro: 'agente.campo_invalido', mensagem: `${i.path.join('.') || 'corpo'}: ${i.message}`, campos: [i.path.join('.')] })
+      }
+      const novo = p.data.modoMaximo
+      const atual = await req.comTenant(async (tx) => {
+        const [l] = await tx<{ modo_maximo: string }[]>`SELECT modo_maximo FROM agente_tenant WHERE tenant_id = tenant_atual()`
+        return l && ehModoAgente(l.modo_maximo) ? l.modo_maximo : null
+      })
+      // Sem linha o teto é autônomo: "voltar a autônomo" a partir dali não muda nada.
+      if (exigeConfirmacao(atual ?? 'autonomo', novo) && !confirmacaoConfere(p.data.confirmacao, novo)) {
+        return pedirConfirmacao(reply, novo, 'o agente em TODOS os números')
+      }
+      await req.comTenant(async (tx) => {
+        const eu = await garantirUsuarioId(tx, req)
+        await tx`
+          INSERT INTO agente_tenant (tenant_id, modo_maximo, atualizado_em, atualizado_por)
+          VALUES (tenant_atual(), ${novo}, now(), ${eu})
+          ON CONFLICT (tenant_id) DO UPDATE SET modo_maximo = EXCLUDED.modo_maximo, atualizado_em = now(),
+                                                atualizado_por = EXCLUDED.atualizado_por`
+        await auditar(tx, {
+          atorId: eu, atorStaff: req.atorStaff ?? false, acao: 'agente.config_alterada', entidade: 'agente_tenant',
+          dados: { antes: { modoMaximo: atual ?? 'autonomo' }, depois: { modoMaximo: novo }, campos: atual === novo ? [] : ['modo_maximo'] },
+        })
+      })
+      return reply.send({ ok: true, modoMaximo: novo })
     },
   )
 

@@ -27,7 +27,15 @@
 
 /** Tudo que a decisão precisa. Coletado por quem chama; aqui não há consulta. */
 export interface ContextoPortao {
-  /** `agente_config.ativo` — o botão de desligar, lido a cada mensagem. */
+  /**
+   * O MODO EFETIVO não é `desligado` — o botão de desligar, lido a cada mensagem.
+   *
+   * ⚠️ Desde a P14 (ADR-028) não é mais só `agente_config.modo` do número: é o
+   *    mais restritivo entre o teto do tenant (kill switch geral), o número e o
+   *    recorte (`pipeline/modo-efetivo.ts`), decidido ANTES de chegar aqui. O
+   *    portão não sabe de onde veio o desligamento — a marca `modo-efetivo` na
+   *    decisão é que conta.
+   */
   readonly agenteAtivo: boolean
   /**
    * ⚠️ NÃO é mais "fora do expediente". É "não há ninguém para atender ESTE

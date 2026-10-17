@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, model } from '@angular/core'
+import { Component, ChangeDetectionStrategy, input, model } from '@angular/core'
 
 /** Faixa de atendimento de um dia. `null` = fechado. */
 export interface Faixa { de: string; ate: string }
@@ -28,7 +28,7 @@ const PADRAO: Faixa = { de: '08:00', ate: '18:00' }
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <fieldset class="horario">
-      <legend class="txt-rotulo">Horário de atendimento</legend>
+      <legend class="txt-rotulo">{{ legenda() }}</legend>
       @for (d of dias; track d[0]) {
         <div class="dia">
           <label class="chk">
@@ -62,6 +62,8 @@ const PADRAO: Faixa = { de: '08:00', ate: '18:00' }
 })
 export class HorarioAtendimentoComponente {
   readonly horario = model.required<HorarioAtendimento>()
+  /** O recorte do agente reaproveita o editor com outro título. */
+  readonly legenda = input('Horário de atendimento')
   readonly dias = DIAS
 
   aberto(dia: string): boolean { return !!this.horario()[dia] }

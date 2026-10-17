@@ -1,3 +1,4 @@
+import { classificarRfv, SEGMENTO_SEM_HISTORICO, type SegmentoRecorte } from '@geracrm/shared'
 import type { Sql } from '../../../db/index.js'
 import type { ContextoDoLead } from './porta.js'
 
@@ -70,4 +71,26 @@ function primeiroNome(nome: string | null): string | null {
   const limpo = nome?.trim()
   if (!limpo) return null
   return limpo.split(/\s+/)[0] ?? null
+}
+
+/**
+ * O SEGMENTO RFV do contato, pela MESMA régua do resto (`classificarRfv`) —
+ * para o recorte do modo (ADR-028). Lê a view `metricas_contato` (RLS pela
+ * security_barrier); sem linha = `sem-historico` (o contato não tem compra nas
+ * métricas: lead novo).
+ *
+ * ⚠️ A view é materializada e atualizada pelo worker: quem comprou depois da
+ *    última atualização ainda aparece como antes. Para recorte de modo, um
+ *    atraso de horas é aceitável; o que não seria é reinventar a régua aqui.
+ */
+export async function segmentoRfvDoContato(sql: Sql, contatoId: string): Promise<SegmentoRecorte> {
+  const [m] = await sql<{ qtd_vendas: number; dias_sem_comprar: number | null; atraso: string | null }[]>`
+    SELECT qtd_vendas, dias_sem_comprar, atraso_relativo::text AS atraso
+      FROM metricas_contato WHERE tenant_id = tenant_atual() AND contato_id = ${contatoId}`
+  if (!m || Number(m.qtd_vendas) <= 0) return SEGMENTO_SEM_HISTORICO
+  return classificarRfv({
+    qtdVendas: Number(m.qtd_vendas),
+    diasSemComprar: m.dias_sem_comprar,
+    atrasoRelativo: m.atraso === null ? null : Number(m.atraso),
+  }).codigo
 }
