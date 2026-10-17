@@ -4,7 +4,7 @@ import { exigirTenant } from '../../../plugins/tenant.js'
 import { auditar } from '../../plataforma/auditoria.js'
 import { garantirUsuarioId } from '../rotas-fila.js'
 import {
-  descartarSugestao, gerarCopiloto, lerSugestaoVigente, metricasSugestoes, modoParaCopiloto, publicarSugestaoMudou,
+  descartarSugestao, gerarCopiloto, lerConversaParaSugestao, lerSugestaoVigente, metricasSugestoes, modoDoCopiloto, publicarSugestaoMudou,
   type OpcoesCopiloto,
 } from './sugestao.js'
 
@@ -23,7 +23,8 @@ import {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const MENSAGEM_SEM_SUGESTAO: Record<string, string> = {
-  orcamento_do_dia: 'O teto diário de custo do agente deste número foi atingido. Responda sem a sugestão.',
+  // O copiloto respeita o teto diário do número (é o mesmo orçamento do agente).
+  orcamento_do_dia: 'Limite diário de IA deste número atingido — responda sem a sugestão até amanhã.',
 }
 
 export async function rotasSugestao(app: FastifyInstance, opcoes: { copiloto?: OpcoesCopiloto } = {}): Promise<void> {
@@ -31,21 +32,20 @@ export async function rotasSugestao(app: FastifyInstance, opcoes: { copiloto?: O
     '/v1/conversas/:id/sugestao', { preHandler: exigirTenant },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
-      const r = await req.comTenant(async (tx) => {
-        const [c] = await tx<{ canal_id: string }[]>`
-          SELECT canal_id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
-        if (!c) return null
-        const modo = await modoParaCopiloto(tx, c.canal_id)
-        const corpo: RespostaSugestao = {
-          sugestao: await lerSugestaoVigente(tx, req.params.id),
-          modoAgente: modo,
-          copilotoDisponivel: modo !== null && modo !== 'desligado',
-          motivoIndisponivel: modo === null ? 'agente.sem_configuracao' : modo === 'desligado' ? 'agente.desligado' : null,
-        }
-        return corpo
+      const lido = await req.comTenant(async (tx) => {
+        const conv = await lerConversaParaSugestao(tx, req.params.id)
+        return conv ? { conv, sugestao: await lerSugestaoVigente(tx, req.params.id) } : null
       })
-      if (!r) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
-      return reply.send(r)
+      if (!lido) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
+      // Selo = modo EFETIVO (P14: teto do tenant, número, recorte), o mesmo que decide o copiloto.
+      const modo = await modoDoCopiloto(req.tenantId!, { ...lido.conv, agora: opcoes.copiloto?.agora ?? new Date() })
+      const corpo: RespostaSugestao = {
+        sugestao: lido.sugestao,
+        modoAgente: modo,
+        copilotoDisponivel: modo !== null && modo !== 'desligado',
+        motivoIndisponivel: modo === null ? 'agente.sem_configuracao' : modo === 'desligado' ? 'agente.desligado' : null,
+      }
+      return reply.send(corpo)
     },
   )
 

@@ -56,7 +56,7 @@ export class SugestaoServico {
     } catch (e) {
       if (this.#conversaId === conversaId) {
         const he = e instanceof HttpErrorResponse ? e : null
-        this.erroAcao.set(mensagemErroGerar(he?.status ?? 0, (he?.error ?? null) as { erro?: string; mensagem?: string } | null))
+        this.erroAcao.set(mensagemErroGerar(he?.status ?? 0, (he?.error ?? null) as { erro?: string; mensagem?: string; motivo?: string } | null))
         // Desligaram o agente com a tela aberta: o selo e o botão refletem na hora.
         if ((he?.error as { erro?: string } | null)?.erro === 'agente.desligado') void this.carregar(conversaId, true)
       }

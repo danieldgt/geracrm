@@ -38,7 +38,9 @@ export function motivoSemCopiloto(r: Pick<RespostaSugestao, 'copilotoDisponivel'
 }
 
 /** Erro tipado de POST …/sugestao/gerar → frase para a tela (nunca o texto cru do servidor sem código). */
-export function mensagemErroGerar(status: number, corpo: { erro?: string; mensagem?: string } | null): string {
+export function mensagemErroGerar(status: number, corpo: { erro?: string; mensagem?: string; motivo?: string } | null): string {
+  // O copiloto respeita o teto diário do número: nomeado, não "sem sugestão" genérico.
+  if (corpo?.erro === 'copiloto.sem_sugestao' && corpo.motivo === 'orcamento_do_dia') return 'Limite diário de IA deste número atingido.'
   switch (corpo?.erro) {
     case 'copiloto.indisponivel': return 'O assistente não respondeu a tempo. Tente de novo ou responda sem a sugestão.'
     case 'agente.desligado': return 'Agente desligado — sugestão indisponível.'

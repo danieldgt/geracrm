@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import {
-  MODOS_AGENTE, PRAZO_COPILOTO_MS, LIMIAR_SIMILARIDADE_SOMBRA, marcaGuardrail,
+  PRAZO_COPILOTO_MS, LIMIAR_SIMILARIDADE_SOMBRA, marcaGuardrail,
   avisosDaSugestao, bloqueadaPelaQualidade, motivoDoBloqueio, foiEditada, naoEnvieAssim, pedeConfirmarOptOut, similaridadeTextos, taxaSombra, taxasDaSugestao, textoDaSugestao,
   type ContagensSugestao, type DesfechoSugestao, type MarcaGuardrail, type MetricasSugestoes, type ModoAgente,
   type OrigemSugestao, type SugestaoVigente,
@@ -8,6 +8,7 @@ import {
 import { comTenantServico, type Sql } from '../../../db/index.js'
 import { conduzirTurnoVendedor, type DepsTurno, type ResultadoTurnoVendedor } from './vendedor.js'
 import { ligacoesPadrao } from './ferramentas/ligacoes.js'
+import { modoEfetivoSeguro } from './pipeline/modo-efetivo.js'
 
 /**
  * SUGESTÃO DO ASSISTIDO E COPILOTO — o lado do VENDEDOR (raia P13; playbook AM §6.1, §6.2, §6.4).
@@ -99,33 +100,28 @@ export async function lerSugestaoPorId(tx: Sql, decisaoId: string): Promise<Suge
 
 // ── modo para o copiloto ────────────────────────────────────────────────────
 
-const ORDEM_MODO: Readonly<Record<ModoAgente, number>> = { desligado: 0, sombra: 1, assistido: 2, autonomo: 3 }
-const ehModo = (v: unknown): v is ModoAgente => typeof v === 'string' && (MODOS_AGENTE as readonly string[]).includes(v)
+/** A conversa e o número dela (sob tenant); `configurado` = existe `agente_config` no número. */
+export async function lerConversaParaSugestao(tx: Sql, conversaId: string): Promise<{ canalId: string; contatoId: string; configurado: boolean } | null> {
+  const [c] = await tx<{ canal_id: string; contato_id: string; configurado: boolean }[]>`
+    SELECT c.canal_id, c.contato_id,
+           EXISTS (SELECT 1 FROM agente_config ac WHERE ac.tenant_id = c.tenant_id AND ac.canal_id = c.canal_id) AS configurado
+      FROM conversa c WHERE c.tenant_id = tenant_atual() AND c.id = ${conversaId}`
+  return c ? { canalId: c.canal_id, contatoId: c.contato_id, configurado: c.configurado } : null
+}
 
 /**
- * O modo que vale para o copiloto neste número (sob tenant). `null` = agente não configurado.
+ * O modo que vale para o copiloto: o MODO EFETIVO do número para este contato (P14 —
+ * `modoEfetivoSeguro`: teto do tenant, número e recorte; falha fechada → sombra). `null` = o número
+ * não tem agente configurado (a tela diz "configure", não "desligado").
  *
- * TODO(P14): trocar por `modoEfetivoSeguro(tenantId, { canalId, contatoId, agora })` de
- * `pipeline/modo-efetivo.ts` quando a P14 entrar (recorte incluído). Até lá: o mais restritivo
- * entre `agente_config.modo` e `agente_tenant.modo_maximo` — este lido com tolerância (a tabela
- * só existe depois da 0104). Nunca lança: erro ao ler o teto do tenant → `sombra` (como a P14).
+ * ⚠️ Só `desligado` cala o copiloto (kill switch). Fora do recorte o modo cai para `foraDoRecorte`
+ *    (padrão sombra) e o copiloto CONTINUA disponível: é o vendedor pedindo, nada sai sozinho.
  */
-export async function modoParaCopiloto(tx: Sql, canalId: string): Promise<ModoAgente | null> {
-  const [cfg] = await tx<{ modo: string }[]>`
-    SELECT modo FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}`
-  if (!cfg || !ehModo(cfg.modo)) return null
-  let teto: ModoAgente = 'autonomo'
-  try {
-    const [existe] = await tx<{ ok: boolean }[]>`SELECT to_regclass('agente_tenant') IS NOT NULL AS ok`
-    if (existe?.ok) {
-      const [t] = await tx<{ modo: string | null }[]>`
-        SELECT to_jsonb(t)->>'modo_maximo' AS modo FROM agente_tenant t WHERE t.tenant_id = tenant_atual()`
-      if (t && ehModo(t.modo)) teto = t.modo
-    }
-  } catch {
-    teto = 'sombra'
-  }
-  return ORDEM_MODO[teto] < ORDEM_MODO[cfg.modo] ? teto : cfg.modo
+export async function modoDoCopiloto(
+  tenantId: string, p: { canalId: string; contatoId: string; configurado: boolean; agora: Date },
+): Promise<ModoAgente | null> {
+  if (!p.configurado) return null
+  return (await modoEfetivoSeguro(tenantId, { canalId: p.canalId, contatoId: p.contatoId, agora: p.agora })).modo
 }
 
 // ── copiloto sob demanda ────────────────────────────────────────────────────
@@ -162,13 +158,14 @@ const TEMPO_ESGOTADO = Symbol('tempo_esgotado')
  */
 export async function gerarCopiloto(tenantId: string, conversaId: string, opcoes: OpcoesCopiloto = {}): Promise<ResultadoCopiloto> {
   const agora = opcoes.agora ?? new Date()
+  const conv = await comTenantServico(tenantId, (tx) => lerConversaParaSugestao(tx, conversaId))
+  if (!conv) return { tipo: 'conversa_inexistente' }
+  // ⚠️ Kill switch ANTES de qualquer custo: desligado → o modelo nem é chamado.
+  const modo = await modoDoCopiloto(tenantId, { ...conv, agora })
+  if (modo === null) return { tipo: 'sem_configuracao' }
+  if (modo === 'desligado') return { tipo: 'desligado' }
   const preparo = await comTenantServico(tenantId, async (tx) => {
-    const [c] = await tx<{ canal_id: string }[]>`
-      SELECT canal_id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
-    if (!c) return { tipo: 'conversa_inexistente' as const }
-    const modo = await modoParaCopiloto(tx, c.canal_id)
-    if (modo === null) return { tipo: 'sem_configuracao' as const }
-    if (modo === 'desligado') return { tipo: 'desligado' as const }
+    const c = { canal_id: conv.canalId }
     // As entrantes ainda sem resposta são "o que o cliente disse agora"; sem nenhuma, o turno
     // sugere a retomada a partir do histórico.
     const entrantes = await tx<{ id: string }[]>`
@@ -178,10 +175,8 @@ export async function gerarCopiloto(tenantId: string, conversaId: string, opcoes
                                       WHERE s.tenant_id = tenant_atual() AND s.conversa_id = ${conversaId}
                                         AND s.direcao = 'saliente' AND s.tipo <> 'sistema'), '-infinity'::timestamptz)
        ORDER BY m.criado_em DESC LIMIT 10`
-    return { tipo: 'ok' as const, canalId: c.canal_id, ids: entrantes.map((e) => e.id).reverse() }
+    return { canalId: c.canal_id, ids: entrantes.map((e) => e.id).reverse() }
   })
-  if (preparo.tipo !== 'ok') return preparo
-
   const chave = `${tenantId}:${conversaId}`
   if (emAndamento.has(chave)) return { tipo: 'em_andamento' }
   emAndamento.add(chave)

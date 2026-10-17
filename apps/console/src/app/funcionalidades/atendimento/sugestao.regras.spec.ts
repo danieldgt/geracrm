@@ -19,6 +19,7 @@ describe('Painel de sugestão — copiloto indisponível', () => {
   it('erros tipados do gerar viram frase com ação; sem conexão é nomeado', () => {
     expect(mensagemErroGerar(502, { erro: 'copiloto.indisponivel' })).toMatch(/não respondeu a tempo/)
     expect(mensagemErroGerar(409, { erro: 'copiloto.sem_sugestao', mensagem: 'Teto atingido.' })).toBe('Teto atingido.')
+    expect(mensagemErroGerar(409, { erro: 'copiloto.sem_sugestao', motivo: 'orcamento_do_dia', mensagem: 'x' })).toBe('Limite diário de IA deste número atingido.')
     expect(mensagemErroGerar(0, null)).toMatch(/Sem conexão/)
     expect(mensagemErroGerar(500, { erro: 'erro.interno' })).toMatch(/Tente de novo/)
   })

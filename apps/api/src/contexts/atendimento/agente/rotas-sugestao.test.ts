@@ -3,12 +3,12 @@ import postgres from 'postgres'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { PRAZO_COPILOTO_MS } from '@geracrm/shared'
 import { criarApp } from '../../../app.js'
-import { encerrarBanco, comTenantServico } from '../../../db/index.js'
+import { encerrarBanco } from '../../../db/index.js'
 import { cifrar } from '../../integracao/cofre.js'
 import { pluginTenant } from '../../../plugins/tenant.js'
 import { rotasSugestao } from './rotas-sugestao.js'
 import { conduzirTurnoVendedor } from './vendedor.js'
-import { modoParaCopiloto } from './sugestao.js'
+import { modoDoCopiloto } from './sugestao.js'
 import { despacharParaTeste, assinar } from '../eventos/barramento.js'
 import type { PortaLlmFerramentas, ResultadoLaco } from './porta-llm.js'
 import type { Ligacoes } from './ferramentas/ligacoes-porta.js'
@@ -140,7 +140,7 @@ beforeEach(async () => {
   await dono`UPDATE conversa SET ultima_entrante_em = now() WHERE tenant_id IN (${T}, ${OUTRO})`
 })
 afterAll(async () => {
-  for (const t of ['agente_decisao', 'agente_sessao', 'agente_tarefa', 'agente_config', 'atendimento', 'aviso_privacidade', 'tenant_privacidade',
+  for (const t of ['agente_decisao', 'agente_sessao', 'agente_tarefa', 'agente_config', 'agente_tenant', 'atendimento', 'aviso_privacidade', 'tenant_privacidade',
     'mensagem', 'conversa', 'contato_telefone', 'contato', 'auditoria', 'usuario', 'canal_configuracao', 'canal_conectado', 'outbox', 'alerta', 'metrica_diaria']) {
     for (const ten of [T, OUTRO]) await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${ten}'`).catch(() => undefined)
   }
@@ -366,11 +366,66 @@ describe('Copiloto sob demanda — só leitura', () => {
     await a.close()
   })
 
-  it('número sem agente configurado → 409; teto do tenant ausente (antes da 0104) é lido com tolerância', async () => {
+  it('número sem agente configurado → 409 agente.sem_configuracao', async () => {
     await dono`DELETE FROM agente_config WHERE tenant_id = ${T}`
     expect(((await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`)).json() as { erro: string }).erro).toBe('agente.sem_configuracao')
-    await configurar('assistido')
-    expect(await comTenantServico(T, (tx) => modoParaCopiloto(tx, CANAL))).toBe('assistido')
+    expect(((await chamar(T, 'GET', `/v1/conversas/${CONVERSA}/sugestao`)).json() as { motivoIndisponivel: string }).motivoIndisponivel).toBe('agente.sem_configuracao')
+  })
+
+  it('kill switch do TENANT (agente_tenant.modo_maximo desligado) → 409 agente.desligado sem chamar o modelo', async () => {
+    await dono`INSERT INTO agente_tenant (tenant_id, modo_maximo) VALUES (${T}, 'desligado')
+               ON CONFLICT (tenant_id) DO UPDATE SET modo_maximo = 'desligado'`
+    try {
+      let chamou = false
+      const a = await appCom({ ...llmQueDiz('x'), async rodar(e) { chamou = true; return llmQueDiz('x').rodar(e) } }, 1000)
+      const r = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)
+      expect(r.statusCode).toBe(409)
+      expect((r.json() as { erro: string }).erro).toBe('agente.desligado')
+      expect(chamou).toBe(false)
+      await a.close()
+    } finally {
+      await dono`DELETE FROM agente_tenant WHERE tenant_id = ${T}`
+    }
+  })
+
+  it('FORA DO RECORTE (cai para sombra): o copiloto continua disponível e gera', async () => {
+    // Quarta, 12:00 em São Paulo; o recorte só vale domingo das 08:00 às 09:00.
+    const QUARTA_MEIO_DIA = new Date('2026-10-14T15:00:00Z')
+    await dono`UPDATE agente_config SET recorte = ${JSON.stringify({ horario: { dom: { de: '08:00', ate: '09:00' } }, segmentosRfv: [], foraDoRecorte: 'sombra' })}::text::jsonb
+               WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
+    try {
+      expect(await modoDoCopiloto(T, { canalId: CANAL, contatoId: CONTATO, configurado: true, agora: QUARTA_MEIO_DIA })).toBe('sombra')
+      await doCliente('tem sabão neutro?')
+      const a = await Fastify()
+      await a.register(pluginTenant)
+      await a.register(rotasSugestao, { copiloto: { llm: llmQueDiz('Temos sim! Quer que eu separe?'), prazoMs: 2000, agora: QUARTA_MEIO_DIA } })
+      await a.ready()
+      const g = (await chamar(T, 'GET', `/v1/conversas/${CONVERSA}/sugestao`, undefined, a)).json() as { modoAgente: string; copilotoDisponivel: boolean }
+      expect(g).toMatchObject({ modoAgente: 'sombra', copilotoDisponivel: true })
+      const r = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)
+      expect(r.statusCode).toBe(200)
+      expect((r.json() as { sugestao: { origem: string; texto: string } }).sugestao).toMatchObject({ origem: 'copiloto', texto: 'Temos sim! Quer que eu separe?' })
+      await a.close()
+    } finally {
+      await dono`UPDATE agente_config SET recorte = NULL WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
+    }
+  })
+
+  it('teto diário do número atingido → 409 copiloto.sem_sugestao (orcamento_do_dia) com mensagem explícita', async () => {
+    await dono`UPDATE agente_config SET orcamento_dia_centavos = 1 WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
+    await dono`INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, modo, desfecho, custo_centavos, criado_em)
+               VALUES (${T}, ${crypto.randomUUID()}, ${CONVERSA}, ${CANAL}, 'assistido', 'silencio', 5, now())`
+    try {
+      let chamou = false
+      const a = await appCom({ ...llmQueDiz('x'), async rodar(e) { chamou = true; return llmQueDiz('x').rodar(e) } }, 2000)
+      const r = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)
+      expect(r.statusCode).toBe(409)
+      expect(r.json()).toMatchObject({ erro: 'copiloto.sem_sugestao', motivo: 'orcamento_do_dia', mensagem: expect.stringMatching(/Limite diário de IA deste número atingido/) })
+      expect(chamou).toBe(false)
+      await a.close()
+    } finally {
+      await dono`UPDATE agente_config SET orcamento_dia_centavos = NULL WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
+    }
   })
 })
 
