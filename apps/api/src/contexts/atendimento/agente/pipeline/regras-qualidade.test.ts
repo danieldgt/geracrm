@@ -146,8 +146,7 @@ describe('Regras de qualidade no turno (P12)', () => {
     // NADA sai — nem a abertura da P4 (decisão b da revisão): ela é descartada e marcada.
     expect(enviados).toEqual([])
     const d = await ultimaDecisao()
-    // ⚠️ `enviada` sai true em autônomo mesmo sem mensagem (vendedor.ts, pendência P0c); o que vale é não ter saída.
-    expect(d).toMatchObject({ desfecho: 'handoff', handoff_motivo: 'qualidade_violacao_critica', mensagens_saida_ids: [] })
+    expect(d).toMatchObject({ desfecho: 'handoff', handoff_motivo: 'qualidade_violacao_critica', enviada: false, mensagens_saida_ids: [] })
     expect(d.resposta!.mensagens).toEqual([])
     expect(daQualidade(d.guardrails).filter((g) => g.codigo !== 'abertura_descartada_pausa')).toEqual([
       expect.objectContaining({ codigo: 'palavra_proibida', gravidade: 'CRITICA', acao: 'registrado' }),
