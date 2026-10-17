@@ -426,3 +426,6 @@ PRONTO     skills descrevem o pipeline e onde estender
   opt-out e gatilhos de segurança ficam sempre ligados. P20 alinha o ADR-033 regra 2 a isso.
   Follow-ups: declarar `DepsTurno.ligacoes.canalId` em vendedor.ts; copiloto (rotas-sugestao) passar canalId a
   ligacoesPadrao para respeitar ações desligadas; estilo/roteiro do playbook no bloco de sistema cacheado (custo).
+- Testes instáveis observados na suíte completa (passam isolados): webhook-enxuto.test.ts "Worker de pós-ingestão",
+  fila.test.ts "Serialização por conversa", rotas-qualidade.test.ts regex /5585/ (P16 corrigindo). Raia P0d de
+  estabilização antes do encerramento.
