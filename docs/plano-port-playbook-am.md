@@ -422,3 +422,7 @@ PRONTO     skills descrevem o pipeline e onde estender
       EFETIVO (selo "teto da conta" quando o kill switch restringe).
 - P13 × P17: o teste "[P17] copiloto não grava memória" está em it.skip em rotas-sugestao.test.ts — a P17 tira o skip
   ao bloquear memoria_anotar em simulação e copiloto.
+- P17: decisão do coordenador — proposta e memória SÃO ações desligáveis no playbook (escolha de negócio); transferir,
+  opt-out e gatilhos de segurança ficam sempre ligados. P20 alinha o ADR-033 regra 2 a isso.
+  Follow-ups: declarar `DepsTurno.ligacoes.canalId` em vendedor.ts; copiloto (rotas-sugestao) passar canalId a
+  ligacoesPadrao para respeitar ações desligadas; estilo/roteiro do playbook no bloco de sistema cacheado (custo).
