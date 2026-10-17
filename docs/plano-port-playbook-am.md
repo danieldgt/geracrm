@@ -406,3 +406,6 @@ PRONTO     skills descrevem o pipeline e onde estender
   Nota: a P5 isolou o worker dos testes por tenant (`workerDoTenant`), o que deve resolver o item (b).
   (j) `EntradaPosResposta.saldoDeEstoqueVisto` preenchido em vendedor.ts a partir do registro de ferramentas;
       filtro P2 passa `estoqueComFonte` (hoje fail-closed: escassez sempre vetada).
+  (k) P10 follow-up: rotas-canais.ts preencher meta_waba_id/meta_telefone ao salvar credencial (hoje o worker
+      da P11 preenche em até 10 min);
+  (l) feriados também na ausência e na disponibilidade do agente (`disponibilidade.ts`) — P11 só aplicou nas ativas.
