@@ -10,7 +10,7 @@
 |---|---|---|---|---|---|
 | P0 costura do pipeline | 0 | 0096 | integrada (ac8d3a7, revisão aprovada na 2ª) | | dona de vendedor.ts / app.ts / server.ts / index.ts |
 | P1 ADRs 028–034 | 0 | — | integrada (d155c22) | worktree-agent-a2ffbdfdac6113d71 | |
-| P2 filtro de saída | 1 | 0097 | em andamento | | |
+| P2 filtro de saída | 1 | 0097 | integrada (740f4d1; 4 revisões) | | |
 | P3 pergunta repetida | 1 | — | integrada (5237e45; 3 revisões; main verde 1525 api) | | |
 | P4 gatilhos + privacidade | 1 | 0098 | em andamento | | |
 | P5 resiliência LLM | 1 | — | integrada (api 1509 verde; removida tabela fixa de preço) | | |
@@ -20,9 +20,9 @@
 | P9 histórico do conhecimento | 1 | 0100 | integrada (0fce467; main verde 1414 api) | | |
 | P10 tela de números | 1 | — | integrada (15c0f85; revalidar visual no fim) | | |
 | P11 webhook enxuto + ativas | 1 | 0101 | em andamento | | |
-| P12 qualidade em produção | 2 | 0102 | pendente | | |
+| P12 qualidade em produção | 2 | 0102 | em andamento | | |
 | P13 sugestão/copiloto/edição | 2 | 0103 | pendente | | |
-| P14 modo: recorte/confirmação/auditoria | 2 | 0104 | pendente | | |
+| P14 modo: recorte/confirmação/auditoria | 2 | 0104 | em andamento | | |
 | P15 evals + scripts | 2 | — | pendente | | |
 | P16 revisão humana | 3 | 0105 | pendente | | |
 | P17 playbook versionado | 3 | 0106 | pendente | | |
