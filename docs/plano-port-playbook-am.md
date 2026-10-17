@@ -12,7 +12,7 @@
 | P1 ADRs 028–034 | 0 | — | integrada (d155c22) | worktree-agent-a2ffbdfdac6113d71 | |
 | P2 filtro de saída | 1 | 0097 | integrada (740f4d1; 4 revisões) | | |
 | P3 pergunta repetida | 1 | — | integrada (5237e45; 3 revisões; main verde 1525 api) | | |
-| P4 gatilhos + privacidade | 1 | 0098 | em andamento | | |
+| P4 gatilhos + privacidade | 1 | 0098 | integrada (8c2af3e; 3 revisões; main verde 1682 api) | | |
 | P5 resiliência LLM | 1 | — | integrada (api 1509 verde; removida tabela fixa de preço) | | |
 | P6 custo e tetos | 1 | 0099 | integrada (af264b2) | | |
 | P7 números ampliados | 1 | — | integrada (c322eee; 4 revisões; main verde 1545 api) | | |
@@ -21,7 +21,7 @@
 | P10 tela de números | 1 | — | integrada (15c0f85; revalidar visual no fim) | | |
 | P11 webhook enxuto + ativas | 1 | 0101 | em andamento | | |
 | P12 qualidade em produção | 2 | 0102 | em andamento | | |
-| P13 sugestão/copiloto/edição | 2 | 0103 | pendente | | |
+| P13 sugestão/copiloto/edição | 2 | 0103 | em andamento | | |
 | P14 modo: recorte/confirmação/auditoria | 2 | 0104 | em andamento | | |
 | P15 evals + scripts | 2 | — | pendente | | |
 | P16 revisão humana | 3 | 0105 | pendente | | |
