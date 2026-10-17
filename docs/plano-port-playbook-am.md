@@ -391,3 +391,7 @@ PRONTO     skills descrevem o pipeline e onde estender
 - P14: `exigirPapel` exige linha em `usuario`; chamar `garantirUsuarioId` antes, ou tratar na tela.
 - Paralelismo: cada raia usa o próprio banco `geracrm_pN` no Postgres 5442 (suítes concorrentes no mesmo banco
   quebram testes de fila/sequência).
+- P0c (pendente, após onda 1; dono vendedor.ts): (a) fontes de números que hoje não entram no P7 — quantidades do
+  pedido aberto carregado fora do laço e memória do contato (`lerMemoria`); (b) estabilizar os testes de
+  fila/worker (`vendedor.test.ts` "Sequência e worker", `pipeline.test.ts` "aviso_e_reagendar") que falham
+  intermitentemente por workers de outros arquivos varrerem todos os tenants.
