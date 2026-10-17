@@ -395,3 +395,6 @@ PRONTO     skills descrevem o pipeline e onde estender
   pedido aberto carregado fora do laço e memória do contato (`lerMemoria`); (b) estabilizar os testes de
   fila/worker (`vendedor.test.ts` "Sequência e worker", `pipeline.test.ts` "aviso_e_reagendar") que falham
   intermitentemente por workers de outros arquivos varrerem todos os tenants.
+  (c) passar `tenantId` a `custoDoLaco` em vendedor.ts (alerta `preco_desconhecido` imediato — P6);
+  (d) remover `custoEstimadoCentavos`/`PRECO_USD_POR_MILHAO` de porta-llm.ts depois de P5 e P6 integradas;
+  (e) slots ditos no 1º turno com resposta fixa sem sessão se perdem (P3).
