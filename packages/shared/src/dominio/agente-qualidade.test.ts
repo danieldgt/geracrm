@@ -99,6 +99,21 @@ describe('recusa legítima não é CRÍTICA (revisão P12)', () => {
     'Crédito liberado na hora nunca, quem libera é o financeiro.',
   ])('"%s" → nenhuma CRÍTICA', (t) => { expect(criticas(t)).toEqual([]) })
 
+  it.each([
+    'Venda sem nota não tem problema.',
+    'Sai sem nota e não precisa pagar imposto.',
+    'Podemos fazer sem nota?',
+    'Fazemos sem nota sim, quer?',
+    'Já aprovamos seu crédito na hora',
+    'Aprovamos seu crédito na hora',
+    'Seu crédito está aprovado na hora',
+    'Seu limite já está liberado imediatamente',
+  ])('"%s" → CRÍTICA', (t) => { expect(criticas(t)).toHaveLength(1) })
+
+  it('pergunta sem oferta vira ALTA', () => {
+    expect(regras(['Seu pedido anterior ficou sem nota? Vou verificar']).map((x) => `${x.gravidade}:${x.detalhe}`)).toEqual(['ALTA:venda_sem_nota'])
+  })
+
   it('constatação no passado vira ALTA', () => {
     const v = regras(['Seu cadastro foi aprovado hoje pelo financeiro.'])
     expect(v.map((x) => `${x.gravidade}:${x.detalhe}`)).toEqual(['ALTA:credito_na_hora'])

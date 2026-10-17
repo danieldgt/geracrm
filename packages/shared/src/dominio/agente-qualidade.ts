@@ -133,7 +133,7 @@ export const PROIBIDAS_QUALIDADE_B2B: ReadonlyArray<{ readonly id: string; reado
   {
     // Crédito/cadastro aprovado na hora: quem aprova é o financeiro/ERP.
     id: 'credito_na_hora', gravidade: 'CRITICA',
-    re: re(`${B}(?:cr[eé]dito|limite|cadastro)\\s+(?:[\\p{L}]+\\s+){0,2}?(?:aprovad[oa]|liberad[oa])\\s+(?:na\\s+hora|hoje|j[aá]|na\\s+mesma\\s+hora|imediatamente|na\\s+certa)${E}|${B}aprova[cç][aã]o\\s+(?:imediata|na\\s+hora|certa|autom[aá]tica)${E}`),
+    re: re(`${B}(?:cr[eé]dito|limite|cadastro)\\s+(?:[\\p{L}]+\\s+){0,2}?(?:aprovad[oa]|liberad[oa])\\s+(?:[\\p{L}]+\\s+){0,2}?(?:na\\s+hora|hoje|j[aá]|na\\s+mesma\\s+hora|imediatamente|na\\s+certa)${E}|${B}(?:j[aá]\\s+)?(?:aprovamos|liberamos)\\s+(?:seu\\s+|sua\\s+|o\\s+)?(?:cr[eé]dito|limite|cadastro)\\s+(?:[\\p{L}]+\\s+){0,2}?(?:na\\s+(?:mesma\\s+)?hora|imediatamente|na\\s+certa)${E}|${B}aprova[cç][aã]o\\s+(?:imediata|na\\s+hora|certa|autom[aá]tica)${E}`),
   },
   { id: 'sem_risco', gravidade: 'ALTA', ignoraNegacao: true, re: re(`${B}(?:sem\\s+(?:nenhum\\s+)?risco|risco\\s+zero)${E}`) },
 ]
@@ -173,13 +173,22 @@ export interface EntradaRegrasQualidade {
  * Negação DEPOIS do termo, na mesma oração: "Pedido sem nota fiscal não é possível",
  * "venda sem nota não fazemos", "aprovação automática não temos, o financeiro analisa".
  */
-const NEGACAO_DEPOIS_RE = /(?<![\p{L}\p{N}])(?:n[aã]o|nunca|jamais|nenhum|nenhuma)(?![\p{L}\p{N}])/iu
+const NEGACAO_DEPOIS_RE =
+  /(?<![\p{L}\p{N}])(?:n[aã]o\s+(?:fazemos|vendemos|trabalhamos|emitimos|aceitamos|conseguimos|temos|[eé]\s+poss[ií]vel|d[aá])|nunca|jamais)(?![\p{L}\p{N}])/iu
 function negadoDepois(frase: string, fimTermo: number): boolean {
   const resto = frase.slice(fimTermo).split(/[,;:—–()]/)[0] ?? ''
   return NEGACAO_DEPOIS_RE.test(resto)
 }
-/** Auxiliar de passado/estado entre o sujeito e "aprovado/liberado": constatação, não promessa. */
-const CONSTATACAO_PASSADO_RE = /(?<![\p{L}])(?:foi|j[aá]|ficou|est[aá]|esteve)\s/iu
+/** Pergunta que OFERECE ("Podemos fazer sem nota?", "Fazemos sem nota sim, quer?") é a própria proposta. */
+const OFERTA_EM_PERGUNTA_RE = /(?<![\p{L}])(?:quer|querem|podemos|fazemos|pode\s+ser)(?![\p{L}])/iu
+/**
+ * Constatação no passado ("seu cadastro foi aprovado hoje") é fato a conferir, não promessa — só com
+ * "foi/ficou" + "hoje" e SEM "na hora/imediatamente/na certa" ("está aprovado na hora" é promessa).
+ */
+function constatacaoNoPassado(termo: string): boolean {
+  return /(?<![\p{L}])(?:foi|ficou)\s/iu.test(termo) && /(?<![\p{L}])hoje(?![\p{L}])/iu.test(termo)
+    && !/na\s+(?:mesma\s+)?hora|imediatamente|na\s+certa/iu.test(termo)
+}
 
 function palavrasProibidas(texto: string, extras: readonly string[] | undefined, estoqueComFonte: boolean): ViolacaoQualidade[] {
   const out: ViolacaoQualidade[] = []
@@ -189,14 +198,17 @@ function palavrasProibidas(texto: string, extras: readonly string[] | undefined,
     out.push({ regra: 'palavra_proibida', gravidade: o.gravidade, trecho: trechoDe(o.trecho ?? texto), detalhe: o.id })
   }
   for (const f of frases(texto)) {
-    // Pergunta não afirma nada ("Seu pedido anterior ficou sem nota?").
-    if (/\?\s*$/.test(f)) continue
+    const pergunta = /\?\s*$/.test(f)
     for (const p of PROIBIDAS_QUALIDADE_B2B) {
       const m = p.re.exec(f)
       if (!m) continue
       if (!p.ignoraNegacao && (termoNegado(f, m.index) || negadoDepois(f, m.index + m[0].length))) continue
-      // Constatação no passado ("seu cadastro foi aprovado hoje") é fato a conferir, não promessa: ALTA.
-      const gravidade = p.gravidade === 'CRITICA' && CONSTATACAO_PASSADO_RE.test(m[0]) ? 'ALTA' : p.gravidade
+      let gravidade: GravidadeQualidade = p.gravidade
+      if (gravidade === 'CRITICA') {
+        // Pergunta: se oferece, é a proposta (CRÍTICA); senão, ALTA ("Seu pedido anterior ficou sem nota?").
+        if (pergunta && !OFERTA_EM_PERGUNTA_RE.test(f)) gravidade = 'ALTA'
+        else if (!pergunta && constatacaoNoPassado(m[0])) gravidade = 'ALTA'
+      }
       out.push({ regra: 'palavra_proibida', gravidade, trecho: trechoDe(f), detalhe: p.id })
     }
   }

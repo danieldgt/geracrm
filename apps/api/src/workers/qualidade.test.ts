@@ -284,6 +284,44 @@ describe('worker de qualidade', () => {
     expect((await avaliacoes(A)).find((x) => x.tipo === 'juiz')!.erro).toMatch(/^formato/)
   })
 
+  it('transcrição: em autônomo o agente entra pelo que foi ENVIADO, não pela decisão (sem "sugestão")', async () => {
+    await dono`UPDATE agente_config SET qualidade_amostra = 1 WHERE tenant_id = ${A}`
+    const { conversa } = await conversaCom(A, CANAL_A, { turnos: 1, modo: 'autonomo' })
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+               VALUES (${A}, ${crypto.randomUUID()}, ${conversa}, 'saliente', 'texto', '{"texto":"Enviei de verdade.","automatica":"agente"}'::jsonb, now() - interval '1 minute')`
+    expect((await rodar(A)).julgadas).toBe(1)
+    const texto = chamadas[0]!.mensagens[0]!.texto
+    expect(texto).toMatch(/AGENTE: Enviei de verdade\./)
+    expect(texto).not.toMatch(/sugestão/)
+  })
+
+  it('fuso inválido no tenant não derruba a passada (validado no SQL e em TS)', async () => {
+    await dono`UPDATE agente_config SET qualidade_amostra = 1 WHERE tenant_id = ${A}`
+    await dono`UPDATE tenant SET fuso = 'Brasil/Ceara' WHERE id = ${A}`
+    try {
+      await conversaCom(A, CANAL_A, { turnos: 1 })
+      expect((await rodar(A)).julgadas).toBe(1)
+    } finally {
+      await dono`UPDATE tenant SET fuso = 'America/Sao_Paulo' WHERE id = ${A}`
+    }
+  })
+
+  it('concorrência: outro processo gravou durante o juiz — a nota dele fica e o custo deste soma (conta no teto)', async () => {
+    await dono`UPDATE agente_config SET qualidade_amostra = 1 WHERE tenant_id = ${A}`
+    const { decisoes, conversa, sessao } = await conversaCom(A, CANAL_A, { turnos: 1 })
+    const concorrente: PortaLlmFerramentas = { ...juizFalso, async rodar(p) {
+      await dono`INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, sessao_id, origem, tipo, gatilho, notas, justificativas, nota_media, custo_centavos)
+                 VALUES (${A}, ${crypto.randomUUID()}, ${decisoes[0]!}, ${conversa}, ${CANAL_A}, ${sessao}, 'sugestao', 'juiz', 'manual',
+                         '{"aderencia":1}'::jsonb, '{"aderencia":"x"}'::jsonb, 1, 5)`
+      return juizFalso.rodar(p)
+    } }
+    const r = await rodar(A, { juiz: concorrente })
+    expect(r.julgadas).toBe(0)
+    const [j] = (await avaliacoes(A)).filter((x) => x.tipo === 'juiz')
+    expect(j).toMatchObject({ gatilho: 'manual', nota_media: '1.00' })
+    expect(Number(j!.custo_centavos)).toBeGreaterThan(100) // 5 do concorrente + o deste julgamento
+  })
+
   it('a fração estável do SQL é a mesma do shared (FNV-1a)', async () => {
     const ids = Array.from({ length: 200 }, () => crypto.randomUUID())
     const sql = await dono<{ f: number }[]>`SELECT qualidade_fracao_estavel(x) AS f FROM unnest(${ids}::text[]) WITH ORDINALITY AS t(x, n) ORDER BY n`

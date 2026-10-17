@@ -167,7 +167,8 @@ export async function transcricaoDaSessao(tx: Sql, sessaoId: string): Promise<{ 
       SELECT 'AGENTE (sugestão)', 'sugestao', d.resposta, d.criado_em
         FROM agente_decisao d
        WHERE d.tenant_id = tenant_atual() AND d.sessao_id = ${sessaoId}
-         AND NOT d.enviada AND d.resposta IS NOT NULL AND d.desfecho IN ('sugeriu', 'handoff', 'superada')
+         -- Sugestão = o que o agente decidiu SEM falar com o cliente; o autônomo entra pela mensagem enviada.
+         AND d.modo <> 'autonomo' AND d.resposta IS NOT NULL AND d.desfecho IN ('respondeu', 'sugeriu', 'handoff', 'superada')
     ) f
     ORDER BY em DESC LIMIT ${MAX_FALAS_TRANSCRICAO}`
   const falas = [...linhasBrutas].reverse().map((l) => {
@@ -302,21 +303,24 @@ export async function julgarSessao(comTx: ComTransacao, alvo: AlvoDoJuiz, juiz: 
         INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, sessao_id, origem, tipo, gatilho, modelo, custo_centavos, turnos, erro)
         VALUES (tenant_atual(), ${comum.id}, ${comum.decisao}, ${comum.conversa}, ${comum.canal}, ${comum.sessao}, ${comum.origem}, 'juiz',
                 ${comum.gatilho}, ${comum.modelo}, ${comum.custo}, ${comum.turnos}, ${r.erro})
-        ON CONFLICT (tenant_id, decisao_id, tipo) DO NOTHING`
+        ON CONFLICT (tenant_id, decisao_id, tipo) DO UPDATE SET custo_centavos = agente_avaliacao.custo_centavos + EXCLUDED.custo_centavos`
       if (custo > 0) await alertarSeChegouAoTeto(tx, alvo)
       return 'falhou' as const
     }
     const notas = Object.fromEntries(Object.entries(r.notas).map(([c, n]) => [c, n.nota]))
     const justificativas = Object.fromEntries(Object.entries(r.notas).map(([c, n]) => [c, mascararTextoQualidade(n.justificativa)]))
-    const ins = await tx`
+    const ins = await tx<{ inserida: boolean }[]>`
       INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, sessao_id, origem, tipo, gatilho,
                                     notas, justificativas, nota_media, modelo, custo_centavos, turnos)
       VALUES (tenant_atual(), ${comum.id}, ${comum.decisao}, ${comum.conversa}, ${comum.canal}, ${comum.sessao}, ${comum.origem}, 'juiz',
               ${comum.gatilho}, ${JSON.stringify(notas)}::text::jsonb, ${JSON.stringify(justificativas)}::text::jsonb, ${r.notaMedia},
               ${comum.modelo}, ${comum.custo}, ${comum.turnos})
-      ON CONFLICT (tenant_id, decisao_id, tipo) DO NOTHING`
+      -- Concorrência (POST × worker): o outro já gravou. A nota dele fica; o custo DESTE julgamento,
+      -- que foi pago, soma na linha — conta no teto do mês.
+      ON CONFLICT (tenant_id, decisao_id, tipo) DO UPDATE SET custo_centavos = agente_avaliacao.custo_centavos + EXCLUDED.custo_centavos
+      RETURNING (xmax = 0) AS inserida`
     await alertarSeChegouAoTeto(tx, alvo)
-    return ins.count > 0 ? 'avaliada' as const : 'ja_avaliada' as const
+    return ins[0]?.inserida ? 'avaliada' as const : 'ja_avaliada' as const
   })
 }
 
