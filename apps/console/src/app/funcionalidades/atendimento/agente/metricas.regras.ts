@@ -68,11 +68,11 @@ export function vereditoDaFase(g: GoLiveDto): Veredito {
       texto: `${contagem(g.pendencias.reprovados.length, 'critério não cumpre', 'critérios não cumprem')} na revisão dos últimos ${g.janelaDias} dias. ${onde}`,
     }
   }
-  if (g.podeAvancar && g.proximaFase) {
-    return { tom: 'sucesso', titulo: `Pronto para ${ROTULO_FASE[g.proximaFase]}`, texto: `Todos os critérios desta fase foram cumpridos. ${onde}` }
-  }
   const alertas = g.pendencias.alertas.length
     ? ` ${contagem(g.pendencias.alertas.length, 'critério pede revisão', 'critérios pedem revisão')}.` : ''
+  if (g.podeAvancar && g.proximaFase) {
+    return { tom: 'sucesso', titulo: `Pronto para ${ROTULO_FASE[g.proximaFase]}`, texto: `Todos os critérios desta fase foram cumpridos.${alertas} ${onde}` }
+  }
   if (!g.proximaFase) {
     return {
       tom: 'neutro', titulo: 'Fase final',

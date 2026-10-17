@@ -44,6 +44,12 @@ describe('Veredito do topo — só informa; aponta a Configuração para mudar o
     expect(v.texto).toMatch(/Configuração/)
   })
 
+  it('pode avançar com alerta → o topo também diz que há critério pedindo revisão', () => {
+    const v = vereditoDaFase({ ...base, podeAvancar: true, recomendacao: 'avancar', pendencias: { reprovados: [], indisponiveis: [], alertas: ['conversao'] } })
+    expect(v.tom).toBe('sucesso')
+    expect(v.texto).toMatch(/1 critério pede revisão/)
+  })
+
   it('manter → conta reprovados e sem medida, e TAMBÉM aponta a Configuração', () => {
     const v = vereditoDaFase({ ...base, pendencias: { reprovados: ['a', 'b'], indisponiveis: ['c'], alertas: [] } })
     expect(v.tom).toBe('neutro')
