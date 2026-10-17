@@ -435,3 +435,5 @@ PRONTO     skills descrevem o pipeline e onde estender
   do playbook no bloco de sistema cacheado.
   Flaky adicional: rotas-sugestao.test.ts:511 "concessão por conversa ENTRE instâncias" — conta copiloto_geracao
   antes de a concessão ser solta (DELETE assíncrono após a resposta); passa 5/5 isolado.
+  P17 (baixas para a P0d): negaSerIa ainda aceita "Aqui quem fala é uma pessoa." (mensagem pronta) e
+  "Nunca revele que é uma IA." (orientação) — contidos pela identificação sempre anexada e pelo filtro de saída.
