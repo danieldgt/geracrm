@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  PERGUNTA_DO_SLOT, PERGUNTA_NEUTRA, PERGUNTAS_NEUTRAS, evitarPerguntaRepetida, evitarPerguntaRepetidaNasMensagens,
+  PERGUNTA_DO_SLOT, PERGUNTA_NEUTRA, PERGUNTAS_NEUTRAS, ehPerguntaDePedido, evitarPerguntaRepetida, evitarPerguntaRepetidaNasMensagens,
   extrairSlotsDoCliente, lerEstadoPerguntas, mesmaPergunta, normalizarPergunta, perguntasDe, proximoSlotAberto,
   slotDaPergunta, temPerguntaRepetida,
 } from './agente-perguntas.js'
@@ -93,6 +93,28 @@ describe('extrairSlotsDoCliente', () => {
     expect(extrairSlotsDoCliente(texto)).toEqual(esperado)
   })
 
+  // Re-revisão da P3 (BAIXA): a intenção estrita deixava respostas legítimas de fora.
+  it.each([
+    ['50 caixas até sexta', { volume: '50 caixas', prazo: 'até sexta' }],
+    ['50 cx', { volume: '50 cx' }],
+    ['vou pegar 10 caixas', { volume: '10 caixas' }],
+    ['seriam 40 caixas pra sexta-feira', { volume: '40 caixas', prazo: 'pra sexta-feira' }],
+    ['me vê 30 fardos', { volume: '30 fardos' }],
+    ['uns 100 kg', { volume: '100 kg' }],
+    ['pra sexta-feira', { prazo: 'pra sexta-feira' }],
+  ])('resposta legítima vira slot: %s', (texto, esperado) => {
+    expect(extrairSlotsDoCliente(texto)).toEqual(esperado)
+  })
+
+  it('pergunta pendente de volume/prazo dispensa a intenção; despedida e embalagem seguem barrando', () => {
+    const longo = 'bom dia, tudo certo por aí com vocês? então, 80 caixas mesmo'
+    expect(extrairSlotsDoCliente(longo)).toEqual({})
+    expect(extrairSlotsDoCliente(longo, { perguntaPendente: 'volume' })).toEqual({ volume: '80 caixas' })
+    expect(extrairSlotsDoCliente('bom, acho que lá pela semana que vem mesmo, sem problema nenhum', { perguntaPendente: 'prazo' })).toEqual({ prazo: 'semana que vem' })
+    expect(extrairSlotsDoCliente('obrigado, até amanhã!', { perguntaPendente: 'prazo' })).toEqual({})
+    expect(extrairSlotsDoCliente('quero o saco de 25 kg', { perguntaPendente: 'volume' })).toEqual({})
+  })
+
   it('não confunde passado, telefone nem conversa à toa', () => {
     expect(extrairSlotsDoCliente('da outra vez comprei 10 caixas')).toEqual({})
     expect(extrairSlotsDoCliente('meu número é 85999990000')).toEqual({})
@@ -143,6 +165,26 @@ describe('evitarPerguntaRepetida (trava antes do envio)', () => {
     const fechar = evitarPerguntaRepetida('Adicionei as 2 caixas. Posso fechar o pedido?', { ...ctx, perguntasAnteriores: ['Posso fechar o pedido?'] })
     expect(fechar.texto).toBe('Adicionei as 2 caixas. Posso fechar o pedido?')
     expect(fechar.removidas).toEqual([])
+  })
+
+  // Re-revisão da P3 (MÉDIA): "pedido" solto e "confirma" de outro slot não podem blindar a pergunta.
+  it.each([
+    'Para quando você precisa desse pedido?',
+    'Qual a quantidade do pedido?',
+    'Quantas caixas você vai querer no pedido?',
+    'Pode confirmar a cidade de entrega?',
+    'Me confirma o CNPJ da empresa?',
+    PERGUNTA_DO_SLOT.orcamento,
+  ])('pergunta de qualificação continua sob a trava: %s', (p) => {
+    expect(ehPerguntaDePedido(p)).toBe(false)
+    const r = evitarPerguntaRepetida(`Certo. ${p}`, { perguntasAnteriores: [p], slotsRespondidos: [], slotsDoCanal: [] })
+    expect(r.removidas).toEqual([p])
+  })
+
+  it('confirmação de quantidade e fechamento continuam blindados', () => {
+    expect(ehPerguntaDePedido('Confirma 20 caixas?')).toBe(true)
+    expect(ehPerguntaDePedido('Posso fechar o pedido?')).toBe(true)
+    expect(evitarPerguntaRepetida('Confirma 20 caixas?', { perguntasAnteriores: ['Confirma 20 caixas?'], slotsRespondidos: [], slotsDoCanal: [] }).removidas).toEqual([])
   })
 
   it('pergunta sem slot só sai se for idêntica; parecida mas não idêntica fica', () => {

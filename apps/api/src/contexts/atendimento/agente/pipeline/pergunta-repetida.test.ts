@@ -284,6 +284,14 @@ describe('etapas isoladas', () => {
     expect(com).toMatchObject({ tipo: 'segue', estado: { perguntas: { respondidos: { tipoCompra: 'revenda', volume: '30 caixas' } } } })
   })
 
+  it('slots: a pergunta pendente de volume no estado deixa ler a resposta sem verbo de intenção', async () => {
+    const entrantes = [{ id: 'm', tipo: 'texto', texto: 'bom dia, tudo certo por aí com vocês? então, 80 caixas mesmo', transcricaoPendente: false, transcricaoFalhou: false }]
+    const estado = { perguntas: { ultima: { texto: PERGUNTA_DO_SLOT.volume, slot: 'volume', em: '' }, respondidos: {} } }
+    const r = await etapaSlotsDoCliente.executar(ctxBase({ entrantes, estado, sessaoId: 'b3b30000-9999-4000-8000-000000000003' }))
+    expect(r).toMatchObject({ estado: { perguntas: { respondidos: { volume: '80 caixas' } } } })
+    expect(await etapaSlotsDoCliente.executar(ctxBase({ entrantes }))).toEqual({ tipo: 'segue' })
+  })
+
   it('slots: áudio ainda sem transcrição não conta; nada a dizer → só segue', async () => {
     const entrantes = [{ id: 'm', tipo: 'audio', texto: '[áudio sem transcrição]', transcricaoPendente: true, transcricaoFalhou: false }]
     expect(await etapaSlotsDoCliente.executar(ctxBase({ entrantes }))).toEqual({ tipo: 'segue' })

@@ -19,12 +19,16 @@ import type { ContextoPipeline, EtapaPreLlm } from './tipos.js'
  * ⚠️ CNPJ vira 'informado'; orçamento também (valor em R$ na instrução viraria número sem fonte).
  */
 
-/** Slots lidos dos entrantes deste turno (áudio ainda sem transcrição não conta). */
-export function slotsDosEntrantes(ctx: Pick<ContextoPipeline, 'entrantes'>): SlotsDoCliente {
+/**
+ * Slots lidos dos entrantes deste turno (áudio ainda sem transcrição não conta). A pergunta que o
+ * agente deixou pendente (`estado.perguntas.ultima.slot`) deixa ler a resposta curta ("50 cx").
+ */
+export function slotsDosEntrantes(ctx: Pick<ContextoPipeline, 'entrantes' | 'estado'>): SlotsDoCliente {
+  const perguntaPendente = lerEstadoPerguntas(ctx.estado['perguntas']).ultima?.slot ?? null
   const r: SlotsDoCliente = {}
   for (const e of ctx.entrantes) {
     if (e.transcricaoPendente || e.transcricaoFalhou) continue
-    Object.assign(r, extrairSlotsDoCliente(e.texto))
+    Object.assign(r, extrairSlotsDoCliente(e.texto, { perguntaPendente }))
   }
   return r
 }
