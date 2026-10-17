@@ -344,3 +344,13 @@ describe('limite de caracteres × nota obrigatória (revisão P17)', () => {
     expect(r.texto).toContain('(conforme a política de frete)')
   })
 })
+
+describe('nota obrigatória conferida de novo depois do corte (revisão final P17)', () => {
+  it('o corte leva a ressalva ("…cidade e região toda.") e a nota volta', () => {
+    const texto = 'Temos toda a grade da coleção nova, em várias cores e tamanhos, e o frete grátis vale para a sua cidade e região toda.'
+    expect(filtrarSaida(texto).texto).toBe(texto) // inteira: a ressalva está na frase
+    const r = filtrarSaida(texto, { limites: { maxCaracteres: 100 } })
+    expect(r.texto).not.toContain('região')
+    expect(r.texto).toMatch(/frete gr[aá]tis \(conforme a política de frete\)|^(?!.*frete gr[aá]tis)/i)
+  })
+})

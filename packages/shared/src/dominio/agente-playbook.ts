@@ -284,32 +284,73 @@ const PERCENTUAL_RE = /\d+(?:[.,]\d+)?\s*%/
 
 // ── texto do negócio: o que NUNCA passa (revisão P17) ──────────────────────
 
-const NAO = String.raw`(?:n[aã]o|nada\s+de|sem|nenhum[a]?|jamais|nunca)`
-const MAQUINA = String.raw`(?:ia|i\.a\.|rob[oô]s?|bots?|chat\s*bots?|m[aá]quinas?|intelig[eê]ncia\s+artificial|automa[cç][aã]o|atendimento\s+autom[aá]tico|(?:assistente|atendente)\s+virtual)`
+/** Homóglifos comuns (cirílico/grego/latinos estendidos e leet) → ASCII. */
+const HOMOGLIFOS: Readonly<Record<string, string>> = {
+  'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x', 'і': 'i', 'ј': 'j', 'к': 'k', 'м': 'm', 'н': 'h', 'т': 't', 'в': 'b',
+  'ı': 'i', 'ł': 'l', 'ø': 'o', 'ß': 'ss', 'α': 'a', 'ο': 'o', 'ι': 'i', 'ρ': 'p', 'ν': 'v', 'τ': 't',
+  '0': 'o', '1': 'i', '3': 'e', '4': 'a', '@': 'a', '$': 's',
+}
+
 /**
- * Negar ser IA ou se passar por gente — no texto que o NEGÓCIO escreve (mensagens
- * prontas, saudação, orientações). Mais largo que a base do filtro de saída de
- * propósito: aqui não há resposta do modelo a preservar, há uma configuração a
- * recusar. "atendimento humano" e "pessoa real" também ficam de fora — a
- * transferência diz "uma pessoa da equipe".
+ * Normalização para a checagem de identidade: NFKD sem acento, minúsculas,
+ * homóglifos para ASCII e pontuação ENTRE letras removida ("A.I." → "ai",
+ * "r-o-b-ô" → "robo", "I'm" → "im"). O resto da pontuação vira espaço.
+ */
+export function normalizarIdentidade(texto: string): string {
+  const base = texto.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  const ascii = [...base].map((c) => HOMOGLIFOS[c] ?? c).join('')
+  return ascii
+    .replace(/(?<=[a-z])[.\-_'’*·•]+(?=[a-z])/g, '')
+    .replace(/[^a-z\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const NAO = String.raw`(?:nao|nada de|sem|nenhum|nenhuma|jamais|nunca|not|never)`
+const MAQ = String.raw`(?:ia|ai|robo\w*|robot\w*|bot\w*|chat ?bot\w*|maquina\w*|inteligencia artificial|artificial intelligence|automac\w*|atendimento automatico|(?:assistente|atendente) virtual|virtual assistant)`
+/** Sem "ai": em português é "aí" ("tudo bem aí? não…"). */
+const MAQ2 = String.raw`(?:ia|robo\w*|robot\w*|bot\w*|chat ?bot\w*|maquina\w*|inteligencia artificial|automac\w*)`
+const PERTO = String.raw`(?:\s+\w+){0,4}\s+`
+/**
+ * Negar ser IA, se passar por gente ou mandar esconder isso — no texto que o
+ * NEGÓCIO escreve (mensagens prontas, saudação, orientações, nome da persona).
+ * Mais largo que a base do filtro de saída de propósito. É a CAMADA EXTRA: a
+ * identificação como assistente virtual é sempre anexada pelo código.
+ * Roda sobre `normalizarIdentidade`.
  */
 const NEGA_IA_RES: readonly RegExp[] = [
-  new RegExp(String.raw`(?:^|[^\p{L}])${NAO}\s+(?:(?:tem|h[aá]|é|e|somos|sou|usamos|existe)\s+)?(?:um\s+|uma\s+|de\s+|nenhum[a]?\s+)?${MAQUINA}(?![\p{L}])`, 'iu'),
-  new RegExp(String.raw`(?:^|[^\p{L}])${MAQUINA}\s*[?!.,:]*\s*(?:aqui\s+)?(?:n[aã]o|nunca|jamais)(?![\p{L}])`, 'iu'),
-  /atendimento\s+(?:100\s*%\s+)?human[oa]|pessoas?\s+(?:real|reais|de\s+verdade|de\s+carne)|gente\s+de\s+verdade|s[oó]\s+gente|human[oa]s?\s+de\s+verdade|equipe\s+humana/iu,
-  /(?:^|[^\p{L}])(?:sou|somos)\s+(?:um\s+|uma\s+)?(?:human[oa]s?|pessoas?|gente|atendente\s+humano)(?![\p{L}])/iu,
-  /(?:diga|fale|responda|afirme|finja|diz|dizer|fingir)\s+(?:que\s+)?(?:é|e|ser|somos|sou|voc[eê]\s+é)\s+(?:um\s+|uma\s+)?(?:human[oa]|pessoa|gente|atendente|vendedor[a]?|funcion[aá]ri[oa])/iu,
-  /ignor\w*\s+(?:as\s+|todas\s+as\s+)?(?:regras|instru[cç][oõ]es|orienta[cç][oõ]es)|desconsider\w*\s+(?:as\s+)?(?:regras|instru[cç][oõ]es)/iu,
+  // "não tem IA", "nada de robô", "sem robô e sem IA", "não sou um bot", "not a bot"
+  new RegExp(String.raw`\b${NAO}\s+(?:(?:tem|ha|e|somos|sou|usamos|existe|am|is|are)\s+)?(?:um\s+|uma\s+|de\s+|a\s+|an\s+|nenhum\s+|nenhuma\s+)?${MAQ}\b`),
+  // "IA? Aqui não.", "robô aqui jamais"
+  new RegExp(String.raw`\b${MAQ2}(?:\s+aqui)?\s+(?:nao|nunca|jamais)\b`),
+  // "que nada" perto de robô/IA
+  new RegExp(String.raw`\bque nada${PERTO}${MAQ2}\b|\b${MAQ2}${PERTO}que nada\b|\b${MAQ2} que nada\b`),
+  // gente de verdade
+  /\batendimento (?:\w+ )?human[oa]\b|\bpessoas? (?:real|reais|de verdade|de carne)\b|\bde carne e osso\b|\bgente de verdade\b|\bso gente\b|\bhuman[oa]s? (?:de verdade|mesmo)\b|\bequipe humana\b|\bem pessoa\b|\bsou de verdade\b/,
+  /\b(?:sou|somos) (?:um |uma )?(?:human[oa]s?|pessoas?|gente|atendente humano)\b/,
+  // inglês
+  /\breal (?:person|people|human)\b|\bhumans? here\b|\bi ?a?m (?:a )?human\b|\bnot (?:a |an )?(?:bot|robot|ai|machine)\b/,
+  // mandar mentir, esconder ou revogar
+  /\b(?:diga|fale|responda|afirme|finja|diz|dizer|fingir|say|tell)\s+(?:que\s+|that\s+)?(?:e|ser|somos|sou|voce e|you are|youre|we are|i am)\s+(?:um\s+|uma\s+|a\s+)?(?:human[oa]?|pessoa|person|gente|atendente|vendedor[a]?|funcionari[oa])\b/,
+  /\b(?:fing\w*|finj\w*|pretend\w*|desconvers\w*|como se fosse)\b/,
+  new RegExp(String.raw`\b(?:nao revel\w*|nao conte|escond\w*|ocult\w*|disfarc\w*)${PERTO.replace('{0,4}', '{0,5}')}(?:${MAQ}|que e|que somos|humano)\b|\b(?:nao revel\w*|escond\w*|ocult\w*) (?:${MAQ})\b`),
+  /\bignor\w* (?:as |todas as |all |the |previous |anteriores )*(?:regras|instruc\w*|orientac\w*|rules|instructions)\b|\bdesconsider\w* (?:as )?(?:regras|instruc\w*)\b/,
 ]
 
-/** O texto nega ser IA, se passa por humano ou tenta revogar as regras? */
+/** O texto nega ser IA, se passa por humano, manda esconder isso ou tenta revogar as regras? */
 export function negaSerIa(texto: string): boolean {
-  return NEGA_IA_RES.some((r) => r.test(texto))
+  const t = normalizarIdentidade(texto)
+  return NEGA_IA_RES.some((r) => r.test(t))
 }
 
 const NUMERO_EXTENSO = String.raw`(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|cento|duzent[oa]s|trezent[oa]s|quinhent[oa]s|mil|meia\s+d[uú]zia|d[uú]zia)`
 /** Número por extenso com unidade de negócio ("dez por cento", "dois dias úteis", "cinco peças"). */
 const NUMERO_EXTENSO_RE = new RegExp(String.raw`(?:^|[^\p{L}])${NUMERO_EXTENSO}(?:\s+e\s+${NUMERO_EXTENSO})*\s+(?:por\s+cento|reais|real|centavos|dias?|horas?|semanas?|meses|m[eê]s|unidades?|pe[cç]as?|caixas?|pares|fardos?|pacotes?|kg|quilos?|metros?)(?![\p{L}])`, 'iu')
+
+/** Verbo de entrega/envio/chegada/saída/expedição (texto normalizado sem acento). */
+const VERBO_ENTREGA_RE = /(?:^|[^\p{L}])(?:entreg\p{L}*|envi\p{L}*|mand\p{L}*|cheg\p{L}*|sai|saem|sair|saiu|sairá|saira|despach\p{L}*|exped\p{L}*|lev\p{L}*|post\p{L}*|recebe\p{L}*)(?![\p{L}])/iu
+/** Vocabulário de tempo: dia, dia da semana, "mesma semana", "dia seguinte", prazo. */
+const TEMPO_RE = /(?:^|[^\p{L}])(?:amanh[aã]|hoje|ontem|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo|mesma\s+semana|dia\s+seguinte|semana\s+que\s+vem|pr[oó]xim[oa]\s+(?:semana|m[eê]s|dia)|prazo|dias?\s+[uú]teis|imediat\p{L}*)(?![\p{L}])/iu
 
 /** Mensagem pronta: placeholders fixos, sem valor/percentual/número/desconto/prazo, sem frase proibida, sem negar ser IA. */
 export function errosDaMensagemPronta(texto: string, chave: ChaveMensagemPlaybook | 'pergunta' | 'saudacao'): string | null {
@@ -319,14 +360,17 @@ export function errosDaMensagemPronta(texto: string, chave: ChaveMensagemPlayboo
   if (negaSerIa(exemplo)) {
     return 'O texto não pode negar que é uma assistente virtual (IA) nem se apresentar como atendimento humano — a identificação é regra, não opção.'
   }
-  if (verificarNumerosNaResposta(exemplo, new Set()).length > 0 || /\bR\$/i.test(exemplo) || PERCENTUAL_RE.test(exemplo)
-    || /por\s+cento/i.test(exemplo) || NUMERO_EXTENSO_RE.test(exemplo)) {
+  // Regra definitiva (revisão P17): NENHUM dígito no texto do negócio — nome,
+  // assistente e empresa entram pelos marcadores. "Leve 3 pague 2", "10 porcento".
+  const semMarcadores = texto.replace(PLACEHOLDER_RE, ' ')
+  if (/\d/.test(semMarcadores) || verificarNumerosNaResposta(exemplo, new Set()).length > 0 || /\bR\$/i.test(exemplo) || PERCENTUAL_RE.test(exemplo)
+    || /por\s*cento/i.test(exemplo) || NUMERO_EXTENSO_RE.test(exemplo)) {
     return 'Mensagem pronta não pode citar valor, percentual nem número (nem por extenso) — o que é fato vai para a base de conhecimento.'
   }
   if (/(?:^|[^\p{L}])descontos?(?![\p{L}])/iu.test(exemplo)) {
     return 'Mensagem pronta não fala de desconto — desconto é decisão da alçada, nunca texto fixo.'
   }
-  if (PROMESSA_PRAZO_RE.test(exemplo) || /(?:^|[^\p{L}])(?:chega|entrega\w*|sai|despach\w*|envi\w*)\s+(?:em|até|ate|no\s+m[aá]ximo)\s+/iu.test(exemplo) && /dias?|horas?|semanas?|amanh[aã]|hoje/iu.test(exemplo)) {
+  if (PROMESSA_PRAZO_RE.test(exemplo) || (VERBO_ENTREGA_RE.test(exemplo) && TEMPO_RE.test(exemplo))) {
     return 'Mensagem pronta não promete prazo de entrega nem de retorno.'
   }
   const f = filtrarSaida(exemplo)
@@ -382,6 +426,9 @@ export function validarPlaybook(bruto: unknown): ResultadoValidacaoPlaybook {
     if (!t) continue
     const e = errosDaMensagemPronta(t, k)
     if (e) erros.push({ campo: `mensagens.${k}`, mensagem: e })
+  }
+  if (negaSerIa(c.persona.nome) || negaSerIa(c.persona.loja)) {
+    erros.push({ campo: negaSerIa(c.persona.nome) ? 'persona.nome' : 'persona.loja', mensagem: 'O nome não pode negar que é uma assistente virtual (IA) nem se apresentar como pessoa.' })
   }
   if (c.persona.saudacao) {
     const e = errosDaMensagemPronta(c.persona.saudacao, 'saudacao')

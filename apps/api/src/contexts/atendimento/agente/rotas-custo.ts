@@ -6,6 +6,7 @@ import { auditar } from '../../plataforma/auditoria.js'
 import { garantirUsuarioId } from '../rotas-fila.js'
 import { fusoSeguro } from '../../plataforma/fuso.js'
 import { cambioBrl, situacaoMensal, tetoSessaoDoAmbiente, tetoSessaoEfetivo, limiarAtingido } from './custo.js'
+import { travarPlaybookDoTenant } from './playbook/repositorio.js'
 
 /**
  * CUSTO E TETOS DO AGENTE (ADR-032, raia P6).
@@ -140,6 +141,8 @@ export async function rotasCusto(app: FastifyInstance): Promise<void> {
       if (!p.success) return invalido(reply, p.error)
       const novo = p.data.tetoSessaoCentavos
       const ok = await req.comTenant(async (tx) => {
+        // Ordem canônica de locks (P17): a trava do playbook do tenant ANTES de tocar agente_config.
+        await travarPlaybookDoTenant(tx)
         const [canal] = await tx<{ id: string }[]>`SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!canal) return false
         const [antes] = await tx<{ teto: string | null }[]>`

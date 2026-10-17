@@ -80,6 +80,16 @@ const doEscopo = (tx: Sql, canalId: string | null) => (canalId ? tx`p.canal_id =
  * `canalId` fica na assinatura por legibilidade de quem chama.
  */
 async function travarEscopo(tx: Sql, _canalId: string | null): Promise<void> {
+  await travarPlaybookDoTenant(tx)
+}
+
+/**
+ * A trava do playbook do tenant. ⚠️ ORDEM CANÔNICA DE LOCKS (revisão P17, deadlock
+ * reproduzido): todo caminho que trava linha de `agente_config` e depois faz
+ * INSERT nela (o trigger da 0106 pega esta trava) chama isto PRIMEIRO, antes de
+ * qualquer FOR UPDATE — a publicação pega esta trava e depois atualiza as linhas.
+ */
+export async function travarPlaybookDoTenant(tx: Sql): Promise<void> {
   await tx`SELECT pg_advisory_xact_lock(hashtext('agente_playbook'), hashtext(tenant_atual()::text))`
 }
 

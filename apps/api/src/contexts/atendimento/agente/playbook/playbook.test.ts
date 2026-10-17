@@ -626,3 +626,19 @@ describe('[6] Uma trava por tenant para publicar e espelhar', () => {
     }
   })
 })
+
+describe('[final 1] PUT da configuração × publicar não entram em deadlock', () => {
+  it('rodadas concorrentes terminam todas (sem 500 de deadlock)', async () => {
+    for (let i = 0; i < 15; i++) {
+      const c = await conteudoDe(A, null)
+      c.estilo.orientacoes = `Rodada ${'x'.repeat(i + 1)} de concorrência: ofereça a grade completa.`
+      expect((await chamar(A, 'PUT', '/v1/agente/playbook/rascunho', { canalId: null, conteudo: c })).statusCode).toBe(200)
+      const visto = await revisado(null)
+      const [put, pub] = await Promise.all([
+        chamar(A, 'PUT', `/v1/canais/${CANAL2}/agente`, { modo: i % 2 ? 'sombra' : 'assistido', politicas: 'Entrega em três dias úteis.' }),
+        chamar(A, 'POST', '/v1/agente/playbook/publicar', { observacao: `Concorrência, rodada ${'x'.repeat(i + 1)}.`, rascunhoAtualizadoEm: visto }),
+      ])
+      expect([put.statusCode, pub.statusCode]).toEqual([200, 200])
+    }
+  })
+})

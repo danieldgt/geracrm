@@ -22,7 +22,7 @@ import { modelosPermitidos } from './modelos.js'
 import { conduzirTurnoVendedor, type DepsTurno } from './vendedor.js'
 import { criarLlmDoCatalogo, llmFerramentasDoAmbiente } from './fabrica-ferramentas.js'
 import { resolverModelo } from './modelos.js'
-import { lerPublicada, lerRascunho } from './playbook/repositorio.js'
+import { lerPublicada, lerRascunho, travarPlaybookDoTenant } from './playbook/repositorio.js'
 import {
   adquirirTravaSimulacao, espelhoDoConteudo, liberarTravaSimulacao, ligacoesDoSandbox, llmComPlaybook, pipelineComPlaybook,
 } from './playbook/simulacao.js'
@@ -277,6 +277,8 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
       const alcadaFinal = alcadaAgente.parse({ ...ALCADA_PADRAO, ...corpo.alcada })
 
       const gravado = await req.comTenant(async (tx) => {
+        // Ordem canônica de locks (P17): a trava do playbook do tenant ANTES de tocar agente_config.
+        await travarPlaybookDoTenant(tx)
         const [canal] = await tx<{ id: string }[]>`
           SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!canal) return { tipo: 'sem_canal' as const }

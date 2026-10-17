@@ -14,7 +14,7 @@ import { criarLlmDoCatalogo, llmFerramentasDoAmbiente } from './fabrica-ferramen
 import { resolverModelo } from './modelos.js'
 import { extrairTexto, MAX_BYTES_ARQUIVO, TIPOS_ARQUIVO } from './conhecimento/extrair-texto.js'
 import {
-  ErroConteudoPlaybook, canalExiste, criarRascunho, descartarRascunho, importarPlaybookInicial, lerPublicada, lerRascunho, lerVersao,
+  ErroConteudoPlaybook, canalExiste, criarRascunho, travarPlaybookDoTenant, descartarRascunho, importarPlaybookInicial, lerPublicada, lerRascunho, lerVersao,
   listarVersoes, publicarRascunho, restaurarVersao, salvarRascunho, vigenteDoCanal,
 } from './playbook/repositorio.js'
 import { sugerirDoDocumento } from './playbook/sugestao.js'
@@ -50,6 +50,16 @@ export const depsPlaybook: { llm: PortaLlmFerramentas | null } = { llm: null }
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
   if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
+/**
+ * Autor da escrita, com a ORDEM CANÔNICA de locks (revisão P17, deadlock com o PUT
+ * da configuração): primeiro a trava do playbook do tenant, depois a linha de
+ * `usuario` (o upsert de `garantirUsuarioId` a trava). O PUT da configuração faz
+ * na mesma ordem.
+ */
+async function autorComTrava(tx: Parameters<typeof garantirUsuarioId>[0], req: FastifyRequest): Promise<string> {
+  await travarPlaybookDoTenant(tx)
+  return garantirUsuarioId(tx, req)
+}
 const soAdmin = { preHandler: [exigirTenant, garantirUsuario, exigirPapel('admin')] }
 
 const canalOpcional = z.string().regex(UUID, 'canalId inválido').nullable().optional()
@@ -80,8 +90,10 @@ function escopoDaQuery(v: string | undefined): string | null | undefined {
 
 export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
   // Versão gravada fora do contrato: erro NOMEADO, nunca "o padrão" em silêncio.
-  app.setErrorHandler((erro, _req, reply) => {
+  app.setErrorHandler((erro, req, reply) => {
     if (erro instanceof ErroConteudoPlaybook) {
+      // Log estruturado (sem o conteúdo do playbook): tenant, versão, o que não bateu.
+      req.log.error({ contexto: 'agente.playbook', evento: 'playbook_conteudo_invalido', tenantId: req.tenantId, versaoId: erro.versaoId, detalhe: erro.detalhe.slice(0, 200), rota: req.routeOptions.url }, 'versão do playbook fora do contrato')
       return reply.code(500).send({ erro: 'playbook.conteudo_invalido', versaoId: erro.versaoId, mensagem: 'Uma versão do playbook está gravada fora do formato esperado. Acione o suporte; nada foi alterado.' })
     }
     throw erro   // o resto segue para o tratador global (app.ts)
@@ -130,7 +142,7 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
     if (!p.success) return zodInvalido(reply, p.error)
     if (!await escopoValido(req, p.data.canalId)) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
     const r = await req.comTenant(async (tx) => importarPlaybookInicial(tx, {
-      canalId: p.data.canalId, autorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+      canalId: p.data.canalId, autorId: await autorComTrava(tx, req), atorStaff: req.atorStaff ?? false,
     }))
     if ('cobertoPelaConta' in r && r.cobertoPelaConta) {
       return reply.code(409).send({
@@ -146,7 +158,7 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
     if (!p.success) return zodInvalido(reply, p.error)
     const canalId = p.data.canalId ?? null
     if (!await escopoValido(req, canalId)) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
-    const r = await req.comTenant(async (tx) => criarRascunho(tx, { canalId, autorId: await garantirUsuarioId(tx, req) }))
+    const r = await req.comTenant(async (tx) => criarRascunho(tx, { canalId, autorId: await autorComTrava(tx, req) }))
     return reply.code(r.criado ? 201 : 200).send(r)
   })
 
@@ -155,7 +167,7 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
     if (!p.success) return zodInvalido(reply, p.error)
     const canalId = p.data.canalId ?? null
     if (!await escopoValido(req, canalId)) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
-    const r = await req.comTenant(async (tx) => salvarRascunho(tx, { canalId, conteudo: p.data.conteudo, autorId: await garantirUsuarioId(tx, req) }))
+    const r = await req.comTenant(async (tx) => salvarRascunho(tx, { canalId, conteudo: p.data.conteudo, autorId: await autorComTrava(tx, req) }))
     if (r.tipo === 'invalido') return campoInvalido(reply, r.erros)
     return reply.send({ ok: true, versao: r.versao })
   })
@@ -182,7 +194,7 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
     const canalId = p.data.canalId ?? null
     if (!await escopoValido(req, canalId)) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
     const r = await req.comTenant(async (tx) => publicarRascunho(tx, {
-      canalId, observacao: p.data.observacao, autorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+      canalId, observacao: p.data.observacao, autorId: await autorComTrava(tx, req), atorStaff: req.atorStaff ?? false,
       rascunhoAtualizadoEm: p.data.rascunhoAtualizadoEm,
     }))
     if (r.tipo === 'rascunho_mudou') {
@@ -226,7 +238,7 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
     const p = corpoPublicarPlaybook.pick({ observacao: true }).strict().safeParse(req.body ?? {})
     if (!p.success) return reply.code(422).send({ erro: 'playbook.observacao_invalida', mensagem: p.error.issues[0]!.message, campos: ['observacao'] })
     const r = await req.comTenant(async (tx) => restaurarVersao(tx, {
-      versaoId: req.params.id, observacao: p.data.observacao, autorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+      versaoId: req.params.id, observacao: p.data.observacao, autorId: await autorComTrava(tx, req), atorStaff: req.atorStaff ?? false,
     }))
     switch (r.tipo) {
       case 'versao_inexistente': return reply.code(404).send({ erro: 'playbook.versao_inexistente' })
@@ -298,9 +310,9 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
       if (s.tipo === 'sugestao_invalida') return campoInvalido(reply, s.erros, 'playbook.sugestao_invalida')
 
       const r = await req.comTenant(async (tx) => {
+        const eu = await autorComTrava(tx, req)
         // Alguém abriu um rascunho enquanto o LLM pensava: não sobrescreve.
         if (await lerRascunho(tx, canalId)) return { tipo: 'rascunho_existente' as const }
-        const eu = await garantirUsuarioId(tx, req)
         const salvo = await salvarRascunho(tx, {
           canalId, conteudo: s.conteudo, autorId: eu, origem: 'documento', resumoMudancas: s.resumoMudancas,
           documentoNome: c.nome ?? null, custoCentavos: s.custoCentavos,

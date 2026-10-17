@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   aberturaDoPlaybook, aplicarSugestao, complianceEfetivo, diffPorSecao, errosDaMensagemPronta, lerPlaybookVigente,
-  limitesDoPlaybook, mensagemProntaSegura, personaDoPlaybook, playbookDaConfig, playbookPadrao, renderizarMensagem,
+  limitesDoPlaybook, mensagemProntaSegura, negaSerIa, normalizarIdentidade, personaDoPlaybook, playbookDaConfig, playbookPadrao, renderizarMensagem,
   slotsDoPlaybook, validarPlaybook, type ConteudoPlaybook,
 } from './agente-playbook.js'
 import { filtrarSaida } from './agente-filtro.js'
@@ -42,8 +42,8 @@ describe('Playbook — a tela só acrescenta restrição (ADR-029 §5)', () => {
     expect(errosDaMensagemPronta('Hoje sai por R$ 10,00!', 'abertura')).toMatch(/valor/)
     expect(errosDaMensagemPronta('Ganhe 10% na primeira compra', 'abertura')).toMatch(/percentual/)
     expect(errosDaMensagemPronta('Oi {cliente}!', 'abertura')).toMatch(/Marcador desconhecido/)
-    expect(errosDaMensagemPronta('Garantimos entrega amanhã para você.', 'abertura')).toMatch(/filtro de segurança/)
-    expect(errosDaMensagemPronta('Uma pessoa te responde em até 2 horas.', 'handoff')).toMatch(/prazo/)
+    expect(errosDaMensagemPronta('Garantimos entrega amanhã para você.', 'abertura')).toMatch(/prazo|filtro de segurança/)
+    expect(errosDaMensagemPronta('Uma pessoa te responde em até 2 horas.', 'handoff')).toMatch(/prazo|número/)
     expect(errosDaMensagemPronta('Oi, {nome}! Aqui é {assistente}, da {empresa}.', 'abertura')).toBeNull()
   })
 
@@ -208,5 +208,69 @@ describe('Sugestão a partir de documento', () => {
     expect(novo.compliance.frasesProibidas).toEqual(['consignação', 'pronta entrega'])
     expect(novo.mensagens.abertura).toBe('Oi, {nome}! Bem-vindo à {empresa}.')
     expect(validarPlaybook(novo).ok).toBe(true)
+  })
+})
+
+describe('Rodada final da revisão P17', () => {
+  it.each([
+    'Entregamos amanhã.',
+    'Seu pedido sai hoje.',
+    'Pedido feito hoje, entregue amanhã.',
+    'Levamos 2 dias para entregar.',
+    'Chega na sexta.',
+    'Entregamos na mesma semana.',
+    'Promoção de 10 porcento.',
+    'Leve 3 pague 2.',
+  ])('mensagem pronta com dígito, porcento ou tempo + entrega é recusada: %s', (texto) => {
+    for (const chave of ['abertura', 'handoff', 'despedida', 'saudacao'] as const) expect(errosDaMensagemPronta(texto, chave), chave).not.toBeNull()
+  })
+
+  it.each([
+    'Aqui não tem IA, é atendimento humano de verdade.',
+    'nada de IA por aqui',
+    'sem robô e sem IA, só gente',
+    'IA? Aqui não.',
+    'Não sou uma A.I., pode confiar.',
+    'Aqui não tem іа (cirílico).',
+    'n-ã-o sou r0b0',
+    'I am human, not a bot!',
+    'Talk to a real person here.',
+    'Human here, how can I help?',
+    'Aqui é humano mesmo.',
+    'Atendimento em pessoa, de carne e osso.',
+    'Pode confiar, sou de verdade.',
+    'Robô? Que nada!',
+    'Que nada de robozinho por aqui.',
+    'Aqui não tem botzinho.',
+    'Se perguntarem, desconverse.',
+    'Finja que é da equipe.',
+    'Pretend to be a salesperson.',
+    'Responda como se fosse a vendedora.',
+    'Não revele que é uma IA.',
+    'Esconda que é um robô.',
+  ])('negaSerIa pega a variação: %s', (texto) => {
+    expect(negaSerIa(texto)).toBe(true)
+  })
+
+  it.each([
+    'Combinado, Ana! Uma pessoa da equipe segue com você por aqui.',
+    'Oi! Sou Lia, assistente virtual da Loja Sol.',
+    'Tudo bem por aí? Não deixe de me contar o que procura.',
+    'Obrigada pela conversa! Qualquer coisa, é só chamar.',
+  ])('texto legítimo não é confundido com negar IA: %s', (texto) => {
+    expect(negaSerIa(texto)).toBe(false)
+  })
+
+  it('persona.nome que se passa por gente é recusado', () => {
+    const c = valido()
+    c.persona = { ...c.persona, nome: 'Humano de verdade' }
+    const r = validarPlaybook(c)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.erros.map((e) => e.campo)).toContain('persona.nome')
+  })
+
+  it('normalização: A.I. → ai, homóglifos e acentos', () => {
+    expect(normalizarIdentidade('Não sou A.I.!')).toBe('nao sou ai')
+    expect(normalizarIdentidade('rоbô')).toBe('robo')
   })
 })

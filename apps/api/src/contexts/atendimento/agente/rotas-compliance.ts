@@ -6,6 +6,7 @@ import { exigirTenant } from '../../../plugins/tenant.js'
 import { exigirPapel, temPapel } from '../../plataforma/papel.js'
 import { auditar } from '../../plataforma/auditoria.js'
 import { garantirUsuarioId } from '../rotas-fila.js'
+import { travarPlaybookDoTenant } from './playbook/repositorio.js'
 
 /**
  * COMPLIANCE DO AGENTE POR NÚMERO (raia P2; ADR-029 §5, ADR-033).
@@ -73,6 +74,8 @@ export async function rotasCompliance(app: FastifyInstance): Promise<void> {
         gatilhosHandoff: semDuplicatas(parse.data.gatilhosHandoff),
       }
       const r = await req.comTenant(async (tx) => {
+        // Ordem canônica de locks (P17): a trava do playbook do tenant ANTES de tocar agente_config.
+        await travarPlaybookDoTenant(tx)
         const [canal] = await tx<{ id: string; compliance: unknown }[]>`
           SELECT c.id, ac.compliance
             FROM canal_conectado c

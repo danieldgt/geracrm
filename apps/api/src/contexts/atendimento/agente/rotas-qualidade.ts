@@ -15,6 +15,7 @@ import { gastoJuizNoMes, inicioDoMesDoTenant, julgarSessao, tetoJuizDoAmbiente, 
 import { fusoSeguro } from '../../plataforma/fuso.js'
 import { juizDoAmbiente } from './qualidade/juiz.js'
 import { cegasParaQuem } from './revisao-humana.js'
+import { travarPlaybookDoTenant } from './playbook/repositorio.js'
 
 /**
  * QUALIDADE EM PRODUÇÃO (ADR-031, raia P12).
@@ -372,6 +373,8 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
       const p = corpoConfig.safeParse(req.body ?? {})
       if (!p.success) return invalido(reply, p.error)
       const ok = await req.comTenant(async (tx) => {
+        // Ordem canônica de locks (P17): a trava do playbook do tenant ANTES de tocar agente_config.
+        await travarPlaybookDoTenant(tx)
         const [canal] = await tx<{ id: string }[]>`SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!canal) return false
         const [antes] = await tx<{ amostra: string | null; teto: string | null }[]>`

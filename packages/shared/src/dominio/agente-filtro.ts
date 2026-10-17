@@ -495,6 +495,28 @@ export const NOTAS_OBRIGATORIAS_B2B: ReadonlyArray<{
   },
 ]
 
+/** Anexa as notas obrigatórias que faltam, frase a frase (ressalva na MESMA frase dispensa). */
+function notasObrigatoriasNoTexto(texto: string): { texto: string; ocorrencias: OcorrenciaFiltro[] } {
+  const ocorrencias: OcorrenciaFiltro[] = []
+  const frases = (texto.match(/(?:[^.!?\n]|(?<=\d)[.,](?=\d))+[.!?…]*[ \t]*|\n/g) ?? []).map((f0) => {
+    let f = f0
+    for (const n of NOTAS_OBRIGATORIAS_B2B) {
+      if (n.ressalva.test(f) || f.includes(n.nota)) continue
+      n.re.lastIndex = 0
+      for (const m of f.matchAll(n.re)) {
+        const ini = m.index ?? 0
+        if (termoNegado(f, ini)) continue
+        const fimTermo = ini + m[0].length
+        ocorrencias.push({ id: n.id, gravidade: 'MEDIA', acao: 'anexado', trecho: m[0] })
+        f = `${f.slice(0, fimTermo)} ${n.nota}${f.slice(fimTermo)}`
+        break
+      }
+    }
+    return f
+  })
+  return { texto: ocorrencias.length ? frases.join('') : texto, ocorrencias }
+}
+
 // ── extras do número ───────────────────────────────────────────────────────
 
 interface ProibidaExtra { readonly id: string; readonly re: RegExp }
@@ -683,7 +705,13 @@ export function filtrarSaida(texto: string, opcoes: OpcoesFiltroSaida = {}): Res
   }
   if (opcoes.limites && !esvaziado) {
     const l = aplicarLimitesMensagem(out, opcoes.limites)
-    if (l.ocorrencias.length) { ocorrencias.push(...l.ocorrencias); out = l.texto }
+    if (l.ocorrencias.length) {
+      ocorrencias.push(...l.ocorrencias); out = l.texto
+      // O corte pode ter levado a RESSALVA ("…cidade e região toda.") e deixado o termo:
+      // a nota obrigatória é conferida de novo sobre o texto cortado.
+      const n = notasObrigatoriasNoTexto(out)
+      if (n.ocorrencias.length) { ocorrencias.push(...n.ocorrencias); out = n.texto }
+    }
   }
   return { texto: out, alterado: out !== texto, ocorrencias, esvaziado }
 }
