@@ -15,7 +15,7 @@
 | P4 gatilhos + privacidade | 1 | 0098 | em andamento | | |
 | P5 resiliência LLM | 1 | — | integrada (api 1509 verde; removida tabela fixa de preço) | | |
 | P6 custo e tetos | 1 | 0099 | integrada (af264b2) | | |
-| P7 números ampliados | 1 | — | em andamento | | |
+| P7 números ampliados | 1 | — | integrada (c322eee; 4 revisões; main verde 1545 api) | | |
 | P8 saúde 3 estados | 1 | — | integrada (d589e00; main verde 1323 api) | | |
 | P9 histórico do conhecimento | 1 | 0100 | integrada (0fce467; main verde 1414 api) | | |
 | P10 tela de números | 1 | — | integrada (15c0f85; revalidar visual no fim) | | |
