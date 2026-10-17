@@ -7,8 +7,8 @@ import { transcricaoDoAmbiente } from '../atendimento/midia/transcricao/fabrica.
 import { embeddingDoAmbiente } from '../catalogo/porta-embedding.js'
 import { idadeDoBatimentoSeg } from './batimento.js'
 import {
-  CACHE_MEDICAO_MS, lerFilasComo, medirSaude, memorizar, pingPeloPool,
-  type ConfiguracaoSaude, type DepsSaude, type LeituraFilas,
+  CACHE_MEDICAO_MS, CONEXOES_SAUDE, lerEmbeddingsComo, lerFilasComo, lerTranscricaoComo, medirSaude, memorizar,
+  pingPeloPool, type ConfiguracaoSaude, type DepsSaude,
 } from './saude-detalhada.js'
 
 /**
@@ -39,6 +39,8 @@ import {
  * componente `ok` dentro de uma resposta degradada não engane o monitor. O
  * alerta carrega `motivos` (códigos de `MOTIVOS_SAUDE`); o que fazer em cada um
  * é do runbook (raia P20).
+ * ⚠️ Os limiares (`LIMITES_SAUDE_PADRAO`) são PROVISÓRIOS
+ * (`LIMITES_SAUDE_PROVISORIOS`) até a calibração com produção na P20.
  *
  * Opções do plugin: só para teste (dependências falsas). `app.ts` registra sem
  * opção nenhuma e tudo vem do ambiente.
@@ -50,7 +52,9 @@ export async function rotasSaudeDetalhada(app: FastifyInstance, opts: Partial<De
 
   const adminUrl = process.env.DATABASE_ADMIN_URL
   const configuracao: ConfiguracaoSaude = opts.configuracao ?? {
-    // Em `server.ts`, os workers só são agendados com DATABASE_ADMIN_URL.
+    // Em `server.ts`, os workers só são agendados com DATABASE_ADMIN_URL. A
+    // semântica só conta como ligada se, além da chave, houver pgvector — isso
+    // é conferido na leitura (`lerEmbeddingsComo` → `sem_pgvector`).
     workers: Boolean(adminUrl),
     transcricao: transcricaoDoAmbiente().capacidades.transcreve,
     embeddingModelo: (() => {
@@ -59,14 +63,16 @@ export async function rotasSaudeDetalhada(app: FastifyInstance, opts: Partial<De
     })(),
   }
 
-  // Conexão de serviço PRÓPRIA, preguiçosa e de uma conexão só: a saúde nunca
-  // disputa o pool da API nem as conexões com advisory lock dos workers.
+  // Pool de serviço PRÓPRIO e preguiçoso: a saúde nunca disputa o pool da API
+  // nem as conexões com advisory lock dos workers. Uma conexão por leitura
+  // (crítica, áudio, embeddings) — com uma só, a opcional lenta seguraria a crítica.
   let dono: Sql | undefined
-  const lerFilasPadrao = (): Promise<LeituraFilas> => {
+  const comDono = <T>(ler: (d: Sql) => () => Promise<T>) => (): Promise<T> => {
     if (!adminUrl) return Promise.reject(new Error('sem_conexao_de_servico'))
-    dono ??= postgres(adminUrl, { max: 1, idle_timeout: 20, connect_timeout: 3, onnotice: () => {} }) as unknown as Sql
-    return lerFilasComo(dono, configuracao, () => new Date())()
+    dono ??= postgres(adminUrl, { max: CONEXOES_SAUDE, idle_timeout: 20, connect_timeout: 3, onnotice: () => {} }) as unknown as Sql
+    return ler(dono)()
   }
+  const agoraReal = () => new Date()
   app.addHook('onClose', async () => {
     if (dono) await (dono as unknown as { end: (o: { timeout: number }) => Promise<void> }).end({ timeout: 2 })
   })
@@ -76,7 +82,10 @@ export async function rotasSaudeDetalhada(app: FastifyInstance, opts: Partial<De
     agora: opts.agora ?? (() => new Date()),
     uptimeSeg: opts.uptimeSeg ?? (() => process.uptime()),
     pingBanco: memorizar(opts.pingBanco ?? pingPeloPool(sql), CACHE_MEDICAO_MS),
-    lerFilas: memorizar(opts.lerFilas ?? lerFilasPadrao, CACHE_MEDICAO_MS),
+    lerFilas: memorizar(opts.lerFilas ?? comDono((d) => lerFilasComo(d, agoraReal)), CACHE_MEDICAO_MS),
+    lerTranscricao: memorizar(opts.lerTranscricao ?? comDono((d) => lerTranscricaoComo(d, agoraReal)), CACHE_MEDICAO_MS),
+    lerEmbeddings: memorizar(
+      opts.lerEmbeddings ?? comDono((d) => lerEmbeddingsComo(d, configuracao.embeddingModelo ?? '')), CACHE_MEDICAO_MS),
     idadeBatimento: opts.idadeBatimento ?? ((nome, agora) => idadeDoBatimentoSeg(nome, agora)),
     estadoDoLlm: opts.estadoDoLlm ?? estadoDoLlm,
     configuracao,

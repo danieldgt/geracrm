@@ -5,7 +5,10 @@ import type { SaudeDetalhada } from '@geracrm/shared'
 import { criarApp } from '../../app.js'
 import { encerrarBanco, sql } from '../../db/index.js'
 import { rotasSaudeDetalhada } from './rotas-saude-detalhada.js'
-import { lerFilasComo, memorizar, comTeto, type DepsSaude, type LeituraFilas } from './saude-detalhada.js'
+import {
+  lerFilasComo, lerTranscricaoComo, lerEmbeddingsComo, memorizar, comTeto, medirSaude,
+  type DepsSaude, type LeituraFilas,
+} from './saude-detalhada.js'
 import { batimento, idadeDoBatimentoSeg } from './batimento.js'
 
 /**
@@ -22,6 +25,8 @@ const MODELO = 'c8a50000-4444-4000-8000-000000000001'
 const canal = (t: string) => t.replace('-0000-4000', '-5555-4000')
 const contato = (t: string) => t.replace('-0000-4000', '-6666-4000')
 const conversa = (t: string) => t.replace('-0000-4000', '-7777-4000')
+const conversa2 = (t: string) => t.replace('-0000-4000', '-7778-4000')
+const contato2 = (t: string) => t.replace('-0000-4000', '-6667-4000')
 const CONTATO_NOME = 'Fulano Saude Sigiloso'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
@@ -30,16 +35,16 @@ const LEITURA_EM = new Date(FUTURO.getTime() + 86_400_000)
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
 
 const FILAS_EM_DIA: LeituraFilas = {
-  agente: { vencidas: 0, maisAntigaHaSeg: null, travadas: 0 },
+  agente: { vencidas: 0, maisAntigaHaSeg: null, executando: 0, executandoMaisAntigaHaSeg: null },
   retornos: { vencidos: 0, maisAntigoHaSeg: null },
-  transcricao: { pendentes: 0, maisAntigaHaSeg: null },
-  embeddings: { pendentes: 0 },
 }
 const FALSO: Partial<DepsSaude> = {
   encerrando: () => false,
   uptimeSeg: () => 3_600,
   pingBanco: async () => 4,
   lerFilas: async () => FILAS_EM_DIA,
+  lerTranscricao: async () => ({ pendentes: 0, maisAntigaHaSeg: null }),
+  lerEmbeddings: async () => ({ semantica: 'ligada', pendentes: 0 }),
   idadeBatimento: () => 1,
   estadoDoLlm: () => ({ situacao: 'principal', reservaAteEm: null, falhasSeguidas: 0, modelosBloqueados: [] }),
   configuracao: { workers: true, transcricao: true, embeddingModelo: 'bge-m3' },
@@ -69,17 +74,10 @@ beforeAll(async () => {
       await tx`INSERT INTO perfil_vertical (tenant_id, id, modelo_id, nome) VALUES (${t}, ${pv}, ${MODELO}, 'Varejo') ON CONFLICT DO NOTHING`
     })
     await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado) VALUES (${t}, ${canal(t)}, 'whatsapp_nao_oficial', 'Saude', 'conectado') ON CONFLICT DO NOTHING`
-    await dono`INSERT INTO contato (tenant_id, id, nome, ativo) VALUES (${t}, ${contato(t)}, ${CONTATO_NOME}, true) ON CONFLICT DO NOTHING`
-    await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${t}, ${conversa(t)}, ${canal(t)}, ${contato(t)}, 1) ON CONFLICT DO NOTHING`
-    // Uma tarefa e um retorno em CADA tenant, para daqui a 10 anos. ⚠️ Nunca no
-    // passado: os testes de worker de outros arquivos varrem TODOS os tenants e
-    // pegariam a tarefa. A leitura abaixo usa um `agora` 10 anos + 1 dia à frente.
+    await dono`INSERT INTO contato (tenant_id, id, nome, ativo) VALUES (${t}, ${contato(t)}, ${CONTATO_NOME}, true), (${t}, ${contato2(t)}, ${CONTATO_NOME}, true) ON CONFLICT DO NOTHING`
+    await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${t}, ${conversa(t)}, ${canal(t)}, ${contato(t)}, 1), (${t}, ${conversa2(t)}, ${canal(t)}, ${contato2(t)}, 1) ON CONFLICT DO NOTHING`
     await dono`DELETE FROM agente_tarefa WHERE tenant_id = ${t}`
-    await dono`INSERT INTO agente_tarefa (tenant_id, id, conversa_id, canal_id, estado, executar_em)
-               VALUES (${t}, gen_random_uuid(), ${conversa(t)}, ${canal(t)}, 'pendente', ${FUTURO})`
     await dono`DELETE FROM agente_retorno WHERE tenant_id = ${t}`
-    await dono`INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, tentativa, texto, estado, executar_em)
-               VALUES (${t}, gen_random_uuid(), ${conversa(t)}, ${canal(t)}, 'proposta_sem_resposta', 1, 'oi', 'pendente', ${FUTURO})`
   }
 })
 afterAll(async () => {
@@ -171,26 +169,78 @@ describe('GET /saude/detalhada — estados e código HTTP', () => {
 })
 
 describe('Leitura das filas — conexão de serviço, todos os tenants, só agregados', () => {
-  it('dado tarefas e retornos vencidos em DOIS tenants, então soma os dois e mede a idade', async () => {
-    const f = await lerFilasComo(dono as never, { workers: true, transcricao: true, embeddingModelo: 'modelo-saude-teste' }, () => LEITURA_EM)()
-    // ≥: outros arquivos de teste correm em paralelo no mesmo banco.
-    expect(f.agente.vencidas).toBeGreaterThanOrEqual(2)
-    expect(f.agente.maisAntigaHaSeg).toBeGreaterThanOrEqual(86_400 - 5)
-    expect(f.retornos.vencidos).toBeGreaterThanOrEqual(2)
-    expect(f.retornos.maisAntigoHaSeg).toBeGreaterThanOrEqual(86_400 - 5)
-    expect(f.transcricao).not.toBeNull()
-    expect(f.embeddings).not.toBeNull()
+  // ⚠️ Tudo datado 10 anos à frente e lido com `agora` = LEITURA_EM: os testes de
+  //    worker de outros arquivos varrem TODOS os tenants com o relógio real e
+  //    pegariam linha vencida de verdade. O recorte por tenant (só de teste) torna
+  //    a contagem EXATA mesmo com a suíte rodando em paralelo no mesmo banco.
+  const lerAB = lerFilasComo(dono as never, () => LEITURA_EM, { somenteTenants: [A, B] })
+
+  it('dado tarefas e retornos vencidos em DOIS tenants, então soma exatamente os dois, mede a idade e ignora o que vence depois', async () => {
+    const antes = await lerAB()
+    expect(antes.agente).toEqual({ vencidas: 0, maisAntigaHaSeg: null, executando: 0, executandoMaisAntigaHaSeg: null })
+    expect(antes.retornos).toEqual({ vencidos: 0, maisAntigoHaSeg: null })
+
+    const depoisDaLeitura = new Date(LEITURA_EM.getTime() + 3_600_000)
+    for (const t of [A, B]) {
+      await dono`INSERT INTO agente_tarefa (tenant_id, id, conversa_id, canal_id, estado, executar_em)
+                 VALUES (${t}, gen_random_uuid(), ${conversa(t)}, ${canal(t)}, 'pendente', ${FUTURO})`
+      await dono`INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, tentativa, texto, estado, executar_em)
+                 VALUES (${t}, gen_random_uuid(), ${conversa(t)}, ${canal(t)}, 'proposta_sem_resposta', 1, 'oi', 'pendente', ${FUTURO})`
+    }
+    // Vencem DEPOIS do instante da leitura: não podem contar.
+    await dono`INSERT INTO agente_tarefa (tenant_id, id, conversa_id, canal_id, estado, executar_em)
+               VALUES (${A}, gen_random_uuid(), ${conversa2(A)}, ${canal(A)}, 'pendente', ${depoisDaLeitura})`
+    await dono`INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, tentativa, texto, estado, executar_em)
+               VALUES (${A}, gen_random_uuid(), ${conversa(A)}, ${canal(A)}, 'carrinho_abandonado', 1, 'oi', 'pendente', ${depoisDaLeitura})`
+    // Uma em execução há 5 min (no relógio da leitura).
+    await dono`INSERT INTO agente_tarefa (tenant_id, id, conversa_id, canal_id, estado, executar_em, iniciada_em)
+               VALUES (${B}, gen_random_uuid(), ${conversa2(B)}, ${canal(B)}, 'executando', ${FUTURO}, ${new Date(LEITURA_EM.getTime() - 300_000)})`
+
+    const depois = await lerAB()
+    expect(depois.agente).toEqual({ vencidas: 2, maisAntigaHaSeg: 86_400, executando: 1, executandoMaisAntigaHaSeg: 300 })
+    expect(depois.retornos).toEqual({ vencidos: 2, maisAntigoHaSeg: 86_400 })
+
+    // Sem recorte (como a rota lê): enxerga os dois tenants e tudo o mais do banco.
+    const todos = await lerFilasComo(dono as never, () => LEITURA_EM)()
+    expect(todos.agente.vencidas).toBeGreaterThanOrEqual(2)
+    expect(todos.retornos.vencidos).toBeGreaterThanOrEqual(2)
   })
 
-  it('dado capacidades desligadas, então não consulta transcrição nem embeddings', async () => {
-    const f = await lerFilasComo(dono as never, { workers: true, transcricao: false, embeddingModelo: null }, () => new Date())()
-    expect(f.transcricao).toBeNull()
-    expect(f.embeddings).toBeNull()
+  it('dado as leituras opcionais, então áudio e embeddings respondem com contagens (ou sem_pgvector)', async () => {
+    const audio = await lerTranscricaoComo(dono as never, () => new Date(), { somenteTenants: [A, B] })()
+    expect(audio).toEqual({ pendentes: 0, maisAntigaHaSeg: null })
+    const emb = await lerEmbeddingsComo(dono as never, 'modelo-saude-teste', { somenteTenants: [A, B] })()
+    expect(['ligada', 'sem_pgvector']).toContain(emb.semantica)
+    if (emb.semantica === 'ligada') expect(emb.pendentes).toBe(0)
   })
 
   it('dado o pool da API (geracrm_api, sem tenant), então o RLS devolve zero — por isso a saúde usa a conexão de serviço', async () => {
     const [r] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM agente_tarefa`
     expect(r!.n).toBe(0)
+  })
+})
+
+describe('Leituras independentes e semântica de fato ligada', () => {
+  it('dado a leitura de áudio pendurada, então a fila crítica segue lida e só a transcrição acusa', async () => {
+    const s = await medirSaude({ ...(FALSO as DepsSaude), agora: () => new Date(), lerTranscricao: () => new Promise(() => {}) })
+    expect(s.motivos).toEqual(['transcricao_sem_leitura'])
+    expect(s.componentes.filaAgente.estado).toBe('ok')
+    expect(s.componentes.filaAgente.vencidas).toBe(0)
+    expect(s.componentes.retornos.vencidos).toBe(0)
+  }, 10_000)
+
+  it('dado chave de embedding preenchida mas sem pgvector, então embeddings fica desligado (ok, sem pendentes)', async () => {
+    const s = await medirSaude({ ...(FALSO as DepsSaude), agora: () => new Date(),
+      lerEmbeddings: async () => ({ semantica: 'sem_pgvector' }), idadeBatimento: () => null, uptimeSeg: () => 99_999 })
+    expect(s.componentes.embeddings).toMatchObject({ estado: 'ok', configurado: false, pendentes: null })
+    expect(s.motivos).not.toContain('embeddings_parado')
+  })
+
+  it('dado chave e pgvector, então embeddings conta como configurado e acusa worker parado', async () => {
+    const s = await medirSaude({ ...(FALSO as DepsSaude), agora: () => new Date(),
+      idadeBatimento: (n) => (n === 'embeddings' ? 99_999 : 1) })
+    expect(s.componentes.embeddings).toMatchObject({ estado: 'degradado', configurado: true, pendentes: 0 })
+    expect(s.motivos).toEqual(['embeddings_parado'])
   })
 })
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  avaliarSaude, httpDaSaude, LIMITES_SAUDE_PADRAO, MOTIVOS_SAUDE, ROTULO_MOTIVO_SAUDE,
+  avaliarSaude, httpDaSaude, LIMITES_SAUDE_PADRAO, LIMITES_SAUDE_PROVISORIOS, MOTIVOS_SAUDE, ROTULO_MOTIVO_SAUDE,
   type EntradaSaude, type MotivoSaude, type EstadoSaude,
 } from './agente-saude.js'
 
@@ -18,11 +18,11 @@ const SAUDAVEL: EntradaSaude = {
     retornos: { configurado: true, batimentoHaSeg: 30 },
   },
   filas: {
-    agente: { vencidas: 2, maisAntigaHaSeg: 1, travadas: 0 },
+    agente: { vencidas: 2, maisAntigaHaSeg: 1, executando: 1, executandoMaisAntigaHaSeg: 8 },
     retornos: { vencidos: 0, maisAntigoHaSeg: null },
-    transcricao: { pendentes: 1, maisAntigaHaSeg: 10 },
-    embeddings: { pendentes: 40 },
   },
+  transcricao: { pendentes: 1, maisAntigaHaSeg: 10 },
+  embeddings: { pendentes: 40 },
   llm: { situacao: 'principal', reservaRestanteSeg: null, falhasSeguidas: 0, modelosBloqueados: 0 },
 }
 
@@ -31,6 +31,8 @@ const w = (nome: keyof EntradaSaude['workers'], v: EntradaSaude['workers']['work
   (e) => ({ ...e, workers: { ...e.workers, [nome]: v } })
 const filas = (f: Partial<NonNullable<EntradaSaude['filas']>>): Ajuste =>
   (e) => ({ ...e, filas: { ...e.filas!, ...f } })
+const agente = (a: Partial<NonNullable<EntradaSaude['filas']>['agente']>): Ajuste =>
+  (e) => ({ ...e, filas: { ...e.filas!, agente: { ...e.filas!.agente, ...a } } })
 
 describe('avaliarSaude — tabela de estados', () => {
   const casos: readonly [string, Ajuste, EstadoSaude, readonly MotivoSaude[]][] = [
@@ -44,26 +46,30 @@ describe('avaliarSaude — tabela de estados', () => {
       'degradado', ['worker_agente_parado']],
     ['worker do agente desligado nesta instância', w('workerAgente', { configurado: false, batimentoHaSeg: null }),
       'degradado', ['worker_agente_desligado']],
-    ['fila do agente acumulada', filas({ agente: { vencidas: L.filaAgenteMaxVencidas + 1, maisAntigaHaSeg: 5, travadas: 0 } }),
+    ['fila do agente acumulada', agente({ vencidas: L.filaAgenteMaxVencidas + 1, maisAntigaHaSeg: 5 }),
       'degradado', ['fila_agente_acumulada']],
-    ['fila do agente atrasada', filas({ agente: { vencidas: 1, maisAntigaHaSeg: L.filaAgenteMaxAtrasoSeg + 1, travadas: 0 } }),
+    ['fila do agente atrasada', agente({ vencidas: 1, maisAntigaHaSeg: L.filaAgenteMaxAtrasoSeg + 1 }),
       'degradado', ['fila_agente_atrasada']],
-    ['turno travado em execução', filas({ agente: { vencidas: 0, maisAntigaHaSeg: null, travadas: 1 } }),
+    ['turno em execução além do prazo + uma passada', agente({ executando: 1, executandoMaisAntigaHaSeg: L.filaAgenteTravadaSeg + 1 }),
       'degradado', ['fila_agente_travada']],
+    ['turno passou do prazo mas a recuperação ainda tem uma passada (não é travada)',
+      agente({ executando: 1, executandoMaisAntigaHaSeg: 121 }), 'ok', []],
     ['LLM na reserva', (e) => ({ ...e, llm: { ...e.llm, situacao: 'reserva', reservaRestanteSeg: 900, falhasSeguidas: 2 } }),
       'degradado', ['llm_reserva_ativo']],
     ['modelo bloqueado', (e) => ({ ...e, llm: { ...e.llm, modelosBloqueados: 1 } }), 'degradado', ['modelo_bloqueado']],
     ['uma falha de LLM sozinha não degrada', (e) => ({ ...e, llm: { ...e.llm, falhasSeguidas: 1 } }), 'ok', []],
     ['transcrição parada', w('transcricao', { configurado: true, batimentoHaSeg: L.transcricaoMaxSeg + 1 }),
       'degradado', ['transcricao_parada']],
-    ['áudio esperando transcrição além do prazo', filas({ transcricao: { pendentes: 3, maisAntigaHaSeg: L.transcricaoMaxAtrasoSeg + 1 } }),
+    ['áudio esperando transcrição além do prazo', (e) => ({ ...e, transcricao: { pendentes: 3, maisAntigaHaSeg: L.transcricaoMaxAtrasoSeg + 1 } }),
       'degradado', ['transcricao_atrasada']],
+    ['transcrição configurada sem leitura (só ela)', (e) => ({ ...e, transcricao: null }), 'degradado', ['transcricao_sem_leitura']],
     ['transcrição não configurada é ok (capacidade opcional)',
-      (e) => w('transcricao', { configurado: false, batimentoHaSeg: null })(filas({ transcricao: null })(e)), 'ok', []],
+      (e) => w('transcricao', { configurado: false, batimentoHaSeg: null })({ ...e, transcricao: null }), 'ok', []],
     ['embeddings parado', w('embeddings', { configurado: true, batimentoHaSeg: L.embeddingsMaxSeg + 1 }), 'degradado', ['embeddings_parado']],
-    ['embeddings acumulados', filas({ embeddings: { pendentes: L.embeddingsMaxPendentes + 1 } }), 'degradado', ['embeddings_acumulados']],
+    ['embeddings acumulados', (e) => ({ ...e, embeddings: { pendentes: L.embeddingsMaxPendentes + 1 } }), 'degradado', ['embeddings_acumulados']],
+    ['embeddings configurado sem leitura (só ele)', (e) => ({ ...e, embeddings: null }), 'degradado', ['embeddings_sem_leitura']],
     ['embeddings não configurado é ok (capacidade opcional)',
-      (e) => w('embeddings', { configurado: false, batimentoHaSeg: null })(filas({ embeddings: null })(e)), 'ok', []],
+      (e) => w('embeddings', { configurado: false, batimentoHaSeg: null })({ ...e, embeddings: null }), 'ok', []],
     ['retornos parado', w('retornos', { configurado: true, batimentoHaSeg: L.retornosMaxSeg + 1 }), 'degradado', ['retornos_parado']],
     ['retornos desligado', w('retornos', { configurado: false, batimentoHaSeg: null }), 'degradado', ['retornos_desligado']],
     ['retorno vencido sem envio', filas({ retornos: { vencidos: 4, maisAntigoHaSeg: L.retornosMaxAtrasoSeg + 1 } }),
@@ -95,12 +101,17 @@ describe('avaliarSaude — tabela de estados', () => {
     expect(avaliarSaude({ ...recem, uptimeSeg: L.workerAgenteMaxSeg + 1 }).motivos).toContain('worker_agente_parado')
   })
 
-  it('dado filas sem leitura, então o motivo aparece UMA vez e as contagens viram null', () => {
+  it('dado a leitura crítica sem resposta, então o motivo aparece UMA vez e as opcionais seguem valendo', () => {
     const s = avaliarSaude({ ...SAUDAVEL, filas: null })
     expect(s.motivos).toEqual(['filas_sem_leitura'])
     expect(s.componentes.filaAgente.vencidas).toBeNull()
     expect(s.componentes.retornos.vencidos).toBeNull()
-    expect(s.componentes.transcricao.estado).toBe('degradado')
+    expect(s.componentes.transcricao.estado).toBe('ok')
+    expect(s.componentes.embeddings.pendentes).toBe(40)
+  })
+
+  it('dado os limites, então estão marcados como provisórios', () => {
+    expect(LIMITES_SAUDE_PROVISORIOS).toBe(true)
   })
 
   it('dado limites próprios, então avalia por eles (limites injetáveis)', () => {

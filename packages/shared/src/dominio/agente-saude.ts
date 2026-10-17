@@ -40,8 +40,10 @@ export const MOTIVOS_SAUDE = [
   'modelo_bloqueado',
   'transcricao_parada',
   'transcricao_atrasada',
+  'transcricao_sem_leitura',
   'embeddings_parado',
   'embeddings_acumulados',
+  'embeddings_sem_leitura',
   'retornos_desligado',
   'retornos_parado',
   'retornos_atrasados',
@@ -63,8 +65,10 @@ export const ROTULO_MOTIVO_SAUDE: Readonly<Record<MotivoSaude, string>> = {
   modelo_bloqueado: 'Modelo de IA bloqueado temporariamente',
   transcricao_parada: 'Worker de transcrição sem passada recente',
   transcricao_atrasada: 'Áudio esperando transcrição além do prazo',
+  transcricao_sem_leitura: 'Não foi possível ler os áudios pendentes',
   embeddings_parado: 'Worker de embeddings sem passada recente',
   embeddings_acumulados: 'Muitos itens esperando embedding',
+  embeddings_sem_leitura: 'Não foi possível ler os itens sem embedding',
   retornos_desligado: 'Worker de retornos desligado nesta instância',
   retornos_parado: 'Worker de retornos sem passada recente',
   retornos_atrasados: 'Retorno programado vencido sem envio',
@@ -94,17 +98,27 @@ export interface EntradaSaude {
     readonly retornos: EntradaWorker
   }
   /**
-   * Agregados das filas, de TODOS os tenants (só contagens e idades).
-   * null = não foi possível ler (banco fora, conexão de serviço ausente).
+   * Leitura CRÍTICA, de TODOS os tenants (só contagens e idades): fila do
+   * agente e retornos. null = não foi possível ler (banco fora, conexão de
+   * serviço ausente, teto estourado).
    */
   readonly filas: {
-    readonly agente: { readonly vencidas: number; readonly maisAntigaHaSeg: number | null; readonly travadas: number }
+    readonly agente: {
+      readonly vencidas: number
+      readonly maisAntigaHaSeg: number | null
+      /** Tarefas em `executando` e a idade da mais antiga (desde `iniciada_em`). */
+      readonly executando: number
+      readonly executandoMaisAntigaHaSeg: number | null
+    }
     readonly retornos: { readonly vencidos: number; readonly maisAntigoHaSeg: number | null }
-    /** null = transcrição não configurada (nada a contar). */
-    readonly transcricao: { readonly pendentes: number; readonly maisAntigaHaSeg: number | null } | null
-    /** null = embedding não configurado (nada a contar). */
-    readonly embeddings: { readonly pendentes: number } | null
   } | null
+  /**
+   * Leituras OPCIONAIS, independentes da crítica: uma lenta não apaga a outra.
+   * null = sem leitura — só vira motivo quando o worker correspondente está
+   * configurado; desligado, não há o que contar.
+   */
+  readonly transcricao: { readonly pendentes: number; readonly maisAntigaHaSeg: number | null } | null
+  readonly embeddings: { readonly pendentes: number } | null
   readonly llm: {
     readonly situacao: 'principal' | 'reserva'
     /** Segundos até a reserva expirar; null = no principal. */
@@ -122,6 +136,13 @@ export interface LimitesSaude {
   readonly filaAgenteMaxVencidas: number
   /** Tarefa vencida esperando há mais que isto = o worker não está dando conta. */
   readonly filaAgenteMaxAtrasoSeg: number
+  /**
+   * Tarefa em `executando` há mais que isto = travada que a recuperação não
+   * devolveu. É o `PRAZO_EXECUCAO_MS` da fila (120 s, quando `recuperarTravadas`
+   * a devolve) MAIS uma passada longa do worker (120 s) — antes disso, travada
+   * é só a recuperação que ainda não rodou.
+   */
+  readonly filaAgenteTravadaSeg: number
   readonly transcricaoMaxSeg: number
   readonly transcricaoMaxAtrasoSeg: number
   readonly embeddingsMaxSeg: number
@@ -130,11 +151,19 @@ export interface LimitesSaude {
   readonly retornosMaxAtrasoSeg: number
 }
 
+/**
+ * ⚠️ PROVISÓRIOS: escolhidos pela cadência de cada worker (`server.ts`) e pelos
+ *    números do playbook da AM, ainda NÃO calibrados com produção. Recalibrar
+ *    com o histórico real (raia P20) antes de ligar alerta que acorda gente.
+ */
+export const LIMITES_SAUDE_PROVISORIOS = true as const
+
 export const LIMITES_SAUDE_PADRAO: LimitesSaude = {
   bancoLentoMs: 1_000,
   workerAgenteMaxSeg: 120,
   filaAgenteMaxVencidas: 50,
   filaAgenteMaxAtrasoSeg: 60,
+  filaAgenteTravadaSeg: 240,
   transcricaoMaxSeg: 300,
   transcricaoMaxAtrasoSeg: 600,
   embeddingsMaxSeg: 900,
@@ -169,9 +198,11 @@ export interface SaudeDetalhada {
     readonly filaAgente: Base & {
       readonly vencidas: number | null
       readonly maisAntigaHaSeg: number | null
-      readonly travadas: number | null
+      readonly executando: number | null
+      readonly executandoMaisAntigaHaSeg: number | null
       readonly limiteVencidas: number
       readonly limiteAtrasoSeg: number
+      readonly limiteTravadaSeg: number
     }
     readonly llm: Base & {
       readonly situacao: 'principal' | 'reserva'
@@ -245,15 +276,19 @@ export function avaliarSaude(e: EntradaSaude, lim: LimitesSaude = LIMITES_SAUDE_
   if (fa) {
     if (fa.vencidas > lim.filaAgenteMaxVencidas) motivosFila.push('fila_agente_acumulada')
     if (fa.maisAntigaHaSeg !== null && fa.maisAntigaHaSeg > lim.filaAgenteMaxAtrasoSeg) motivosFila.push('fila_agente_atrasada')
-    if (fa.travadas > 0) motivosFila.push('fila_agente_travada')
+    if (fa.executandoMaisAntigaHaSeg !== null && fa.executandoMaisAntigaHaSeg > lim.filaAgenteTravadaSeg) {
+      motivosFila.push('fila_agente_travada')
+    }
   }
   const filaAgente = {
     ...base(motivosFila),
     vencidas: fa?.vencidas ?? null,
     maisAntigaHaSeg: fa?.maisAntigaHaSeg ?? null,
-    travadas: fa?.travadas ?? null,
+    executando: fa?.executando ?? null,
+    executandoMaisAntigaHaSeg: fa?.executandoMaisAntigaHaSeg ?? null,
     limiteVencidas: lim.filaAgenteMaxVencidas,
     limiteAtrasoSeg: lim.filaAgenteMaxAtrasoSeg,
+    limiteTravadaSeg: lim.filaAgenteTravadaSeg,
   }
 
   const motivosLlm: MotivoSaude[] = []
@@ -263,28 +298,28 @@ export function avaliarSaude(e: EntradaSaude, lim: LimitesSaude = LIMITES_SAUDE_
 
   const tr = worker(e.workers.transcricao, lim.transcricaoMaxSeg, e.uptimeSeg,
     { desligado: null, parado: 'transcricao_parada' })
-  const ft = e.filas?.transcricao ?? null
+  const ft = e.transcricao
   if (e.workers.transcricao.configurado) {
-    if (e.filas === null) tr.motivos.push('filas_sem_leitura')
+    if (ft === null) tr.motivos.push('transcricao_sem_leitura')
     else if (ft?.maisAntigaHaSeg != null && ft.maisAntigaHaSeg > lim.transcricaoMaxAtrasoSeg) tr.motivos.push('transcricao_atrasada')
   }
   const transcricao = {
     ...base(tr.motivos), ...tr.campos,
-    pendentes: ft?.pendentes ?? null,
-    maisAntigaHaSeg: ft?.maisAntigaHaSeg ?? null,
+    pendentes: e.workers.transcricao.configurado ? (ft?.pendentes ?? null) : null,
+    maisAntigaHaSeg: e.workers.transcricao.configurado ? (ft?.maisAntigaHaSeg ?? null) : null,
     limiteAtrasoSeg: lim.transcricaoMaxAtrasoSeg,
   }
 
   const em = worker(e.workers.embeddings, lim.embeddingsMaxSeg, e.uptimeSeg,
     { desligado: null, parado: 'embeddings_parado' })
-  const fe = e.filas?.embeddings ?? null
+  const fe = e.embeddings
   if (e.workers.embeddings.configurado) {
-    if (e.filas === null) em.motivos.push('filas_sem_leitura')
+    if (fe === null) em.motivos.push('embeddings_sem_leitura')
     else if (fe && fe.pendentes > lim.embeddingsMaxPendentes) em.motivos.push('embeddings_acumulados')
   }
   const embeddings = {
     ...base(em.motivos), ...em.campos,
-    pendentes: fe?.pendentes ?? null,
+    pendentes: e.workers.embeddings.configurado ? (fe?.pendentes ?? null) : null,
     limitePendentes: lim.embeddingsMaxPendentes,
   }
 
@@ -302,7 +337,7 @@ export function avaliarSaude(e: EntradaSaude, lim: LimitesSaude = LIMITES_SAUDE_
 
   const componentes = { processo, banco, workerAgente, filaAgente, llm, transcricao, embeddings, retornos }
   const todos: readonly Base[] = Object.values(componentes)
-  // Sem repetição: "filas_sem_leitura" aparece em vários componentes, mas é um problema só.
+  // Sem repetição: "filas_sem_leitura" aparece em dois componentes, mas é um problema só.
   const motivos = [...new Set(todos.flatMap((c) => c.motivos))]
   const status: EstadoSaude = e.encerrando ? 'erro' : motivos.length > 0 ? 'degradado' : 'ok'
   return { status, motivos, componentes }
