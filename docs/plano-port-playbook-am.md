@@ -20,11 +20,11 @@
 | P9 histórico do conhecimento | 1 | 0100 | integrada (0fce467; main verde 1414 api) | | |
 | P10 tela de números | 1 | — | integrada (15c0f85; revalidar visual no fim) | | |
 | P11 webhook enxuto + ativas | 1 | 0101 | integrada (3ad34fa; 2 revisões; main verde 1759 api) | | |
-| P12 qualidade em produção | 2 | 0102 | em andamento | | |
+| P12 qualidade em produção | 2 | 0102 | integrada (b5b1e87; 3 revisões) | | |
 | P13 sugestão/copiloto/edição | 2 | 0103 | em andamento | | |
 | P14 modo: recorte/confirmação/auditoria | 2 | 0104 | integrada (c0487fc; 2 revisões; main verde 1805 api) | | |
-| P15 evals + scripts | 2 | — | pendente | | |
-| P16 revisão humana | 3 | 0105 | pendente | | |
+| P15 evals + scripts | 2 | — | em andamento | | |
+| P16 revisão humana | 3 | 0105 | em andamento | | |
 | P17 playbook versionado | 3 | 0106 | em andamento | | |
 | P18 SLA do handoff | 3 | 0107 | pendente | | fatia mínima de INB-22 (decisão padrão: fazer; ver ADR-034) |
 | P19 painel de fase | 3 | — | pendente | | |
