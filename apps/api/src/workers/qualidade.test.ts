@@ -30,12 +30,18 @@ const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () =>
 
 let chamadas: PedidoDeLaco[] = []
 let falhar = false
+let txAbertaDuranteJuiz = false
 const notasFalsas = Object.fromEntries(CRITERIOS_RUBRICA.map((c, i) => [c, { nota: [4, 5, 3, 2, 5][i], justificativa: `ok ${c} liga 85 99999-1234` }]))
 /** Juiz falso: registra o pedido e devolve a rubrica com uso cobrável no catálogo (Sonnet 5.5). */
 const juizFalso: PortaLlmFerramentas = {
   nome: 'claude', capacidades: { ferramentas: false, saidaEstruturada: true, cacheDePrefixo: true },
   async rodar(p): Promise<ResultadoLaco> {
     chamadas.push(p)
+    // O juiz roda FORA de transação: nenhuma tx do julgamento fica aberta enquanto o modelo pensa.
+    const [aberta] = await dono<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM pg_stat_activity
+       WHERE datname = current_database() AND state LIKE 'idle in transaction%' AND query LIKE '%AGENTE (sugest%'`
+    txAbertaDuranteJuiz = txAbertaDuranteJuiz || aberta!.n > 0
     const rastro = { chamadas: [], rodadas: 1, uso: { entrada: 100_000, saida: 1_000, cacheLeitura: 0, cacheEscrita: 0 }, modelo: 'claude-sonnet-5-5', provedor: 'claude', latenciaMs: 1, parouPor: 'fim' as const }
     if (falhar) return { ok: false, motivo: 'indisponivel', detalhe: 'fora', rastro }
     return { ok: true, saida: notasFalsas, rastro }
@@ -199,6 +205,7 @@ describe('worker de qualidade', () => {
 
     expect((await rodar(A)).julgadas).toBe(0)
     expect(chamadas).toHaveLength(1)
+    expect(txAbertaDuranteJuiz).toBe(false)
   })
 
   it('fora da amostra o juiz não roda; a amostra é estável pelo id da conversa', async () => {

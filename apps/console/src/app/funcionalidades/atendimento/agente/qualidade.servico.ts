@@ -61,9 +61,9 @@ export class QualidadeServico {
     } catch (e) { return falhaDe(e) }
   }
 
-  async avaliar(conversaId: string): Promise<Resultado<{ avaliacao: AvaliacaoQualidadeDto | null; desfecho: string }>> {
+  async avaliar(conversaId: string, decisaoId: string): Promise<Resultado<{ avaliacao: AvaliacaoQualidadeDto | null; desfecho: string }>> {
     try {
-      const r = await firstValueFrom(this.#http.post<{ avaliacao: AvaliacaoQualidadeDto | null; desfecho: string }>('/v1/agente/qualidade/avaliar', { conversaId }))
+      const r = await firstValueFrom(this.#http.post<{ avaliacao: AvaliacaoQualidadeDto | null; desfecho: string }>('/v1/agente/qualidade/avaliar', { conversaId, decisaoId }))
       return { ok: true, avaliacao: r.avaliacao, desfecho: r.desfecho }
     } catch (e) { return falhaDe(e) }
   }

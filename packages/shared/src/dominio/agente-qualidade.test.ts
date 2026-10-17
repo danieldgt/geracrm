@@ -89,7 +89,50 @@ describe('regras de qualidade (ADR-031) — o que escapou do pipeline', () => {
   })
 })
 
+describe('recusa legítima não é CRÍTICA (revisão P12)', () => {
+  const criticas = (t: string) => regras([t]).filter((x) => x.gravidade === 'CRITICA')
+  it.each([
+    'Pedido sem nota fiscal não é possível, toda venda sai com nota.',
+    'Infelizmente venda sem nota não fazemos.',
+    'Seu pedido anterior ficou sem nota? Vou verificar',
+    'Aprovação automática não temos, o financeiro analisa o cadastro.',
+    'Crédito liberado na hora nunca, quem libera é o financeiro.',
+  ])('"%s" → nenhuma CRÍTICA', (t) => { expect(criticas(t)).toEqual([]) })
+
+  it('constatação no passado vira ALTA', () => {
+    const v = regras(['Seu cadastro foi aprovado hoje pelo financeiro.'])
+    expect(v.map((x) => `${x.gravidade}:${x.detalhe}`)).toEqual(['ALTA:credito_na_hora'])
+  })
+
+  it('a afirmação continua CRÍTICA', () => {
+    expect(criticas('Dá para fazer sem nota fiscal, fica mais barato.')).toHaveLength(1)
+    expect(criticas('Seu crédito aprovado na hora!')).toHaveLength(1)
+  })
+
+  it('faixa de dias é horário de operação, não promessa de prazo', () => {
+    expect(regras(['A entrega é feita de segunda a sexta.'])).toEqual([])
+    expect(regras(['Entregamos às sextas na sua região.'])).toEqual([])
+    expect(regras(['Despachamos de segunda-feira a sábado.'])).toEqual([])
+    expect(codigos(regras(['Entregamos na sexta.']))).toContain('ALTA:promessa_prazo:prazo de entrega por data')
+  })
+
+  it('escassez com saldo consultado (mesmo critério do P2) não é CRÍTICA; sem saldo, é', () => {
+    const t = 'Temos sim, restam poucas unidades em estoque.'
+    expect(regras([t], { estoqueComFonte: true }).filter((x) => x.gravidade === 'CRITICA')).toEqual([])
+    expect(regras([t]).filter((x) => x.gravidade === 'CRITICA')).toHaveLength(1)
+  })
+})
+
 describe('máscara', () => {
+  it.each([
+    ['5585999991277'], ['+5585999991277'], ['558599991277'], ['85 9 9999-1277'], ['(85) 99999-1277'], ['+55 85 99999-1277'],
+  ])('telefone %s some', (fone) => {
+    expect(mascararTextoQualidade(`me liga ${fone} ok`)).toBe('me liga [telefone] ok')
+  })
+  it('CPF com espaços some', () => {
+    expect(mascararTextoQualidade('cpf 123 456 789 09')).toBe('cpf [cpf]')
+  })
+
   it('tira telefone, CPF, CNPJ e e-mail; mantém dinheiro e quantidade', () => {
     const t = mascararTextoQualidade('Fone +55 (85) 99999-1234, CPF 123.456.789-09, CNPJ 12.345.678/0001-90, x@y.com.br, R$ 1.234,56 e 12 caixas')
     expect(t).toBe('Fone [telefone], CPF [cpf], CNPJ [cnpj], [e-mail], R$ 1.234,56 e 12 caixas')

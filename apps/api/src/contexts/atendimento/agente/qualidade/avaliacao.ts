@@ -5,6 +5,7 @@ import {
   type RegraQualidade,
 } from '@geracrm/shared'
 import type { Sql } from '../../../../db/index.js'
+import { fusoSeguro } from '../../../plataforma/fuso.js'
 import { custoDoLaco } from '../custo.js'
 import { textoDaMensagem } from '../vendedor.js'
 import type { PortaLlmFerramentas } from '../porta-llm.js'
@@ -200,13 +201,20 @@ export function tetoJuizEfetivo(configurado: number | string | null | undefined,
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : tetoJuizDoAmbiente(env)
 }
 
+/** Início do mês corrente no fuso do TENANT — fuso validado em TS (`fusoSeguro`), nunca cru no SQL. Sob tenant. */
+export async function inicioDoMesDoTenant(tx: Sql): Promise<Date> {
+  const [t] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
+  const fuso = fusoSeguro(t?.fuso)
+  const [l] = await tx<{ ini: Date }[]>`SELECT date_trunc('month', now() AT TIME ZONE ${fuso}) AT TIME ZONE ${fuso} AS ini`
+  return l!.ini
+}
+
 /** Gasto do juiz no mês corrente (fuso do tenant) neste número. Sob tenant. */
 export async function gastoJuizNoMes(tx: Sql, canalId: string): Promise<number> {
+  const ini = await inicioDoMesDoTenant(tx)
   const [l] = await tx<{ total: string }[]>`
     SELECT coalesce(sum(custo_centavos), 0)::text AS total FROM agente_avaliacao
-     WHERE tenant_id = tenant_atual() AND canal_id = ${canalId} AND tipo = 'juiz'
-       AND criado_em >= (SELECT date_trunc('month', now() AT TIME ZONE coalesce(fuso, 'America/Sao_Paulo')) AT TIME ZONE coalesce(fuso, 'America/Sao_Paulo')
-                           FROM tenant WHERE id = tenant_atual())`
+     WHERE tenant_id = tenant_atual() AND canal_id = ${canalId} AND tipo = 'juiz' AND criado_em >= ${ini}`
   return Number(l?.total ?? 0)
 }
 
@@ -228,23 +236,25 @@ export interface AlvoDoJuiz {
 
 export type DesfechoJuiz = 'avaliada' | 'falhou' | 'teto' | 'sem_falas' | 'ja_avaliada'
 
-/**
- * Julga UMA sessão (sob o tenant): confere o teto do mês, monta a transcrição,
- * chama o juiz e grava. O custo sai do catálogo (P6) pelo provedor que de fato
- * respondeu — reserva incluída. Falha do juiz fica registrada (com `erro`), sem
- * nota: não repete a cada passada; o POST manual refaz.
- */
-export async function julgarSessao(tx: Sql, alvo: AlvoDoJuiz, juiz: { porta: PortaLlmFerramentas; modelo?: string | undefined }): Promise<DesfechoJuiz> {
+/** Roda `fn` numa transação CURTA sob o tenant (worker: `comTenantServico`; rota: `req.comTenant`). */
+export type ComTransacao = <T>(fn: (tx: Sql) => Promise<T>) => Promise<T>
+
+type Preparo =
+  | { readonly tipo: 'pronto'; readonly transcricao: string }
+  | { readonly tipo: Exclude<DesfechoJuiz, 'avaliada' | 'falhou'> }
+
+/** Passo 1 (tx curta): já julgada? teto? transcrição. Sem falas do agente → registra e para. */
+async function prepararJulgamento(tx: Sql, alvo: AlvoDoJuiz): Promise<Preparo> {
   const [ja] = await tx<{ id: string }[]>`
     SELECT id FROM agente_avaliacao WHERE tenant_id = tenant_atual() AND decisao_id = ${alvo.decisaoId} AND tipo = 'juiz' AND erro IS NULL`
-  if (ja) return 'ja_avaliada'
-  if (alvo.tetoMesCentavos <= 0) return 'teto'
+  if (ja) return { tipo: 'ja_avaliada' }
+  if (alvo.tetoMesCentavos <= 0) return { tipo: 'teto' }
   const gasto = await gastoJuizNoMes(tx, alvo.canalId)
   if (gasto >= alvo.tetoMesCentavos) {
     if (await abrirAlertaTetoJuiz(tx, alvo.canalNome, alvo.tetoMesCentavos)) {
       logQualidade('warn', 'juiz_no_teto', { tenantId: alvo.tenantId, canalId: alvo.canalId, gasto, teto: alvo.tetoMesCentavos })
     }
-    return 'teto'
+    return { tipo: 'teto' }
   }
   const t = await transcricaoDaSessao(tx, alvo.sessaoId)
   if (!t || t.falasDoAgente === 0) {
@@ -254,40 +264,60 @@ export async function julgarSessao(tx: Sql, alvo: AlvoDoJuiz, juiz: { porta: Por
       VALUES (tenant_atual(), ${randomUUID()}, ${alvo.decisaoId}, ${alvo.conversaId}, ${alvo.canalId}, ${alvo.sessaoId},
               ${origemDoModo(alvo.modo)}, 'juiz', ${alvo.gatilho}, ${alvo.turnos}, 'sem falas do agente para avaliar')
       ON CONFLICT (tenant_id, decisao_id, tipo) DO NOTHING`
-    return 'sem_falas'
+    return { tipo: 'sem_falas' }
   }
+  return { tipo: 'pronto', transcricao: t.texto }
+}
 
-  const r = await julgarTranscricao(juiz.porta, { transcricao: t.texto, roteiro: alvo.politicas, modelo: juiz.modelo })
+/**
+ * Julga UMA sessão em TRÊS passos — o modelo NUNCA dentro de transação (até
+ * 45 s segurando conexão e locks do pool):
+ *   1. tx curta: já julgada? teto do mês? transcrição (mascarada);
+ *   2. o juiz, sem transação; custo pelo catálogo (P6) pelo provedor que de
+ *      fato respondeu — reserva incluída;
+ *   3. tx curta: grava com ON CONFLICT (outro processo pode ter gravado no
+ *      meio) e RECONFERE o teto (alerta quando este julgamento o atingiu).
+ * Falha do juiz fica registrada (com `erro`), sem nota: não repete a cada
+ * passada; o POST manual refaz.
+ */
+export async function julgarSessao(comTx: ComTransacao, alvo: AlvoDoJuiz, juiz: { porta: PortaLlmFerramentas; modelo?: string | undefined }): Promise<DesfechoJuiz> {
+  const prep = await comTx((tx) => prepararJulgamento(tx, alvo))
+  if (prep.tipo !== 'pronto') return prep.tipo
+
+  const r = await julgarTranscricao(juiz.porta, { transcricao: prep.transcricao, roteiro: alvo.politicas, modelo: juiz.modelo })
   const custo = r.uso && r.modelo
     ? await custoDoLaco({ provedor: r.provedor, modelo: r.modelo, uso: r.uso, tenantId: alvo.tenantId })
     : 0
-  const comum = {
-    id: randomUUID(), decisao: alvo.decisaoId, conversa: alvo.conversaId, canal: alvo.canalId, sessao: alvo.sessaoId,
-    origem: origemDoModo(alvo.modo), gatilho: alvo.gatilho, modelo: r.modelo, custo, turnos: alvo.turnos,
-  }
-  // Refazer (POST manual) substitui uma tentativa que falhou.
-  await tx`DELETE FROM agente_avaliacao WHERE tenant_id = tenant_atual() AND decisao_id = ${alvo.decisaoId} AND tipo = 'juiz' AND erro IS NOT NULL`
-  if (!r.ok) {
-    logQualidade('warn', 'juiz_falhou', { tenantId: alvo.tenantId, sessaoId: alvo.sessaoId, erro: r.erro })
-    await tx`
-      INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, sessao_id, origem, tipo, gatilho, modelo, custo_centavos, turnos, erro)
+  if (!r.ok) logQualidade('warn', 'juiz_falhou', { tenantId: alvo.tenantId, sessaoId: alvo.sessaoId, erro: r.erro })
+
+  return comTx(async (tx) => {
+    const comum = {
+      id: randomUUID(), decisao: alvo.decisaoId, conversa: alvo.conversaId, canal: alvo.canalId, sessao: alvo.sessaoId,
+      origem: origemDoModo(alvo.modo), gatilho: alvo.gatilho, modelo: r.modelo, custo, turnos: alvo.turnos,
+    }
+    // Refazer (POST manual) substitui uma tentativa que falhou.
+    await tx`DELETE FROM agente_avaliacao WHERE tenant_id = tenant_atual() AND decisao_id = ${alvo.decisaoId} AND tipo = 'juiz' AND erro IS NOT NULL`
+    if (!r.ok) {
+      await tx`
+        INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, sessao_id, origem, tipo, gatilho, modelo, custo_centavos, turnos, erro)
+        VALUES (tenant_atual(), ${comum.id}, ${comum.decisao}, ${comum.conversa}, ${comum.canal}, ${comum.sessao}, ${comum.origem}, 'juiz',
+                ${comum.gatilho}, ${comum.modelo}, ${comum.custo}, ${comum.turnos}, ${r.erro})
+        ON CONFLICT (tenant_id, decisao_id, tipo) DO NOTHING`
+      if (custo > 0) await alertarSeChegouAoTeto(tx, alvo)
+      return 'falhou' as const
+    }
+    const notas = Object.fromEntries(Object.entries(r.notas).map(([c, n]) => [c, n.nota]))
+    const justificativas = Object.fromEntries(Object.entries(r.notas).map(([c, n]) => [c, mascararTextoQualidade(n.justificativa)]))
+    const ins = await tx`
+      INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, sessao_id, origem, tipo, gatilho,
+                                    notas, justificativas, nota_media, modelo, custo_centavos, turnos)
       VALUES (tenant_atual(), ${comum.id}, ${comum.decisao}, ${comum.conversa}, ${comum.canal}, ${comum.sessao}, ${comum.origem}, 'juiz',
-              ${comum.gatilho}, ${comum.modelo}, ${comum.custo}, ${comum.turnos}, ${r.erro})
+              ${comum.gatilho}, ${JSON.stringify(notas)}::text::jsonb, ${JSON.stringify(justificativas)}::text::jsonb, ${r.notaMedia},
+              ${comum.modelo}, ${comum.custo}, ${comum.turnos})
       ON CONFLICT (tenant_id, decisao_id, tipo) DO NOTHING`
-    if (custo > 0) await alertarSeChegouAoTeto(tx, alvo)
-    return 'falhou'
-  }
-  const notas = Object.fromEntries(Object.entries(r.notas).map(([c, n]) => [c, n.nota]))
-  const justificativas = Object.fromEntries(Object.entries(r.notas).map(([c, n]) => [c, n.justificativa]))
-  const ins = await tx`
-    INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, sessao_id, origem, tipo, gatilho,
-                                  notas, justificativas, nota_media, modelo, custo_centavos, turnos)
-    VALUES (tenant_atual(), ${comum.id}, ${comum.decisao}, ${comum.conversa}, ${comum.canal}, ${comum.sessao}, ${comum.origem}, 'juiz',
-            ${comum.gatilho}, ${JSON.stringify(notas)}::text::jsonb, ${JSON.stringify(justificativas)}::text::jsonb, ${r.notaMedia},
-            ${comum.modelo}, ${comum.custo}, ${comum.turnos})
-    ON CONFLICT (tenant_id, decisao_id, tipo) DO NOTHING`
-  await alertarSeChegouAoTeto(tx, alvo)
-  return ins.count > 0 ? 'avaliada' : 'ja_avaliada'
+    await alertarSeChegouAoTeto(tx, alvo)
+    return ins.count > 0 ? 'avaliada' as const : 'ja_avaliada' as const
+  })
 }
 
 /** O julgamento que acabou de gravar levou o número ao teto do mês: avisa já (o worker para de escolhê-lo). */

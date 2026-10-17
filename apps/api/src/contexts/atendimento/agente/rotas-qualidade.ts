@@ -11,7 +11,8 @@ import { auditar } from '../../plataforma/auditoria.js'
 import { garantirUsuarioId } from '../rotas-fila.js'
 import { lerCursor, paginar } from '../../crm/cursor-criado-em.js'
 import type { PortaLlmFerramentas } from './porta-llm.js'
-import { gastoJuizNoMes, julgarSessao, tetoJuizDoAmbiente, tetoJuizEfetivo } from './qualidade/avaliacao.js'
+import { gastoJuizNoMes, inicioDoMesDoTenant, julgarSessao, tetoJuizDoAmbiente, tetoJuizEfetivo } from './qualidade/avaliacao.js'
+import { fusoSeguro } from '../../plataforma/fuso.js'
 import { juizDoAmbiente } from './qualidade/juiz.js'
 
 /**
@@ -54,7 +55,7 @@ const corpoConfig = z.object({
   tetoMesCentavos: z.number().int().nonnegative().max(MAX_CENTAVOS).nullable(),
 }).strict()
 
-const corpoAvaliar = z.object({ conversaId: z.string().regex(UUID) }).strict()
+const corpoAvaliar = z.object({ conversaId: z.string().regex(UUID), decisaoId: z.string().regex(UUID).optional() }).strict()
 
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
   if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
@@ -160,9 +161,10 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
             FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}`
         gasto = await gastoJuizNoMes(tx, canalId)
       } else {
+        const ini = await inicioDoMesDoTenant(tx)
         const [t] = await tx<{ total: string }[]>`
           SELECT coalesce(sum(custo_centavos), 0)::text AS total FROM agente_avaliacao
-           WHERE tenant_id = tenant_atual() AND tipo = 'juiz' AND criado_em >= date_trunc('month', now())`
+           WHERE tenant_id = tenant_atual() AND tipo = 'juiz' AND criado_em >= ${ini}`
         gasto = Number(t?.total ?? 0)
       }
       return { g: g!, criterios, regras, cfg, gasto }
@@ -207,10 +209,11 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
       if (inicio !== undefined && !DATA.test(inicio)) return reply.code(422).send({ erro: 'qualidade.campo_invalido', campos: ['inicio'] })
       const dados = await req.comTenant(async (tx) => {
         // A semana: segunda 00:00 no fuso da loja (ou a segunda do `inicio`), 7 dias.
+        const [t] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
+        const fuso = fusoSeguro(t?.fuso)
         const [sem] = await tx<{ ini: Date; fim: Date; rotulo: string }[]>`
-          SELECT ini, ini + interval '7 days' AS fim, to_char(ini AT TIME ZONE f.fuso, 'IYYY-"W"IW') AS rotulo
-            FROM (SELECT coalesce(fuso, 'America/Sao_Paulo') AS fuso FROM tenant WHERE id = tenant_atual()) f,
-                 LATERAL (SELECT date_trunc('week', coalesce(${inicio ?? null}::date::timestamp, now() AT TIME ZONE f.fuso)) AT TIME ZONE f.fuso AS ini) s`
+          SELECT ini, ini + interval '7 days' AS fim, to_char(ini AT TIME ZONE ${fuso}, 'IYYY-"W"IW') AS rotulo
+            FROM (SELECT date_trunc('week', coalesce(${inicio ?? null}::date::timestamp, now() AT TIME ZONE ${fuso})) AT TIME ZONE ${fuso} AS ini) s`
         // Uma linha por conversa e número na semana: pior gravidade que escapou, menor nota, regras e justificativas.
         const conversas = await tx<{
           canal_id: string; canal_nome: string; conversa_id: string; pior: string | null; menor_nota: string | null
@@ -230,6 +233,9 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
            WHERE a.tenant_id = tenant_atual() AND a.criado_em >= ${sem!.ini} AND a.criado_em < ${sem!.fim}
              ${canalId ? tx`AND a.canal_id = ${canalId}` : tx``}
            GROUP BY a.tenant_id, a.canal_id, cc.nome_amigavel, a.conversa_id
+           -- O teto de linhas nunca corta uma CRÍTICA: as piores vêm primeiro.
+           ORDER BY max(CASE a.pior_gravidade WHEN 'CRITICA' THEN 3 WHEN 'ALTA' THEN 2 WHEN 'MEDIA' THEN 1 ELSE 0 END) DESC,
+                    min(a.nota_media) ASC NULLS LAST, a.conversa_id
            LIMIT 5000`
         return { sem: sem!, conversas }
       })
@@ -251,7 +257,7 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
           const just = (i.justificativas ?? []).flatMap((t) => {
             try { return Object.entries(JSON.parse(t) as Record<string, string>).map(([k, v]) => `${k}: ${mascararTextoQualidade(v)}`) } catch { return [] }
           }).join(' | ')
-          linhas.push([dados.sem.rotulo, i.canal_nome, idx + 1, i.motivo, i.conversa_id, i.piorGravidade ?? '', i.menorNota ?? '', i.avaliacoes, viol, just]
+          linhas.push([dados.sem.rotulo, mascararTextoQualidade(i.canal_nome), idx + 1, i.motivo, i.conversa_id, i.piorGravidade ?? '', i.menorNota ?? '', i.avaliacoes, viol, just]
             .map(celulaCsv).join(';'))
         })
       }
@@ -272,8 +278,10 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
       const j = juiz()
       if (!j.porta) return reply.code(503).send({ erro: 'qualidade.juiz_indisponivel', mensagem: j.motivoIndisponivel ?? 'Juiz de qualidade indisponível.' })
       const porta = j.porta
-      const r = await req.comTenant(async (tx) => {
-        const [s] = await tx<{ sessao_id: string; canal_id: string; canal_nome: string; modo: string | null; turnos: number; politicas: string | null; teto: string | null; decisao_id: string | null }[]>`
+      const { conversaId, decisaoId } = p.data
+      // Passo 1 (tx curta): a sessão do ITEM (decisaoId) ou, sem ele, a mais recente da conversa.
+      const s = await req.comTenant(async (tx) => {
+        const [l] = await tx<{ sessao_id: string; canal_id: string; canal_nome: string; modo: string | null; turnos: number; politicas: string | null; teto: string | null; decisao_id: string | null }[]>`
           SELECT s.id AS sessao_id, s.canal_id, cc.nome_amigavel AS canal_nome, s.modo, s.turnos, ac.politicas,
                  ac.qualidade_teto_mes_centavos::text AS teto,
                  (SELECT d.id FROM agente_decisao d WHERE d.tenant_id = s.tenant_id AND d.sessao_id = s.id AND d.resposta IS NOT NULL
@@ -281,22 +289,24 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
             FROM agente_sessao s
             JOIN canal_conectado cc ON cc.tenant_id = s.tenant_id AND cc.id = s.canal_id
             LEFT JOIN agente_config ac ON ac.tenant_id = s.tenant_id AND ac.canal_id = s.canal_id
-           WHERE s.tenant_id = tenant_atual() AND s.conversa_id = ${p.data.conversaId}
+           WHERE s.tenant_id = tenant_atual() AND s.conversa_id = ${conversaId}
+             ${decisaoId ? tx`AND s.id = (SELECT sessao_id FROM agente_decisao WHERE tenant_id = tenant_atual() AND id = ${decisaoId})` : tx``}
            ORDER BY s.iniciada_em DESC LIMIT 1`
-        if (!s || !s.decisao_id) return { tipo: 'sem_sessao' as const }
-        const d = await julgarSessao(tx, {
-          tenantId: req.tenantId!, sessaoId: s.sessao_id, decisaoId: s.decisao_id, conversaId: p.data.conversaId, canalId: s.canal_id,
-          canalNome: s.canal_nome, modo: s.modo ?? 'sombra', turnos: s.turnos, gatilho: 'manual', politicas: s.politicas,
-          tetoMesCentavos: tetoJuizEfetivo(s.teto),
-        }, { porta, modelo: j.modelo })
-        const [linha] = await tx<LinhaAvaliacao[]>`
-          SELECT a.id, a.decisao_id, a.conversa_id, a.canal_id, a.sessao_id, a.origem, a.tipo, a.gatilho, a.violacoes, a.pior_gravidade,
-                 a.notas, a.justificativas, a.nota_media::text AS nota_media, a.acao, a.modelo, a.custo_centavos::text AS custo_centavos,
-                 a.erro, a.criado_em, a.criado_em::text AS criado_em_txt
-            FROM agente_avaliacao a WHERE a.tenant_id = tenant_atual() AND a.decisao_id = ${s.decisao_id} AND a.tipo = 'juiz'`
-        return { tipo: 'ok' as const, desfecho: d, avaliacao: linha ? dto(linha) : null }
+        return l ?? null
       })
-      if (r.tipo === 'sem_sessao') return reply.code(404).send({ erro: 'qualidade.sem_sessao', mensagem: 'O agente ainda não atuou nesta conversa.' })
+      if (!s || !s.decisao_id) return reply.code(404).send({ erro: 'qualidade.sem_sessao', mensagem: 'O agente ainda não atuou nesta conversa.' })
+      // Passos 2 e 3: o juiz roda FORA de transação; a gravação é outra tx curta.
+      const d = await julgarSessao((fn) => req.comTenant(fn), {
+        tenantId: req.tenantId!, sessaoId: s.sessao_id, decisaoId: s.decisao_id, conversaId, canalId: s.canal_id,
+        canalNome: s.canal_nome, modo: s.modo ?? 'sombra', turnos: s.turnos, gatilho: 'manual', politicas: s.politicas,
+        tetoMesCentavos: tetoJuizEfetivo(s.teto),
+      }, { porta, modelo: j.modelo })
+      const linha = await req.comTenant(async (tx) => (await tx<LinhaAvaliacao[]>`
+        SELECT a.id, a.decisao_id, a.conversa_id, a.canal_id, a.sessao_id, a.origem, a.tipo, a.gatilho, a.violacoes, a.pior_gravidade,
+               a.notas, a.justificativas, a.nota_media::text AS nota_media, a.acao, a.modelo, a.custo_centavos::text AS custo_centavos,
+               a.erro, a.criado_em, a.criado_em::text AS criado_em_txt
+          FROM agente_avaliacao a WHERE a.tenant_id = tenant_atual() AND a.decisao_id = ${s.decisao_id} AND a.tipo = 'juiz'`)[0])
+      const r = { desfecho: d, avaliacao: linha ? dto(linha) : null }
       if (r.desfecho === 'teto') return reply.code(409).send({ erro: 'qualidade.teto_atingido', mensagem: 'O avaliador chegou ao teto do mês neste número.' })
       if (r.desfecho === 'falhou') return reply.code(502).send({ erro: 'qualidade.juiz_falhou', mensagem: r.avaliacao?.erro ?? 'O avaliador não respondeu.', avaliacao: r.avaliacao })
       if (r.desfecho === 'sem_falas') return reply.code(422).send({ erro: 'qualidade.sem_falas', mensagem: 'Não há fala do agente para avaliar nesta conversa.' })

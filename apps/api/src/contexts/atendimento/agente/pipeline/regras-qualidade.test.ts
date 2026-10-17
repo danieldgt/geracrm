@@ -5,6 +5,7 @@ import { conduzirTurnoVendedor } from '../vendedor.js'
 import type { Tarefa } from '../fila.js'
 import type { PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
 import type { Ligacoes } from '../ferramentas/ligacoes-porta.js'
+import { etapaRegrasQualidade } from './regras-qualidade.js'
 
 /**
  * PAUSA EM CRÍTICA (ADR-031 §3, raia P12) — o turno de verdade (banco real,
@@ -67,7 +68,8 @@ const ultimaDecisao = async () => (await dono<{
   guardrails: { etapa: string; codigo: string; gravidade: string; acao: string; trecho?: string }[]
 }[]>`SELECT desfecho, handoff_motivo, enviada, mensagens_saida_ids, resposta, guardrails FROM agente_decisao WHERE tenant_id = ${T} ORDER BY criado_em DESC LIMIT 1`)[0]!
 const alertas = async () => dono<{ tipo: string; severidade: string; mensagem: string }[]>`
-  SELECT tipo, severidade, mensagem FROM alerta WHERE tenant_id = ${T} AND resolvido_em IS NULL`
+  SELECT tipo, severidade, mensagem FROM alerta WHERE tenant_id = ${T} AND resolvido_em IS NULL
+     AND tipo IN ('agente_violacao_critica', 'agente_qualidade_teto')`
 const atendimentos = async () => (await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM atendimento WHERE tenant_id = ${T} AND estado <> 'encerrado'`)[0]!.n
 const daQualidade = <M extends { etapa: string }>(g: M[]): M[] => g.filter((x) => x.etapa === 'regras-qualidade')
 
@@ -88,13 +90,13 @@ beforeAll(async () => {
 })
 beforeEach(async () => {
   enviados.length = 0
-  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'notificacao', 'atendimento', 'mensagem', 'alerta', 'outbox']) {
+  for (const t of ['aviso_privacidade', 'agente_decisao', 'agente_tarefa', 'agente_sessao', 'notificacao', 'atendimento', 'mensagem', 'alerta', 'outbox']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`UPDATE conversa SET conduzida_por = 'humano' WHERE tenant_id = ${T}`
 })
 afterAll(async () => {
-  for (const t of ['agente_avaliacao', 'agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_config', 'notificacao', 'atendimento', 'mensagem', 'alerta', 'conversa', 'contato_telefone', 'contato', 'canal_configuracao', 'canal_conectado', 'outbox']) {
+  for (const t of ['aviso_privacidade', 'agente_avaliacao', 'agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_config', 'notificacao', 'atendimento', 'mensagem', 'alerta', 'conversa', 'contato_telefone', 'contato', 'canal_configuracao', 'canal_conectado', 'outbox']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${T}`
@@ -105,21 +107,39 @@ afterAll(async () => {
   await encerrarBanco(); await dono.end()
 })
 
+describe('Etapa isolada: mesmo estoqueComFonte do P2', () => {
+  it('"poucas unidades" com saldo consultado no turno não é CRÍTICA; sem saldo, é', async () => {
+    const ctx = { tenantId: T, conversaId: CONVERSA, canalId: CANAL, contatoId: CONTATO, sessaoId: null, modo: 'assistido', agora: new Date(),
+      cfgExtra: {}, persona: {} as never, estado: {}, historico: [], entrantes: [], primeiraResposta: false, foraDoExpediente: false } as const
+    const base = { handoff: null, centavosVistos: new Set<number>(), numerosVistos: new Set<number>(), falasAnterioresDoAgente: [] }
+    const msg = ['Temos sim, restam poucas unidades em estoque.']
+    const com = await etapaRegrasQualidade.executar(ctx as never, { ...base, mensagens: msg, saldoDeEstoqueVisto: true } as never)
+    expect(com.guardrails.filter((g) => g.gravidade === 'CRITICA')).toEqual([])
+    const sem = await etapaRegrasQualidade.executar(ctx as never, { ...base, mensagens: msg } as never)
+    expect(sem.guardrails.some((g) => g.gravidade === 'CRITICA')).toBe(true)
+    await dono`DELETE FROM alerta WHERE tenant_id = ${T}`
+  })
+})
+
 describe('Regras de qualidade no turno (P12)', () => {
   it('autônomo: violação CRÍTICA não sai, transfere com qualidade_violacao_critica sem mensagem extra, e alerta', async () => {
     await configurar('autonomo')
     const r = await turno([CRITICA])
     expect(r.desfecho).toBe('handoff')
     expect(enviados.some((t) => /nota fiscal/i.test(t))).toBe(false)
-    expect(enviados.filter((t) => !/assistente virtual/i.test(t))).toEqual([]) // nada além de uma eventual abertura fixa (P4)
+    // NADA sai — nem a abertura da P4 (decisão b da revisão): ela é descartada e marcada.
+    expect(enviados).toEqual([])
     const d = await ultimaDecisao()
     // ⚠️ `enviada` sai true em autônomo mesmo sem mensagem (vendedor.ts, pendência P0c); o que vale é não ter saída.
     expect(d).toMatchObject({ desfecho: 'handoff', handoff_motivo: 'qualidade_violacao_critica', mensagens_saida_ids: [] })
     expect(d.resposta!.mensagens).toEqual([])
-    expect(daQualidade(d.guardrails)).toEqual([
+    expect(daQualidade(d.guardrails).filter((g) => g.codigo !== 'abertura_descartada_pausa')).toEqual([
       expect.objectContaining({ codigo: 'palavra_proibida', gravidade: 'CRITICA', acao: 'registrado' }),
       { etapa: 'regras-qualidade', codigo: 'qualidade_violacao_critica', gravidade: 'CRITICA', acao: 'handoff' },
     ])
+    // O contato não tem aviso de privacidade vigente: a P4 montou a abertura — e ela foi descartada.
+    expect(d.guardrails).toContainEqual({ etapa: 'regras-qualidade', codigo: 'abertura_descartada_pausa', gravidade: 'INFO', acao: 'removido' })
+    expect((await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM aviso_privacidade WHERE tenant_id = ${T}`)[0]!.n).toBe(0)
     expect(await atendimentos()).toBe(1)
     const a = await alertas()
     expect(a).toEqual([expect.objectContaining({ tipo: 'agente_violacao_critica', severidade: 'critico' })])

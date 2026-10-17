@@ -595,7 +595,13 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   guardrails.push(...cadeia.guardrails)
   if (cadeia.bloqueio) handoff = { motivo: cadeia.bloqueio.motivo, resumo: cadeia.bloqueio.resumo }
 
-  const pf = await prefixoFiltrado(handoff, pre.prefixo)
+  // ⚠️ Pausa por violação CRÍTICA da qualidade (P12, ADR-031): NADA sai — nem o
+  //    prefixo (abertura da P4). A conversa vai ao humano em silêncio; a abertura
+  //    não saiu, então o aviso de privacidade não é registrado (efeitos pós-envio).
+  const pausaQualidade = cadeia.bloqueio?.motivo === 'qualidade_violacao_critica'
+  const pf = pausaQualidade
+    ? { mensagens: [] as readonly string[], guardrails: pre.prefixo.length > 0 ? [marca('regras-qualidade', 'abertura_descartada_pausa', 'INFO', 'removido')] : [], estado: {} as PatchEstado }
+    : await prefixoFiltrado(handoff, pre.prefixo)
   guardrails.push(...pf.guardrails)
   const saida = [...pf.mensagens, ...cadeia.mensagens]
   return concluir({

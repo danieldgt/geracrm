@@ -76,6 +76,14 @@ CREATE INDEX agente_avaliacao_por_sessao ON agente_avaliacao (tenant_id, sessao_
 -- Gasto do juiz no mês por número (teto).
 CREATE INDEX agente_avaliacao_custo_juiz ON agente_avaliacao (tenant_id, canal_id, criado_em) INCLUDE (custo_centavos) WHERE tipo = 'juiz';
 
+-- O worker varre agente_decisao e agente_sessao de TODOS os tenants a cada minuto:
+--   regras pendentes → decisões recentes com resposta (parcial, sem tenant na frente);
+--   última decisão da sessão e transcrição → por (tenant, sessão, criado_em);
+--   candidatas ao juiz → sessões recentes por iniciada_em.
+CREATE INDEX agente_decisao_com_resposta ON agente_decisao (criado_em) WHERE resposta IS NOT NULL;
+CREATE INDEX agente_decisao_por_sessao   ON agente_decisao (tenant_id, sessao_id, criado_em DESC);
+CREATE INDEX agente_sessao_recente       ON agente_sessao (iniciada_em);
+
 COMMENT ON TABLE agente_avaliacao IS
     'Qualidade em produção (ADR-031): regras em 100% das decisões e juiz com rubrica na amostra estável. '
     'Idempotente por (decisão, tipo). Trechos e justificativas mascarados.';

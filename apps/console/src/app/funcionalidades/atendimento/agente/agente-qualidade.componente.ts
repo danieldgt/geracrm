@@ -404,7 +404,8 @@ export class AgenteQualidadeComponente {
   async avaliar(a: AvaliacaoQualidadeDto): Promise<void> {
     if (this.avaliando()) return
     this.avaliando.set(a.conversaId)
-    const r = await this.#api.avaliar(a.conversaId)
+    // Julga a sessão DESTE item (a da decisão), não a mais recente da conversa.
+    const r = await this.#api.avaliar(a.conversaId, a.decisaoId)
     this.avaliando.set(null)
     if (!r.ok) {
       this.#toast.erro(mensagemDaFalha(r.erro.erro, r.erro.mensagem ?? 'Não foi possível avaliar agora.'))

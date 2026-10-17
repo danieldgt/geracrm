@@ -57,8 +57,14 @@ export async function violacoesDoTurno(ctx: ContextoPipeline, entrada: EntradaPo
     if (entrada.numerosVistos instanceof NumerosVistos) for (const p of entrada.numerosVistos.percentuais) f.percentuais.add(p)
     fontes = f
   }
+  // Leitura tolerante dos campos da P0c (u/j): presentes depois do merge, ausentes antes.
+  const extra = entrada as EntradaPosResposta & { readonly saldoDeEstoqueVisto?: boolean; readonly mensagensFixas?: readonly string[] }
   return avaliarRegrasQualidade({
     mensagens: entrada.mensagens,
+    // Texto fixo do sistema (abertura da P4) não é resposta do agente: não é avaliado.
+    isentas: extra.mensagensFixas,
+    // O MESMO critério do filtro P2: com saldo de estoque consultado no turno, escassez não é urgência falsa.
+    estoqueComFonte: extra.saldoDeEstoqueVisto === true,
     extras: compliance.frasesProibidas,
     perguntasAnteriores: perguntasJaRespondiveis(ctx.historico),
     fontes,

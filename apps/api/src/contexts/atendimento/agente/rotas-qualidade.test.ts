@@ -156,6 +156,8 @@ describe('GET /v1/agente/qualidade/amostra-semanal.csv', () => {
     for (let i = 0; i < 5; i++) baixas.add((await conversa(A, CANAL_A, { pior: null, nota: 2 })).conversa)
     for (let i = 0; i < 15; i++) await conversa(A, CANAL_A, { pior: null, nota: 5 })
     await conversa(B, CANAL_B, { pior: 'CRITICA' })
+    // Nome do número com telefone: sai mascarado no CSV também.
+    await dono`UPDATE canal_conectado SET nome_amigavel = 'Loja 85 99999-1234' WHERE tenant_id = ${A} AND id = ${CANAL_A}`
 
     const r = await get(A, '/v1/agente/qualidade/amostra-semanal.csv')
     expect(r.statusCode).toBe(200)
@@ -175,6 +177,8 @@ describe('GET /v1/agente/qualidade/amostra-semanal.csv', () => {
     // Estável: exportar de novo dá o mesmo arquivo.
     expect((await get(A, '/v1/agente/qualidade/amostra-semanal.csv')).body).toBe(r.body)
     expect((await get(A, '/v1/agente/qualidade/amostra-semanal.csv?inicio=ontem')).statusCode).toBe(422)
+    expect(dados[0]![1]).toBe('Loja [telefone]')
+    await dono`UPDATE canal_conectado SET nome_amigavel = 'Loja A' WHERE tenant_id = ${A} AND id = ${CANAL_A}`
   })
 
   it('célula protege contra fórmula e escapa aspas e separador', () => {
@@ -197,6 +201,25 @@ describe('POST /v1/agente/qualidade/avaliar — juiz sob demanda', () => {
     expect(chamadasJuiz).toBe(1)
     expect((await app.inject({ method: 'POST', url: '/v1/agente/qualidade/avaliar', headers: h(B), payload: { conversaId: conv } })).statusCode).toBe(404)
     expect((await app.inject({ method: 'POST', url: '/v1/agente/qualidade/avaliar', headers: h(A), payload: { conversaId: 'x' } })).statusCode).toBe(422)
+  })
+})
+
+describe('POST /v1/agente/qualidade/avaliar — a sessão do item', () => {
+  it('com decisaoId julga a sessão daquela decisão, não a mais recente', async () => {
+    await limpar(A)
+    const { conversa: conv, decisao: recente } = await conversa(A, CANAL_A)
+    // Uma sessão ANTERIOR na mesma conversa, com a sua decisão.
+    const antiga = crypto.randomUUID(), decAntiga = crypto.randomUUID()
+    await dono`INSERT INTO agente_sessao (tenant_id, id, conversa_id, canal_id, modo, turnos, estado, encerrada_em, motivo_saida, iniciada_em)
+               VALUES (${A}, ${antiga}, ${conv}, ${CANAL_A}, 'sombra', 1, 'encerrada', now() - interval '2 days', 'teste', now() - interval '3 days')`
+    await dono`INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, sessao_id, modo, desfecho, resposta, criado_em)
+               VALUES (${A}, ${decAntiga}, ${conv}, ${CANAL_A}, ${antiga}, 'sombra', 'sugeriu', '{"mensagens":["Bom dia, posso ajudar?"]}'::jsonb, now() - interval '3 days')`
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em) VALUES (${A}, ${crypto.randomUUID()}, ${conv}, 'entrante', 'texto', '{"texto":"oi"}'::jsonb, now() - interval '3 days')`
+    const r = await app.inject({ method: 'POST', url: '/v1/agente/qualidade/avaliar', headers: h(A), payload: { conversaId: conv, decisaoId: decAntiga } })
+    expect(r.statusCode).toBe(200)
+    expect(r.json().avaliacao).toMatchObject({ decisaoId: decAntiga, sessaoId: antiga })
+    const semItem = await app.inject({ method: 'POST', url: '/v1/agente/qualidade/avaliar', headers: h(A), payload: { conversaId: conv } })
+    expect(semItem.json().avaliacao).toMatchObject({ decisaoId: recente })
   })
 })
 

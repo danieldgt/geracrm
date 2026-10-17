@@ -96,9 +96,11 @@ export interface ViolacaoQualidade {
 export function mascararTextoQualidade(texto: string): string {
   return texto
     .replace(/[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}/gu, '[e-mail]')
-    .replace(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, '[cnpj]')
-    .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, '[cpf]')
-    .replace(/(?:\+?55[\s-]?)?\(?\b\d{2}\)?[\s-]?9?\d{4}[\s-]?\d{4}\b/g, '[telefone]')
+    .replace(/(?<!\d)\d{2}[.\s]?\d{3}[.\s]?\d{3}[/\s]?\d{4}[-\s]?\d{2}(?!\d)/g, '[cnpj]')
+    .replace(/(?<!\d)\d{3}[.\s]?\d{3}[.\s]?\d{3}[-\s]?\d{2}(?!\d)/g, '[cpf]')
+    // Telefone com ou sem DDI (+55/55), DDD com ou sem parênteses, 9 solto e separadores:
+    // "5585999991277", "+55 85 99999-1277", "558599991277", "85 9 9999-1277", "(85) 99999-1277".
+    .replace(/(?<!\d)(?:\+?55[\s.-]?)?\(?\d{2}\)?[\s.-]?(?:9[\s.-]?)?\d{4}[\s.-]?\d{4}(?!\d)/g, '[telefone]')
 }
 
 function trechoDe(t: string): string {
@@ -131,7 +133,7 @@ export const PROIBIDAS_QUALIDADE_B2B: ReadonlyArray<{ readonly id: string; reado
   {
     // Crédito/cadastro aprovado na hora: quem aprova é o financeiro/ERP.
     id: 'credito_na_hora', gravidade: 'CRITICA',
-    re: re(`${B}(?:cr[eé]dito|limite|cadastro)\\s+(?:[\\p{L}]+\\s+)?(?:aprovad[oa]|liberad[oa])\\s+(?:na\\s+hora|hoje|j[aá]|na\\s+mesma\\s+hora|imediatamente|na\\s+certa)${E}|${B}aprova[cç][aã]o\\s+(?:imediata|na\\s+hora|certa|autom[aá]tica)${E}`),
+    re: re(`${B}(?:cr[eé]dito|limite|cadastro)\\s+(?:[\\p{L}]+\\s+){0,2}?(?:aprovad[oa]|liberad[oa])\\s+(?:na\\s+hora|hoje|j[aá]|na\\s+mesma\\s+hora|imediatamente|na\\s+certa)${E}|${B}aprova[cç][aã]o\\s+(?:imediata|na\\s+hora|certa|autom[aá]tica)${E}`),
   },
   { id: 'sem_risco', gravidade: 'ALTA', ignoraNegacao: true, re: re(`${B}(?:sem\\s+(?:nenhum\\s+)?risco|risco\\s+zero)${E}`) },
 ]
@@ -141,6 +143,9 @@ const PRAZO_ENTREGA_RE = re(
   `${B}(?:chega|chegam|chegar[aá]|chegaria|entrega|entregamos|entregaremos|entregue|despachamos|despacha|enviamos|sai|saem|vai\\s+chegar|vai\\s+sair)${E}`
   + `[^.!?\\n]{0,30}?${B}(?:hoje|amanh[aã]|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo|ainda\\s+hoje|em\\s+breve|rapidinho|logo\\s+logo|at[eé]\\s+o\\s+fi(?:m|nal)\\s+d[ao]\\s+(?:dia|semana))${E}`,
 )
+const DIA_SRC = 'segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo'
+const FAIXA_DE_DIAS_RE = new RegExp(
+  `${B}(?:de|da|do)\\s+(?:${DIA_SRC})(?:-feira)?\\s+(?:a|[aà]|at[eé])\\s+(?:${DIA_SRC})(?:-feira)?${E}|${B}(?:[aà]s|aos|nas|nos)\\s+(?:${DIA_SRC})s?(?:-feiras?)?${E}`, 'giu')
 const CONDICIONAL_RE = /(?:^|[\s,])(?:se|caso|quando|assim\s+que)\s/iu
 const RETORNO_HUMANO_RE = /vendedor|consultor|especialista|atendente|equipe|retorno|te\s+(?:chama|liga|responde)|entra(?:r)?\s+em\s+contato/iu
 
@@ -160,21 +165,39 @@ export interface EntradaRegrasQualidade {
   readonly fontes?: FontesDeNumeros | null | undefined
   /** Limite por mensagem (`agente_config.max_caracteres`). */
   readonly maxCaracteres?: number | undefined
+  /** Houve saldo de estoque de ferramenta no turno — o MESMO critério do filtro P2 (escassez deixa de ser vetada). */
+  readonly estoqueComFonte?: boolean | undefined
 }
 
-function palavrasProibidas(texto: string, extras: readonly string[] | undefined): ViolacaoQualidade[] {
+/**
+ * Negação DEPOIS do termo, na mesma oração: "Pedido sem nota fiscal não é possível",
+ * "venda sem nota não fazemos", "aprovação automática não temos, o financeiro analisa".
+ */
+const NEGACAO_DEPOIS_RE = /(?<![\p{L}\p{N}])(?:n[aã]o|nunca|jamais|nenhum|nenhuma)(?![\p{L}\p{N}])/iu
+function negadoDepois(frase: string, fimTermo: number): boolean {
+  const resto = frase.slice(fimTermo).split(/[,;:—–()]/)[0] ?? ''
+  return NEGACAO_DEPOIS_RE.test(resto)
+}
+/** Auxiliar de passado/estado entre o sujeito e "aprovado/liberado": constatação, não promessa. */
+const CONSTATACAO_PASSADO_RE = /(?<![\p{L}])(?:foi|j[aá]|ficou|est[aá]|esteve)\s/iu
+
+function palavrasProibidas(texto: string, extras: readonly string[] | undefined, estoqueComFonte: boolean): ViolacaoQualidade[] {
   const out: ViolacaoQualidade[] = []
   // A base + extras do filtro, de novo, sobre o texto final: se ainda cortaria, escapou.
-  for (const o of filtrarSaida(texto, { extras }).ocorrencias) {
+  for (const o of filtrarSaida(texto, { extras, estoqueComFonte }).ocorrencias) {
     if (o.gravidade === 'INFO' || o.acao === 'registrado' || o.acao === 'reescrito') continue
     out.push({ regra: 'palavra_proibida', gravidade: o.gravidade, trecho: trechoDe(o.trecho ?? texto), detalhe: o.id })
   }
   for (const f of frases(texto)) {
+    // Pergunta não afirma nada ("Seu pedido anterior ficou sem nota?").
+    if (/\?\s*$/.test(f)) continue
     for (const p of PROIBIDAS_QUALIDADE_B2B) {
       const m = p.re.exec(f)
       if (!m) continue
-      if (!p.ignoraNegacao && termoNegado(f, m.index)) continue
-      out.push({ regra: 'palavra_proibida', gravidade: p.gravidade, trecho: trechoDe(f), detalhe: p.id })
+      if (!p.ignoraNegacao && (termoNegado(f, m.index) || negadoDepois(f, m.index + m[0].length))) continue
+      // Constatação no passado ("seu cadastro foi aprovado hoje") é fato a conferir, não promessa: ALTA.
+      const gravidade = p.gravidade === 'CRITICA' && CONSTATACAO_PASSADO_RE.test(m[0]) ? 'ALTA' : p.gravidade
+      out.push({ regra: 'palavra_proibida', gravidade, trecho: trechoDe(f), detalhe: p.id })
     }
   }
   return out
@@ -184,8 +207,10 @@ function promessas(texto: string): ViolacaoQualidade[] {
   const out: ViolacaoQualidade[] = []
   for (const f of frases(texto)) {
     if (/\?\s*$/.test(f)) continue
-    const m = PRAZO_ENTREGA_RE.exec(f)
-    if (m && !termoNegado(f, m.index) && !CONDICIONAL_RE.test(f.slice(0, m.index + 1))) {
+    // "de segunda a sexta", "às sextas", "aos sábados": horário de operação, não data prometida.
+    const g = f.replace(FAIXA_DE_DIAS_RE, (x) => ' '.repeat(x.length))
+    const m = PRAZO_ENTREGA_RE.exec(g)
+    if (m && !termoNegado(g, m.index) && !CONDICIONAL_RE.test(g.slice(0, m.index + 1))) {
       out.push({ regra: 'promessa_prazo', gravidade: 'ALTA', trecho: trechoDe(f), detalhe: 'prazo de entrega por data' })
       continue
     }
@@ -211,7 +236,7 @@ export function avaliarRegrasQualidade(e: EntradaRegrasQualidade): ViolacaoQuali
   const max = e.maxCaracteres && e.maxCaracteres > 0 ? e.maxCaracteres : MAX_CARACTERES_PADRAO_QUALIDADE
   const perguntas: string[] = []
   for (const m of mensagens) {
-    out.push(...palavrasProibidas(m, e.extras), ...promessas(m))
+    out.push(...palavrasProibidas(m, e.extras, e.estoqueComFonte === true), ...promessas(m))
     if (e.fontes) {
       for (const n of numerosSemFonte(m, e.fontes)) {
         const f = frases(m).find((x) => x.includes(n.trecho)) ?? n.trecho

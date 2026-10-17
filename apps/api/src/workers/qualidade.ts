@@ -84,11 +84,11 @@ export async function processarQualidade(dono: Sql, deps: DepsQualidade = {}, ag
       // A amostra no SQL é um pré-filtro; esta é a régua (a mesma do shared).
       if (!c.decisao_id || !naAmostra(c.conversa_id, amostraEfetiva(c.amostra === null ? null : Number(c.amostra), c.modo))) continue
       const gatilho: GatilhoAvaliacao = c.estado === 'ativa' ? 'turnos' : 'fim_sessao'
-      const d: DesfechoJuiz = await comTenantServico(c.tenant_id, (tx) => julgarSessao(tx, {
+      const d: DesfechoJuiz = await julgarSessao((fn) => comTenantServico(c.tenant_id, fn), {
         tenantId: c.tenant_id, sessaoId: c.sessao_id, decisaoId: c.decisao_id!, conversaId: c.conversa_id, canalId: c.canal_id,
         canalNome: c.canal_nome, modo: c.modo ?? 'sombra', turnos: c.turnos, gatilho, politicas: c.politicas,
         tetoMesCentavos: tetoJuizEfetivo(c.teto, deps.env),
-      }, { porta, modelo }))
+      }, { porta, modelo })
       if (d === 'avaliada') julgadas++
       else if (d === 'falhou') falhas++
       else if (d === 'teto') noTeto++
@@ -125,9 +125,11 @@ async function candidatasAoJuiz(dono: Sql, agora: Date, somenteTenant: string | 
          AND qualidade_fracao_estavel(s.conversa_id::text) < coalesce(ac.qualidade_amostra,
                CASE s.modo WHEN 'sombra' THEN 1 WHEN 'assistido' THEN 0.2 WHEN 'autonomo' THEN 0.05 ELSE 0 END)
          -- Número no teto do mês (ou com juiz desligado, teto 0) nem entra: senão ocuparia o lote.
-         AND (SELECT coalesce(sum(a.custo_centavos), 0) FROM agente_avaliacao a JOIN tenant t ON t.id = a.tenant_id
+         -- ⚠️ Pré-filtro com o mês em America/Sao_Paulo: o fuso do tenant é texto livre e um
+         --    inválido derrubaria a passada de TODOS. A conta exata (fusoSeguro) é a do julgamento.
+         AND (SELECT coalesce(sum(a.custo_centavos), 0) FROM agente_avaliacao a
                WHERE a.tenant_id = s.tenant_id AND a.canal_id = s.canal_id AND a.tipo = 'juiz'
-                 AND a.criado_em >= date_trunc('month', now() AT TIME ZONE coalesce(t.fuso, 'America/Sao_Paulo')) AT TIME ZONE coalesce(t.fuso, 'America/Sao_Paulo'))
+                 AND a.criado_em >= date_trunc('month', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo')
              < coalesce(ac.qualidade_teto_mes_centavos, ${tetoAmbiente})
     )
     SELECT s.tenant_id, s.sessao_id, s.conversa_id, s.canal_id, s.canal_nome, s.modo, s.estado, s.turnos, s.amostra, s.teto, s.politicas,
