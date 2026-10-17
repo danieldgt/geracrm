@@ -411,3 +411,6 @@ PRONTO     skills descrevem o pipeline e onde estender
   (l) feriados também na ausência e na disponibilidade do agente (`disponibilidade.ts`) — P11 só aplicou nas ativas.
 - Integração P14 × P11: depois da P14 na main, `retorno.ts avaliar()` (P11) usa `modoEfetivoDoCanal` — kill switch do
   tenant e recorte também calam o retorno. Integrar a P4 antes da P14 (identificaComoRobo ignorado na P4).
+  (m) tela da campanha mostra "pausada por qualidade do número" (hoje só o alerta avisa) — P11;
+  (n) purga de tarefa_pos_ingestao em laço até o lote vir curto (hoje ~72k/dia) — P11;
+  (o) catch externo de processarRetornos reagenda sem contar falha (pré-existente) — P11.
