@@ -420,3 +420,5 @@ PRONTO     skills descrevem o pipeline e onde estender
   (r) recorte ganha opção "feriado conta como: fora | dentro" (padrão: fora) — cobre "autônomo fora do expediente";
   (s) tela de empresa nomeia 403 ("só administrador") e 422 (mensagem do servidor); lista de números mostra o modo
       EFETIVO (selo "teto da conta" quando o kill switch restringe).
+- P13 × P17: o teste "[P17] copiloto não grava memória" está em it.skip em rotas-sugestao.test.ts — a P17 tira o skip
+  ao bloquear memoria_anotar em simulação e copiloto.
