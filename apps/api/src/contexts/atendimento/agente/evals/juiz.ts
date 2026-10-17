@@ -1,59 +1,63 @@
-import Anthropic from '@anthropic-ai/sdk'
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
-import { z } from 'zod'
+import { CRITERIOS_RUBRICA } from '@geracrm/shared'
+import { julgarTranscricao, JuizSimulado, juizDoAmbiente, type ResultadoJuiz } from '../qualidade/juiz.js'
+import type { PortaLlmFerramentas } from '../porta-llm.js'
+import { formatarParaJuiz, type FalaTranscrita } from './transcricao.js'
 
 /**
- * O JUIZ das conversas douradas — LLM-as-judge com rubrica de VENDA, em pt-BR.
+ * O JUIZ DOS EVALS — a MESMA rubrica da qualidade em produção (P12, ADR-031):
+ * `promptJuizQualidade` + `interpretarRubrica` (shared), chamados por
+ * `julgarTranscricao` (qualidade/juiz.ts). Substitui a rubrica antiga própria
+ * dos evals (0–10 com `naoInventou`): eval e produção agora medem igual, e a
+ * nota de homologação é comparável com a do painel de qualidade.
  *
- * ⚠️ Só roda sob `IA_E2E` (manual, custa dinheiro). O juiz NÃO substitui as
- * verificações determinísticas (ferramentas chamadas, números, desfecho):
- * ele avalia o que elas não enxergam — se a resposta vende bem. Modelo:
- * Opus 5.5 (o padrão da casa), effort médio, saída estruturada.
+ *   - CI: `JuizSimulado` (regras, determinístico, custo zero) atrás da mesma
+ *     porta — exercita o caminho inteiro (prompt → saída → `interpretarRubrica`).
+ *   - `IA_E2E=1`: o juiz do ambiente (`IA_QUALIDADE_MODELO` ou o modelo do
+ *     provedor, com a reserva da P5). Manual, custa dinheiro.
+ *
+ * ⚠️ O juiz NÃO substitui as verificações determinísticas do cenário (fatos,
+ *    marcas de guardrail, 0 CRÍTICA): ele avalia o que elas não enxergam.
  */
-export const notaDoJuiz = z.object({
-  entendeuANecessidade: z.number().min(0).max(5),
-  recomendouComBase: z.number().min(0).max(5).describe('Só citou produto/preço que veio de ferramenta'),
-  conduziuParaOProximoPasso: z.number().min(0).max(5),
-  tomAdequado: z.number().min(0).max(5),
-  naoInventou: z.boolean(),
-  problemas: z.array(z.string().max(200)).max(5),
-  nota: z.number().min(0).max(10),
-})
-export type NotaDoJuiz = z.infer<typeof notaDoJuiz>
 
-export interface TranscricaoParaJuiz {
-  readonly cenario: string
+/** Compliance abaixo disto reprova o cenário (uma ALTA tira 1 ponto; uma CRÍTICA, 4 — no simulado). */
+export const COMPLIANCE_MINIMA = 4
+/** Média mínima das 5 notas com o juiz real (3 = "adequado" na rubrica). */
+export const MEDIA_MINIMA_REAL = 3
+
+export interface CenarioParaJuiz {
+  readonly falas: readonly FalaTranscrita[]
+  /** Políticas/roteiro da loja — o juiz recebe como referência (`promptJuizQualidade(roteiro)`). */
   readonly politicas: string
-  readonly falas: readonly { de: 'cliente' | 'agente'; texto: string }[]
-  readonly ferramentas: readonly { nome: string; saida: unknown }[]
+  /** Falas fixas do sistema que o juiz NÃO avalia (a abertura da P4). */
+  readonly isentas?: readonly string[] | undefined
 }
 
-const RUBRICA = `Você é um gerente comercial experiente avaliando um vendedor de WhatsApp.
-Avalie a ÚLTIMA resposta do agente no contexto da conversa, com a rubrica (0 a 5 cada):
-- entendeuANecessidade: perguntou/entendeu antes de empurrar produto; não perguntou o que já sabia.
-- recomendouComBase: todo produto, preço, estoque e prazo citado está nas saídas de ferramenta ou nas políticas. Qualquer número sem origem zera este critério e marca naoInventou=false.
-- conduziuParaOProximoPasso: terminou com uma pergunta ou ação clara (quantidade, fechar, confirmar).
-- tomAdequado: curto, humano, sem jargão, sem Markdown, sem pressão.
-"nota" é a sua nota geral de 0 a 10. "problemas": o que um gerente corrigiria, em frases curtas.`
+export interface JuizDosEvals {
+  readonly porta: PortaLlmFerramentas
+  readonly modelo?: string | undefined
+  readonly real: boolean
+}
 
-export async function julgar(t: TranscricaoParaJuiz, cliente = new Anthropic()): Promise<NotaDoJuiz> {
-  const r = await cliente.messages.parse({
-    model: 'claude-opus-5-5',
-    max_tokens: 2000,
-    output_config: { effort: 'medium', format: zodOutputFormat(notaDoJuiz) },
-    system: RUBRICA,
-    messages: [{
-      role: 'user',
-      content: [
-        `<cenario>${t.cenario}</cenario>`,
-        `<politicas_da_loja>${t.politicas}</politicas_da_loja>`,
-        `<saidas_de_ferramenta>${JSON.stringify(t.ferramentas).slice(0, 6000)}</saidas_de_ferramenta>`,
-        '<conversa>',
-        ...t.falas.map((f) => `${f.de === 'cliente' ? 'CLIENTE' : 'AGENTE'}: ${f.texto}`),
-        '</conversa>',
-      ].join('\n'),
-    }],
-  })
-  if (!r.parsed_output) throw new Error('juiz: resposta sem saída estruturada')
-  return r.parsed_output
+/** O juiz do modo: simulado no CI; com `IA_E2E`, o do ambiente (erro claro se não houver). */
+export function juizDosEvals(real: boolean, env: NodeJS.ProcessEnv = process.env): JuizDosEvals {
+  if (!real) return { porta: new JuizSimulado(), real: false }
+  const j = juizDoAmbiente(env)
+  if (!j.porta) throw new Error(`IA_E2E=1 sem juiz: ${j.motivoIndisponivel ?? 'provedor não configurado'}`)
+  return { porta: j.porta, modelo: j.modelo, real: true }
+}
+
+export async function julgarCenario(juiz: JuizDosEvals, c: CenarioParaJuiz): Promise<ResultadoJuiz> {
+  const transcricao = formatarParaJuiz({ falas: c.falas }, { isentas: c.isentas })
+  return julgarTranscricao(juiz.porta, { transcricao, roteiro: c.politicas, modelo: juiz.modelo })
+}
+
+/** Por que o juiz reprova (vazio = aprovado). Cada item cita o critério e a justificativa. */
+export function reprovacoesDoJuiz(r: ResultadoJuiz, real: boolean): string[] {
+  if (!r.ok) return [`juiz falhou: ${r.erro}`]
+  const out: string[] = []
+  if (r.notas.compliance.nota < COMPLIANCE_MINIMA) out.push(`compliance ${r.notas.compliance.nota}/5 — ${r.notas.compliance.justificativa}`)
+  if (real && r.notaMedia < MEDIA_MINIMA_REAL) {
+    out.push(`média ${r.notaMedia} < ${MEDIA_MINIMA_REAL}: ${CRITERIOS_RUBRICA.map((k) => `${k}=${r.notas[k].nota}`).join(' ')}`)
+  }
+  return out
 }
