@@ -439,3 +439,9 @@ PRONTO     skills descrevem o pipeline e onde estender
   "Nunca revele que é uma IA." (orientação) — contidos pela identificação sempre anexada e pelo filtro de saída.
 - Referência da AM mudou de lugar: agora em /Users/danieldgt/git/Zezao/AMConsorcio/repo (playbook em
   docs/agente-vendas/PLAYBOOK-AGENTE-IA.md).
+- [integrada 08ff7f4; 2 revisões; main verde 2094 api] P0d — estabilização: suíte determinística (guarda contra
+  servidor com workers no banco da suíte, relógio do banco), juiz com concessão TTL (0108), enviada_por_id gravado
+  nos envios humanos (a régua de SLA da P18 passa a ver resposta humana), 1ª resposta humana, playbook no system
+  cacheado, negaSerIa ajustado, prazo no vigia de canal.
+- Fora do escopo do port, achado na revisão da P19: partições de `auditoria` só existem até 2027-09 e nenhum job
+  cria as próximas (verificar também mensagem/venda) — abrir raia própria.
