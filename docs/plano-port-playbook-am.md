@@ -22,10 +22,10 @@
 | P11 webhook enxuto + ativas | 1 | 0101 | integrada (3ad34fa; 2 revisões; main verde 1759 api) | | |
 | P12 qualidade em produção | 2 | 0102 | em andamento | | |
 | P13 sugestão/copiloto/edição | 2 | 0103 | em andamento | | |
-| P14 modo: recorte/confirmação/auditoria | 2 | 0104 | em andamento | | |
+| P14 modo: recorte/confirmação/auditoria | 2 | 0104 | integrada (c0487fc; 2 revisões; main verde 1805 api) | | |
 | P15 evals + scripts | 2 | — | pendente | | |
 | P16 revisão humana | 3 | 0105 | pendente | | |
-| P17 playbook versionado | 3 | 0106 | pendente | | |
+| P17 playbook versionado | 3 | 0106 | em andamento | | |
 | P18 SLA do handoff | 3 | 0107 | pendente | | fatia mínima de INB-22 (decisão padrão: fazer; ver ADR-034) |
 | P19 painel de fase | 3 | — | pendente | | |
 | P20 operação/docs/skills | 4 | — | pendente | | |
@@ -414,3 +414,9 @@ PRONTO     skills descrevem o pipeline e onde estender
   (m) tela da campanha mostra "pausada por qualidade do número" (hoje só o alerta avisa) — P11;
   (n) purga de tarefa_pos_ingestao em laço até o lote vir curto (hoje ~72k/dia) — P11;
   (o) catch externo de processarRetornos reagenda sem contar falha (pré-existente) — P11.
+- Decisões de produto pós-revisão da P14 (aplicar na P17, que é dona da tela/conteúdo do agente):
+  (q) retorno fora do recorte só por horário/feriado → ADIA até a próxima abertura do recorte (kill switch e
+      segmento continuam cancelando);
+  (r) recorte ganha opção "feriado conta como: fora | dentro" (padrão: fora) — cobre "autônomo fora do expediente";
+  (s) tela de empresa nomeia 403 ("só administrador") e 422 (mensagem do servidor); lista de números mostra o modo
+      EFETIVO (selo "teto da conta" quando o kill switch restringe).
