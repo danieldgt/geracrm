@@ -214,7 +214,10 @@ export function interpretarSaida(texto: string): unknown {
  * "Grammar error", "Unimplemented keys", "schema"), e não a requisição em si.
  */
 function recusouFormato(texto: string): boolean {
-  return /response_format|json_schema|json_object|strict|structured|grammar|schema|propertyNames|unimplemented keys/i.test(texto)
+  // ⚠️ "requested parameters": o OpenRouter responde 404 "No endpoints found that can handle the
+  //    requested parameters" quando nenhum fornecedor aceita o formato pedido — é degrau de formato,
+  //    não modelo inexistente (sem isto o 404 bloquearia o modelo por 1 h à toa).
+  return /response_format|json_schema|json_object|strict|structured|grammar|schema|propertyNames|unimplemented keys|requested parameters/i.test(texto)
 }
 
 /**
@@ -301,18 +304,31 @@ export function mapearStatus(status: number, texto: string): { motivo: MotivoFal
   if (status === 401) return { motivo: 'credencial_invalida', detalhe }
   if (status === 403 || status === 404) return { motivo: 'acesso_negado', detalhe }
   if (status === 402) return { motivo: 'limite_de_custo', detalhe }
-  if (status === 429) return { motivo: codigoDoErro(texto) === 'insufficient_quota' ? 'limite_de_custo' : 'limite_de_taxa', detalhe }
+  if (status === 429) return { motivo: cotaEsgotada(texto) ? 'limite_de_custo' : 'limite_de_taxa', detalhe }
   if (status === 408 || status >= 500) return { motivo: 'indisponivel', detalhe }
   return { motivo: 'requisicao_invalida', detalhe }
 }
 
-/** `error.code` (ou `error.type`) do corpo JSON de erro do fio OpenAI. */
-function codigoDoErro(texto: string): string | undefined {
-  try {
-    const j = JSON.parse(texto) as { error?: { code?: unknown; type?: unknown } }
-    const c = j.error?.code ?? j.error?.type
-    return typeof c === 'string' ? c : undefined
-  } catch {
-    return undefined
-  }
+/**
+ * 429 de cota/crédito esgotado (fatal) × de taxa (passageiro). Lê `error.code`/`error.type`/
+ * `error.status` do corpo — inclusive o Gemini, que manda o erro dentro de um ARRAY — e, por
+ * fim, o texto: fornecedor compatível não padroniza o código, e "quota"/"billing"/"credit"/
+ * `RESOURCE_EXHAUSTED` são o que de fato aparece.
+ */
+function cotaEsgotada(texto: string): boolean {
+  const codigos = codigosDoErro(texto)
+  if (codigos.some((c) => /insufficient_quota|billing|credit|quota|RESOURCE_EXHAUSTED/i.test(c))) return true
+  if (codigos.some((c) => /rate_limit/i.test(c))) return false
+  return /quota|billing|credit|RESOURCE_EXHAUSTED/i.test(texto)
+}
+
+/** `code`, `type` e `status` do erro no corpo JSON (objeto ou array de objetos). */
+function codigosDoErro(texto: string): string[] {
+  let j: unknown
+  try { j = JSON.parse(texto) } catch { return [] }
+  const corpos = Array.isArray(j) ? j : [j]
+  return corpos.flatMap((c) => {
+    const e = (c as { error?: Record<string, unknown> } | null)?.error
+    return e ? [e['code'], e['type'], e['status']].filter((x): x is string => typeof x === 'string') : []
+  })
 }

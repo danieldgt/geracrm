@@ -34,10 +34,11 @@ export interface EstadoDoLlm {
   readonly modelosBloqueados: readonly { readonly modelo: string; readonly ateEm: Date }[]
   /**
    * Cada principal visto no processo (`fornecedor:modelo`): o do ambiente e os
-   * escolhidos no catálogo por número. ⚠️ A reserva é POR PRINCIPAL — o Groq
+   * escolhidos no catálogo por número. Opcional no tipo (fixtures e
+   * consumidores antigos); o estado do processo sempre preenche. ⚠️ A reserva é POR PRINCIPAL — o Groq
    * fora do ar desvia só os números que usam Groq; quem está no Claude segue.
    */
-  readonly principais: readonly {
+  readonly principais?: readonly {
     readonly principal: string
     readonly reserva: string | null
     readonly situacao: 'principal' | 'reserva'
@@ -46,7 +47,7 @@ export interface EstadoDoLlm {
     readonly ativacoes: number
   }[]
   /** Última falha de provedor (principal ou reserva). Sem mensagem do fornecedor: só o motivo. */
-  readonly ultimaFalha: { readonly em: Date; readonly principal: string; readonly motivo: string; readonly origem: 'principal' | 'reserva' } | null
+  readonly ultimaFalha?: { readonly em: Date; readonly principal: string; readonly motivo: string; readonly origem: 'principal' | 'reserva' } | null
 }
 
 /** Uma linha de log com `alerta=<codigo>` — nunca com chave, mensagem de cliente ou detalhe do fornecedor. */

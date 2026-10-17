@@ -158,8 +158,8 @@ describe('Reserva de provedor com janela', () => {
     expect((await noClaude.rodar(pedido)).rastro?.provedor).toBe('claude')
     const r = estado.retrato()
     expect(r.situacao).toBe('reserva')
-    expect(r.principais.find((p) => p.principal === 'groq:llama')).toMatchObject({ situacao: 'reserva', ativacoes: 1 })
-    expect(r.principais.find((p) => p.principal === 'claude:opus')).toMatchObject({ situacao: 'principal' })
+    expect(r.principais?.find((p) => p.principal === 'groq:llama')).toMatchObject({ situacao: 'reserva', ativacoes: 1 })
+    expect(r.principais?.find((p) => p.principal === 'claude:opus')).toMatchObject({ situacao: 'principal' })
   })
 })
 

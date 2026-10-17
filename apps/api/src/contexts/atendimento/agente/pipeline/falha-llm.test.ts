@@ -78,6 +78,10 @@ describe.each(['openrouter', 'groq', 'gemini'] as const)('Classificação: %s (f
     ['503', new Response('{}', { status: 503 }), 'indisponivel', 'transitoria'],
     ['529', new Response('{}', { status: 529 }), 'indisponivel', 'transitoria'],
     ['400', new Response('{"error":{"message":"messages: bad"}}', { status: 400 }), 'requisicao_invalida', 'requisicao'],
+    ['429 Gemini (erro em array, RESOURCE_EXHAUSTED)', new Response(JSON.stringify([{ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded' } }]), { status: 429 }), 'limite_de_custo', 'fatal'],
+    ['429 só com texto de cota', new Response('You exceeded your current quota, please check your plan and billing details', { status: 429 }), 'limite_de_custo', 'fatal'],
+    ['200 com error.code 429 de cota', new Response(JSON.stringify({ error: { code: 429, message: 'credit limit reached' } }), { status: 200 }), 'limite_de_custo', 'fatal'],
+    ['200 com error.code 429 de taxa', new Response(JSON.stringify({ error: { code: 429, message: 'slow down' } }), { status: 200 }), 'limite_de_taxa', 'transitoria'],
     ['200 com error.code 403 (OpenRouter repassa)', new Response(JSON.stringify({ error: { code: 403, message: 'no access' } }), { status: 200 }), 'acesso_negado', 'fatal'],
   ]
   it.each(casos)('%s', async (_nome, resposta, motivo, classe) => {
@@ -86,6 +90,22 @@ describe.each(['openrouter', 'groq', 'gemini'] as const)('Classificação: %s (f
     if (r.ok) return
     expect(r.motivo).toBe(motivo)
     expect(classeDaFalhaLlm(r.motivo)).toBe(classe)
+  })
+})
+
+describe('Recusa de formato não é modelo inexistente', () => {
+  it('404 "No endpoints found that can handle the requested parameters" desce o formato e segue — não vira acesso_negado', async () => {
+    const corpos: Record<string, unknown>[] = []
+    const respostas = [
+      new Response(JSON.stringify({ error: { message: 'No endpoints found that can handle the requested parameters.', code: 404 } }), { status: 404 }),
+      new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{"mensagens":["oi"],"confianca":0.9}' } }] }), { status: 200 }),
+    ]
+    let i = 0
+    const buscar = (async (_u: unknown, init?: RequestInit) => { corpos.push(JSON.parse(String(init?.body))); return respostas[i++]! }) as unknown as typeof fetch
+    const r = await new LlmOpenRouterFerramentas({ apiKey: 'k', modelos: ['a/x'], buscar }).rodar(pedido)
+    expect(r.ok).toBe(true)
+    expect((corpos[0]!['response_format'] as { type: string }).type).toBe('json_schema')
+    expect((corpos[1]!['response_format'] as { type: string }).type).toBe('json_object')
   })
 })
 
