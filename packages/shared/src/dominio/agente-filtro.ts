@@ -205,13 +205,14 @@ export function termoNegado(frase: string, inicioTermo: number): boolean {
 export interface ProibidaBase {
   readonly id: string
   readonly gravidade: GravidadeGuardrail
-  readonly re: RegExp
+  /** Regex da regra — ou `casa`, quando a regra precisa olhar a oração em tokens. */
+  readonly re?: RegExp | undefined
+  /** Detector programático (já aplica a negação). */
+  readonly casa?: ((frase: string) => boolean) | undefined
   /** A negação faz parte da afirmação vetada ("não sou um robô", "nunca falta estoque"). */
   readonly ignoraNegacao?: boolean
   /** Deixa de valer quando o turno trouxe estoque de fonte (`estoqueComFonte`). */
   readonly liberadaComEstoqueDeFonte?: boolean
-  /** "Só/apenas/somente" logo antes do verbo é restrição honesta ("só garantimos o prazo depois do faturamento"). */
-  readonly aceitaRestricao?: boolean
 }
 
 /** Verbos de promessa. ⚠️ "garantia" (substantivo) fica de fora: "garantia de fábrica" é fato do produto. */
@@ -222,12 +223,79 @@ const OBJETO_GARANTIA = [
   'cr[eé]dito', 'limite', 'aprova[cç][aã]o', 'aprovad[oa]', 'frete', 'reposi[cç][aã]o',
 ].join('|')
 /** O que vem depois do verbo de promessa: os objetos acima e o que descreve entrega/estoque. */
-// ⚠️ `pedido` NÃO é objeto: "garanto que o pedido foi registrado" é fato, não promessa.
-//    Data é objeto: "eu garanto o seu pedido na sexta" promete o dia.
-const OBJETO_PROMESSA = `${OBJETO_GARANTIA}|cheg\\p{L}*|entreg\\p{L}*|sai|saem|tem|temos|faltar|falta|hoje|${fuzzy('amanhã')}|segunda|${fuzzy('terça')}|quarta|quinta|sexta|${fuzzy('sábado')}|domingo`
-/** Verbo de ENCAMINHAMENTO entre a promessa e o objeto: "prometo verificar o prazo" é compromisso de checar, não de entregar. */
-const NAO_ENCAMINHA = '(?!(?:(?:verific|confirm|consult|retorn|olh|registr|confer|chec)\\p{L}*|ver|vejo|vemos)\\s)'
-const ATE_4_SEM_ENCAMINHAR = `(?:${NAO_ENCAMINHA}[\\p{L}\\p{N}%$.,]+\\s+){0,4}?`
+// ── promessa por verbo (garantir/assegurar/prometer) ─────────────────────────
+//
+// A regra é em TOKENS da oração depois do verbo, não regex: as exceções
+// (encaminhamento, data seguida de quem encaminha, intervalo de horário)
+// dependem da ORDEM das palavras.
+//
+//  1. Depois do verbo aceita-se [\s,:;—–]+ ("Te garanto: chega amanhã").
+//  2. Promessa = algum OBJETO nas 5 primeiras palavras da oração seguinte:
+//     entrega, prazo, estoque, preço, crédito…, cheg*, entreg*, sai, tem,
+//     faltar — ou uma DATA ("eu garanto o seu pedido na sexta").
+//     ⚠️ `pedido` não é objeto: "garanto que o pedido foi registrado" é fato.
+//  3. Verbo de ENCAMINHAMENTO antes do objeto (verificar, confirmar, consultar,
+//     retornar, ver, olhar, registrar, conferir) abona — o compromisso é de
+//     checar — SÓ se, depois dele e do que ele checa ("o prazo"), não houver
+//     cheg*/entreg*/sai/estoque/data na oração ("garanto que verifico e chega
+//     sexta" continua promessa).
+//  4. DATA seguida, na mesma oração, de encaminhamento ou de quem encaminha
+//     ("prometo que hoje confiro o estoque", "garanto que hoje mesmo o vendedor
+//     te chama") não é promessa de entrega — com a mesma ressalva do item 3.
+//  5. Intervalo "de segunda a sexta" é horário, não data prometida.
+//  6. Negação antes do verbo (regra da AM) abona; "só/apenas" NÃO abona
+//     ("a gente só garante entrega amanhã" é promessa).
+
+const VERBO_PROMESSA_RE = new RegExp(`${B}${GARANTIR}${E}`, 'giu')
+const DATA_SRC = `hoje|${fuzzy('amanhã')}|segunda|${fuzzy('terça')}|quarta|quinta|sexta|${fuzzy('sábado')}|domingo`
+const DATA_TOKEN_RE = new RegExp(`^(?:${DATA_SRC})$`, 'iu')
+const ehData = (w: string): boolean => DATA_TOKEN_RE.test(w)
+const OBJETO_NOMINAL_RE = new RegExp(`^(?:${OBJETO_GARANTIA})$`, 'iu')
+const OBJETO_TOKEN_RE = new RegExp(`^(?:${OBJETO_GARANTIA}|cheg\\p{L}*|entreg\\p{L}*|sai|saem|tem|temos|faltar|falta)$`, 'iu')
+const DURO_RE = /^(?:cheg\p{L}*|entreg\p{L}*|sai|saem|estoque)$/iu
+const ENCAMINHA_RE = /^(?:(?:verific|confir|consult|retorn|olh|registr|confer|chec)\p{L}*|ver|vejo|vemos)$/iu
+const QUEM_ENCAMINHA_RE = /^(?:vendedor|vendedora|equipe|consultor|consultora|atendente|representante)$/iu
+const LIGACAO_RE = /^(?:te|lhe|o|a|os|as|seu|sua|seus|suas|um|uma|com|sobre|do|da|dos|das|no|na)$/iu
+const INTERVALO_DE_DATAS_RE = new RegExp(`${B}de\\s+(?:${DATA_SRC})\\s+(?:a|${fuzzy('à')}|${fuzzy('até')})\\s+(?:${DATA_SRC})${E}`, 'giu')
+const JANELA_OBJETO = 5
+
+const tokensDe = (t: string): string[] => t.normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+
+/** Depois de um encaminhamento em `i`, há promessa dura no resto? (pula o que ele checa: "o prazo"). */
+function promessaDepoisDoEncaminhamento(ws: readonly string[], i: number): boolean {
+  let j = i + 1
+  while (j < ws.length && LIGACAO_RE.test(ws[j]!)) j++
+  if (j < ws.length && OBJETO_NOMINAL_RE.test(ws[j]!)) j++
+  return ws.slice(j).some((w) => DURO_RE.test(w) || ehData(w))
+}
+
+/** Promessa por verbo (garantir/assegurar/prometer) na frase, não negada. */
+export function promessaPorVerbo(frase: string): boolean {
+  VERBO_PROMESSA_RE.lastIndex = 0
+  for (const m of frase.matchAll(VERBO_PROMESSA_RE)) {
+    const ini = m.index ?? 0
+    if (termoNegado(frase, ini)) continue
+    const depois = frase.slice(ini + m[0].length).replace(/^[\s,:;—–]+/u, '')
+    const oracao = (depois.split(/[,;:—–()]/)[0] ?? '').replace(INTERVALO_DE_DATAS_RE, ' ')
+    const ws = tokensDe(oracao)
+    let encaminhou = -1
+    for (let i = 0; i < Math.min(ws.length, JANELA_OBJETO); i++) {
+      const w = ws[i]!
+      if (ENCAMINHA_RE.test(w)) { encaminhou = i; break }
+      if (ehData(w)) {
+        const k = ws.findIndex((x, idx) => idx > i && (ENCAMINHA_RE.test(x) || QUEM_ENCAMINHA_RE.test(x)))
+        if (k < 0) return true
+        if (promessaDepoisDoEncaminhamento(ws, k)) return true
+        encaminhou = -2
+        break
+      }
+      if (OBJETO_TOKEN_RE.test(w)) return true
+    }
+    if (encaminhou >= 0 && promessaDepoisDoEncaminhamento(ws, encaminhou)) return true
+  }
+  return false
+}
+
 const VERBO_OFERTA = [
   'posso', 'podemos', 'consigo', 'conseguimos', 'vou', 'vamos', 'dou', 'damos', 'fa[cç]o', 'fazemos',
   'libero', 'liberamos', 'ofere[cç]o', 'oferecemos', 'aplico', 'aplicamos', 'deixo', 'deixamos',
@@ -251,9 +319,9 @@ export const PROIBIDAS_BASE_B2B: readonly ProibidaBase[] = [
   },
   // Garantir entrega, prazo, estoque, preço ou crédito.
   {
-    id: 'garantia_sem_fonte', gravidade: 'CRITICA', aceitaRestricao: true,
-    // "garantimos entrega amanhã", "te garanto que chega sexta", "prometemos que não vai faltar estoque".
-    re: re(`${B}${GARANTIR}${E}\\s+${NAO_ENCAMINHA}${ATE_4_SEM_ENCAMINHAR}(?:${OBJETO_PROMESSA})${E}`),
+    id: 'garantia_sem_fonte', gravidade: 'CRITICA',
+    // "garantimos entrega amanhã", "te garanto: chega sexta", "prometemos que não vai faltar estoque".
+    casa: promessaPorVerbo,
   },
   {
     // ⚠️ `termo`: a negação conta a partir de "garantido", não do objeto ("o prazo NÃO é garantido").
@@ -425,18 +493,19 @@ function inicioDoTermo(m: RegExpMatchArray): number {
   return (m.index ?? 0) + Math.max(0, i)
 }
 
-/** "só", "apenas", "somente" IMEDIATAMENTE antes do verbo ("só a gente garante…" não conta). */
-const RESTRICAO_ANTES_RE = /(?:^|[\s,;:])(?:s[oó]|apenas|somente)\s+$/iu
-
 /** Primeira expressão proibida NÃO negada na frase. */
 function proibidaNaFrase(
   frase: string, extras: readonly ProibidaExtra[], estoqueComFonte: boolean,
 ): { id: string; gravidade: GravidadeGuardrail } | null {
   for (const p of PROIBIDAS_BASE_B2B) {
     if (p.liberadaComEstoqueDeFonte && estoqueComFonte) continue
+    if (p.casa) {
+      if (p.casa(frase)) return { id: p.id, gravidade: p.gravidade }
+      continue
+    }
+    if (!p.re) continue
     p.re.lastIndex = 0
     for (const m of frase.matchAll(p.re)) {
-      if (p.aceitaRestricao && RESTRICAO_ANTES_RE.test(frase.slice(0, m.index ?? 0))) continue
       if (p.ignoraNegacao || !termoNegado(frase, inicioDoTermo(m))) return { id: p.id, gravidade: p.gravidade }
     }
   }
@@ -526,13 +595,20 @@ export function filtrarSaida(texto: string, opcoes: OpcoesFiltroSaida = {}): Res
     const hit = proibidaNaFrase(f, extras, estoqueComFonte)
     if (hit) { ocorrencias.push({ ...hit, acao: 'removido', trecho: f.trim() }); continue }
     if (HESITACAO_RE.test(f)) {
-      // Hesitação + afirmação de negócio: cortar a hesitação viraria promessa.
-      // Pergunta só corta a locução ("Quem sabe você tem interesse no modelo novo?").
-      const pergunta = /\?\s*$/.test(f)
-      if (!pergunta && AFIRMACAO_NEGOCIO_RE.test(f) && !SUJEITO_ENCAMINHA_RE.test(f)) {
-        ocorrencias.push({ id: 'hesitacao_em_afirmacao', gravidade: 'ALTA', acao: 'removido', trecho: f.trim() })
+      // Hesitação + colocação de promessa: a locução NUNCA é cortada (cortar
+      // fabricaria a promessa). Pergunta ou sujeito que encaminha → a frase fica
+      // INTACTA, com a hesitação, e é registrada; senão a frase inteira sai.
+      if (AFIRMACAO_NEGOCIO_RE.test(f)) {
+        if (/\?\s*$/.test(f) || SUJEITO_ENCAMINHA_RE.test(f)) {
+          ocorrencias.push({ id: 'hesitacao_em_afirmacao', gravidade: 'INFO', acao: 'registrado', trecho: f.trim() })
+        } else {
+          ocorrencias.push({ id: 'hesitacao_em_afirmacao', gravidade: 'ALTA', acao: 'removido', trecho: f.trim() })
+          continue
+        }
+        mantidas.push(f)
         continue
       }
+      // Sem colocação de promessa: corta só a locução ("Quem sabe você tem interesse no modelo novo?").
       for (const p of PROIBIDAS_REESCRITA_B2B) {
         p.re.lastIndex = 0
         const m = p.re.exec(f)

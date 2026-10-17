@@ -82,13 +82,26 @@ describe('filtro de saída — promessas afirmativas saem', () => {
       'Garanto que o pedido foi registrado.',
       'Asseguramos que o pedido é conferido antes do envio.',
       'Prometo te retornar sobre o pedido.',
-      'Só garantimos o prazo depois do faturamento.',
-      'Apenas garantimos a entrega com o pedido faturado.',
+      'Prometo que hoje confiro o estoque.',
+      'Prometo que amanhã cedo eu verifico.',
+      'Garanto que amanhã te retorno.',
+      'Garanto que hoje mesmo o vendedor te chama.',
+      'Garantimos o atendimento de segunda a sexta.',
     ]) expect(filtrarSaida(t)).toEqual(intacto(t))
   })
 
-  it('"só" longe do verbo não abona a promessa', () => {
-    expect(ids('Só a gente garante entrega amanhã.')).toEqual(['garantia_sem_fonte'])
+  it.each([
+    'Te garanto: chega amanhã.',
+    'Garanto, chega amanhã.',
+    'A gente só garante entrega amanhã.',
+    'Só garantimos entrega amanhã se fechar até as 14h.',
+    'Hoje só prometemos entrega para sexta.',
+    'Só garantimos o prazo depois do faturamento.',
+    'Só a gente garante entrega amanhã.',
+    'Garanto que verifico e chega sexta.',
+    'Garanto que amanhã o vendedor confirma e chega sexta.',
+  ])('restrição, pontuação ou encaminhamento seguido de promessa não abonam: %s', (t) => {
+    expect(ids(t)).toEqual(['garantia_sem_fonte'])
   })
 
   it('garantia do PRODUTO não é promessa de entrega', () => {
@@ -178,11 +191,24 @@ describe('filtro de saída — consentimento, hesitação e notas', () => {
     ['Quem sabe o catálogo tem o que você procura?', 'O catálogo tem o que você procura?'],
     ['Acho que o vendedor consegue te ajudar com o prazo.', 'O vendedor consegue te ajudar com o prazo.'],
     ['Provavelmente o vendedor sabe te dizer o valor.', 'O vendedor sabe te dizer o valor.'],
-    ['Acho que chega amanhã?', 'Chega amanhã?'],
   ])('pergunta ou encaminhamento: só a locução sai, a frase fica — %s', (t, esperado) => {
     const r = filtrarSaida(t)
     expect(r.texto).toBe(esperado)
     expect(r.ocorrencias.every((o) => o.gravidade === 'INFO' && o.acao === 'reescrito')).toBe(true)
+  })
+
+  it.each([
+    'Acho que chega amanhã, ok?',
+    'Provavelmente chega amanhã, tudo bem?',
+    'Acho que temos estoque, quer fechar?',
+    'Acho que chega amanhã e o vendedor confirma.',
+    'Provavelmente sai hoje; a equipe confirma o horário.',
+    'Acho que chega amanhã?',
+  ])('hesitação + promessa em pergunta ou com quem encaminha: frase INTACTA, só registrada — %s', (t) => {
+    expect(filtrarSaida(t)).toEqual({
+      texto: t, alterado: false, esvaziado: false,
+      ocorrencias: [{ id: 'hesitacao_em_afirmacao', gravidade: 'INFO', acao: 'registrado', trecho: t }],
+    })
   })
 
   it('a transportadora como sujeito de promessa ainda é promessa', () => {

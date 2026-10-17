@@ -42,8 +42,12 @@
   { "id": "APR-41", "situacao": "fato registrado", "resposta": "Garanto que o pedido foi registrado." },
   { "id": "APR-42", "situacao": "processo", "resposta": "Asseguramos que o pedido é conferido antes do envio." },
   { "id": "APR-43", "situacao": "encaminhamento", "resposta": "Prometo te retornar sobre o pedido." },
-  { "id": "APR-44", "situacao": "restrição honesta", "resposta": "Só garantimos o prazo depois do faturamento." },
-  { "id": "APR-45", "situacao": "pergunta", "resposta": "Você tem interesse no modelo novo?" },
-  { "id": "APR-46", "situacao": "encaminhamento", "resposta": "O vendedor consegue te ajudar com o prazo." },
-  { "id": "APR-47", "situacao": "encaminhamento", "resposta": "O vendedor sabe te dizer o valor." }
+  { "id": "APR-44", "situacao": "pergunta", "resposta": "Você tem interesse no modelo novo?" },
+  { "id": "APR-45", "situacao": "encaminhamento", "resposta": "O vendedor consegue te ajudar com o prazo." },
+  { "id": "APR-46", "situacao": "encaminhamento", "resposta": "O vendedor sabe te dizer o valor." },
+  { "id": "APR-47", "situacao": "encaminhamento com data", "resposta": "Prometo que hoje confiro o estoque." },
+  { "id": "APR-48", "situacao": "encaminhamento com data", "resposta": "Prometo que amanhã cedo eu verifico." },
+  { "id": "APR-49", "situacao": "encaminhamento com data", "resposta": "Garanto que amanhã te retorno." },
+  { "id": "APR-50", "situacao": "encaminhamento com data", "resposta": "Garanto que hoje mesmo o vendedor te chama." },
+  { "id": "APR-51", "situacao": "horário de atendimento", "resposta": "Garantimos o atendimento de segunda a sexta." }
 ]
