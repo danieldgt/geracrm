@@ -234,14 +234,14 @@ const FILTROS: ReadonlyArray<{ id: FiltroQualidade; rotulo: string }> = [
     }
   `,
   styles: `
-    :host { display: grid; gap: var(--espacamento-4); min-width: 0; }
+    :host { display: grid; gap: var(--espacamento-4); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .esq { display: grid; gap: var(--espacamento-3); }
     .cab { display: flex; justify-content: space-between; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; }
     .titulo { margin: 0; color: var(--texto); }
     .escopo { color: var(--texto-suave); font-weight: 400; }
     .dica { margin: var(--espacamento-1) 0 var(--espacamento-3); color: var(--texto-suave); font-size: 13px; }
     .suave { color: var(--texto-suave); font-size: 12px; }
-    .kpis { display: grid; gap: var(--espacamento-3); grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    .kpis { display: grid; gap: var(--espacamento-3); grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
     .kpi { display: grid; gap: 2px; padding: var(--espacamento-3); border: 1px solid var(--borda); border-radius: var(--raio-controle);
       background: var(--superficie); min-width: 0; }
     .kpi.alerta { border-color: var(--erro); }
@@ -282,9 +282,9 @@ const FILTROS: ReadonlyArray<{ id: FiltroQualidade; rotulo: string }> = [
     .erro-mais { margin: var(--espacamento-3) 0 0; color: var(--erro); font-size: 13px; }
     .mais { margin-top: var(--espacamento-4); }
     .link { border: 0; background: transparent; padding: 0; font: inherit; color: var(--acao); cursor: pointer; text-decoration: underline; }
-    .form { display: grid; gap: var(--espacamento-3); grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); align-items: start; }
+    .form { display: grid; gap: var(--espacamento-3); grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); align-items: start; }
     .form .acoes { grid-column: 1 / -1; }
-    .campo { display: grid; gap: var(--espacamento-1); min-width: 0; }
+    .campo { display: grid; gap: var(--espacamento-1); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .campo small { color: var(--texto-suave); font-size: 12px; }
     .msg-erro { color: var(--erro); font-size: 12px; }
     @media (max-width: 640px) {

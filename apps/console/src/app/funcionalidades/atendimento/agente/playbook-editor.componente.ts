@@ -203,7 +203,7 @@ type Lista = 'frasesProibidas' | 'gatilhosHandoff'
     h3 { margin: 0; }
     .dica { margin: 0; color: var(--texto-suave); font-size: 12px; }
     .erro { margin: 0; color: var(--erro); font-size: 12px; }
-    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--espacamento-3); align-items: end; }
+    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: var(--espacamento-3); align-items: end; }
     .campo { display: flex; flex-direction: column; gap: var(--espacamento-1); font-size: 13px; color: var(--texto-secundario); min-width: 0; position: relative; }
     input[type=text], input[type=number], select, textarea { font: inherit; color: var(--texto); background: var(--superficie);
       border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); padding: var(--espacamento-1) var(--espacamento-2);
@@ -230,7 +230,7 @@ type Lista = 'frasesProibidas' | 'gatilhosHandoff'
     .x { border: 0; background: transparent; color: var(--texto-secundario); cursor: pointer; font: inherit; }
     .leitura { border-left: 2px solid var(--borda); padding-left: var(--espacamento-3); font-size: 13px; color: var(--texto-secundario); }
     .leitura ul { margin: var(--espacamento-1) 0 var(--espacamento-2); padding-left: var(--espacamento-4); }
-    .toggles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--espacamento-2); }
+    .toggles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: var(--espacamento-2); }
     code { font-size: 12px; background: var(--fundo); padding: 0 var(--espacamento-1); border-radius: var(--raio-controle); margin-right: var(--espacamento-1); }
     @media (max-width: 640px) {
       .duas { grid-template-columns: 1fr; }

@@ -336,7 +336,7 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
     }
   `,
   styles: `
-    :host { display: grid; gap: var(--espacamento-4); min-width: 0; }
+    :host { display: grid; gap: var(--espacamento-4); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .esq { display: grid; gap: var(--espacamento-3); }
     .cab { display: flex; justify-content: space-between; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; }
     .titulo { margin: 0 0 var(--espacamento-3); color: var(--texto); }
@@ -350,7 +350,7 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
       border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto); cursor: pointer; }
     .nav:hover:not(:disabled) { background: var(--superficie-hover); }
     .nav:disabled { opacity: .4; cursor: default; }
-    .kpis { display: grid; gap: var(--espacamento-3); grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    .kpis { display: grid; gap: var(--espacamento-3); grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
     .kpi { display: grid; gap: 2px; padding: var(--espacamento-3); border: 1px solid var(--borda); border-radius: var(--raio-controle);
       background: var(--superficie); min-width: 0; }
     .kpi.alerta { border-color: var(--erro); }
@@ -395,7 +395,7 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
     .violacoes { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-1); }
     .violacoes li { display: flex; gap: var(--espacamento-2); align-items: baseline; flex-wrap: wrap; font-size: 13px; min-width: 0; }
     .trecho { color: var(--texto-secundario); overflow-wrap: anywhere; min-width: 0; flex: 1 1 200px; }
-    .form { display: grid; gap: var(--espacamento-3); min-width: 0; }
+    .form { display: grid; gap: var(--espacamento-3); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .form-cab { display: flex; justify-content: space-between; align-items: baseline; gap: var(--espacamento-2); flex-wrap: wrap; }
     .criterio { border: 0; margin: 0; padding: 0; display: grid; gap: var(--espacamento-1); min-width: 0; }
     .c-nome { font-size: 13px; color: var(--texto); padding: 0; }
@@ -416,7 +416,7 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
     .grupo { border: 0; margin: 0; padding: 0; display: grid; gap: var(--espacamento-1); min-width: 0; }
     .grupo legend { font-size: 13px; color: var(--texto); margin-bottom: var(--espacamento-1); padding: 0; }
     .radio { display: flex; gap: var(--espacamento-2); align-items: center; font-size: 13px; color: var(--texto); cursor: pointer; }
-    .campo { display: grid; gap: var(--espacamento-1); min-width: 0; font-size: 13px; }
+    .campo { display: grid; gap: var(--espacamento-1); grid-template-columns: minmax(0, 1fr); min-width: 0; font-size: 13px; }
     .campo small { color: var(--texto-suave); font-size: 12px; }
     .campo select, .campo input, .campo textarea { font: inherit; min-width: 0; }
     .dupla { display: grid; grid-template-columns: 1fr 1fr; gap: var(--espacamento-3); }

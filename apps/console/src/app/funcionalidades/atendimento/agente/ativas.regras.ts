@@ -80,12 +80,15 @@ export function rotuloSuspensao(motivo: string): string {
   if (origem === 'conta') {
     return `A Meta restringiu a conta (${evento ?? 'restrição'}). Confira o Gerenciador do WhatsApp antes de liberar.`
   }
+  // Each cause carries its own article: a bare fallback once read "porque a evento X".
   const porEvento: Record<string, string> = {
-    FLAGGED: 'qualidade do número caiu para baixa',
+    FLAGGED: 'a qualidade do número caiu para baixa',
     DOWNGRADE: 'a Meta reduziu o limite de envio do número',
   }
-  const causa = nota === 'RED' ? 'qualidade do número em vermelho' : porEvento[evento ?? ''] ?? `evento ${evento ?? 'da Meta'}`
-  return `Suspensas porque a ${causa}. Voltam sozinhas quando a Meta normalizar.`
+  const causa = nota === 'RED'
+    ? 'a qualidade do número está em vermelho'
+    : porEvento[evento ?? ''] ?? (evento ? `a Meta sinalizou o número (${evento})` : 'a Meta sinalizou o número')
+  return `Suspensas porque ${causa}. Voltam sozinhas quando a Meta normalizar.`
 }
 
 /** Status de template da Meta → rótulo e tom do badge. */

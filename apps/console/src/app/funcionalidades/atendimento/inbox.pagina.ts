@@ -523,28 +523,28 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
     .aviso button { margin-top: 10px; padding: 6px 12px; border: 0; border-radius: 6px; background: var(--wa-green); color: #04231d; font-weight: 600; cursor: pointer; }
 
     /* ── Conversa ── */
-    .conversa { display: flex; flex-direction: column; min-height: 0; background: var(--wa-chat); position: relative; }
+    .conversa { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--wa-chat); position: relative; }
     /* leve textura no fundo do chat */
     .conversa::before { content: ''; position: absolute; inset: 0; opacity: .04; pointer-events: none;
       background-image: radial-gradient(var(--wa-text) 1px, transparent 1px); background-size: 22px 22px; }
     .placeholder { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--wa-sec); text-align: center; padding: 24px; }
     .placeholder .icone { font-size: 48px; }
 
-    .topo { height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: var(--wa-panel); z-index: 1; }
+    .topo { min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 6px 16px; background: var(--wa-panel); z-index: 1; }
     .topo .avatar { width: 40px; height: 40px; font-size: 14px; }
-    .topo-col { display: flex; flex-direction: column; }
-    .nome-linha { display: flex; align-items: center; gap: 7px; }
-    .topo-acoes { margin-left: auto; }
+    .topo-col { display: flex; flex-direction: column; flex: 1 1 112px; min-width: 96px; }
+    .nome-linha { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .topo-acoes { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 8px; min-width: 0; }
     .assumir-btn { border: 0; background: var(--wa-green); color: #04231d; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
     .pedido-btn { font-size: 12px; color: var(--wa-text); background: rgba(255,255,255,.1); padding: 6px 12px; border-radius: 999px; text-decoration: none; white-space: nowrap; }
     .pedido-btn:hover { background: rgba(255,255,255,.18); }
     .atend-badge { font-size: 12px; color: var(--wa-text); background: rgba(255,255,255,.1); padding: 5px 10px; border-radius: 999px; }
     .atend-badge .proto { color: #14e39c; margin-right: 4px; font-variant-numeric: tabular-nums; }
-    .topo-col .nome { font-size: 15px; font-weight: 600; }
+    .topo-col .nome { font-size: 15px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nome-link { color: inherit; text-decoration: none; }
     .nome-link:hover, .nome-link:focus-visible { text-decoration: underline; outline: none; }
     .lista-mais { align-self: center; margin: 10px auto; display: block; }
-    .sub { font-size: 12px; color: var(--wa-sec); }
+    .sub { font-size: 12px; color: var(--wa-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .presenca { padding: 6px 16px; font-size: 12px; color: var(--wa-text); background: var(--acao-suave); border-bottom: 1px solid var(--wa-line); }
     .sub[data-estado='aberta'] { color: var(--wa-green); }
     .sub[data-estado='terminando'] { color: #e0b341; }

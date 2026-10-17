@@ -127,7 +127,7 @@ const ABAS = TODAS_AS_ABAS.filter((a) => a.pronta)
     .numero select { font: inherit; width: 100%; min-height: var(--densidade-alvo-clique-console); }
     .numero select:focus-visible { outline: none; border-color: var(--borda-foco); box-shadow: 0 0 0 2px var(--borda-foco); }
     .abas { display: flex; gap: var(--espacamento-1); border-bottom: 1px solid var(--borda); flex: 1 1 320px; min-width: 0;
-      overflow-x: auto; }
+      overflow-x: auto; overflow-y: hidden; }
     .aba { flex: none; padding: var(--espacamento-2) var(--espacamento-3); border: 0; border-bottom: 2px solid transparent;
       background: transparent; color: var(--texto-secundario); font: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
       margin-bottom: -1px; white-space: nowrap;

@@ -31,6 +31,9 @@ describe('Mensagens ativas — regras da tela', () => {
     expect(rotuloSuspensao('qualidade:FLAGGED')).toContain('Voltam sozinhas')
     expect(rotuloSuspensao('qualidade:DOWNGRADE:RED')).toContain('vermelho')
     expect(rotuloSuspensao('conta:ACCOUNT_VIOLATION')).toContain('Gerenciador do WhatsApp')
+    expect(rotuloSuspensao('qualidade:FLAGGED')).toContain('porque a qualidade do número caiu')
+    // unknown event: never "porque a evento X"
+    expect(rotuloSuspensao('qualidade:OUTRO')).toBe('Suspensas porque a Meta sinalizou o número (OUTRO). Voltam sozinhas quando a Meta normalizar.')
   })
 
   it('⚠️ próxima abertura no fuso do TENANT, não no do navegador', () => {

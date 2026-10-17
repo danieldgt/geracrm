@@ -196,6 +196,9 @@ export function corpoDaApi(corpo: unknown): boolean {
  */
 export function mensagemFalhaQr(status: number, mensagemServidor?: string | null, respondeuApi = true): string {
   if (status === 409) return mensagemServidor || 'QR indisponível'
+  // 422 is a named business failure (e.g. "Preencha as credenciais antes de reconectar"):
+  // "tente de novo" would send the person into a loop that never fixes it.
+  if (status === 422 && mensagemServidor) return mensagemServidor
   if (status === 403) return 'Só o administrador da conta pode gerar o QR. Peça a ele para parear o aparelho.'
   if (classificarFalhaDeCarga(status, respondeuApi) === 'servidor_indisponivel') {
     return 'Servidor do GeraCRM indisponível. Tente de novo em instantes.'

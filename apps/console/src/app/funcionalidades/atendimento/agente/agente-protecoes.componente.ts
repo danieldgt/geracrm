@@ -26,7 +26,7 @@ export const ABA_PROTECOES_PRONTA = COMPLIANCE_PRONTO || CUSTO_PRONTO || ATIVAS_
   `,
   styles: `
     :host { min-width: 0; }
-    .blocos { display: grid; gap: var(--espacamento-4); min-width: 0; }
+    .blocos { display: grid; gap: var(--espacamento-4); grid-template-columns: minmax(0, 1fr); min-width: 0; }
   `,
 })
 export class AgenteProtecoesComponente {

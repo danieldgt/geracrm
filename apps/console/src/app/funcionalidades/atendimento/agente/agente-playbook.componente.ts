@@ -12,7 +12,7 @@ import { PlaybookDiffComponente } from './playbook-diff.componente.js'
 import { PlaybookHistoricoComponente } from './playbook-historico.componente.js'
 import { AgentePlaygroundComponente } from './agente-playground.componente.js'
 import { ARQUIVO_MAX_BYTES, tipoArquivoDe } from './conhecimento.regras.js'
-import { erroDaObservacao, errosPorCampo, temAlteracao, textoDaBarra, textoDeFalha } from './playbook.regras.js'
+import { erroDaObservacao, errosPorCampo, temAlteracao, textoDaBarra, textoDaFalhaDoDocumento, textoDeFalha } from './playbook.regras.js'
 
 /**
  * PLAYBOOK COMERCIAL (raia P17; ADR-029, ADR-033) — "como vender", versionado.
@@ -152,7 +152,9 @@ type Vista = 'editar' | 'historico' | 'testar'
                   [base]="d.base" [complianceDoNumero]="d.complianceDoNumero" (mudou)="editado.set($event)" />
               } @else {
                 <ui-painel><ui-estado titulo="Sem playbook ainda"
-                  [descricao]="d.podeEditar ? 'Importe a configuração atual do agente como versão 1 ou clique em Editar para começar.' : 'Peça a um administrador para criar o playbook.'" /></ui-painel>
+                  [descricao]="!d.podeEditar ? 'Peça a um administrador para criar o playbook.'
+                    : d.importavel ? 'Importe a configuração atual do agente como versão 1 para começar.'
+                    : 'Clique em Editar para começar.'" /></ui-painel>
               }
             }
             @case ('testar') {
@@ -252,9 +254,18 @@ export class AgentePlaybookComponente {
     effect(() => { this.canalId(); this.escopo(); untracked(() => void this.carregar()) })
   }
 
-  trocarEscopo(e: 'numero' | 'tenant'): void {
+  async trocarEscopo(e: 'numero' | 'tenant'): Promise<void> {
     if (e === this.escopo()) return
-    if (this.alterado() && !window.confirm('Há alterações não salvas no rascunho. Trocar mesmo assim?')) return
+    // ⚠️ Our own modal, never the browser confirm(): a native dialog blocks the
+    //    tab and doesn't follow the theme.
+    if (this.alterado()) {
+      const ok = await this.confirmacao.confirmar({
+        titulo: 'Trocar sem salvar o rascunho?',
+        mensagem: 'Há alterações não salvas no rascunho deste escopo. Se trocar agora, elas se perdem.',
+        acao: 'Trocar e descartar', cancelar: 'Continuar editando', perigo: true,
+      })
+      if (!ok) return
+    }
     this.escopo.set(e)
   }
 
@@ -372,9 +383,7 @@ export class AgentePlaybookComponente {
         : { canalId: this.canalEscopo(), texto: this.textoDoc().trim() }
       const r = await this.api.aPartirDeDocumento(corpo)
       if (!r.ok) {
-        this.falhou(r.status, r.erro.erro === 'playbook.rascunho_existente'
-          ? 'Há um rascunho em andamento. Publique ou descarte antes de gerar outro.'
-          : r.erro.mensagem, 'gerar a sugestão')
+        this.falhou(r.status, textoDaFalhaDoDocumento(r.erro.erro, r.erro.mensagem), 'gerar a sugestão')
         return
       }
       this.sugestao.set({ resumo: r.resumoMudancas, diff: r.diff })

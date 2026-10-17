@@ -4,6 +4,11 @@
  * Direção visual: docs/identidade-visual.md · ADR-012 · skill geracrm-layout-ui. */
 
 html { color-scheme: light dark; }
+/* The theme picker wins over the OS for native controls too (scrollbars, radios,
+ * checkboxes, select): without this, "claro" on a dark-mode OS paints dark
+ * scrollbar tracks and black radio dots on a light surface. */
+html[data-tema='claro'] { color-scheme: light; }
+html[data-tema='escuro'] { color-scheme: dark; }
 
 /* ─── Layout da casca ─────────────────────────────────────────────────────────
  * Altura da barra superior. Fica AQUI, e não solta em cada arquivo, porque a

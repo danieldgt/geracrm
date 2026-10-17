@@ -113,6 +113,19 @@ export function textoDeFalha(status: number, mensagem: string | undefined, conte
   return `Não foi possível ${contexto} agora. Tente de novo.`
 }
 
+/**
+ * Failure of "atualizar a partir de documento", named for the person: the API's
+ * `playbook.sugestao_invalida` carries the raw validator text ("orientacoes: Invalid
+ * input…"), which is for the log, not for the screen.
+ */
+export function textoDaFalhaDoDocumento(erro: string | undefined, mensagem: string | undefined): string | undefined {
+  if (erro === 'playbook.rascunho_existente') return 'Há um rascunho em andamento. Publique ou descarte antes de gerar outro.'
+  if (erro === 'playbook.sugestao_invalida') {
+    return 'A IA não conseguiu transformar este documento num playbook válido. Tente de novo ou envie só o trecho que muda a conduta.'
+  }
+  return mensagem
+}
+
 /** Erros do sandbox com ação corretiva. */
 export function textoDaSimulacao(status: number, erro: string | undefined, mensagem: string | undefined): { texto: string; reiniciar: boolean } {
   if (erro === 'agente.simulacao_em_andamento') return { texto: 'Já há uma simulação rodando nesta conta. Espere alguns segundos e envie de novo.', reiniciar: false }

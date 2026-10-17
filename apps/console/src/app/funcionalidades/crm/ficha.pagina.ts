@@ -226,14 +226,16 @@ import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
     .x { border: 0; background: transparent; color: var(--texto-suave); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
     .x:hover { color: var(--erro); }
     .add-linha, .add-coment { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-2); }
-    .add-linha input, .add-coment input, .add-linha select { flex: 1; padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
+    .add-linha input, .add-coment input, .add-linha select { flex: 1; min-width: 0; padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
     .add-linha select { flex: 0 0 auto; }
     .voltar { display: inline-block; margin-bottom: var(--espacamento-4); color: var(--acao); text-decoration: none; font-size: 13px; }
     .voltar:hover { text-decoration: underline; }
     .acoes-ficha { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
     .acoes-ficha a.btn { text-decoration: none; display: inline-flex; align-items: center; }
-    .grade { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(340px, 1.4fr); gap: var(--espacamento-4); align-items: start; }
-    .col { display: grid; gap: var(--espacamento-4); }
+    /* auto-fit on the CONTENT width, not the viewport: with the menu and the chat rail open the
+       content is narrow long before 760px, and fixed tracks made the columns overlap. */
+    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: var(--espacamento-4); align-items: start; }
+    .col { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--espacamento-4); min-width: 0; }
     .cartao { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .cartao h3 { margin: var(--espacamento-3) 0 var(--espacamento-2); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--texto-suave); }
     .cartao h3:first-child { margin-top: 0; }

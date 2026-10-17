@@ -208,6 +208,11 @@ describe('Falha ao gerar o QR', () => {
     expect(mensagemFalhaQr(409, 'Instância já conectada')).toBe('Instância já conectada')
   })
 
+  it('422 (falha de negócio) mostra a ação corretiva do servidor, não "tente de novo"', () => {
+    expect(mensagemFalhaQr(422, 'Preencha as credenciais antes de reconectar.')).toBe('Preencha as credenciais antes de reconectar.')
+    expect(mensagemFalhaQr(422, null)).toBe('Não foi possível gerar o QR. Tente de novo.')
+  })
+
   it('servidor fora é dito como servidor fora', () => {
     expect(mensagemFalhaQr(0)).toContain('indisponível')
     expect(mensagemFalhaQr(500)).toBe('Não foi possível gerar o QR. Tente de novo.')

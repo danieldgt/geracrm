@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { playbookPadrao } from '@geracrm/shared'
 import {
   adicionarChip, dataCurta, erroDaObservacao, erroDoPrefixo, errosPorCampo, moverItem, numeroOuNulo, slotsLivres, temAlteracao,
-  textoDaBarra, textoDaSimulacao, textoDeFalha, tomDaGravidade,
+  textoDaBarra, textoDaFalhaDoDocumento, textoDaSimulacao, textoDeFalha, tomDaGravidade,
 } from './playbook.regras.js'
 
 describe('Playbook — regras da tela', () => {
@@ -45,6 +45,9 @@ describe('Playbook — regras da tela', () => {
   it('falhas nomeadas: 403 só admin; sandbox com ação', () => {
     expect(textoDeFalha(403, 'x')).toBe('Só um administrador pode alterar o playbook.')
     expect(textoDeFalha(422, 'Observação curta')).toBe('Observação curta')
+    // the validator text from the document suggestion never reaches the screen
+    expect(textoDaFalhaDoDocumento('playbook.sugestao_invalida', 'orientacoes: Invalid input')).toMatch(/^A IA não conseguiu/)
+    expect(textoDaFalhaDoDocumento('playbook.documento_grande', 'O documento tem 9 caracteres')).toBe('O documento tem 9 caracteres')
     expect(textoDaSimulacao(422, 'agente.simulacao_limite', 'chegou a 20').reiniciar).toBe(true)
     expect(textoDaSimulacao(409, 'agente.simulacao_em_andamento', undefined).texto).toMatch(/Já há uma simulação/)
     expect(tomDaGravidade('CRITICA')).toBe('erro')

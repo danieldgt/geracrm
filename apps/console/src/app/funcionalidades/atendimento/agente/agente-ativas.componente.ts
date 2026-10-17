@@ -176,7 +176,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
       background: var(--atencao-suave); color: var(--texto); font-size: 13px; margin: 0 0 var(--espacamento-3); overflow-wrap: anywhere; }
     .aviso--erro { background: var(--erro-suave); }
     .acoes-aviso { margin-top: var(--espacamento-2); }
-    .feriados { margin-top: var(--espacamento-3); display: grid; gap: var(--espacamento-2); min-width: 0; }
+    .feriados { margin-top: var(--espacamento-3); display: grid; gap: var(--espacamento-2); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .rot { color: var(--texto); font-size: 13px; }
     .chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--espacamento-2); }
     .chip { display: inline-flex; align-items: center; gap: var(--espacamento-1); border: 1px solid var(--borda);
@@ -187,7 +187,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
     .x:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 1px; }
     .add { display: flex; flex-wrap: wrap; align-items: end; gap: var(--espacamento-3); }
     .add .campo { flex: 0 1 200px; }
-    .campo { display: grid; gap: var(--espacamento-1); min-width: 0; color: var(--texto); font-size: 13px; }
+    .campo { display: grid; gap: var(--espacamento-1); grid-template-columns: minmax(0, 1fr); min-width: 0; color: var(--texto); font-size: 13px; }
     .campo small { color: var(--texto-suave); font-size: 12px; }
     .campo input, .campo select { font: inherit; width: 100%; min-height: var(--densidade-alvo-clique-console);
       padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);

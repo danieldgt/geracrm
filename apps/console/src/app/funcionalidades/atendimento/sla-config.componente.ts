@@ -59,7 +59,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
     .titulo { margin: 0; font-size: 14px; font-weight: 600; color: var(--texto); }
     .dica { margin: 0; color: var(--texto-suave); font-size: 12px; }
     .esq { height: 72px; border-radius: var(--raio-controle); background: var(--superficie); }
-    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--espacamento-3); }
+    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: var(--espacamento-3); align-items: end; }
     .campo { display: flex; flex-direction: column; gap: var(--espacamento-2); color: var(--texto); font-size: 13px; min-width: 0; }
     .campo input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
       background: var(--fundo); color: var(--texto); font: inherit; min-width: 0; }

@@ -135,7 +135,7 @@ const SEGMENTOS = [
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-5); }
+    .cabecalho { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-5); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .nova { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: center; margin-bottom: var(--espacamento-5);
@@ -149,7 +149,7 @@ const SEGMENTOS = [
     button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .esq { height: 60px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
-    .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }
+    .lista { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--espacamento-3); }
     .camp { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .camp-topo { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-3); }
     .camp-nome { display: block; color: var(--texto); font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

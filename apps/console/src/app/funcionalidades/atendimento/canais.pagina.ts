@@ -7,6 +7,7 @@ const MAX_RENOVACOES = 9
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { CanaisServico, type Canal } from './canais.servico.js'
+import { rotuloSuspensao } from './agente/ativas.regras.js'
 import { RouterLink } from '@angular/router'
 import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
 import {
@@ -148,7 +149,7 @@ import {
                      o contato ATIVO; responder quem escreveu continua. -->
                 @if (c.ativasSuspensas; as s) {
                   <p class="pausado">
-                    ⏸️ <strong>Mensagens ativas suspensas</strong> desde {{ dataHora(s.desde) }}{{ s.motivo ? ' — ' + s.motivo : '' }}
+                    ⏸️ <strong>Mensagens ativas suspensas</strong> desde {{ dataHora(s.desde) }}.{{ s.motivo ? ' ' + rotuloSuspensao(s.motivo) : '' }}
                     <span class="pausado-ok">Respostas a quem escreveu continuam saindo normalmente.</span>
                   </p>
                 }
@@ -367,14 +368,14 @@ import {
     .saude .val small { font-size: 12px; color: var(--texto-suave); }
     .saude .val.ruim { color: var(--erro); }
     .saude .val.neutro { font-size: 14px; color: var(--texto-suave); }
-    .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-6); }
+    .cabecalho { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-6); }
     h1 { margin: 0; font-size: 20px; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .bloco h2 { margin: 0 0 var(--espacamento-2); font-size: 16px; color: var(--texto); }
     .vazio, .aviso { text-align: center; } .bloco p { color: var(--texto-secundario); margin: 0 auto var(--espacamento-4); max-width: 44ch; }
     .esqueleto { height: 60px; background: var(--superficie); border-radius: var(--raio-controle); }
-    .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }
+    .lista { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--espacamento-3); }
     .canal { padding: var(--espacamento-4); border: 1px solid var(--borda); border-left: 3px solid var(--borda-forte); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .canal--conectado { border-left-color: var(--rfv-cliente-fiel); }
     .canal--desconectado { border-left-color: var(--erro); }
@@ -809,6 +810,8 @@ export class CanaisPagina implements OnInit, OnDestroy {
     return obs
   }
 
+  /** The stored reason ("qualidade:FLAGGED") in the operator's words — never the raw code. */
+  readonly rotuloSuspensao = rotuloSuspensao
   hora(d: Date): string { return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
   dataHora(iso: string): string {
     return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })

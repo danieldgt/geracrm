@@ -556,13 +556,13 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
   `,
   styles: `
     :host { display: block; min-width: 0; }
-    .form { display: grid; gap: var(--espacamento-4); min-width: 0; }
+    .form { display: grid; gap: var(--espacamento-4); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .esq-lista { display: grid; gap: var(--espacamento-3); }
     .secao { margin: 0 0 var(--espacamento-3); color: var(--texto); }
     .sub { margin: var(--espacamento-4) 0 var(--espacamento-1); color: var(--texto); font-weight: 600; }
     .topo { margin-top: 0; }
     .dica { margin: var(--espacamento-1) 0 var(--espacamento-2); color: var(--texto-suave); font-size: 12px; }
-    .modos, .objetivos { display: grid; gap: var(--espacamento-2); grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .modos, .objetivos { display: grid; gap: var(--espacamento-2); grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); }
     .modo { display: flex; align-items: flex-start; gap: var(--espacamento-2); padding: var(--espacamento-3);
       border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); cursor: pointer; min-width: 0;
       background: var(--superficie);
@@ -572,7 +572,7 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
     .modo.off { opacity: .55; cursor: default; }
     .modo:has(input:focus-visible) { outline: 2px solid var(--borda-foco); outline-offset: 1px; }
     .modo input { margin-top: 3px; flex: none; }
-    .modelos { display: grid; gap: var(--espacamento-2); min-width: 0; }
+    .modelos { display: grid; gap: var(--espacamento-2); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .modelos[aria-invalid='true'] .card-modelo { border-color: var(--borda-erro); }
     .card-modelo .modo-txt { gap: var(--espacamento-1); }
     .linha-modelo { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; min-width: 0; }
@@ -588,7 +588,7 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
     .modo-rot { color: var(--texto); font-size: 13px; font-weight: 600; }
     .modo-exp { color: var(--texto-secundario); font-size: 12px; }
     .grade-2 { display: grid; gap: var(--espacamento-3); grid-template-columns: 1fr 1fr; min-width: 0; }
-    .grade-3 { display: grid; gap: var(--espacamento-3); grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: var(--espacamento-2); }
+    .grade-3 { display: grid; gap: var(--espacamento-3); grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); margin-top: var(--espacamento-2); }
     .grade-2 > *, .grade-3 > * { min-width: 0; }
     .campo input, .campo select, .campo textarea { font: inherit; width: 100%; min-height: var(--densidade-alvo-clique-console); }
     .campo textarea { min-height: 0; }
@@ -599,7 +599,7 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
     .chk { display: flex; align-items: flex-start; gap: var(--espacamento-2); color: var(--texto); font-size: 14px;
       margin-top: var(--espacamento-2); }
     .chk input { margin-top: 3px; flex: none; }
-    .slots { display: grid; gap: 0 var(--espacamento-4); grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    .slots { display: grid; gap: 0 var(--espacamento-4); grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); }
     .aviso { padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle);
       background: var(--atencao-suave); color: var(--texto); font-size: 13px; margin-bottom: var(--espacamento-3); }
     .aviso--erro { background: var(--erro-suave); }
@@ -624,7 +624,7 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
     .segmentos legend { padding: 0 var(--espacamento-1); }
     .fora { display: grid; gap: 0; }
     .teto { display: flex; align-items: end; gap: var(--espacamento-3); flex-wrap: wrap; }
-    .teto-campo { display: grid; gap: var(--espacamento-1); min-width: 220px; }
+    .teto-campo { display: grid; gap: var(--espacamento-1); min-width: min(220px, 100%); }
     .reserva { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; margin: var(--espacamento-2) 0 0;
       color: var(--texto-secundario); font-size: 12px; }
     @media (max-width: 640px) { .grade-2 { grid-template-columns: 1fr; } }

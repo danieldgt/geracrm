@@ -107,7 +107,7 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
     .abas { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }
     .abas button { padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
     .abas button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
-    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--espacamento-3); margin-bottom: var(--espacamento-4); }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: var(--espacamento-3); margin-bottom: var(--espacamento-4); }
     .kpi { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); display: flex; flex-direction: column; gap: var(--espacamento-1); }
     .kpi-sub { font-size: 12px; color: var(--texto-suave); }
     .txt-kpi.bom { color: var(--sucesso); }

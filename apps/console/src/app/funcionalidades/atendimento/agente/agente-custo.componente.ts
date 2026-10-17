@@ -155,13 +155,13 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     }
   `,
   styles: `
-    :host { display: grid; gap: var(--espacamento-4); min-width: 0; }
+    :host { display: grid; gap: var(--espacamento-4); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .esq { display: grid; gap: var(--espacamento-3); }
     .titulo { margin: 0; font-size: 15px; font-weight: 600; color: var(--texto); }
     .escopo { color: var(--texto-suave); font-weight: 400; }
     .dica { margin: var(--espacamento-1) 0 var(--espacamento-3); color: var(--texto-suave); font-size: 13px; }
-    .form { display: grid; gap: var(--espacamento-3); min-width: 0; }
-    .opcoes { display: grid; gap: var(--espacamento-2); grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    .form { display: grid; gap: var(--espacamento-3); grid-template-columns: minmax(0, 1fr); min-width: 0; }
+    .opcoes { display: grid; gap: var(--espacamento-2); grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
       border: 0; margin: 0; padding: 0; min-width: 0; }
     .opcao { display: flex; align-items: center; gap: var(--espacamento-2); padding: var(--espacamento-3);
       border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); cursor: pointer; min-width: 0;
@@ -172,7 +172,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .opcao span { overflow-wrap: anywhere; }
     .valor { max-width: 320px; }
     .aviso { margin: 0; color: var(--atencao); font-size: 13px; }
-    .numeros { display: grid; gap: var(--espacamento-2); grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 0; }
+    .numeros { display: grid; gap: var(--espacamento-2); grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); margin: 0; }
     .numeros dt { color: var(--texto-suave); font-size: 12px; }
     .numeros dd { margin: 2px 0 0; color: var(--texto); overflow-wrap: anywhere; }
     .suave { color: var(--texto-suave); font-size: 12px; }

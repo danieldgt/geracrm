@@ -284,7 +284,7 @@ interface Importado extends TextoExtraido { readonly nome: string }
   `,
   styles: `
     :host { display: block; min-width: 0; }
-    .conhecimento { display: grid; gap: var(--espacamento-4); min-width: 0; }
+    .conhecimento { display: grid; gap: var(--espacamento-4); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .esq-lista { display: grid; gap: var(--espacamento-2); }
     .secao { margin: 0 0 var(--espacamento-3); color: var(--texto); }
     .topo { margin-top: 0; }
@@ -292,13 +292,13 @@ interface Importado extends TextoExtraido { readonly nome: string }
     .link { border: 0; background: transparent; padding: 0; font: inherit; color: var(--acao); cursor: pointer; text-decoration: underline; }
     .link:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
 
-    .cap { display: grid; gap: var(--espacamento-1); min-width: 0; }
+    .cap { display: grid; gap: var(--espacamento-1); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .cap-linha { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; min-width: 0; }
     .cap-motivo { color: var(--atencao); font-size: 13px; overflow-wrap: anywhere; }
     .cap-pend { color: var(--texto-secundario); }
     .aviso-inline { margin: 0; display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }
 
-    .form { display: grid; gap: var(--espacamento-3); min-width: 0; }
+    .form { display: grid; gap: var(--espacamento-3); grid-template-columns: minmax(0, 1fr); min-width: 0; }
     .form-cab { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; }
     .form-cab .secao { margin: 0; }
     .grade-2 { display: grid; gap: var(--espacamento-3); grid-template-columns: 1fr 1fr; min-width: 0; }
