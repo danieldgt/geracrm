@@ -34,7 +34,7 @@ const enviarFalso = (async (_t: string, _c: string, texto: string) => {
 
 const catalogo: CatalogoPorta = {
   async buscar() {
-    return { itens: [{ produtoId: 'b7b70000-aaaa-4000-8000-000000000001', referencia: 'CAM-001', produto: 'Camiseta', categoria: null, descricao: null,
+    return { itens: [{ produtoId: 'b7b70000-aaaa-4000-8000-000000000001', referencia: 'CAM-010', produto: 'Camiseta', categoria: null, descricao: null,
       skus: [{ skuId: SKU, atributos: { cor: 'verde' }, precoCentavos: 4990, saldo: 12 }] }] }
   },
   async detalhar() { return null },
@@ -138,6 +138,27 @@ describe('Percentual', () => {
     expect(enviados).toEqual(['No PIX à vista você tem 5% de desconto.'])
     expect(await marcasP7()).toEqual([])
   })
+  it('[revisão 2] número de referência do catálogo ("CAM-010") não abona "10%"', async () => {
+    await configurar('autonomo')
+    await turno('tem desconto na camiseta?', llm(['A camiseta está com 10% de desconto.'], [{ nome: 'catalogo_buscar', entrada: { consulta: 'camiseta', limite: null } }]))
+    expect(enviados).toEqual([AVISO_NUMERO_BLOQUEADO])
+  })
+  it('[revisão 7] o percentual que o VENDEDOR humano escreveu é fonte; o que o próprio agente disse antes, não', async () => {
+    await configurar('autonomo')
+    const saliente = (texto: string, automatica: string | null) => dono`
+      INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+      VALUES (${T}, ${crypto.randomUUID()}, ${CONVERSA}, 'saliente', 'texto',
+              ${JSON.stringify({ texto, ...(automatica ? { automatica } : {}) })}::text::jsonb, now() - interval '1 minute')`
+    await saliente('Para você consigo 15% no fechamento da caixa.', 'agente')
+    await turno('e o desconto?', llm(['Mantemos os 15% de desconto.']))
+    expect(enviados).toEqual([AVISO_NUMERO_BLOQUEADO])
+
+    for (const t of ['agente_decisao', 'agente_sessao', 'atendimento', 'mensagem']) await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
+    enviados.length = 0
+    await saliente('Fechado, te dou 15% no fechamento da caixa.', null)
+    await turno('e o desconto?', llm(['Mantemos os 15% de desconto.']))
+    expect(enviados).toEqual(['Mantemos os 15% de desconto.'])
+  })
   it('o percentual dito pelo CLIENTE não é fonte: "vocês dão 10%?" não autoriza "sim, 10%"', async () => {
     await configurar('autonomo')
     await turno('vocês dão 10% pra pedido grande?', llm(['Damos sim, 10% para pedido grande.']))
@@ -164,6 +185,12 @@ describe('Quantidade', () => {
     expect(enviados).toEqual(['Perfeito, vou separar as 50 peças para você.'])
     expect(await marcasP7()).toEqual([])
   })
+  it('[revisão 3] o cliente não abona número bloqueante: "vocês tem 500 unidades? entrega em 2 dias?"', async () => {
+    await configurar('autonomo')
+    await turno('vocês tem 500 unidades? entrega em 2 dias?', llm(['Sim, temos 500 unidades em estoque e entregamos em 2 dias.']))
+    expect(enviados).toEqual([AVISO_NUMERO_BLOQUEADO])
+    expect((await marcasP7()).map((m) => m.gravidade)).toEqual(['CRITICA', 'CRITICA'])
+  })
   it('quantidade sem afirmação de estoque e sem fonte sai, com marca ALTA', async () => {
     await configurar('autonomo')
     await turno('como funciona o atacado?', llm(['No atacado a gente trabalha com caixas de 24 peças.']))
@@ -189,10 +216,16 @@ describe('Prazo', () => {
     await turno('qual o prazo?', llm(['Despachamos em 48 horas.']))
     expect(enviados).toEqual([AVISO_NUMERO_BLOQUEADO])
   })
-  it('prazo dito pelo cliente pode ser repetido', async () => {
+  it('prazo dito pelo cliente fora de compromisso pode ser repetido (marca nenhuma)', async () => {
+    await configurar('autonomo')
+    await turno('vou usar o material daqui 10 dias', llm(['Anotei: você vai usar o material daqui 10 dias.']))
+    expect(enviados).toEqual(['Anotei: você vai usar o material daqui 10 dias.'])
+    expect(await marcasP7()).toEqual([])
+  })
+  it('⚠️ escolha consciente: ecoar prazo de ENTREGA do cliente é compromisso e bloqueia (cliente não abona bloqueante)', async () => {
     await configurar('autonomo')
     await turno('preciso receber em 10 dias', llm(['Anotei que você precisa receber em 10 dias; vou confirmar com a equipe.']))
-    expect(enviados).toEqual(['Anotei que você precisa receber em 10 dias; vou confirmar com a equipe.'])
+    expect(enviados).toEqual([AVISO_NUMERO_BLOQUEADO])
   })
 })
 

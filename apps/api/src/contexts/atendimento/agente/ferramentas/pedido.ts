@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { MOTIVOS_HANDOFF_DO_MODELO } from '@geracrm/shared'
 import type { Ferramenta } from './porta.js'
 import type { PedidoPorta } from './ligacoes-porta.js'
-import { centavosDe, numerosDe } from './porta.js'
+import { centavosDe, numerosDe, percentuaisDe } from './porta.js'
 
 /**
  * Ferramentas de PEDIDO: ver, mexer nos itens, propor. ⚠️ Não existe
@@ -15,7 +15,9 @@ export function ferramentasDePedido(ped: PedidoPorta): Ferramenta<never>[] {
     entrada: z.object({}),
     async executar(ctx) {
       const p = await ped.ver(ctx)
-      return { ok: true, saida: p ?? { pedido: null, itens: [], totalCentavos: 0 }, centavos: centavosDe(p), numeros: numerosDe(p) }
+      return { ok: true, saida: p ?? { pedido: null, itens: [], totalCentavos: 0 }, centavos: centavosDe(p),
+        // ⚠️ "seu pedido tem 3 itens": a contagem de itens também é fonte.
+        numeros: p ? [...numerosDe(p), p.itens.length] : [0] }
     },
   }
   const itens: Ferramenta<{ acao: 'adicionar' | 'alterar' | 'remover'; skuId: string | null; seq: number | null; quantidade: number | null }> = {
@@ -43,7 +45,8 @@ export function ferramentasDePedido(ped: PedidoPorta): Ferramenta<never>[] {
         ok: true, efeito: 'pedido_alterado',
         saida: { situacao: r.situacao, ...(r.detalhe ? { detalhe: r.detalhe } : {}), ...(r.pedido ? { ...r.pedido } : {}) },
         centavos: centavosDe(r.pedido),
-        numeros: numerosDe({ detalhe: r.detalhe ?? null, pedido: r.pedido ?? null }),
+        numeros: [...numerosDe({ detalhe: r.detalhe ?? null, pedido: r.pedido ?? null }), ...(r.pedido ? [r.pedido.itens.length] : [])],
+        percentuais: percentuaisDe(r.detalhe ?? null),
       }
     },
   }
@@ -54,10 +57,10 @@ export function ferramentasDePedido(ped: PedidoPorta): Ferramenta<never>[] {
     async executar(ctx) {
       const r = await ped.propor(ctx)
       // ⚠️ "faltam R$ 500,00" da regra comercial é número que o modelo PODE repetir (PED-08).
-      if (r.situacao !== 'ok') return { ok: true, saida: { situacao: r.situacao, detalhe: r.detalhe ?? null }, centavos: r.centavos ?? [], numeros: numerosDe(r.detalhe ?? null) }
+      if (r.situacao !== 'ok') return { ok: true, saida: { situacao: r.situacao, detalhe: r.detalhe ?? null }, centavos: r.centavos ?? [], numeros: numerosDe(r.detalhe ?? null), percentuais: percentuaisDe(r.detalhe ?? null) }
       return {
         ok: true, efeito: 'proposta_enviada', saida: { situacao: 'ok', resumo: r.resumo, totalCentavos: r.totalCentavos, expiraEm: r.expiraEm },
-        centavos: [r.totalCentavos], numeros: [...numerosDe(r.resumo), ...prazoAte(r.expiraEm, ctx.agora)],
+        centavos: [r.totalCentavos], numeros: [...numerosDe(r.resumo), ...prazoAte(r.expiraEm, ctx.agora)], percentuais: percentuaisDe(r.resumo),
       }
     },
   }

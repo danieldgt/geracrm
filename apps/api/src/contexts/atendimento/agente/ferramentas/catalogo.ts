@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { Ferramenta } from './porta.js'
 import type { CatalogoPorta } from './ligacoes-porta.js'
-import { centavosDe, numerosDe } from './porta.js'
+import { centavosDe, numerosDe, percentuaisDe } from './porta.js'
 
 /** As três ferramentas de catálogo. Só leitura. */
 export function ferramentasDeCatalogo(cat: CatalogoPorta): Ferramenta<never>[] {
@@ -15,7 +15,7 @@ export function ferramentasDeCatalogo(cat: CatalogoPorta): Ferramenta<never>[] {
     async executar(ctx, e) {
       const r = await cat.buscar(ctx, { consulta: e.consulta, limite: e.limite ?? 5 })
       const saida = { itens: r.itens, total: r.itens.length }
-      return { ok: true, saida, centavos: centavosDe(r.itens), numeros: numerosDe(saida) }
+      return { ok: true, saida, centavos: centavosDe(r.itens), numeros: numerosDe(saida), percentuais: percentuaisDe(saida) }
     },
   }
   const detalhar: Ferramenta<{ produtoId: string }> = {
@@ -25,7 +25,7 @@ export function ferramentasDeCatalogo(cat: CatalogoPorta): Ferramenta<never>[] {
     async executar(ctx, e) {
       const p = await cat.detalhar(ctx, e.produtoId)
       if (!p) return { ok: false, erro: 'produto não encontrado' }
-      return { ok: true, saida: p, centavos: centavosDe(p), numeros: numerosDe(p) }
+      return { ok: true, saida: p, centavos: centavosDe(p), numeros: numerosDe(p), percentuais: percentuaisDe(p) }
     },
   }
   const preco: Ferramenta<{ skuIds: string[] }> = {
@@ -34,7 +34,7 @@ export function ferramentasDeCatalogo(cat: CatalogoPorta): Ferramenta<never>[] {
     entrada: z.object({ skuIds: z.array(z.string().uuid()).min(1).max(20) }),
     async executar(ctx, e) {
       const r = await cat.precoEEstoque(ctx, e.skuIds)
-      return { ok: true, saida: { skus: r }, centavos: centavosDe(r), numeros: numerosDe(r) }
+      return { ok: true, saida: { skus: r }, centavos: centavosDe(r), numeros: numerosDe(r), percentuais: percentuaisDe(r) }
     },
   }
   return [buscar, detalhar, preco] as Ferramenta<never>[]

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { numerosDeSaida, type ModoDoTurno, type PerfilPreco } from '@geracrm/shared'
+import { NumerosVistos, numerosDeSaida, percentuaisDeSaida, type ModoDoTurno, type PerfilPreco } from '@geracrm/shared'
 import type { DefinicaoFerramentaLlm, ResultadoExecucaoFerramenta } from '../porta-llm.js'
 import type { enviarTextoNaConversa } from '../../envio-conversa.js'
 
@@ -45,6 +45,11 @@ export type SaidaFerramenta =
        * chamada — a fonte do guardrail ampliado (P7). Use `numerosDeSaida`.
        */
       readonly numeros?: readonly number[] | undefined
+      /**
+       * Percentuais expostos ao modelo — SÓ número escrito com % ou campo
+       * percentual (`percentuaisDe`). Fonte tipada: um número qualquer nunca abona "%".
+       */
+      readonly percentuais?: readonly number[] | undefined
       /** Efeito colateral que o turno precisa saber (handoff pedido, proposta enviada). */
       readonly efeito?: 'handoff' | 'proposta_enviada' | 'pedido_alterado' | undefined
       readonly handoff?: { motivo: string; resumo: string } | undefined
@@ -94,7 +99,7 @@ export interface RegistroDeFerramentas {
    * Números de negócio (%, quantidade, prazo) vistos em ferramenta neste turno —
    * a fonte do guardrail ampliado (raia P7 preenche; P0 só abre o campo).
    */
-  readonly numerosVistos: Set<number>
+  readonly numerosVistos: NumerosVistos
   readonly efeitos: { handoff: { motivo: string; resumo: string } | null; propostaEnviada: boolean; pedidoAlterado: boolean }
   executar(nome: string, entradaBruta: unknown): Promise<ResultadoExecucaoFerramenta>
 }
@@ -109,7 +114,7 @@ export function registroDeFerramentas(
 ): RegistroDeFerramentas {
   const porNome = new Map(ferramentas.map((f) => [f.nome, f]))
   const centavosVistos = new Set<number>()
-  const numerosVistos = new Set<number>()
+  const numerosVistos = new NumerosVistos()
   const efeitos = { handoff: null as { motivo: string; resumo: string } | null, propostaEnviada: false, pedidoAlterado: false }
   return {
     lista: ferramentas,
@@ -127,6 +132,7 @@ export function registroDeFerramentas(
         if (!r.ok) return { ok: false, erro: r.erro }
         for (const c of r.centavos ?? []) centavosVistos.add(c)
         for (const n of r.numeros ?? []) numerosVistos.add(n)
+        for (const n of r.percentuais ?? []) numerosVistos.percentuais.add(n)
         if (r.efeito === 'handoff' && r.handoff) efeitos.handoff = r.handoff
         if (r.efeito === 'proposta_enviada') efeitos.propostaEnviada = true
         if (r.efeito === 'pedido_alterado') efeitos.pedidoAlterado = true
@@ -141,6 +147,11 @@ export function registroDeFerramentas(
 /** Números de negócio de uma saída (pula centavos, ids, `seq`, datas ISO). */
 export function numerosDe(saida: unknown): number[] {
   return [...numerosDeSaida(saida)]
+}
+
+/** Percentuais de uma saída: campo percentual ou "N%" escrito num texto. */
+export function percentuaisDe(saida: unknown): number[] {
+  return [...percentuaisDeSaida(saida)]
 }
 
 /** Coleta recursivamente todos os campos `*Centavos` de uma saída. */

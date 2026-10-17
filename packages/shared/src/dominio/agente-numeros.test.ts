@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   extrairNumerosDeNegocio, numeroBr, numeroPorExtenso, numerosDeSaida, numerosDoTexto, numerosSemFonte,
+  percentuaisDeSaida, percentuaisDoTexto, NumerosVistos,
 } from './agente-numeros.js'
 
 const tipos = (t: string) => extrairNumerosDeNegocio(t).map((n) => `${n.tipo}:${n.valor}${n.bloqueante ? '!' : ''}`)
@@ -108,13 +109,60 @@ describe('fontes', () => {
   it('com fonte não acusa; sem fonte acusa', () => {
     expect(numerosSemFonte('Temos 12 unidades', { gerais: [12] })).toEqual([])
     expect(numerosSemFonte('Temos 13 unidades', { gerais: [12] }).map((n) => n.valor)).toEqual([13])
-    expect(numerosSemFonte('10% de desconto', { gerais: [10] })).toEqual([])
-    expect(numerosSemFonte('10% de desconto', { gerais: [0.1] })).toEqual([])
+    expect(numerosSemFonte('10% de desconto', { gerais: [], percentuais: [10] })).toEqual([])
     expect(numerosSemFonte('10% de desconto', { gerais: [] })).toHaveLength(1)
   })
-  it('o cliente é fonte de quantidade e prazo, NUNCA de percentual', () => {
-    const doCliente = numerosDoTexto('vocês dão 10%? quero 50 peças para daqui 5 dias')
-    expect(numerosSemFonte('Separo 50 peças com entrega em 5 dias', { gerais: [], doCliente })).toEqual([])
+  it('o cliente abona só número NÃO bloqueante; percentual nunca', () => {
+    const doCliente = numerosDoTexto('vocês dão 10%? quero 50 peças; vocês tem 500 unidades? entrega em 2 dias?')
+    expect(numerosSemFonte('Separo 50 peças para você', { gerais: [], doCliente })).toEqual([])
     expect(numerosSemFonte('Sim, 10% de desconto', { gerais: [], doCliente }).map((n) => n.tipo)).toEqual(['percentual'])
+    expect(numerosSemFonte('Sim, temos 500 unidades em estoque e entregamos em 2 dias', { gerais: [], doCliente }).map((n) => n.valor))
+      .toEqual([500, 2])
+  })
+})
+
+describe('Revisão adversarial (P7) — cada achado vira caso', () => {
+  it('[ALTA 1] máscara de hora e de nº de pedido não engolem percentual nem estoque', () => {
+    const pct = (t: string, v: number) => expect(extrairNumerosDeNegocio(t).filter((n) => n.tipo === 'percentual').map((n) => n.valor), t).toEqual([v])
+    pct('Levando 10 caixas 15% de desconto', 15)
+    pct('Todas as 30 caixas 20% off', 20)
+    pct('Neste ano 10% de desconto', 10)
+    pct('Para notas 5% de desconto', 5)
+    pct('Pedido 7% de desconto', 7)
+    pct('O plano 5% off', 5)
+    expect(tipos('Temos as 10 unidades em estoque')).toEqual(['quantidade:10!'])
+    expect(tipos('separo as 50 peças')).toEqual(['quantidade:50'])
+    expect(tipos('Levando 10 caixas 15% de desconto')).toEqual(['percentual:15!', 'quantidade:10'])
+  })
+  it('[ALTA 2] fonte de percentual é tipada: referência, R$ e fração não abonam %', () => {
+    const vistos = new NumerosVistos()
+    const saida = { itens: [{ referencia: 'CAM-010', produto: 'Camiseta CAM-010', skus: [{ atributos: { tamanho: '10' }, precoCentavos: 9980, saldo: 3 }] }],
+      detalhe: 'faltam R$ 99.80', taxa: 0.1, descontoPercentual: 7 }
+    numerosDeSaida(saida, vistos); percentuaisDeSaida(saida, vistos.percentuais)
+    expect([...vistos.percentuais]).toEqual([7])
+    expect(vistos.has(80)).toBe(false)
+    for (const t of ['10% de desconto', '80% off', '10 por cento']) {
+      expect(numerosSemFonte(t, { gerais: vistos, percentuais: vistos.percentuais }), t).toHaveLength(1)
+    }
+    expect(numerosSemFonte('7% de desconto', { gerais: vistos, percentuais: vistos.percentuais })).toEqual([])
+    expect([...percentuaisDoTexto('Pedido mínimo de 6 peças; PIX tem 5% de desconto; CAM-010')]).toEqual([5])
+  })
+  it('[MÉDIA 4] "tem/há" sozinhos não afirmam estoque', () => {
+    expect(tipos('Seu pedido tem 3 itens')).toEqual(['quantidade:3'])
+    expect(tipos('O pacote tem 1,5 kg')).toEqual(['quantidade:1.5'])
+    expect(tipos('Restam 3 unidades')).toEqual(['quantidade:3!'])
+  })
+  it('[MÉDIA 5] prazos em lista e com receber/sair', () => {
+    expect(tipos('30/60/90 dias no boleto')).toEqual(['prazo_dias:30!', 'prazo_dias:60!', 'prazo_dias:90!'])
+    expect(tipos('Pagamento em 30, 60 e 90 dias')).toEqual(['prazo_dias:30!', 'prazo_dias:60!', 'prazo_dias:90!'])
+    expect(tipos('Em 2 dias você recebe')).toEqual(['prazo_dias:2!'])
+    expect(tipos('Você recebe em 2 dias')).toEqual(['prazo_dias:2!'])
+    expect(tipos('Em 3 dias úteis o pedido sai')).toEqual(['prazo_dias:3!'])
+  })
+  it('[BAIXA 6] quantidade por extenso, "pct" e "metade do preço"', () => {
+    expect(tipos('temos vinte unidades')).toEqual(['quantidade:20!'])
+    expect(tipos('temos mil unidades em estoque')).toEqual(['quantidade:1000!'])
+    expect(tipos('vendo em 12 pct')).toEqual(['quantidade:12'])
+    expect(tipos('faço pela metade do preço')).toEqual(['percentual:50!'])
   })
 })
