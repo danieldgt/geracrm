@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { MOTIVOS_HANDOFF_DO_MODELO } from '@geracrm/shared'
 import type { Ferramenta } from './porta.js'
 import type { PedidoPorta } from './ligacoes-porta.js'
-import { centavosDe } from './porta.js'
+import { centavosDe, numerosDe } from './porta.js'
 
 /**
  * Ferramentas de PEDIDO: ver, mexer nos itens, propor. ⚠️ Não existe
@@ -15,7 +15,7 @@ export function ferramentasDePedido(ped: PedidoPorta): Ferramenta<never>[] {
     entrada: z.object({}),
     async executar(ctx) {
       const p = await ped.ver(ctx)
-      return { ok: true, saida: p ?? { pedido: null, itens: [], totalCentavos: 0 }, centavos: centavosDe(p) }
+      return { ok: true, saida: p ?? { pedido: null, itens: [], totalCentavos: 0 }, centavos: centavosDe(p), numeros: numerosDe(p) }
     },
   }
   const itens: Ferramenta<{ acao: 'adicionar' | 'alterar' | 'remover'; skuId: string | null; seq: number | null; quantidade: number | null }> = {
@@ -43,6 +43,7 @@ export function ferramentasDePedido(ped: PedidoPorta): Ferramenta<never>[] {
         ok: true, efeito: 'pedido_alterado',
         saida: { situacao: r.situacao, ...(r.detalhe ? { detalhe: r.detalhe } : {}), ...(r.pedido ? { ...r.pedido } : {}) },
         centavos: centavosDe(r.pedido),
+        numeros: numerosDe({ detalhe: r.detalhe ?? null, pedido: r.pedido ?? null }),
       }
     },
   }
@@ -53,8 +54,11 @@ export function ferramentasDePedido(ped: PedidoPorta): Ferramenta<never>[] {
     async executar(ctx) {
       const r = await ped.propor(ctx)
       // ⚠️ "faltam R$ 500,00" da regra comercial é número que o modelo PODE repetir (PED-08).
-      if (r.situacao !== 'ok') return { ok: true, saida: { situacao: r.situacao, detalhe: r.detalhe ?? null }, centavos: r.centavos ?? [] }
-      return { ok: true, efeito: 'proposta_enviada', saida: { situacao: 'ok', resumo: r.resumo, totalCentavos: r.totalCentavos, expiraEm: r.expiraEm }, centavos: [r.totalCentavos] }
+      if (r.situacao !== 'ok') return { ok: true, saida: { situacao: r.situacao, detalhe: r.detalhe ?? null }, centavos: r.centavos ?? [], numeros: numerosDe(r.detalhe ?? null) }
+      return {
+        ok: true, efeito: 'proposta_enviada', saida: { situacao: 'ok', resumo: r.resumo, totalCentavos: r.totalCentavos, expiraEm: r.expiraEm },
+        centavos: [r.totalCentavos], numeros: [...numerosDe(r.resumo), ...prazoAte(r.expiraEm, ctx.agora)],
+      }
     },
   }
   const transferir: Ferramenta<{ motivo: (typeof MOTIVOS_HANDOFF_DO_MODELO)[number]; resumo: string }> = {
@@ -75,4 +79,17 @@ export function ferramentaDeTransferencia(): Ferramenta<never> {
   return ferramentasDePedido({
     ver: async () => null, itens: async () => ({ situacao: 'pedido_imutavel' }), propor: async () => ({ situacao: 'indisponivel' }), recentes: async () => [],
   })[3]!
+}
+
+/**
+ * "A proposta vale por 2 dias / 48 horas": o prazo até `expiraEm` contado de
+ * `agora`, em horas e dias inteiros (arredondados para cima e para baixo) — é o
+ * que o modelo pode dizer sobre a validade sem inventar.
+ */
+function prazoAte(expiraEm: string, agora: Date): number[] {
+  const ms = Date.parse(expiraEm) - agora.getTime()
+  if (!Number.isFinite(ms) || ms <= 0) return []
+  const horas = ms / 3_600_000
+  const dias = horas / 24
+  return [...new Set([Math.floor(horas), Math.ceil(horas), Math.floor(dias), Math.ceil(dias)].filter((n) => n > 0))]
 }

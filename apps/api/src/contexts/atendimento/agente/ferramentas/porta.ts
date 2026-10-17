@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ModoDoTurno, PerfilPreco } from '@geracrm/shared'
+import { numerosDeSaida, type ModoDoTurno, type PerfilPreco } from '@geracrm/shared'
 import type { DefinicaoFerramentaLlm, ResultadoExecucaoFerramenta } from '../porta-llm.js'
 import type { enviarTextoNaConversa } from '../../envio-conversa.js'
 
@@ -15,6 +15,10 @@ import type { enviarTextoNaConversa } from '../../envio-conversa.js'
  * ⚠️ `centavos` na saída: todo valor monetário que a ferramenta mostrou ao
  * modelo. É o conjunto que o guardrail numérico aceita na resposta — número
  * que não veio daqui é alucinação, por definição (CLAUDE.md).
+ *
+ * ⚠️ `numeros` na saída: idem para percentual, quantidade e prazo (P7). Ferramenta
+ * que mostra saldo, quantidade ou prazo ao modelo e não os devolve aqui faz o
+ * guardrail ampliado barrar a resposta certa.
  */
 
 export interface ContextoFerramenta {
@@ -36,6 +40,11 @@ export type SaidaFerramenta =
       readonly saida: unknown
       /** Valores monetários expostos ao modelo nesta chamada, em centavos. */
       readonly centavos?: readonly number[] | undefined
+      /**
+       * Números de negócio (quantidade, saldo, prazo, %) expostos ao modelo nesta
+       * chamada — a fonte do guardrail ampliado (P7). Use `numerosDeSaida`.
+       */
+      readonly numeros?: readonly number[] | undefined
       /** Efeito colateral que o turno precisa saber (handoff pedido, proposta enviada). */
       readonly efeito?: 'handoff' | 'proposta_enviada' | 'pedido_alterado' | undefined
       readonly handoff?: { motivo: string; resumo: string } | undefined
@@ -117,6 +126,7 @@ export function registroDeFerramentas(
         const r = await f.executar(ctx, parse.data as never)
         if (!r.ok) return { ok: false, erro: r.erro }
         for (const c of r.centavos ?? []) centavosVistos.add(c)
+        for (const n of r.numeros ?? []) numerosVistos.add(n)
         if (r.efeito === 'handoff' && r.handoff) efeitos.handoff = r.handoff
         if (r.efeito === 'proposta_enviada') efeitos.propostaEnviada = true
         if (r.efeito === 'pedido_alterado') efeitos.pedidoAlterado = true
@@ -126,6 +136,11 @@ export function registroDeFerramentas(
       }
     },
   }
+}
+
+/** Números de negócio de uma saída (pula centavos, ids, `seq`, datas ISO). */
+export function numerosDe(saida: unknown): number[] {
+  return [...numerosDeSaida(saida)]
 }
 
 /** Coleta recursivamente todos os campos `*Centavos` de uma saída. */

@@ -3,7 +3,7 @@ import { comTenantServico } from '../../../../db/index.js'
 import { carregarContextoDoLead } from '../contexto-lead.js'
 import type { Ferramenta } from './porta.js'
 import type { ConhecimentoPorta, PedidoPorta } from './ligacoes-porta.js'
-import { centavosDe } from './porta.js'
+import { centavosDe, numerosDe } from './porta.js'
 
 /** Perfil do cliente (o que já sabemos) + pedidos recentes. Nunca CPF/CNPJ/endereço. */
 export function ferramentaClientePerfil(ped: PedidoPorta | undefined): Ferramenta<never> {
@@ -15,7 +15,7 @@ export function ferramentaClientePerfil(ped: PedidoPorta | undefined): Ferrament
       const lead = await comTenantServico(ctx.tenantId, (tx) => carregarContextoDoLead(tx, ctx.conversaId))
       const recentes = ped ? await ped.recentes(ctx) : []
       const saida = { cliente: lead, pedidosRecentes: recentes }
-      return { ok: true, saida, centavos: centavosDe(recentes) }
+      return { ok: true, saida, centavos: centavosDe(recentes), numeros: numerosDe(saida) }
     },
   }
   return f as Ferramenta<never>
@@ -28,7 +28,8 @@ export function ferramentaConhecimento(kb: ConhecimentoPorta): Ferramenta<never>
     entrada: z.object({ pergunta: z.string().min(1).max(300) }),
     async executar(ctx, e) {
       const r = await kb.buscar(ctx, e.pergunta)
-      return { ok: true, saida: r }
+      // ⚠️ O trecho do conhecimento é FONTE: "entrega em 3 dias úteis" lido aqui pode ser dito.
+      return { ok: true, saida: r, numeros: numerosDe(r.trechos.map((t) => t.texto)) }
     },
   }
   return f as Ferramenta<never>
