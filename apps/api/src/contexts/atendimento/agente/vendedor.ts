@@ -27,7 +27,7 @@ import { custoDoLaco } from './custo.js'
 import { lerEstado, patchEstado, juntarPatches } from './estado-agente.js'
 import {
   montarPipeline, rodarPreLlm, rodarPosResposta, marca, mascararTexto,
-  type ClasseFalha, type ContextoPipeline, type DecisaoFalha, type EntranteDoTurno, type PatchEstado, type PipelineDoTurno,
+  type ClasseFalha, type ContextoPipeline, type EntranteDoTurno, type PatchEstado, type PipelineDoTurno,
 } from './pipeline/index.js'
 import { efetivarSeDentroDaAlcada } from '../../pedido/alcada.js'
 import { MAX_TENTATIVAS_TRANSCRICAO } from '../../../workers/transcricao.js'
@@ -317,11 +317,12 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
    * rede final de R$ → sequência → modo → envio → teto(pós) → persistência.
    */
   const concluir = async (p: {
-    resposta: RespostaRegistrada; mensagensFinais: readonly string[]; handoff: { motivo: string; resumo: string } | null
+    /** O texto que vai sair, AINDA INTEIRO — a rede verifica antes de fatiar. */
+    resposta: RespostaRegistrada; mensagens: readonly string[]; handoff: { motivo: string; resumo: string } | null
     rastro?: RastroDoLaco | undefined; custo: number; bloqueados: number[]; guardrails: readonly MarcaGuardrail[]; estado: PatchEstado
   }): Promise<ResultadoTurnoVendedor> => {
     const { rastro, custo } = p
-    let { resposta, mensagensFinais, handoff } = p
+    let { resposta, mensagens, handoff } = p
     const guardrails = [...p.guardrails]
     const bloqueados = [...p.bloqueados]
 
@@ -329,14 +330,18 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     // ⚠️ O guardrail R$ do passo 7 olha a saída do modelo; uma etapa do
     //    pipeline (ou uma resposta fixa) pode ter reescrito o texto depois.
     //    Nada sai com valor sem fonte, venha de onde vier.
-    const naRede = mensagensFinais.flatMap((m) => verificarNumerosNaResposta(m, registro.centavosVistos))
+    // ⚠️ Verifica o texto INTEIRO, antes de `fatiarMensagem`: o corte rígido
+    //    de uma frase longa sem pontuação pode partir "1.234,56" em "1." e
+    //    "234,56" — dois valores que nenhuma ferramenta citou (falso bloqueio).
+    const naRede = mensagens.flatMap((m) => verificarNumerosNaResposta(m, registro.centavosVistos))
     if (naRede.length > 0) {
-      guardrails.push(marca('rede-final', 'valor_sem_fonte', 'CRITICA', 'substituido', mensagensFinais.join(' ')))
+      guardrails.push(marca('rede-final', 'valor_sem_fonte', 'CRITICA', 'substituido', mensagens.join(' ')))
       bloqueados.push(...naRede.filter((n) => !bloqueados.includes(n)))
-      mensagensFinais = [AVISO_VALOR_BLOQUEADO]
+      mensagens = [AVISO_VALOR_BLOQUEADO]
       handoff = handoff ?? { motivo: 'incerteza', resumo: 'Valor sem origem em ferramenta no texto final; bloqueado pela rede final.' }
-      resposta = { ...resposta, mensagens: mensagensFinais, handoff, confianca: Math.min(resposta.confianca, 0.4) }
+      resposta = { ...resposta, mensagens, handoff, confianca: Math.min(resposta.confianca, 0.4) }
     }
+    const mensagensFinais = mensagens.flatMap((m) => fatiarMensagem(m, cfg.regras.maxCaracteres * 4))
 
     // ── Sequência: chegou mensagem nova enquanto pensávamos? ──────────────
     if (!semEfeito && await comTenantServico(tenantId, (tx) => chegouMensagemNova(tx, conversaId, tarefa.mensagens_ids))) {
@@ -409,7 +414,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     const d = pre.decisao
     return concluir({
       resposta: { mensagens: d.mensagens, confianca: 1, handoff: d.handoff, origem: 'fixa' },
-      mensagensFinais: d.mensagens.flatMap((m) => fatiarMensagem(m, cfg.regras.maxCaracteres * 4)),
+      mensagens: d.mensagens,
       handoff: d.handoff ?? null, custo: 0, bloqueados: [], guardrails: guardrailsPre, estado: pre.estado,
     })
   }
@@ -440,10 +445,11 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   if (!r.ok) {
     const recado = recadoDaFalha(r.motivo, r.detalhe)
     const falha = await pipeline.falha.decidir(ctx, { motivo: r.motivo, detalhe: recado, executouFerramentas: (r.rastro?.chamadas.length ?? 0) > 0, estado, tentativas: tarefa.tentativas })
-    const aviso = await avisarCliente(falha, modo, () => enviar(tenantId, conversaId, falha.avisoCliente ?? '', null, agora, { ehDisparo: false, marcador: 'agente' }))
+    const rede = avisoPelaRede(falha.avisoCliente, registro.centavosVistos)
+    const aviso = await avisarCliente(rede.texto, modo, (texto) => enviar(tenantId, conversaId, texto, null, agora, { ehDisparo: false, marcador: 'agente' }))
     const entrega = falha.acao === 'handoff' && modo === 'autonomo'
     const decisaoId = await comTenantServico(tenantId, async (tx) => {
-      const id = await registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, falhaTipo: falha.classe, guardrails: guardrailsPre, idsSaida: aviso, enviada: aviso.length > 0, agora, latenciaMs: Date.now() - inicio })
+      const id = await registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, falhaTipo: falha.classe, guardrails: [...guardrailsPre, ...rede.guardrails], bloqueados: rede.bloqueados, idsSaida: aviso, enviada: aviso.length > 0, agora, latenciaMs: Date.now() - inicio })
       if (!semEfeito) {
         await garantirSessao(tx, { sessaoId, existente: !!reuniao.sessao_id, conversaId, canalId, modo: modoDoNumero, agora, porQue: motivoDisponibilidade(equipe) })
         await patchEstado(tx, sessaoId, juntarPatches([pre.estado, falha.estado]))
@@ -468,11 +474,12 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     const recado = `a IA respondeu fora do formato: ${parse.error.issues[0]?.path.join('.') ?? ''} ${parse.error.issues[0]?.message ?? ''} — recebido: ${amostra}`
     const falha = await pipeline.falha.decidir(ctx, { motivo: 'formato', detalhe: recado, executouFerramentas: r.rastro.chamadas.length > 0, estado, tentativas: tarefa.tentativas })
     const estadoDaFalha = juntarPatches([pre.estado, falha.estado])
-    const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, falhaTipo: falha.classe, guardrails: guardrailsPre, agora, latenciaMs: Date.now() - inicio }))
+    const rede = avisoPelaRede(falha.avisoCliente, registro.centavosVistos)
+    const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, falhaTipo: falha.classe, guardrails: [...guardrailsPre, ...rede.guardrails], bloqueados: rede.bloqueados, agora, latenciaMs: Date.now() - inicio }))
     if (falha.acao === 'handoff') {
-      return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'modelo_indisponivel', recado, modo, agora, decisaoId, { avisoCliente: falha.avisoCliente, enviar, estado: estadoDaFalha, abrirSessao })
+      return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'modelo_indisponivel', recado, modo, agora, decisaoId, { avisoCliente: rede.texto, centavosVistos: registro.centavosVistos, enviar, estado: estadoDaFalha, abrirSessao })
     }
-    await avisarCliente(falha, modo, () => enviar(tenantId, conversaId, falha.avisoCliente ?? '', null, agora, { ehDisparo: false, marcador: 'agente' }))
+    await avisarCliente(rede.texto, modo, (texto) => enviar(tenantId, conversaId, texto, null, agora, { ehDisparo: false, marcador: 'agente' }))
     if (!semEfeito) {
       await comTenantServico(tenantId, async (tx) => {
         const sid = await sessaoParaEstado(tx, { sessaoId: reuniao.sessao_id, estado: estadoDaFalha, tarefa, abrir: abrirSessao, agora })
@@ -517,7 +524,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     // ⚠️ `resposta.mensagens` é o que SAI (depois do guardrail e da cadeia); o
     //    que o modelo escreveu fica em `original` — a auditoria mostra os dois.
     resposta: { ...resposta, mensagens: cadeia.mensagens, handoff: handoff ?? undefined, original: parse.data },
-    mensagensFinais: cadeia.mensagens.flatMap((m) => fatiarMensagem(m, cfg.regras.maxCaracteres * 4)),
+    mensagens: cadeia.mensagens,
     handoff, rastro: r.rastro, custo, bloqueados, guardrails, estado: juntarPatches([pre.estado, cadeia.estado]),
   })
 }
@@ -526,15 +533,34 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
 
 /**
  * Envia o aviso da política de falha — só em AUTÔNOMO e só se houver texto.
- * Devolve os ids enviados (vazio quando não enviou ou o gateway recusou).
+ * `texto` já passou por `avisoPelaRede`. Devolve os ids enviados (vazio quando
+ * não enviou ou o gateway recusou).
  */
 async function avisarCliente(
-  falha: DecisaoFalha, modo: ModoDoTurno,
-  enviarAviso: () => ReturnType<typeof enviarTextoNaConversa>,
+  texto: string | null, modo: ModoDoTurno | 'desligado',
+  enviarAviso: (texto: string) => ReturnType<typeof enviarTextoNaConversa>,
 ): Promise<string[]> {
-  if (modo !== 'autonomo' || !falha.avisoCliente) return []
-  const e = await enviarAviso()
+  if (modo !== 'autonomo' || !texto) return []
+  const e = await enviarAviso(texto)
   return e.ok ? [e.mensagemId] : []
+}
+
+/**
+ * REDE FINAL DE R$ PARA O AVISO FIXO (handoff sem modelo, política de falha).
+ *
+ * ⚠️ Hoje o aviso é texto de código; amanhã vem de configuração (P17) — e o
+ *    "nada sai com valor sem fonte" vale para ele também. Aviso com valor sem
+ *    origem em ferramenta NÃO sai (vira `null`): é cortesia, o handoff/reagendamento
+ *    segue igual, e substituir por outro texto inventaria uma promessa. Antes do
+ *    modelo não há ferramenta no turno, então qualquer valor é sem fonte.
+ */
+function avisoPelaRede(
+  aviso: string | null | undefined, centavosVistos: ReadonlySet<number> = new Set(),
+): { texto: string | null; guardrails: MarcaGuardrail[]; bloqueados: number[] } {
+  if (!aviso) return { texto: null, guardrails: [], bloqueados: [] }
+  const bloqueados = verificarNumerosNaResposta(aviso, centavosVistos)
+  if (bloqueados.length === 0) return { texto: aviso, guardrails: [], bloqueados: [] }
+  return { texto: null, guardrails: [marca('rede-final', 'valor_sem_fonte', 'CRITICA', 'removido', aviso)], bloqueados }
 }
 
 /** Como abrir a sessão quando uma etapa devolve estado e ainda não há sessão. */
@@ -588,18 +614,19 @@ async function handoffSemModelo(
     avisoCliente?: string | null | undefined; enviar?: typeof enviarTextoNaConversa | undefined
     guardrails?: readonly MarcaGuardrail[] | undefined; estado?: PatchEstado | undefined; falhaTipo?: ClasseFalha | undefined
     abrirSessao?: AbrirSessao | undefined
+    /** Valores citados por ferramenta neste turno (vazio antes do modelo). */
+    centavosVistos?: ReadonlySet<number> | undefined
   } = {},
 ): Promise<ResultadoTurnoVendedor> {
-  const idsAviso: string[] = []
-  if (modo === 'autonomo' && extra.avisoCliente) {
-    const e = await (extra.enviar ?? enviarTextoNaConversa)(tenantId, tarefa.conversa_id, extra.avisoCliente, null, agora, { ehDisparo: false, marcador: 'agente' })
-    if (e.ok) idsAviso.push(e.mensagemId)
-  }
+  const rede = avisoPelaRede(extra.avisoCliente, extra.centavosVistos)
+  const idsAviso = await avisarCliente(rede.texto, modo,
+    (texto) => (extra.enviar ?? enviarTextoNaConversa)(tenantId, tarefa.conversa_id, texto, null, agora, { ehDisparo: false, marcador: 'agente' }))
   const semEfeito = modo === 'simulacao' || modo === 'copiloto'
   const id = await comTenantServico(tenantId, async (tx) => {
     const sid = semEfeito ? null : await sessaoParaEstado(tx, { sessaoId, estado: extra.estado, tarefa, abrir: extra.abrirSessao, agora })
     const d = decisaoId ?? await registrarDecisao(tx, {
-      tarefa, sessaoId: sid, modo, desfecho: 'handoff', handoff: { motivo, resumo }, guardrails: extra.guardrails, falhaTipo: extra.falhaTipo,
+      tarefa, sessaoId: sid, modo, desfecho: 'handoff', handoff: { motivo, resumo }, guardrails: [...(extra.guardrails ?? []), ...rede.guardrails],
+      bloqueados: rede.bloqueados, falhaTipo: extra.falhaTipo,
       enviada: idsAviso.length > 0, idsSaida: idsAviso, agora, latenciaMs: 0,
     })
     if (semEfeito) return d

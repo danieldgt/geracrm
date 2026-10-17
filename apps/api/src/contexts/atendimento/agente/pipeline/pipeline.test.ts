@@ -44,6 +44,27 @@ function llmQueDiz(mensagens: string[]): PortaLlmFerramentas {
 }
 const llmQueFalha: PortaLlmFerramentas = { nome: 'falso', capacidades: { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false },
   async rodar(): Promise<ResultadoLaco> { return { ok: false, motivo: 'indisponivel', detalhe: 'simulada' } } }
+/** Modelo falso que consulta o catálogo (o valor passa a ter fonte) e responde `mensagens`. */
+function llmQueCotaEDiz(mensagens: string[]): PortaLlmFerramentas {
+  return { nome: 'falso', capacidades: { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false },
+    async rodar(p): Promise<ResultadoLaco> {
+      const busca = await p.executar('catalogo_buscar', { consulta: 'caixa', limite: null })
+      if (!busca.ok) throw new Error(`catálogo falso falhou: ${busca.erro}`)
+      return { ok: true, saida: { mensagens, confianca: 0.9 }, rastro: { chamadas: [], rodadas: 1, uso: { entrada: 10, saida: 5, cacheLeitura: 0, cacheEscrita: 0 }, modelo: 'falso', latenciaMs: 1, parouPor: 'fim' } }
+    } }
+}
+const PRECO_CAIXA = 123456
+const ligacoesComCatalogo = async (): Promise<Ligacoes> => ({
+  ...(await ligacoes()),
+  catalogo: {
+    async buscar() {
+      return { itens: [{ produtoId: crypto.randomUUID(), referencia: 'CX-1', produto: 'Caixa', categoria: null, descricao: null,
+        skus: [{ skuId: crypto.randomUUID(), atributos: {}, precoCentavos: PRECO_CAIXA, saldo: 10 }] }] }
+    },
+    async detalhar() { return null },
+    async precoEEstoque() { return [] },
+  },
+})
 const llmProibido: PortaLlmFerramentas = { nome: 'proibido', capacidades: { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false },
   async rodar(): Promise<ResultadoLaco> { throw new Error('o modelo não devia ser chamado') } }
 
@@ -227,6 +248,20 @@ describe('Ponto 2 — gatilhos de entrada (P4)', () => {
     expect(d).toMatchObject({ handoff_motivo: 'opt_out', enviada: true })
   })
 
+  it('handoff com aviso que cita valor: a rede final segura o aviso, o handoff segue e a decisão registra', async () => {
+    await configurar('autonomo')
+    const r = await turno('pare', {
+      llm: llmProibido,
+      ...pipeline({ gatilhos: pre(async () => ({ tipo: 'handoff', motivo: 'opt_out', resumo: 'Parar.', avisoCliente: 'Tudo bem. Seu crédito de R$ 50,00 continua valendo.' })) }),
+    })
+    expect(r).toMatchObject({ desfecho: 'handoff', motivo: 'opt_out' })
+    expect(enviados).toEqual([])
+    expect(await atendimentos()).toBe(1)
+    const d = await ultimaDecisao()
+    expect(d).toMatchObject({ handoff_motivo: 'opt_out', enviada: false, numeros_bloqueados: [5000] })
+    expect(d.guardrails.map((g) => `${g.etapa}/${g.codigo}/${g.acao}`)).toEqual(['rede-final/valor_sem_fonte/removido'])
+  })
+
   it('handoff com aviso em sombra: o aviso NÃO sai e não nasce atendimento', async () => {
     await configurar('sombra')
     const r = await turno('pare', {
@@ -303,6 +338,28 @@ describe('Pontos 5–8 — depois do modelo (P7, P2, P3, P12)', () => {
     expect(d.resposta!.mensagens).toEqual(['Vou confirmar os valores certinhos com a equipe e já te retorno.'])
   })
 
+  it('rede final verifica o texto INTEIRO: o corte rígido que parte "1.234,56" não vira falso bloqueio', async () => {
+    await configurar('autonomo')
+    // max_caracteres 80 → bolhas de até 320. Frase longa SEM pontuação cai no
+    // corte rígido, e o 320º caractere cai no meio de "R$ 1.234,56".
+    await dono`UPDATE agente_config SET max_caracteres = 80 WHERE tenant_id = ${T}`
+    try {
+      const texto = `${'b'.repeat(314)} R$ 1.234,56 cada caixa`
+      expect(texto.slice(318, 322)).toBe('1.23')
+      const r = await turno('quanto a caixa?', { llm: llmQueCotaEDiz([texto]), ligacoes: ligacoesComCatalogo })
+      expect(r.desfecho).toBe('respondeu')
+      // Saiu fatiado — e as fatias, juntas, são o texto que o catálogo cotou.
+      expect(enviados).toHaveLength(2)
+      expect(enviados[0]!.endsWith('R$ 1.')).toBe(true)
+      expect(enviados.join('')).toBe(texto)
+      const d = await ultimaDecisao()
+      expect(d.guardrails).toEqual([])
+      expect(d.numeros_bloqueados).toEqual([])
+    } finally {
+      await dono`UPDATE agente_config SET max_caracteres = 320 WHERE tenant_id = ${T}`
+    }
+  })
+
   it('filtro recebe as falas anteriores do agente e o estado gravado no turno anterior', async () => {
     await configurar('autonomo')
     const vistos: ContextoPipeline[] = []
@@ -356,6 +413,37 @@ describe('Ponto 9 — política de falha (P5)', () => {
     expect(await atendimentos()).toBe(0)
     const [s] = await dono<{ estado: string }[]>`SELECT estado FROM agente_sessao WHERE tenant_id = ${T}`
     expect(s!.estado).toBe('ativa')
+  })
+})
+
+describe('Ponto 9 — falha: o aviso também passa pela rede final de R$', () => {
+  it('aviso_e_reagendar com valor sem fonte: não envia, reagenda igual e marca a decisão', async () => {
+    await configurar('autonomo')
+    const falha: PipelineDoTurno['falha'] = { nome: 'falsa', decidir: async () => ({ acao: 'aviso_e_reagendar', classe: 'transitoria', avisoCliente: 'Instabilidade; o frete de R$ 19,90 está garantido.', reagendarEmMs: 30_000 }) }
+    const r = await turno('oi', { llm: llmQueFalha, ...pipeline({ falha }) })
+    expect(r).toMatchObject({ desfecho: 'falha', reagendarEmMs: 30_000 })
+    expect(enviados).toEqual([])
+    const d = await ultimaDecisao()
+    expect(d).toMatchObject({ desfecho: 'falha', enviada: false, numeros_bloqueados: [1990] })
+    expect(d.guardrails.map((g) => `${g.etapa}/${g.codigo}`)).toEqual(['rede-final/valor_sem_fonte'])
+  })
+
+  it('handoff por resposta fora do formato: aviso com valor sem fonte não sai; aviso limpo sai', async () => {
+    await configurar('autonomo')
+    const foraDoFormato: PortaLlmFerramentas = { nome: 'falso', capacidades: { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false },
+      async rodar(): Promise<ResultadoLaco> { return { ok: true, saida: { nada: 1 }, rastro: { chamadas: [], rodadas: 1, uso: { entrada: 1, saida: 1, cacheLeitura: 0, cacheEscrita: 0 }, modelo: 'falso', latenciaMs: 1, parouPor: 'fim' } } } }
+    const comAviso = (avisoCliente: string): PipelineDoTurno['falha'] => ({ nome: 'falsa', decidir: async () => ({ acao: 'handoff', classe: 'formato', avisoCliente }) })
+
+    const r = await turno('oi', { llm: foraDoFormato, ...pipeline({ falha: comAviso('Já te passo para a equipe; o pedido fica em 39,90.') }) })
+    expect(r.desfecho).toBe('handoff')
+    expect(enviados).toEqual([])
+    const d = await ultimaDecisao()
+    expect(d.numeros_bloqueados).toEqual([3990])
+    expect(d.guardrails.map((g) => `${g.etapa}/${g.codigo}`)).toEqual(['rede-final/valor_sem_fonte'])
+
+    await dono`DELETE FROM atendimento WHERE tenant_id = ${T}`
+    await turno('oi', { llm: foraDoFormato, ...pipeline({ falha: comAviso('Já te passo para a equipe.') }) })
+    expect(enviados).toEqual(['Já te passo para a equipe.'])
   })
 })
 
