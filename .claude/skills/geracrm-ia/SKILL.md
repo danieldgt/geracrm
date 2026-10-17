@@ -77,13 +77,35 @@ A IA é uma das maiores linhas de custo variável do produto (§11 de `stack-arq
 - **Meça por tenant e por funcionalidade** — sem isso, não há como precificar plano nem detectar
   abuso.
 - **Cache de resposta** para pergunta repetida na base de conhecimento.
-- **Limite por tenant**, com comportamento definido ao estourar (degradar para humano, não falhar).
+- **Limite com comportamento definido ao estourar** (degradar para humano, não falhar). No agente
+  (ADR-032): teto diário **por número** (`orcamento_dia_centavos`, handoff `limite_de_custo`), teto **por
+  sessão** (`IA_TETO_SESSAO_CENTAVOS`, padrão R$ 3,00, 0 desliga; handoff `limite_de_custo_conversa`) e
+  orçamento mensal **por tenant** que só alerta (`agente_orcamento_80`/`_100`).
+- ⚠️ **Custo pelo catálogo `modelo_ia`, nunca por tabela no código** (`agente/custo.ts`):
+  `normalizarIdModelo` (prefixo de provedor, perfil Bedrock, versão, data, `:free`) → `precoDoModelo` com
+  cache de 10 min; entrada, saída e cache de leitura/escrita; gratuito custa 0; id desconhecido cai no
+  **maior** preço do catálogo e abre `preco_desconhecido`. Passe `tenantId` a `custoDoLaco`. Modelo novo =
+  linha no catálogo (migration).
 - ⚠️ **Escolha o tamanho do modelo pela tarefa.** Classificar intenção e gerar sugestão de mensagem
   não exigem o mesmo modelo. Usar o maior para tudo é desperdício que aparece na fatura.
 
 ## Fallback
 
 ⚠️ **Provedor de IA fora do ar não pode derrubar o produto** (circuit breaker, §9.4 da stack).
+
+### Resiliência e reserva (ADR-030)
+
+- Toda falha da porta é classificada (`porta.ts` `classeDaFalhaLlm`): `fatal` (401/402, cota),
+  `transitoria` (408/429/5xx/529, rede, tempo), `requisicao` (erro nosso, não conta), `formato`;
+  `acesso_negado` (403 num modelo) é classe própria.
+- `agente/llm-reserva.ts` (`RoteadorLlm`) e `llm-estado.ts`: 2 falhas de provedor seguidas do principal
+  ligam `IA_RESERVA_PROVEDOR`/`IA_RESERVA_MODELO` por `IA_RESERVA_JANELA_MIN` (30) — log
+  `"alerta":"llm_reserva_ativo"`, volta sozinho (`llm_reserva_encerrado`). Se o turno **já executou
+  ferramentas**, a chamada não é repetida na reserva. 403/404 num modelo bloqueia aquele modelo 1 h e usa
+  `IA_MODELO` (`modelo_bloqueado`). Estado em memória do processo; `estadoDoLlm()` alimenta a saúde.
+- Toda chamada de modelo do produto (agente, copiloto, juiz, playbook a partir de documento) passa pela
+  porta com o roteador — não instancie adaptador direto.
+- Provar a reserva: `pnpm --filter @geracrm/api agente:smoke -- --reserva`.
 
 | Recurso | Sem IA |
 |---|---|
@@ -94,6 +116,19 @@ A IA é uma das maiores linhas de custo variável do produto (§11 de `stack-arq
 ## Avaliação de qualidade
 
 Prompt não se testa como código — mas também não se ajusta por impressão.
+
+### Juiz (ADR-031)
+
+- **Uma rubrica só**, no shared (`agente-qualidade.ts`: `promptJuizQualidade`, `esquemaRubricaJson`,
+  `interpretarRubrica`; 5 critérios 0–5 + justificativa ≤ 280). Produção (`qualidade/juiz.ts`,
+  `julgarTranscricao`) e evals (`evals/juiz.ts`) chamam a mesma função — nota de homologação e de produção
+  são comparáveis.
+- Fora do caminho da resposta (worker e `POST /v1/agente/qualidade/avaliar`), em três passos: transação
+  curta (teto + transcrição), modelo **sem transação aberta**, transação curta que grava e reconfere o teto.
+- Modelo `IA_QUALIDADE_MODELO` (ou o do provedor); teto mensal por número
+  (`IA_QUALIDADE_TETO_MES_CENTAVOS`, padrão R$ 20,00) com alerta `agente_qualidade_teto`.
+- A transcrição vai mascarada e entre marcadores: fala do cliente é dado, nunca instrução ao juiz.
+- O juiz só vale como critério com concordância humana ≥ 85% (revisão semanal).
 
 - Mantenha um **conjunto de casos reais** com o resultado esperado, e rode contra ele ao mudar
   prompt ou modelo.

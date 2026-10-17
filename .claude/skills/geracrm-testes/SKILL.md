@@ -132,6 +132,37 @@ natural com o nome do arquivo** (`plano-teste-ingestao`, não `pro`).
 difícil de enxergar. Serializar com `fileParallelism: false` esconde o problema e torna a suíte
 lenta; isolar o fixture resolve.
 
+### ⚠️ Filas e workers: consumir sob o tenant, nunca com o dono
+
+Os workers (`agente_tarefa`, retornos, qualidade, SLA, pós-ingestão, transcrição) procuram trabalho como
+**dono**, em **todos** os tenants. Num teste, consumir a fila com a conexão dona pega a tarefa de OUTRO
+arquivo rodando em paralelo — e os dois falham de forma intermitente (foi a causa dos flaky de
+`vendedor.test.ts` × `pipeline.test.ts`, raia P0c-b).
+
+- **`workerDoTenant`**: conexão com o papel da aplicação (`DATABASE_URL`) e `geracrm.tenant_id` fixo no
+  tenant do arquivo — todo consumo da fila no teste (pegar, concluir, falhar, reagendar, recuperar) passa
+  por ela; o RLS garante que só a tarefa do próprio tenant aparece.
+  ```ts
+  const workerDoTenant = postgres(process.env.DATABASE_URL!, { max: 2, connection: { 'geracrm.tenant_id': T } as never })
+  ```
+- **`somenteTenant`**: os workers que varrem como dono aceitam `deps.somenteTenant` (ex.: `processarSla`,
+  `processarQualidade`, retornos, pós-ingestão) — no teste, sempre passe o tenant do arquivo.
+- O dono fica só para **montar cenário e conferir**, nunca para consumir.
+- Contagem global (ex.: "nenhuma tarefa pendente", alertas) filtra pelo tenant do arquivo — e alerta,
+  também pelo `tipo`.
+
+### Banco próprio por raia
+
+Raias em paralelo rodam a suíte contra o **mesmo Postgres** (porta 5442): duas suítes no mesmo banco
+quebram testes de fila e de sequência. Cada worktree usa o próprio banco `geracrm_<raia>`:
+
+```bash
+docker exec geracrm-postgres psql -U geracrm -d geracrm -c "DROP DATABASE IF EXISTS geracrm_p20 WITH (FORCE);" -c "CREATE DATABASE geracrm_p20;"
+# no .env DO WORKTREE: DATABASE_URL e DATABASE_ADMIN_URL apontando para /geracrm_p20
+cd apps/api && pnpm migrate
+docker exec -i geracrm-postgres psql -U geracrm -d geracrm_p20 < ../../infra/dev/setup-dev.sql   # depois das migrations
+```
+
 ## Concorrência
 
 Testes de duas transações simultâneas, obrigatórios em:

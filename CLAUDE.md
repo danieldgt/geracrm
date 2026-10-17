@@ -46,12 +46,21 @@ para venda B2B recorrente. Monorepo pnpm+Turborepo: `apps/api` (Fastify), `apps/
 - Idioma: prosa em pt-BR; código/comentários em inglês; domínio em português (`Conversa`, `Pedido`,
   `Campanha`, `Numero`). Dinheiro em centavos inteiros; IDs UUID v7; sem `enum` do TypeScript.
 - Não commitar em `main` sem os checks (`pnpm lint typecheck test`) verdes.
-- **Estado atual (2026-10-02): produto em operação (dogfooding) e rodada "vendedor autônomo".**
-  Stack no Railway com chat bidirecional, pedido assistido, campanhas e agente. O plano vigente é
-  `docs/plano-mestre-vendedor-autonomo.md` (raias R1–R10) com ADR-023…027. O agente é VENDEDOR:
-  laço de ferramentas sob RLS, fila própria com debounce (`agente_tarefa`), modos
-  sombra/assistido/autônomo, propor-e-confirmar com alçada. Skills da área: `geracrm-agente-vendas`,
-  `geracrm-catalogo`.
+- **Estado atual (2026-10-17): produto em operação (dogfooding); port dos padrões do agente da AM.**
+  Stack no Railway com chat bidirecional, pedido assistido, campanhas e agente VENDEDOR (laço de
+  ferramentas sob RLS, fila `agente_tarefa`, modos sombra/assistido/autônomo, propor-e-confirmar). O port
+  (`docs/plano-port-playbook-am.md`, ADR-028…034) pôs pipeline determinístico, qualidade com revisão
+  humana, playbook versionado e SLA do handoff; P19 (painel de fase) e P0d (estabilização) em andamento.
+  Operação: `docs/agente-go-live.md`, `agente-runbook.md`, `agente-revisao-semanal.md`. Skills da área:
+  `geracrm-agente-vendas`, `geracrm-catalogo`.
+- **O turno do agente é um pipeline de ordem fixa** (`agente/pipeline/`, ADR-029): regra nova é etapa
+  com teste, nunca `vendedor.ts`. O que protege fica no código e **não tem chave de desligar**; tela e
+  playbook só acrescentam restrição. Modo efetivo = o mais restritivo entre conta, número e recorte
+  (ADR-028); o kill switch é modo, nunca parar o worker.
+- **Teto de custo é por NÚMERO (dia) e por sessão**; o tenant só tem alerta mensal (ADR-032). Preço vem
+  do catálogo `modelo_ia`, nunca de tabela no código.
+- **Teste que consome fila usa `workerDoTenant`/`somenteTenant`, nunca o dono**; cada raia em banco
+  próprio (`geracrm_<raia>`). Ver `geracrm-testes`.
 - **O modelo nunca inventa número.** Preço, estoque, prazo e desconto só entram na resposta se vieram
   de ferramenta no mesmo turno — verificado em código (`verificarNumerosNaResposta`). `pedido_efetivar`
   não é ferramenta do modelo (ADR-027).

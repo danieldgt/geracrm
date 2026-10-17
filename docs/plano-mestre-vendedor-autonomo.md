@@ -161,7 +161,7 @@ Seções XML, prefixo congelado e cacheado em 3 pontos (global → tenant → co
 3. Resultado de ferramenta embrulhado em `<dados_externos>`; texto do cliente só em `user`; instruções do operador por `role: system`.
 4. Ferramentas de menor privilégio: sem apagar, sem alterar preço, sem acesso a outro contato; `pedido_efetivar` **não existe** para o modelo.
 5. Alçada: `decidirAlcada()` no domínio; desconto = 0 sem aprovação; valor máximo por canal.
-6. Limites: 6 rodadas, 20 s, 1.500 tokens de saída, 1 turno por conversa por vez, teto diário de custo por tenant (degrada para humano, nunca cala).
+6. Limites: 6 rodadas, 20 s, 1.500 tokens de saída, 1 turno por conversa por vez, teto diário de custo **por número** (degrada para humano, nunca cala; ver ADR-032).
 7. PII mínima no prompt (sem CPF/CNPJ completo, sem endereço); mascaramento em `agente_decisao` e logs.
 
 ---
@@ -310,7 +310,7 @@ Integração: uma raia por vez na `main`, suíte completa a cada integração, r
 
 1. **O modelo diz número errado** → ferramenta + verificação numérica + citação de fonte + modo sombra primeiro.
 2. **Banimento no não-oficial com volume de robô** → INV-23 (throttle) antes de autônomo no não-oficial; aviso visível (ADR-021).
-3. **Custo** → cache em 3 pontos, effort low, teto diário por tenant com degradação, Batch API para extração de memória.
+3. **Custo** → cache em 3 pontos, effort low, teto diário por número, teto por sessão e alerta mensal por tenant (ADR-032), Batch API para extração de memória.
 4. **`vector` indisponível no Railway** → fase 1 é lexical; a semântica é capacidade declarada.
 5. **Conflito agente × humano na mesma conversa** → agente cala ao detectar presença (já existe) e ao ser assumido; sessão encerra com motivo.
 6. **LGPD** → PII mínima, mascaramento, retenção configurável, exclusão do titular alcança `agente_decisao` e `cliente_memoria`.
@@ -350,3 +350,23 @@ não-oficial; exibir as capacidades novas do canal na tela de Números; juiz LLM
 base), worker de embeddings (`embutir-pendentes.ts`, migration 0094, imagem pgvector local/CI) e
 capacidade de busca visível na tela (`docs/plano-rag-conhecimento.md`). Em produção depende de
 `VOYAGE_API_KEY` no Railway e de o Postgres ter pgvector — `capacidades` responde.
+
+### 8.1 Port dos padrões do agente da AM (2026-10-17)
+
+Plano e quadro vivo em `docs/plano-port-playbook-am.md` (raias P0–P20), decisões em ADR-028…034.
+Integrado na `main`:
+
+| Frente | O que mudou |
+|---|---|
+| Pipeline (P0, P0b, P0c) | o turno virou pipeline de ordem fixa com etapas em `agente/pipeline/` e marcas de guardrail em `agente_decisao.guardrails` (ADR-029) |
+| Proteções (P2, P3, P4, P7) | filtro de saída com negação e compliance extra; trava de pergunta repetida e slots do cliente; gatilhos antes do modelo (opt-out com confirmação, pedido de humano, Procon, "é robô?", áudio) e aviso de privacidade; números ampliados (%, quantidade, prazo só com fonte) |
+| Resiliência e custo (P5, P6) | classificação da falha, reserva com janela, 403 por modelo, falha nunca em silêncio (ADR-030); custo pelo catálogo, teto **por sessão**, teto diário **por número** e alerta mensal por tenant (ADR-032) |
+| Operação (P8, P9, P10, P11) | `/saude/detalhada` em três estados; histórico imutável do conhecimento; tela de números com QR só para admin; webhook sem rede antes do 2xx, qualidade do número suspendendo ativas e campanhas, ativas com expediente e limites |
+| Qualidade (P12, P15, P16) | regras em 100%, pausa em CRÍTICA, juiz amostrado com rubrica única; evals B2B no pipeline real e scripts `agente:smoke/avaliar/medir-prefixo`; revisão humana semanal cega com concordância (ADR-031) |
+| Vendedor e modo (P13, P14, P17) | sugestão do assistido no inbox, copiloto sob demanda, métrica de edição; modo efetivo com recorte, kill switch do tenant e confirmação digitada (ADR-028); playbook versionado com sandbox (ADR-033) |
+| Handoff (P18) | SLA por número em minutos úteis, roteamento, reserva, aviso único de espera e cronômetro na fila (ADR-034) |
+| Docs (P20) | `agente-go-live.md`, `agente-runbook.md`, `agente-revisao-semanal.md`, `agente-guia-vendedor.md`, `agente-treinamento-1h.md`; skills e ADRs alinhados |
+
+Em andamento: P19 (painel e critério de fase, `GET /v1/agente/go-live`) e P0d (estabilização final:
+testes instáveis, lock do worker de qualidade, `primeira_resposta_humana_em`, estilo do playbook no bloco
+cacheado). Os critérios de fase continuam **proposta** até a P19 e a calibração com o primeiro cliente.

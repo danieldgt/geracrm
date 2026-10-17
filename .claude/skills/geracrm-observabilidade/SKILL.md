@@ -86,6 +86,54 @@ Alerta que não tem ação associada treina o time a ignorar.
 ⚠️ **Sem alerta de "CPU alta" sem consequência.** Se ninguém sabe o que fazer ao receber, não é
 alerta — é ruído.
 
+## Saúde em três estados (`GET /saude/detalhada`)
+
+`avaliarSaude` (shared `agente-saude.ts`, pura) + medição em `plataforma/saude-detalhada.ts`:
+
+- `ok` / `degradado` (HTTP **200**) / `erro` (HTTP **503**, só `encerrando`). Dependência fora — banco,
+  worker parado, fila atrasada, LLM na reserva — é `degradado`: 503 faria a plataforma derrubar o
+  processo que segura a operação. O healthcheck do Railway segue em `/saude`; `/pronto` testa o banco.
+- Rota **pública**: só contagens, idades em segundos e códigos (`MOTIVOS_SAUDE`). Nada de tenant, modelo,
+  URL ou mensagem de erro.
+- Componentes usam `estado`, nunca `status`: o monitor externo procura a palavra-chave `"status":"ok"`.
+- Batimento: todo worker de intervalo chama `batimento(nome)` (`plataforma/batimento.ts`) no `finally`;
+  worker novo que deve contar na saúde precisa disso e de entrar em `EntradaSaude`.
+- Leitura crítica (fila do agente, retornos) separada das opcionais (transcrição, embeddings), cada uma
+  com teto e cache próprios — uma lenta não apaga a outra.
+- ⚠️ Limiares provisórios (`LIMITES_SAUDE_PROVISORIOS`): calibrar com histórico antes de acordar gente.
+
+## Alertas do produto (tabela `alerta`)
+
+Um aberto por `(tenant, tipo)` (`alerta_aberto_unico`); escreva com `ON CONFLICT … DO NOTHING` e feche
+ao normalizar. Tipos ligados ao agente e à operação, com ação no `docs/agente-runbook.md`:
+
+| Tipo | Origem |
+|---|---|
+| `agente_llm_indisponivel` | política de falha do LLM; fecha no turno bem-sucedido |
+| `agente_violacao_critica` | regras de qualidade pausaram uma conversa |
+| `agente_qualidade_teto` | teto mensal do juiz no número |
+| `preco_desconhecido` | modelo fora do catálogo `modelo_ia` |
+| `agente_orcamento_80` / `agente_orcamento_100` | orçamento mensal do tenant (só avisa) |
+| `opt_out_confirmar` / `opt_out_cliente` | pedido de opt-out a confirmar (assistido) / opt-out registrado |
+| `qualidade_numero` | Meta baixou a qualidade ou restringiu a conta; ativas e campanhas suspensas |
+| `canal_desconectado` | vigia do canal |
+| `sla_handoff_estourado` | SLA do handoff vencido sem resposta humana |
+| `entrega_baixa` | taxa de entrega por número |
+
+Alertas **de processo** (sem tenant) não vão para a tabela: saem no log com o campo `"alerta"`
+(`llm_reserva_ativo`, `llm_reserva_encerrado`, `llm_reserva_falhou`, `modelo_bloqueado`, contexto
+`agente.llm`) e aparecem como motivo em `/saude/detalhada`.
+
+## Logs estruturados do agente
+
+- Uma linha JSON por evento, com `contexto` (`agente.llm`, `agente.qualidade`…), ids (`tenantId`,
+  `conversaId`, `canalId`), o código (`alerta` ou `evento`) e nada de conteúdo: nem texto do cliente, nem
+  chave, nem mensagem do fornecedor. Ex.: `{"contexto":"agente.qualidade","evento":"agente_violacao_critica",
+  "regras":[…],"pausou":true}`.
+- A auditoria de "por que o robô disse isso" é `agente_decisao` (marcas de guardrail, ferramentas, custo,
+  modo efetivo), não log.
+- Scripts que tocam provedor passam a saída por `semSegredos` (`evals/segredos.ts`).
+
 ## Investigar um incidente
 
 1. **Isole o tenant** — o problema é de um cliente ou de todos? Muda tudo
