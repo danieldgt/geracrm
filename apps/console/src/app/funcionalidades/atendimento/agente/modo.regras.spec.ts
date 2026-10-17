@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  erroDoRecorte, fraseOrigem, fraseReserva, pedidoDeConfirmacao, recorteParaFormulario, recorteParaSalvar,
+  erroDoRecorte, fraseOrigem, fraseReserva, pedidoAoTirarRecorte, pedidoDeConfirmacao, recorteParaFormulario, recorteParaSalvar,
   type ReservaLlm,
 } from './modo.regras.js'
 
@@ -67,6 +67,15 @@ describe('confirmação digitada', () => {
   it('conta: sem teto é autônomo — voltar a autônomo de autônomo não pede', () => {
     expect(pedidoDeConfirmacao(null, 'autonomo', 'conta')).toBeNull()
     expect(pedidoDeConfirmacao('autonomo', 'desligado', 'conta')?.mensagem).toContain('TODOS os números')
+  })
+})
+
+describe('tirar o recorte de autônomo', () => {
+  it('pede "autonomo" só quando continua autônomo, tinha recorte e vai sem', () => {
+    expect(pedidoAoTirarRecorte('autonomo', 'autonomo', true, null)).toMatchObject({ digitar: 'autonomo' })
+    expect(pedidoAoTirarRecorte('autonomo', 'autonomo', false, null)).toBeNull()
+    expect(pedidoAoTirarRecorte('autonomo', 'sombra', true, null)).toBeNull()
+    expect(pedidoAoTirarRecorte('autonomo', 'autonomo', true, { horario: null, segmentosRfv: ['cliente-fiel'], foraDoRecorte: 'sombra' })).toBeNull()
   })
 })
 

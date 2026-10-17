@@ -99,11 +99,28 @@ export function recorteRestringe(r: RecorteAgente | null): boolean {
 }
 
 /** Momento LOCAL no fuso do tenant: 1 (segunda) … 7 (domingo) e "HH:MM". */
-export interface MomentoLocal { readonly diaIso: number; readonly hora: string }
+export interface MomentoLocal {
+  readonly diaIso: number
+  readonly hora: string
+  /** Hoje é feriado para o tenant? Ausente = não. */
+  readonly feriado?: boolean | undefined
+}
 
-/** Dentro do horário do recorte? `null` = qualquer hora. */
+/**
+ * Dentro do horário do recorte? `null` = qualquer hora.
+ *
+ * ⚠️ CONVENÇÃO da faixa que cruza a meia-noite (a MESMA do `expediente.ts`): a
+ *    faixa de um dia vale nas horas DAQUELE dia local. `seg 22:00–02:00` cobre
+ *    seg 00:00–02:00 e seg 22:00–24:00; a madrugada de terça é regida pela faixa
+ *    de TERÇA, não pela de segunda. Quem quer "segunda à noite até 2h de terça"
+ *    declara `seg 22:00–23:59` e `ter 00:00–02:00` (ou a faixa cruzada nos dois dias).
+ *
+ * ⚠️ FERIADO conta como fora do horário (`m.feriado`): o recorte por horário é
+ *    "quando a equipe está de olho"; feriado não é.
+ */
 export function dentroDoHorarioRecorte(h: HorarioRecorte | null, m: MomentoLocal): boolean {
   if (!h) return true
+  if (m.feriado) return false
   const faixa = h[DIA_POR_ISO[m.diaIso] ?? 'seg']
   if (!faixa) return false
   // Comparação lexicográfica de "HH:MM" — o formato é fixo (validado no schema).

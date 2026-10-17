@@ -73,7 +73,8 @@ describe('Configurações Gerais', () => {
     await chamar(OUTRO, 'PATCH', '/v1/config/empresa', { nome: 'Mudou a Alheia' })
     const minha = (await chamar(T, 'GET', '/v1/config/empresa')).json() as { nome: string }
     expect(minha.nome).toBe('Loja Renomeada') // intacta
-    const equipeOutro = (await chamar(OUTRO, 'GET', '/v1/config/equipe')).json() as { itens: unknown[] }
-    expect(equipeOutro.itens.length).toBe(0) // Ana é do T
+    const equipeOutro = (await chamar(OUTRO, 'GET', '/v1/config/equipe')).json() as { itens: { nome: string }[] }
+    // Ana é do T. (O PATCH exige admin e garante a linha de quem chamou no OUTRO — por isso não é 0.)
+    expect(equipeOutro.itens.map((u) => u.nome)).not.toContain('Ana')
   })
 })

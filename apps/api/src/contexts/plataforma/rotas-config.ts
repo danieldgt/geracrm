@@ -1,5 +1,13 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
+import { exigirPapel } from './papel.js'
+import { fusoValido } from './fuso.js'
+import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+
+/** A linha de `usuario` nasce no batimento; garantir antes de `exigirPapel` (mesmo padrão das rotas do agente). */
+async function garantirUsuario(req: FastifyRequest): Promise<void> {
+  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+}
 
 /**
  * Configurações Gerais — a empresa (nome, fuso, plano) e a equipe com os papéis.
@@ -19,11 +27,16 @@ export async function rotasConfig(app: FastifyInstance): Promise<void> {
   })
 
   app.patch<{ Body: { nome?: string; fuso?: string } }>(
-    '/v1/config/empresa', { preHandler: exigirTenant },
+    // ⚠️ Admin: o fuso decide o expediente, a ausência e o recorte do agente de todos os números.
+    '/v1/config/empresa', { preHandler: [exigirTenant, garantirUsuario, exigirPapel('admin')] },
     async (req, reply) => {
       const nome = req.body?.nome?.trim()
       const fuso = req.body?.fuso?.trim()
       if (nome !== undefined && nome.length === 0) return reply.code(422).send({ erro: 'empresa.nome_obrigatorio', mensagem: 'O nome não pode ficar vazio.' })
+      // ⚠️ Fuso IANA de verdade: um texto qualquer derrubava toda consulta com AT TIME ZONE.
+      if (fuso && !fusoValido(fuso)) {
+        return reply.code(422).send({ erro: 'empresa.fuso_invalido', mensagem: `Fuso "${fuso}" não existe. Use um fuso IANA, por exemplo America/Sao_Paulo ou America/Manaus.`, campos: ['fuso'] })
+      }
       const [r] = await req.comTenant((tx) => tx`
         UPDATE tenant SET nome = COALESCE(${nome ?? null}, nome), fuso = COALESCE(${fuso || null}, fuso)
          WHERE id = tenant_atual() RETURNING id`)

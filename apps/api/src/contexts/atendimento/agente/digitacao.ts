@@ -2,6 +2,7 @@ import { comTenantServico, type Sql } from '../../../db/index.js'
 import { decifrar } from '../../integracao/cofre.js'
 import { criarCanal } from '../canais/fabrica.js'
 import type { Tarefa } from './fila.js'
+import { modoEfetivoDoCanal } from './pipeline/modo-efetivo.js'
 
 /**
  * "Digitando…" antes do turno (ritmo humano, R5) — só onde o canal declara
@@ -21,18 +22,22 @@ export async function indicarDigitacaoDaTarefa(
   try {
     const dados = await comTenantServico(tarefa.tenant_id, async (tx: Sql) => {
       const [l] = await tx<{
-        modo: string | null; provedor: string | null; cred: Uint8Array | null; destino: string | null; id_externo: string | null
+        provedor: string | null; cred: Uint8Array | null; destino: string | null; id_externo: string | null
+        contato_id: string
       }[]>`
-        SELECT cfg.modo, cc.provedor, cc.credenciais_cifradas AS cred, ct.e164 AS destino,
+        SELECT c.contato_id, cc.provedor, cc.credenciais_cifradas AS cred, ct.e164 AS destino,
                (SELECT m.id_externo FROM mensagem m
                  WHERE m.tenant_id = c.tenant_id AND m.conversa_id = c.id AND m.direcao = 'entrante'
                  ORDER BY m.criado_em DESC LIMIT 1) AS id_externo
           FROM conversa c
           JOIN canal_conectado cc ON cc.tenant_id = c.tenant_id AND cc.id = c.canal_id
-          LEFT JOIN agente_config cfg ON cfg.tenant_id = cc.tenant_id AND cfg.canal_id = cc.id
           LEFT JOIN contato_telefone ct ON ct.tenant_id = c.tenant_id AND ct.contato_id = c.contato_id AND ct.principal
          WHERE c.tenant_id = tenant_atual() AND c.id = ${tarefa.conversa_id}`
-      return l ?? null
+      if (!l) return null
+      // ⚠️ O modo EFETIVO (teto do tenant, recorte) — não a coluna do número:
+      //    "digitando…" sob o kill switch prometeria uma resposta que não vem.
+      const efetivo = await modoEfetivoDoCanal(tx, { canalId: tarefa.canal_id, contatoId: l.contato_id, agora: new Date() })
+      return { ...l, modo: efetivo.modo }
     })
     if (!dados) return 'sem_dados'
     if (dados.modo !== 'autonomo') return 'modo'

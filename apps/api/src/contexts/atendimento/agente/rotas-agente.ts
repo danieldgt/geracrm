@@ -230,11 +230,6 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
       if (ativo && falta.length > 0 && !modeloCodigo) {
         return reply.code(422).send({ erro: 'agente.sem_chave', mensagem: `Falta configurar ${falta.join(', ')} no servidor.` })
       }
-      // ⚠️ Confirmação digitada por ÚLTIMO: a pessoa só digita "autonomo" depois
-      //    de o resto estar válido — senão confirma, erra a política e digita de novo.
-      if (exigeConfirmacao(atual, modo) && !confirmacaoConfere(corpo.confirmacao, modo)) {
-        return pedirConfirmacao(reply, modo, 'o agente deste número')
-      }
       // ⚠️ Identificar-se como assistente é REGRA, não preferência (ADR-028/029):
       //    a tela não oferece mais a opção e a API não aceita desligá-la.
       const personaFinal = personaSchema.parse({ ...PERSONA_PADRAO, ...corpo.persona, identificaComoRobo: true })
@@ -243,9 +238,22 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
       const gravado = await req.comTenant(async (tx) => {
         const [canal] = await tx<{ id: string }[]>`
           SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
-        if (!canal) return null
+        if (!canal) return { tipo: 'sem_canal' as const }
+        // ⚠️ FOR UPDATE: a confirmação é checada contra a linha TRAVADA, na
+        //    transação da escrita. Lida antes, dois PUTs concorrentes (um em
+        //    sombra, outro confirmando autônomo) podiam passar sem confirmar.
         const [antes] = await tx<{ linha: Record<string, unknown> }[]>`
-          SELECT to_jsonb(ac.*) AS linha FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${req.params.id}`
+          SELECT to_jsonb(ac.*) AS linha FROM agente_config ac
+           WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${req.params.id} FOR UPDATE`
+        const modoTravado = antes && ehModoAgente(antes.linha['modo']) ? antes.linha['modo'] : null
+        const recorteAntes = antes?.linha['recorte'] ?? null
+        // Confirmação digitada por ÚLTIMO: a pessoa só digita "autonomo" depois de
+        // o resto estar válido — senão confirma, erra a política e digita de novo.
+        // Tirar o recorte de um número autônomo também solta o robô: pede "autonomo".
+        const tiraRecorte = modo === 'autonomo' && modoTravado === 'autonomo' && corpo.recorte === null && recorteAntes !== null
+        if ((exigeConfirmacao(modoTravado, modo) || tiraRecorte) && !confirmacaoConfere(corpo.confirmacao, modo)) {
+          return { tipo: 'confirmar' as const, tiraRecorte }
+        }
         await tx`
           INSERT INTO agente_config (
             tenant_id, canal_id, ativo, modo, politicas, max_turnos,
@@ -288,14 +296,20 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         const [depois] = await tx<{ linha: Record<string, unknown> }[]>`
           SELECT to_jsonb(ac.*) AS linha FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${req.params.id}`
         const dif = diferencaDeConfig(antes?.linha ?? null, depois?.linha ?? {})
-        await auditar(tx, {
-          atorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
-          acao: 'agente.config_alterada', entidade: 'agente_config', entidadeId: req.params.id,
-          dados: { antes: dif.antes, depois: dif.depois, campos: dif.campos, criacao: !antes },
-        })
-        return canal
+        // PUT que não mudou nada não é evento: auditar "salvou igual" enterra a mudança real.
+        if (!antes || dif.campos.length > 0) {
+          await auditar(tx, {
+            atorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+            acao: 'agente.config_alterada', entidade: 'agente_config', entidadeId: req.params.id,
+            dados: { antes: dif.antes, depois: dif.depois, campos: dif.campos, criacao: !antes },
+          })
+        }
+        return { tipo: 'ok' as const }
       })
-      if (!gravado) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
+      if (gravado.tipo === 'sem_canal') return reply.code(404).send({ erro: 'canal.nao_encontrado' })
+      if (gravado.tipo === 'confirmar') {
+        return pedirConfirmacao(reply, modo, gravado.tiraRecorte ? 'o agente deste número sem recorte (sempre)' : 'o agente deste número')
+      }
       return reply.send({ ok: true, modo })
     },
   )
@@ -333,15 +347,13 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         return reply.code(422).send({ erro: 'agente.campo_invalido', mensagem: `${i.path.join('.') || 'corpo'}: ${i.message}`, campos: [i.path.join('.')] })
       }
       const novo = p.data.modoMaximo
-      const atual = await req.comTenant(async (tx) => {
-        const [l] = await tx<{ modo_maximo: string }[]>`SELECT modo_maximo FROM agente_tenant WHERE tenant_id = tenant_atual()`
-        return l && ehModoAgente(l.modo_maximo) ? l.modo_maximo : null
-      })
-      // Sem linha o teto é autônomo: "voltar a autônomo" a partir dali não muda nada.
-      if (exigeConfirmacao(atual ?? 'autonomo', novo) && !confirmacaoConfere(p.data.confirmacao, novo)) {
-        return pedirConfirmacao(reply, novo, 'o agente em TODOS os números')
-      }
-      await req.comTenant(async (tx) => {
+      const r = await req.comTenant(async (tx) => {
+        // ⚠️ FOR UPDATE: a confirmação é checada contra o teto TRAVADO, na transação da escrita.
+        const [l] = await tx<{ modo_maximo: string }[]>`SELECT modo_maximo FROM agente_tenant WHERE tenant_id = tenant_atual() FOR UPDATE`
+        const atual = l && ehModoAgente(l.modo_maximo) ? l.modo_maximo : null
+        // Sem linha o teto é autônomo: "voltar a autônomo" a partir dali não muda nada.
+        if (exigeConfirmacao(atual ?? 'autonomo', novo) && !confirmacaoConfere(p.data.confirmacao, novo)) return 'confirmar' as const
+        if ((atual ?? 'autonomo') === novo) return 'igual' as const
         const eu = await garantirUsuarioId(tx, req)
         await tx`
           INSERT INTO agente_tenant (tenant_id, modo_maximo, atualizado_em, atualizado_por)
@@ -350,9 +362,11 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
                                                 atualizado_por = EXCLUDED.atualizado_por`
         await auditar(tx, {
           atorId: eu, atorStaff: req.atorStaff ?? false, acao: 'agente.config_alterada', entidade: 'agente_tenant',
-          dados: { antes: { modoMaximo: atual ?? 'autonomo' }, depois: { modoMaximo: novo }, campos: atual === novo ? [] : ['modo_maximo'] },
+          dados: { antes: { modoMaximo: atual ?? 'autonomo' }, depois: { modoMaximo: novo }, campos: ['modo_maximo'] },
         })
+        return 'ok' as const
       })
+      if (r === 'confirmar') return pedirConfirmacao(reply, novo, 'o agente em TODOS os números')
       return reply.send({ ok: true, modoMaximo: novo })
     },
   )

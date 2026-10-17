@@ -61,6 +61,13 @@ describe('horário do recorte', () => {
     expect(dentroDoHorarioRecorte(h, { diaIso: 1, hora: '02:00' })).toBe(false)
     expect(dentroDoHorarioRecorte(h, { diaIso: 1, hora: '12:00' })).toBe(false)
   })
+  it('feriado conta como fora do horário (sem horário no recorte, não afeta)', () => {
+    const h = recorteAgente.parse({ horario: COMERCIAL }).horario
+    expect(dentroDoHorarioRecorte(h, { diaIso: 1, hora: '10:00', feriado: true })).toBe(false)
+    expect(dentroDoHorarioRecorte(null, { diaIso: 1, hora: '10:00', feriado: true })).toBe(true)
+    expect(decidirModoEfetivo({ modoTenant: null, modoNumero: 'autonomo', recorte: { horario: COMERCIAL }, momento: { ...SEG_14H, feriado: true } }))
+      .toMatchObject({ modo: 'sombra', motivo: 'fora_do_recorte_horario' })
+  })
   it('fim é exclusivo, início inclusivo', () => {
     const h = recorteAgente.parse({ horario: COMERCIAL }).horario
     expect(dentroDoHorarioRecorte(h, { diaIso: 2, hora: '08:00' })).toBe(true)

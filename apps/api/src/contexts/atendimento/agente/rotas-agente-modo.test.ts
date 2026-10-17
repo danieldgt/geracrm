@@ -24,7 +24,7 @@ const ADMIN = 'a14d0000-8888-4000-8000-000000000001'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
 let app: FastifyInstance
-const chamar = (t: string, m: 'GET' | 'PUT', url: string, corpo?: Record<string, unknown>) =>
+const chamar = (t: string, m: 'GET' | 'PUT' | 'PATCH', url: string, corpo?: Record<string, unknown>) =>
   app.inject({ method: m, url, headers: { 'x-tenant-id': t }, ...(corpo ? { payload: corpo } : {}) })
 const URL_CFG = `/v1/canais/${CANAL}/agente`
 const POLITICAS = 'Entrega em 3 dias úteis. Pagamento por PIX ou cartão.'
@@ -142,13 +142,30 @@ describe('Auditoria agente.config_alterada', () => {
     expect(await auditorias('agente_config')).toHaveLength(0)
   })
 
-  it('diferencaDeConfig corta texto longo e ignora ordem de chave em JSON', () => {
+  it('diferencaDeConfig: políticas como tamanho + hash; texto longo cortado; ordem de chave em JSON não conta', () => {
     const longo = 'x'.repeat(900)
-    const d = diferencaDeConfig({ politicas: 'a', persona: { nome: 'Lia', tom: 'neutro' }, atualizado_em: 1 },
-      { politicas: longo, persona: { tom: 'neutro', nome: 'Lia' }, atualizado_em: 2 })
-    expect(d.campos).toEqual(['politicas'])
-    expect(String(d.depois['politicas'])).toContain('(900 caracteres)')
-    expect(String(d.depois['politicas']).length).toBeLessThan(560)
+    const d = diferencaDeConfig({ politicas: 'a', nome_x: 'b', persona: { nome: 'Lia', tom: 'neutro' }, atualizado_em: 1 },
+      { politicas: longo, nome_x: longo, persona: { tom: 'neutro', nome: 'Lia' }, atualizado_em: 2 })
+    expect(d.campos).toEqual(['nome_x', 'politicas'])
+    expect(d.depois['politicas']).toEqual({ tamanho: 900, sha256: expect.stringMatching(/^[0-9a-f]{16}$/) })
+    expect(JSON.stringify(d)).not.toContain('xxxxxxxxxx'.repeat(60))
+    expect(String(d.depois['nome_x'])).toContain('(900 caracteres)')
+  })
+
+  it('PUT sem mudança não audita; o texto das políticas nunca vai para a trilha', async () => {
+    await chamar(T, 'PUT', URL_CFG, { modo: 'sombra', politicas: POLITICAS })
+    await chamar(T, 'PUT', URL_CFG, { modo: 'sombra', politicas: POLITICAS })
+    await chamar(T, 'PUT', URL_CFG, { modo: 'sombra', politicas: POLITICAS + ' Frete grátis acima de R$ 500.' })
+    const a = await auditorias('agente_config')
+    expect(a).toHaveLength(2)
+    expect(a[1]!.dados.campos).toEqual(['politicas'])
+    expect(JSON.stringify(a)).not.toContain('Frete grátis')
+  })
+
+  it('teto do tenant salvo igual não audita', async () => {
+    await chamar(T, 'PUT', '/v1/agente/tenant', { modoMaximo: 'sombra' })
+    await chamar(T, 'PUT', '/v1/agente/tenant', { modoMaximo: 'sombra' })
+    expect(await auditorias('agente_tenant')).toHaveLength(1)
   })
 })
 
@@ -164,7 +181,11 @@ describe('Recorte e modo efetivo na tela', () => {
     // Ausente no corpo = mantém; null = remove.
     await chamar(T, 'PUT', URL_CFG, { modo: 'autonomo', politicas: POLITICAS })
     expect(((await chamar(T, 'GET', URL_CFG)).json() as Record<string, unknown>)['recorte']).toEqual(recorte)
-    await chamar(T, 'PUT', URL_CFG, { modo: 'autonomo', politicas: POLITICAS, recorte: null })
+    // ⚠️ Tirar o recorte de um número autônomo solta o robô: pede "autonomo".
+    const sem = await chamar(T, 'PUT', URL_CFG, { modo: 'autonomo', politicas: POLITICAS, recorte: null })
+    expect(sem.json()).toMatchObject({ erro: 'agente.confirmacao_necessaria', confirmar: 'autonomo' })
+    expect(((await chamar(T, 'GET', URL_CFG)).json() as Record<string, unknown>)['recorte']).toEqual(recorte)
+    await chamar(T, 'PUT', URL_CFG, { modo: 'autonomo', politicas: POLITICAS, recorte: null, confirmacao: 'autonomo' })
     expect((await chamar(T, 'GET', URL_CFG)).json()).toMatchObject({ recorte: null, modoEfetivo: { modo: 'autonomo', origem: 'numero' } })
   })
 
@@ -220,5 +241,29 @@ describe('Teto do tenant — kill switch geral', () => {
 
   it('corpo inválido → 422', async () => {
     expect((await chamar(T, 'PUT', '/v1/agente/tenant', { modoMaximo: 'turbo' })).statusCode).toBe(422)
+  })
+})
+
+describe('Fuso da empresa', () => {
+  it('fuso inválido no banco: GET da config do agente não dá 500', async () => {
+    await dono`UPDATE tenant SET fuso = 'Marte/Olympus' WHERE id = ${T}`
+    try {
+      const g = await chamar(T, 'GET', URL_CFG)
+      expect(g.statusCode).toBe(200)
+      expect((g.json() as { modoEfetivo: { momento: { hora: string } } }).modoEfetivo.momento.hora).toMatch(/^\d{2}:\d{2}$/)
+    } finally {
+      await dono`UPDATE tenant SET fuso = 'America/Sao_Paulo' WHERE id = ${T}`
+    }
+  })
+  it('PATCH /v1/config/empresa recusa fuso que não é IANA (422) e aceita um válido', async () => {
+    const r = await chamar(T, 'PATCH', '/v1/config/empresa', { fuso: 'Brasil/Fortaleza' })
+    expect(r.statusCode).toBe(422)
+    expect(r.json()).toMatchObject({ erro: 'empresa.fuso_invalido', campos: ['fuso'] })
+    expect((await chamar(T, 'PATCH', '/v1/config/empresa', { fuso: 'America/Fortaleza' })).statusCode).toBe(200)
+    await dono`UPDATE tenant SET fuso = 'America/Sao_Paulo' WHERE id = ${T}`
+  })
+  it('PATCH /v1/config/empresa exige admin', async () => {
+    await tirarAdminDoUsuarioDoHeader()
+    expect((await chamar(T, 'PATCH', '/v1/config/empresa', { nome: 'Outro nome' })).statusCode).toBe(403)
   })
 })

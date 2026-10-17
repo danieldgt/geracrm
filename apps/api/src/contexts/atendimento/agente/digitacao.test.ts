@@ -52,6 +52,7 @@ beforeAll(async () => {
 })
 beforeEach(async () => {
   chamadas = []
+  await dono`DELETE FROM agente_tenant WHERE tenant_id = ${T}`
   await dono`DELETE FROM mensagem WHERE tenant_id = ${T}`
   await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, id_externo, criado_em)
              VALUES (${T}, ${randomUUID()}, ${CONVERSA}, 'entrante', 'texto', '{"texto":"oi"}'::jsonb, 'wamid.ANTIGA', now() - interval '1 minute'),
@@ -59,7 +60,7 @@ beforeEach(async () => {
   await configurar('autonomo')
 })
 afterAll(async () => {
-  for (const t of ['agente_config', 'mensagem', 'conversa', 'contato_telefone', 'contato', 'canal_conectado']) await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
+  for (const t of ['agente_config', 'agente_tenant', 'mensagem', 'conversa', 'contato_telefone', 'contato', 'canal_conectado']) await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   await dono`DELETE FROM tenant WHERE id = ${T}`
   await encerrarBanco(); await dono.end()
 })
@@ -79,6 +80,23 @@ describe('indicarDigitacaoDaTarefa', () => {
     await configurar('assistido')
     expect(await indicarDigitacaoDaTarefa(tarefa, { criar: () => canalFalso(true) })).toBe('modo')
     expect(chamadas).toEqual([])
+  })
+
+  it('número autônomo sob o kill switch do tenant → não indica (modo efetivo, P14)', async () => {
+    await dono`INSERT INTO agente_tenant (tenant_id, modo_maximo) VALUES (${T}, 'desligado')`
+    expect(await indicarDigitacaoDaTarefa(tarefa, { criar: () => canalFalso(true) })).toBe('modo')
+    expect(chamadas).toEqual([])
+  })
+
+  it('número autônomo FORA do recorte (horário) → não indica', async () => {
+    const [l] = await dono<{ dia: number }[]>`SELECT to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'ID')::int AS dia`
+    const outroDia = (['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'] as const)[l!.dia % 7]!
+    await dono`UPDATE agente_config SET recorte = ${JSON.stringify({ horario: { [outroDia]: { de: '00:00', ate: '23:59' } } })}::text::jsonb WHERE tenant_id = ${T}`
+    try {
+      expect(await indicarDigitacaoDaTarefa(tarefa, { criar: () => canalFalso(true) })).toBe('modo')
+    } finally {
+      await dono`UPDATE agente_config SET recorte = NULL WHERE tenant_id = ${T}`
+    }
   })
 
   it('adaptador que lança não derruba nada', async () => {

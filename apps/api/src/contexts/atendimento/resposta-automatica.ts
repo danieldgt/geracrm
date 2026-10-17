@@ -1,6 +1,7 @@
 import { comTenantServico } from '../../db/index.js'
 import { responderAusencia } from './ausencia.js'
 import { motivoDisponibilidade, quemAtende } from './disponibilidade.js'
+import { modoEfetivoSeguro } from './agente/pipeline/modo-efetivo.js'
 
 /**
  * O QUE O PRODUTO RESPONDE SOZINHO a uma mensagem entrante — e em que ordem.
@@ -56,17 +57,23 @@ export interface ResumoAutomatico {
 export async function responderAutomaticamente(
   tenantId: string, conversaId: string, canalId: string, agora: Date = new Date(),
 ): Promise<ResumoAutomatico> {
-  const { equipe, agente } = await comTenantServico(tenantId, async (tx) => {
+  const { equipe, agente, contatoId } = await comTenantServico(tenantId, async (tx) => {
     const [cfg] = await tx<{ modo: string; exigir_ausencia_antes: boolean }[]>`
       SELECT modo, exigir_ausencia_antes FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}`
-    return { equipe: await quemAtende(tx, canalId, agora), agente: cfg ?? null }
+    const [conv] = await tx<{ contato_id: string }[]>`
+      SELECT contato_id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
+    return { equipe: await quemAtende(tx, canalId, agora), agente: cfg ?? null, contatoId: conv?.contato_id ?? null }
   })
   const disponibilidade = motivoDisponibilidade(equipe)
+  // ⚠️ O modo EFETIVO (teto do tenant, recorte), não a coluna: com o kill switch
+  //    ligado ou fora do recorte, o agente não vai responder — e a ausência
+  //    tem de sair. Falha fechada (sombra): na dúvida, a ausência sai.
+  const efetivo = agente ? await modoEfetivoSeguro(tenantId, { canalId, contatoId, agora }) : { modo: 'desligado' as const, motivo: null }
 
   // ⚠️ Vendedor AUTÔNOMO que não espera a ausência responde ele mesmo: mandar
   //    "não há ninguém disponível" e, 3 s depois, o robô puxando conversa é a
   //    contradição que o §4.3.1 do escopo existe para evitar — só que invertida.
-  const agenteResponde = agente?.modo === 'autonomo' && !agente.exigir_ausencia_antes
+  const agenteResponde = efetivo.modo === 'autonomo' && !!agente && !agente.exigir_ausencia_antes
   const ausencia = agenteResponde ? 'agente_responde' : await responderAusencia(tenantId, conversaId, canalId, agora, equipe)
 
   // ⚠️ O TURNO do agente não roda mais aqui (ADR-024): foi agendado na
@@ -76,8 +83,8 @@ export async function responderAutomaticamente(
     ausencia,
     agenteFalou: false,
     agenteEncerrouPor: null,
-    agenteMotivo: !agente || agente.modo === 'desligado' ? 'agente_desligado' : 'agendado_no_worker',
-    agenteDetalhe: agente ? `modo ${agente.modo}` : null,
+    agenteMotivo: efetivo.modo === 'desligado' ? 'agente_desligado' : 'agendado_no_worker',
+    agenteDetalhe: agente ? `modo ${efetivo.modo}${efetivo.modo !== agente.modo ? ` (número em ${agente.modo}; ${efetivo.motivo ?? 'restrito'})` : ''}` : null,
     disponibilidade,
   }
 }

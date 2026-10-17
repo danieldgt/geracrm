@@ -5,7 +5,8 @@ import { conduzirTurnoVendedor } from '../vendedor.js'
 import type { Tarefa } from '../fila.js'
 import type { PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
 import type { Ligacoes } from '../ferramentas/ligacoes-porta.js'
-import { etapaModoEfetivo, lerFatosDoModo } from './modo-efetivo.js'
+import { etapaModoEfetivo, lerFatosDoModo, modoEfetivoDoCanal, modoEfetivoSeguro, MOTIVO_MODO_INDISPONIVEL } from './modo-efetivo.js'
+import { responderAutomaticamente } from '../../resposta-automatica.js'
 
 /**
  * O MODO EFETIVO num TURNO REAL (raia P14, ADR-028): banco de verdade, WhatsApp
@@ -82,6 +83,7 @@ beforeAll(async () => {
 })
 beforeEach(async () => {
   enviados.length = 0; chamadasLlm = 0
+  await dono`UPDATE tenant SET fuso = 'America/Sao_Paulo' WHERE id = ${T}`
   for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'notificacao', 'atendimento', 'mensagem', 'agente_tenant']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id IN ('${T}', '${OUTRO}')`)
   }
@@ -165,5 +167,94 @@ describe('Turno real com recorte (ADR-028)', () => {
     expect(linhas).toHaveLength(0)
     const decisao = await etapaModoEfetivo.decidir({ tenantId: OUTRO, canalId: CANAL, contatoId: CONTATO, modoDoNumero: 'autonomo', cfgExtra: {}, agora: new Date() })
     expect(decisao).toEqual({ modo: 'autonomo', motivo: null })
+  })
+})
+
+/**
+ * CONTRATO de `modoEfetivoDoCanal` — o que retorno.ts (P11) e o copiloto (P13)
+ * devem perguntar em vez de ler `agente_config.modo`. Espelhe estes casos.
+ */
+describe('modoEfetivoDoCanal(tx, { canalId, contatoId?, agora })', () => {
+  const doCanal = (contatoId?: string) => comTenantServico(T, (tx) => modoEfetivoDoCanal(tx, { canalId: CANAL, contatoId, agora: new Date() }))
+
+  it('sem teto e sem recorte: o modo do número', async () => {
+    await configurar('autonomo', null)
+    expect(await doCanal(CONTATO)).toMatchObject({ modo: 'autonomo', modoDoNumero: 'autonomo', origem: 'numero', motivo: null })
+  })
+  it('kill switch do tenant: desligado, origem tenant', async () => {
+    await configurar('autonomo', null)
+    await dono`INSERT INTO agente_tenant (tenant_id, modo_maximo) VALUES (${T}, 'desligado')`
+    expect(await doCanal(CONTATO)).toMatchObject({ modo: 'desligado', modoDoNumero: 'autonomo', origem: 'tenant', motivo: 'teto_do_tenant' })
+  })
+  it('fora do horário do recorte: cai, mesmo sem contato', async () => {
+    await configurar('autonomo', { horario: await horarioSemHoje() })
+    expect(await doCanal()).toMatchObject({ modo: 'sombra', origem: 'recorte', motivo: 'fora_do_recorte_horario' })
+  })
+  it('recorte por segmento: com contato avalia; sem contato a parte de segmento não é avaliada', async () => {
+    await configurar('autonomo', { segmentosRfv: ['cliente-fiel'] })
+    expect(await doCanal(CONTATO)).toMatchObject({ modo: 'sombra', motivo: 'fora_do_recorte_segmento' })
+    expect(await doCanal()).toMatchObject({ modo: 'autonomo', motivo: null })
+  })
+  it('número sem configuração: desligado', async () => {
+    const outroCanal = await comTenantServico(T, (tx) => modoEfetivoDoCanal(tx, { canalId: crypto.randomUUID(), agora: new Date() }))
+    expect(outroCanal).toMatchObject({ modo: 'desligado', modoDoNumero: 'desligado' })
+  })
+  it('copiloto sob kill switch: modoEfetivoSeguro diz desligado (quem gera sugestão deve calar e não chamar o LLM)', async () => {
+    await configurar('assistido', null)
+    await dono`INSERT INTO agente_tenant (tenant_id, modo_maximo) VALUES (${T}, 'desligado')`
+    expect(await modoEfetivoSeguro(T, { canalId: CANAL, contatoId: CONTATO, agora: new Date() })).toEqual({ modo: 'desligado', motivo: 'teto_do_tenant' })
+  })
+})
+
+describe('Falha fechada', () => {
+  it('etapa: sem conseguir ler os fatos, cai para sombra com motivo modo_efetivo_indisponivel', async () => {
+    const quebrado = { tenantId: 'nao-e-uuid', canalId: CANAL, contatoId: CONTATO, cfgExtra: {}, agora: new Date() }
+    expect(await etapaModoEfetivo.decidir({ ...quebrado, modoDoNumero: 'autonomo' })).toEqual({ modo: 'sombra', motivo: MOTIVO_MODO_INDISPONIVEL })
+    expect(await etapaModoEfetivo.decidir({ ...quebrado, modoDoNumero: 'assistido' })).toEqual({ modo: 'sombra', motivo: MOTIVO_MODO_INDISPONIVEL })
+  })
+  it('modoEfetivoSeguro: idem', async () => {
+    expect(await modoEfetivoSeguro('nao-e-uuid', { canalId: CANAL, agora: new Date() })).toEqual({ modo: 'sombra', motivo: MOTIVO_MODO_INDISPONIVEL })
+  })
+})
+
+describe('Fuso inválido no banco', () => {
+  it('o turno não quebra (cai no fuso padrão) e o recorte segue valendo', async () => {
+    await dono`UPDATE tenant SET fuso = 'Marte/Olympus' WHERE id = ${T}`
+    await configurar('autonomo', null)
+    const r = await turno('oi')
+    expect(r.desfecho).toBe('respondeu')
+    const fatos = await comTenantServico(T, (tx) => lerFatosDoModo(tx, new Date()))
+    expect(fatos.momento.hora).toMatch(/^\d{2}:\d{2}$/)
+  })
+})
+
+/**
+ * A AUSÊNCIA segue o modo EFETIVO (resposta-automatica.ts): o agente só "toma a
+ * vez" da ausência quando vai mesmo responder. ⚠️ Sem rede: uma ausência recente
+ * na conversa faz o desfecho ser `ja_respondida` — prova que passou pela ausência.
+ */
+describe('Ausência sob o modo efetivo', () => {
+  const ausenciaRecente = () => dono`
+    INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+    VALUES (${T}, ${crypto.randomUUID()}, ${CONVERSA}, 'saliente', 'texto', '{"texto":"Voltamos já","automatica":"ausencia"}'::jsonb, now() - interval '1 minute')`
+  beforeAll(async () => { await dono`UPDATE canal_configuracao SET mensagem_ausencia = 'Voltamos já' WHERE tenant_id = ${T} AND canal_id = ${CANAL}` })
+
+  it('autônomo sem esperar a ausência: o agente responde (a ausência não sai)', async () => {
+    await configurar('autonomo', null)
+    await ausenciaRecente()
+    expect((await responderAutomaticamente(T, CONVERSA, CANAL)).ausencia).toBe('agente_responde')
+  })
+  it('kill switch do tenant: a ausência sai', async () => {
+    await configurar('autonomo', null)
+    await dono`INSERT INTO agente_tenant (tenant_id, modo_maximo) VALUES (${T}, 'desligado')`
+    await ausenciaRecente()
+    const r = await responderAutomaticamente(T, CONVERSA, CANAL)
+    expect(r.ausencia).toBe('ja_respondida')
+    expect(r.agenteMotivo).toBe('agente_desligado')
+  })
+  it('fora do recorte: a ausência sai', async () => {
+    await configurar('autonomo', { horario: await horarioSemHoje() })
+    await ausenciaRecente()
+    expect((await responderAutomaticamente(T, CONVERSA, CANAL)).ausencia).toBe('ja_respondida')
   })
 })

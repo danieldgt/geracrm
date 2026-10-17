@@ -21,7 +21,7 @@ import {
 import { ConhecimentoServico } from './conhecimento.servico.js'
 import { ModoServico } from './modo.servico.js'
 import {
-  MODOS_FORA, ROTULO_FORA, ROTULO_SEGMENTO, SEGMENTOS, erroDoRecorte, fraseOrigem, fraseReserva, pedidoDeConfirmacao,
+  MODOS_FORA, ROTULO_FORA, ROTULO_SEGMENTO, SEGMENTOS, erroDoRecorte, fraseOrigem, fraseReserva, pedidoAoTirarRecorte, pedidoDeConfirmacao,
   recorteParaFormulario, recorteParaSalvar, type FormularioRecorte, type ModoNaConfig, type TetoDoTenant,
 } from './modo.regras.js'
 import { fraseCapacidade } from './conhecimento.regras.js'
@@ -623,6 +623,8 @@ export class AgenteConfigComponente {
   readonly podeConfigurar = computed(() => this.cfgModo()?.podeConfigurar)
   readonly reserva = computed(() => fraseReserva(this.cfgModo()?.reservaLlm))
   readonly rf = signal<FormularioRecorte>(recorteParaFormulario(null))
+  /** A pessoa mexeu no recorte desde a carga? Com recorte inválido salvo, salvar exige essa ação. */
+  private readonly recorteMexido = signal(false)
   readonly erroRecorte = computed(() => (this.tentou() ? erroDoRecorte(this.rf()) : null))
   readonly estadoTeto = signal<'carregando' | 'pronto' | 'erro'>('carregando')
   readonly teto = signal<TetoDoTenant | null>(null)
@@ -686,11 +688,13 @@ export class AgenteConfigComponente {
 
   mudarRecorte<K extends 'ativo' | 'usaHorario' | 'foraDoRecorte'>(campo: K, valor: FormularioRecorte[K]): void {
     this.rf.update((r) => ({ ...r, [campo]: valor }))
+    this.recorteMexido.set(true)
     this.limparErro('recorte')
   }
-  mudarHorarioRecorte(h: HorarioAtendimento): void { this.rf.update((r) => ({ ...r, horario: h })); this.limparErro('recorte') }
+  mudarHorarioRecorte(h: HorarioAtendimento): void { this.rf.update((r) => ({ ...r, horario: h })); this.recorteMexido.set(true); this.limparErro('recorte') }
   alternarSegmento(sg: SegmentoRecorte, ligado: boolean): void {
     this.rf.update((r) => ({ ...r, segmentos: ligado ? [...new Set([...r.segmentos, sg])] : r.segmentos.filter((x) => x !== sg) }))
+    this.recorteMexido.set(true)
     this.limparErro('recorte')
   }
 
@@ -765,6 +769,7 @@ export class AgenteConfigComponente {
       this.cfg.set(c)
       this.f.set(formularioDe(c))
       this.rf.set(recorteParaFormulario((c as ConfigAgente & ModoNaConfig).recorte ?? null))
+      this.recorteMexido.set(false)
       this.estado.set('pronto')
     } catch (e) {
       this.estado.set(ehSemPermissao(e) ? 'sem_permissao' : 'erro')
@@ -813,13 +818,24 @@ export class AgenteConfigComponente {
     }
     // ⚠️ Autônomo e desligado pedem o nome do modo DIGITADO (ADR-028). A API
     //    confere de novo — a tela só evita a ida e volta.
+    // ⚠️ Recorte salvo INVÁLIDO e intocado: o formulário o mostra vazio, e salvar
+    //    gravaria "sem recorte" em silêncio — soltando o robô. Exige ação.
+    const salvo = this.cfgModo()
+    if (salvo?.recorteInvalido && !this.recorteMexido()) {
+      this.erroGeral.set('O recorte salvo está inválido. Ajuste o recorte (ou desmarque “Usar recorte”) antes de salvar.')
+      this.toast.erro('Revise o recorte antes de salvar.')
+      return
+    }
+    const recorte = recorteParaSalvar(this.rf())
+    const tinhaRecorte = !!salvo?.recorte || !!salvo?.recorteInvalido
     const pedido = pedidoDeConfirmacao(this.cfg()?.modo ?? null, this.f().modo, 'numero')
+      ?? pedidoAoTirarRecorte(this.cfg()?.modo ?? 'desligado', this.f().modo, tinhaRecorte, recorte)
     if (pedido && !(await this.confirmacao.confirmar({ ...pedido, perigo: true }))) return
     this.salvando.set(true)
     try {
       const corpo = {
         ...corpoParaSalvar(this.f()),
-        recorte: recorteParaSalvar(this.rf()),
+        recorte,
         ...(pedido ? { confirmacao: this.confirmacao.digitado() } : {}),
       }
       const r = await this.api.salvarConfig(this.canalId(), corpo)

@@ -8,6 +8,20 @@
  *    entrariam inteiras na trilha a cada clique em "Salvar".
  */
 
+import { createHash } from 'node:crypto'
+
+/**
+ * Colunas de TEXTO LIVRE: vão para a trilha como tamanho + hash, nunca o texto.
+ * ⚠️ Política da loja pode ter condição comercial e dado de cliente; a auditoria
+ *    diz QUE mudou e permite conferir QUAL versão (o hash), sem copiar o conteúdo.
+ */
+const RESUMIDAS = new Set(['politicas'])
+
+function resumo(v: unknown): unknown {
+  if (typeof v !== 'string') return v ?? null
+  return { tamanho: v.length, sha256: createHash('sha256').update(v).digest('hex').slice(0, 16) }
+}
+
 /** Colunas que não são configuração (chave, carimbo de tempo). */
 const IGNORADAS = new Set(['tenant_id', 'canal_id', 'atualizado_em', 'criado_em'])
 /** Texto longo entra cortado: a auditoria diz QUE mudou; o texto inteiro está na tela. */
@@ -45,8 +59,8 @@ export function diferencaDeConfig(
     const va = antes ? antes[k] ?? null : null
     const vd = depois[k] ?? null
     if (estavel(va) === estavel(vd)) continue
-    a[k] = cortar(va)
-    d[k] = cortar(vd)
+    a[k] = RESUMIDAS.has(k) ? resumo(va) : cortar(va)
+    d[k] = RESUMIDAS.has(k) ? resumo(vd) : cortar(vd)
   }
   return { antes: a, depois: d, campos: Object.keys(d) }
 }

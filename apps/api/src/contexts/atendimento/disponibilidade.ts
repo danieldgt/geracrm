@@ -1,6 +1,7 @@
 import type { Sql } from '../../db/index.js'
 import { ehFeriado, foraDoExpediente, type HorarioAtendimento } from './expediente.js'
 import { normalizarFeriados } from '@geracrm/shared'
+import { momentoNoFuso } from '../plataforma/fuso.js'
 
 /**
  * TEM ALGUÉM PARA ATENDER ESTE NÚMERO?
@@ -77,7 +78,7 @@ export async function quemAtende(
 ): Promise<QuemAtende> {
   const [linha] = await tx<{
     vinculados: number; logados: number; ativos: number
-    horario: HorarioAtendimento | null; feriados: unknown; dia_iso: number; hora_local: string; data_local: string
+    horario: HorarioAtendimento | null; feriados: unknown; fuso: string | null
   }[]>`
     SELECT
       count(*)::int AS vinculados,
@@ -92,9 +93,8 @@ export async function quemAtende(
         WHERE cfg.tenant_id = tenant_atual() AND cfg.canal_id = ${canalId}) AS horario,
       (SELECT cfg.feriados FROM canal_configuracao cfg
         WHERE cfg.tenant_id = tenant_atual() AND cfg.canal_id = ${canalId}) AS feriados,
-      to_char(${agora}::timestamptz AT TIME ZONE t.fuso, 'YYYY-MM-DD')        AS data_local,
-      EXTRACT(ISODOW FROM (${agora}::timestamptz AT TIME ZONE t.fuso))::int AS dia_iso,
-      to_char(${agora}::timestamptz AT TIME ZONE t.fuso, 'HH24:MI')          AS hora_local
+      -- ⚠️ Data, dia e hora locais saem em TS (fuso.ts): fuso inválido no AT TIME ZONE derrubava a consulta.
+      t.fuso
       FROM tenant t
       LEFT JOIN usuario_canal uc ON uc.tenant_id = t.id AND uc.canal_id = ${canalId}
       -- ⚠️ Só usuário ATIVO conta: desligado da empresa não segura o agente.
@@ -102,6 +102,7 @@ export async function quemAtende(
      WHERE t.id = tenant_atual()
      GROUP BY t.fuso`
 
+  const local = momentoNoFuso(agora, linha?.fuso)
   return {
     vinculados: linha?.vinculados ?? 0,
     logados: linha?.logados ?? 0,
@@ -109,7 +110,7 @@ export async function quemAtende(
     // ⚠️ Feriado do número (P11, `canal_configuracao.feriados`) fecha o dia local
     //    inteiro — a mesma régua das ativas (`situacaoDoExpediente`): no feriado a
     //    ausência responde e o agente entra, como fora do expediente.
-    foraDoExpediente: foraDoExpediente(linha?.horario ?? null, linha?.dia_iso ?? 1, linha?.hora_local ?? '12:00')
-      || (!!linha?.data_local && ehFeriado(normalizarFeriados(linha.feriados), linha.data_local)),
+    foraDoExpediente: foraDoExpediente(linha?.horario ?? null, local.diaIso, local.hora)
+      || ehFeriado(normalizarFeriados(linha?.feriados), local.data),
   }
 }

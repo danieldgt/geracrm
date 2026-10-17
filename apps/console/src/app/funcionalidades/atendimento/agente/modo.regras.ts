@@ -151,6 +151,20 @@ export function pedidoDeConfirmacao(atual: ModoAgente | null, novo: ModoAgente, 
       }
 }
 
+/**
+ * Tirar o recorte de um número que CONTINUA autônomo solta o robô para qualquer
+ * hora e qualquer cliente: pede "autonomo" digitado, como a API (P14).
+ */
+export function pedidoAoTirarRecorte(modoSalvo: ModoAgente, modoNovo: ModoAgente, tinhaRecorte: boolean, recorteNovo: RecorteAgente | null):
+  { titulo: string; mensagem: string; acao: string; digitar: string } | null {
+  if (!(modoSalvo === 'autonomo' && modoNovo === 'autonomo' && tinhaRecorte && recorteNovo === null)) return null
+  return {
+    titulo: 'Tirar o recorte do agente autônomo?',
+    mensagem: 'Sem recorte, o agente responde sozinho a qualquer hora e a qualquer cliente deste número.',
+    acao: 'Tirar o recorte', digitar: textoDeConfirmacao('autonomo'),
+  }
+}
+
 // ─── Reserva de LLM (P5) ───────────────────────────────────────────────────
 
 /** Uma linha sobre a reserva de provedor; `tom` para o badge. */
