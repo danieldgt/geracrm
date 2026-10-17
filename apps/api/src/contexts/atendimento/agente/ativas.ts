@@ -1,4 +1,4 @@
-import { calcularJanela, contarVariaveis, lerConfigAtivas, normalizarFeriados, permiteTextoLivre, type ConfigAtivas } from '@geracrm/shared'
+import { calcularJanela, templateDeRetornoCompativel, lerConfigAtivas, normalizarFeriados, permiteTextoLivre, type ConfigAtivas } from '@geracrm/shared'
 import type { Sql } from '../../../db/index.js'
 import { proximaAbertura, situacaoDoExpediente, type HorarioAtendimento } from '../expediente.js'
 
@@ -30,7 +30,8 @@ export interface TemplateDaAtiva {
   readonly id: string
   /** Status da Meta da versão vigente (`APPROVED` se houver uma aprovada); `null` = template apagado. */
   readonly status: string | null
-  readonly variaveis: number
+  /** Nenhuma variável ou só {{1}} (`templateDeRetornoCompativel`). */
+  readonly compativel: boolean
 }
 
 export interface ContextoAtiva {
@@ -69,7 +70,7 @@ export function decidirAtiva(c: ContextoAtiva, agora: Date): DecisaoAtiva {
   if (c.tipoCanal === 'whatsapp_oficial' && !permiteTextoLivre(calcularJanela(c.ultimaEntranteEm, agora))) {
     if (!c.config.templateRetorno) return { acao: 'recusar', motivo: 'sem_template' }
     if (!c.template || c.template.status !== 'APPROVED') return { acao: 'recusar', motivo: 'template_indisponivel' }
-    if (c.template.variaveis > 1) return { acao: 'recusar', motivo: 'template_incompativel' }
+    if (!c.template.compativel) return { acao: 'recusar', motivo: 'template_incompativel' }
     return { acao: 'template', templateId: c.template.id }
   }
   return { acao: 'texto' }
@@ -132,6 +133,6 @@ export async function lerTemplate(tx: Sql, templateId: string): Promise<Template
      WHERE tv.tenant_id = tenant_atual() AND tv.template_id = ${templateId}
      ORDER BY (tv.status_meta = 'APPROVED') DESC, tv.versao DESC
      LIMIT 1`
-  if (!v) return { id: templateId, status: null, variaveis: 0 }
-  return { id: templateId, status: v.status_meta, variaveis: contarVariaveis(v.corpo?.body?.texto ?? '') }
+  if (!v) return { id: templateId, status: null, compativel: true }
+  return { id: templateId, status: v.status_meta, compativel: templateDeRetornoCompativel(v.corpo?.body?.texto ?? '') }
 }

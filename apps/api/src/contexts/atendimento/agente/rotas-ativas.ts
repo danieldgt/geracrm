@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import {
-  ATIVAS_PADRAO, contarVariaveis, corpoAtivas, lerConfigAtivas, normalizarFeriados,
+  ATIVAS_PADRAO, contarVariaveis, corpoAtivas, lerConfigAtivas, normalizarFeriados, templateDeRetornoCompativel,
   type EstadoAtivas, type TemplateAprovadoResumo,
 } from '@geracrm/shared'
 import { exigirTenant } from '../../../plugins/tenant.js'
@@ -65,6 +65,7 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
           config,
           padroes: ATIVAS_PADRAO,
           feriados,
+          fuso,
           tipoCanal: l.tipo,
           exigeTemplateForaDaJanela: l.tipo === 'whatsapp_oficial',
           horarioConfigurado: !!l.horario && Object.keys(l.horario).length > 0,
@@ -111,7 +112,8 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
             SELECT tv.corpo FROM template_versao tv
              WHERE tv.tenant_id = tenant_atual() AND tv.template_id = ${corpo.templateRetorno} AND tv.status_meta = 'APPROVED'`
           if (!tpl) return { tipo: 'template_indisponivel' as const }
-          if (contarVariaveis(tpl.corpo?.body?.texto ?? '') > 1) return { tipo: 'template_incompativel' as const }
+          // Mesma régua do envio (envio-template.ts): nenhuma variável ou SÓ {{1}}.
+          if (!templateDeRetornoCompativel(tpl.corpo?.body?.texto ?? '')) return { tipo: 'template_incompativel' as const }
         }
 
         const antes = { ...lerConfigAtivas(cfg.ativas), feriados: normalizarFeriados(cfg.feriados) }
@@ -195,5 +197,8 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
 
 function resumoTemplate(t: { id: string; nome: string; idioma: string; categoria: string; corpo: { body?: { texto?: string } } }): TemplateAprovadoResumo {
   const corpo = t.corpo?.body?.texto ?? ''
-  return { id: t.id, nome: t.nome, idioma: t.idioma, categoria: t.categoria, corpo, variaveis: contarVariaveis(corpo) }
+  return {
+    id: t.id, nome: t.nome, idioma: t.idioma, categoria: t.categoria, corpo,
+    variaveis: contarVariaveis(corpo), compativel: templateDeRetornoCompativel(corpo),
+  }
 }

@@ -61,6 +61,10 @@ describe('CanalMetaOficial', () => {
       messaging_product: 'whatsapp', recipient_type: 'individual', to: '5581999990000', type: 'template',
       template: { name: 'retorno_pedido', language: { code: 'pt_BR' }, components: [{ type: 'body', parameters: [{ type: 'text', text: 'Joana' }] }] },
     })
+    // 132xxx (template inexistente/pausado/parâmetro errado) é PERMANENTE: resposta_inesperada, nunca 'indisponivel'.
+    const recusado = new CanalMetaOficial(cred, { buscar: fakeFetch(400, { error: { code: 132001, message: 'Template name does not exist' } }) })
+    expect(await recusado.enviarTemplate('5581999990000', { nome: 'x', idioma: 'pt_BR', variaveis: [] }))
+      .toMatchObject({ ok: false, motivo: 'resposta_inesperada', detalhe: expect.stringContaining('132001') })
     // Sem variáveis, sem `components` (a Meta recusa parâmetro que o template não declara).
     await canal.enviarTemplate('5581999990000', { nome: 'aviso', idioma: 'pt_BR', variaveis: [] })
     expect((corpos[1] as { template: object }).template).toEqual({ name: 'aviso', language: { code: 'pt_BR' } })

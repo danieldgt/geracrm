@@ -89,7 +89,7 @@ describe('GET /v1/canais/:id/agente/ativas', () => {
     const r = await pedir('GET', URL_ATIVAS)
     expect(r.statusCode).toBe(200)
     expect(r.json()).toMatchObject({
-      config: ATIVAS_PADRAO, padroes: ATIVAS_PADRAO, feriados: [], tipoCanal: 'whatsapp_oficial',
+      config: ATIVAS_PADRAO, padroes: ATIVAS_PADRAO, feriados: [], fuso: 'America/Sao_Paulo', tipoCanal: 'whatsapp_oficial',
       exigeTemplateForaDaJanela: true, horarioConfigurado: false, expediente: { aberto: true }, suspensao: null, template: null,
     })
   })
@@ -134,12 +134,14 @@ describe('PUT /v1/canais/:id/agente/ativas', () => {
   it('template de retorno: só aprovado e com no máximo {{1}}', async () => {
     const pendente = await novoTemplate('retorno_pendente', 'PENDING')
     const duas = await novoTemplate('retorno_duas', 'APPROVED', 'Oi {{1}}, pedido {{2}}')
+    const soDois = await novoTemplate('retorno_so_dois', 'APPROVED', 'Seu pedido {{2}} está salvo')
+    expect((await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, templateRetorno: soDois })).json()).toMatchObject({ erro: 'ativas.template_incompativel' })
     const bom = await novoTemplate('retorno_bom', 'APPROVED')
     expect((await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, templateRetorno: pendente })).json()).toMatchObject({ erro: 'ativas.template_indisponivel' })
     expect((await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, templateRetorno: duas })).json()).toMatchObject({ erro: 'ativas.template_incompativel' })
     expect((await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, templateRetorno: bom })).statusCode).toBe(200)
     const g = (await pedir('GET', URL_ATIVAS)).json()
-    expect(g.template).toMatchObject({ id: bom, nome: 'retorno_bom', status: 'APPROVED', variaveis: 1 })
+    expect(g.template).toMatchObject({ id: bom, nome: 'retorno_bom', status: 'APPROVED', variaveis: 1, compativel: true })
   })
 
   it('número sem agente configurado → 409 nomeado', async () => {

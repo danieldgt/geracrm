@@ -1,5 +1,4 @@
 import { Component, ChangeDetectionStrategy, inject, input, signal, computed, effect, untracked } from '@angular/core'
-import { DatePipe } from '@angular/common'
 import type { EstadoAtivas, TemplateAprovadoResumo } from '@geracrm/shared'
 import {
   BadgeComponente, BotaoComponente, EsqueletoComponente, EstadoComponente, PainelComponente, ToastServico,
@@ -8,7 +7,7 @@ import { ehSemPermissao } from './agente.servico.js'
 import { AtivasServico } from './ativas.servico.js'
 import {
   adicionarFeriado, badgeStatusTemplate, erroDaApi, feriadoDeData, removerFeriado, rotuloFeriado, rotuloSuspensao,
-  validarAtivas, type ErrosAtivas, type FormAtivas,
+  formatarNoFuso, validarAtivas, type ErrosAtivas, type FormAtivas,
 } from './ativas.regras.js'
 
 /**
@@ -28,7 +27,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
 @Component({
   selector: 'app-agente-ativas',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, PainelComponente, EstadoComponente, EsqueletoComponente, BotaoComponente, BadgeComponente],
+  imports: [PainelComponente, EstadoComponente, EsqueletoComponente, BotaoComponente, BadgeComponente],
   template: `
     @switch (estado()) {
       @case ('carregando') {
@@ -57,7 +56,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
 
             @if (d.suspensao; as s) {
               <div class="aviso aviso--erro" role="status">
-                <strong>Ativas suspensas desde {{ s.desde | date: 'dd/MM HH:mm' }}.</strong>
+                <strong>Ativas suspensas desde {{ quando(s.desde, d.fuso) }}.</strong>
                 {{ suspensao(s.motivo) }}
                 <div class="acoes-aviso">
                   <ui-botao variante="secundario" (click)="liberar()" [carregando]="liberando()">Liberar agora</ui-botao>
@@ -74,7 +73,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
                 <p class="linha">Dentro do expediente agora — as ativas saem na hora marcada.</p>
               } @else {
                 <p class="linha">Fora do expediente agora.
-                  @if (d.expediente.proximaAbertura) { As ativas vencidas saem na próxima abertura: <span class="txt-dados">{{ d.expediente.proximaAbertura | date: 'EEE dd/MM HH:mm' }}</span>. }
+                  @if (d.expediente.proximaAbertura) { As ativas vencidas saem na próxima abertura: <span class="txt-dados">{{ quando(d.expediente.proximaAbertura, d.fuso) }}</span>. }
                   @else { Nenhum dia aberto nas próximas semanas — as ativas ficam esperando. }
                 </p>
               }
@@ -136,7 +135,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
                     <option value="">Nenhum — recusar fora de 24 h</option>
                     @if (d.template; as t) { @if (!temNaLista(t.id)) { <option [value]="t.id">{{ t.nome }} ({{ t.idioma }})</option> } }
                     @for (t of templates(); track t.id) {
-                      <option [value]="t.id" [disabled]="t.variaveis > 1">{{ t.nome }} ({{ t.idioma }}){{ t.variaveis > 1 ? ' — variáveis demais' : '' }}</option>
+                      <option [value]="t.id" [disabled]="!t.compativel">{{ t.nome }} ({{ t.idioma }}){{ t.compativel ? '' : ' — usa variável além do primeiro nome' }}</option>
                     }
                   </select>
                   @if (erros().templateRetorno; as e) { <span class="msg-erro">{{ e }}</span> }
@@ -245,6 +244,8 @@ export class AgenteAtivasComponente {
   }
 
   rotulo(f: string): string { return rotuloFeriado(f) }
+  /** Data no fuso do TENANT (a loja), não no do navegador. */
+  quando(iso: string, fuso: string): string { return formatarNoFuso(iso, fuso) }
   suspensao(m: string): string { return rotuloSuspensao(m) }
   badge(s: string) { return badgeStatusTemplate(s) }
   temNaLista(id: string): boolean { return this.templates().some((t) => t.id === id) }

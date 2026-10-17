@@ -70,9 +70,22 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
       // Só banco; erro NOSSO (banco) → 500 para a Meta reenviar.
       if (ev.tipo === 'qualidade' || ev.tipo === 'template_status') {
         try {
-          const canais = await sql<{ tenant_id: string; canal_id: string }[]>`
+          let canais = await sql<{ tenant_id: string; canal_id: string }[]>`
             SELECT tenant_id, canal_id
               FROM canais_meta_por_waba(${ev.wabaId}, ${ev.tipo === 'qualidade' ? ev.telefone : null})`
+          if (canais.length === 0 && ev.tipo === 'qualidade' && ev.telefone) {
+            // display_phone_number divergente do cadastro (formato, número trocado):
+            // com UM canal só na WABA não há ambiguidade — aplica a ele; com
+            // vários, adivinhar suspenderia o número errado.
+            const daWaba = await sql<{ tenant_id: string; canal_id: string }[]>`
+              SELECT tenant_id, canal_id FROM canais_meta_por_waba(${ev.wabaId}, NULL)`
+            if (daWaba.length === 1) canais = daWaba
+            else if (daWaba.length > 1) {
+              req.log.warn({ wabaId: ev.wabaId, telefone: ev.telefone, canais: daWaba.length },
+                'webhook meta: telefone da qualidade não casa com nenhum número da WABA — evento não aplicado')
+              continue
+            }
+          }
           if (canais.length === 0) {
             // ⚠️ Sem alvo é falha PERMANENTE: 200 + log (a WABA pode ainda não
             //    ter sido sincronizada — o worker de pós-ingestão preenche).
@@ -124,6 +137,10 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
           //    quando o worker roda: o cliente acabou de escrever.
           const r = await comTenantServico(canal.tenant_id, (tx) => ingerirMensagemEntrante(tx, canal.canal_id, entrante))
           if (r.ok) req.log.info({ canalId: canal.canal_id, conversaId: r.conversaId, duplicada: r.duplicada }, 'mensagem entrante ingerida (meta)')
+          if (r.ok && r.posIngestaoFalhou) {
+            req.log.warn({ canalId: canal.canal_id, conversaId: r.conversaId, erro: r.posIngestaoFalhou },
+              'pós-ingestão NÃO agendada: ausência e mídia desta mensagem não sairão')
+          }
         } else if (ev.status === 'enviada' || ev.status === 'entregue' || ev.status === 'lida') {
           await comTenantServico(canal.tenant_id, (tx) => registrarStatusMensagem(tx, ev.idExterno, ev.status as 'enviada' | 'entregue' | 'lida'))
         }

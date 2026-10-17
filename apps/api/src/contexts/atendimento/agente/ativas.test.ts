@@ -10,7 +10,7 @@ import { ATIVAS_PADRAO } from '@geracrm/shared'
  * aprovado ou recusa nomeada. Banco real; WhatsApp falso (adaptador mockado
  * pelo contrato da porta — nunca a Graph API).
  */
-const espiao = vi.hoisted(() => ({ templates: [] as { para: string; nome: string; idioma: string; variaveis: readonly string[] }[] }))
+const espiao = vi.hoisted(() => ({ templates: [] as { para: string; nome: string; idioma: string; variaveis: readonly string[] }[], falha: null as null | { motivo: string; detalhe: string } }))
 vi.mock('../canais/fabrica.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../canais/fabrica.js')>()
   return {
@@ -20,6 +20,7 @@ vi.mock('../canais/fabrica.js', async (importOriginal) => {
       async enviarTexto() { return { ok: true, idExterno: 'texto-1' } },
       async enviarTemplate(para: string, t: { nome: string; idioma: string; variaveis: readonly string[] }) {
         espiao.templates.push({ para, ...t })
+        if (espiao.falha) return { ok: false, ...espiao.falha }
         return { ok: true, idExterno: `tpl-${espiao.templates.length}` }
       },
     }),
@@ -112,7 +113,7 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
-  textos = []; espiao.templates = []
+  textos = []; espiao.templates = []; espiao.falha = null
   await dono`DELETE FROM agente_retorno WHERE tenant_id = ${T}`
   await dono`DELETE FROM mensagem WHERE tenant_id = ${T}`
   await dono`DELETE FROM canal_configuracao WHERE tenant_id = ${T}`
@@ -258,6 +259,23 @@ describe('⚠️ Oficial fora da janela de 24h: template aprovado ou recusa (ADR
     const [m] = await dono<{ conteudo: { texto: string; template: { nome: string }; automatica: string }; status: string }[]>`
       SELECT conteudo, status FROM mensagem WHERE tenant_id = ${T} AND conversa_id = ${CONV_OF}`
     expect(m).toMatchObject({ status: 'enviada', conteudo: { texto: 'Oi, Joana! Seu pedido continua salvo por aqui.', template: { nome: 'retorno_p11' }, automatica: 'retorno' } })
+  })
+
+  it('⚠️ a Meta recusa o template no envio (132001, não existe) → recusado na hora, sem reagendar nem gastar a cadência', async () => {
+    await configurar(OF, { templateRetorno: TPL })
+    await template('APPROVED')
+    espiao.falha = { motivo: 'resposta_inesperada', detalhe: 'template recusado pela Meta (132001)' }
+    await agendar(CONV_OF, OF)
+    expect(await processar()).toMatchObject({ recusados: 1, reagendados: 0, enviados: 0 })
+    expect(await retornos(CONV_OF)).toEqual([expect.objectContaining({ estado: 'recusado', detalhe: 'permanente: resposta_inesperada' })])
+  })
+
+  it('template cuja única variável é {{2}} → incompatível (só {{1}} é preenchível)', async () => {
+    await configurar(OF, { templateRetorno: TPL })
+    await template('APPROVED', 'Seu pedido {{2}} está salvo.')
+    await agendar(CONV_OF, OF)
+    await processar()
+    expect((await retornos(CONV_OF))[0]).toMatchObject({ estado: 'recusado', detalhe: 'template_incompativel' })
   })
 
   it('⚠️ fronteira da janela: 23h59 depois da última do cliente ainda é texto; 24h exatas já é template', async () => {

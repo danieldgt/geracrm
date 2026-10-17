@@ -37,7 +37,10 @@ export type ResultadoAusencia =
   | 'sem_mensagem_configurada'
   | 'ja_respondida'
   | 'atendente_presente'
+  /** Recusa NOSSA (opt-out, canal arquivado, sem credencial, conversa sumiu): final. */
   | 'envio_recusado'
+  /** Falha de TRANSPORTE do provedor: quem chama pode tentar de novo. */
+  | 'envio_falhou_transporte'
 
 /** ⚠️ Uma resposta a cada 6h por conversa. Ver `responderAusencia`. */
 const HORAS_ENTRE_RESPOSTAS = 6
@@ -80,9 +83,11 @@ export async function responderAusencia(
                       WHERE m.tenant_id = cfg.tenant_id AND m.conversa_id = ${conversaId}
                         AND m.direcao = 'saliente'
                         AND m.conteudo->>'automatica' = 'ausencia'
-                        -- A que FALHOU não conta: o worker de pós-ingestão (P11)
-                        -- tenta de novo, e o cliente não recebeu nada ainda.
-                        AND m.status IS DISTINCT FROM 'falhou'
+                        -- A que falhou por TRANSPORTE não conta: o worker de
+                        -- pós-ingestão (P11) tenta de novo. A RECUSADA (opt-out,
+                        -- canal arquivado) conta: repetir seria nova bolha a cada
+                        -- mensagem do cliente.
+                        AND NOT (coalesce(m.status, '') = 'falhou' AND coalesce(m.conteudo->>'falha', '') = 'transporte')
                         AND m.criado_em > ${agora}::timestamptz - make_interval(hours => ${HORAS_ENTRE_RESPOSTAS}))
                AS ja_respondida
         FROM canal_configuracao cfg
@@ -113,5 +118,15 @@ export async function responderAusencia(
     //    problema oposto.
     { ehDisparo: false, marcador: 'ausencia' },
   )
-  return r.ok ? 'enviada' : 'envio_recusado'
+  if (r.ok) return 'enviada'
+  if (r.classe !== 'transporte') return 'envio_recusado'
+  // ⚠️ Marca a falha de TRANSPORTE na própria mensagem: é ela que deixa de
+  //    contar como "já respondida" e libera o retry — e só ela.
+  if (r.mensagemId) {
+    const mensagemId = r.mensagemId
+    await comTenantServico(tenantId, (tx: Sql) => tx`
+      UPDATE mensagem SET conteudo = conteudo || '{"falha":"transporte"}'::jsonb
+       WHERE tenant_id = tenant_atual() AND id = ${mensagemId}`)
+  }
+  return 'envio_falhou_transporte'
 }

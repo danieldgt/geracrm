@@ -77,6 +77,10 @@ export async function rotasWebhook(app: FastifyInstance): Promise<void> {
           { canalId, conversaId: r.conversaId, duplicada: r.duplicada, leadNovo: r.leadNovo },
           'mensagem entrante ingerida',
         )
+        if (r.posIngestaoFalhou) {
+          req.log.warn({ canalId, conversaId: r.conversaId, erro: r.posIngestaoFalhou },
+            'pós-ingestão NÃO agendada: ausência e mídia desta mensagem não sairão')
+        }
         // ⚠️ O NOTIFY é disparado pela TRIGGER do outbox no COMMIT (migration
         //    0026) — transacional por construção. Reentrega (duplicada) não
         //    grava outbox, então não republica.

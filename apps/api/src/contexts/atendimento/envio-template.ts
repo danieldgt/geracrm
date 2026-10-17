@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { contarVariaveis, primeiroNome } from '@geracrm/shared'
+import { contarVariaveis, primeiroNome, templateDeRetornoCompativel } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../../db/index.js'
 import { decifrar } from '../integracao/cofre.js'
 import { criarCanal } from './canais/fabrica.js'
@@ -65,9 +65,8 @@ export async function enviarTemplateNaConversa(
        WHERE t.tenant_id = tenant_atual() AND t.id = ${templateId}`
     if (!tpl) return { ok: false, classe: 'recusa', motivo: 'template_indisponivel' }
     const corpo = tpl.corpo?.body?.texto ?? ''
-    const n = contarVariaveis(corpo)
-    if (n > 1 || (n === 1 && !/\{\{\s*1\s*\}\}/.test(corpo))) return { ok: false, classe: 'recusa', motivo: 'template_incompativel' }
-    const variaveis = n === 1 ? [primeiroNome(ctx.contato)] : []
+    if (!templateDeRetornoCompativel(corpo)) return { ok: false, classe: 'recusa', motivo: 'template_incompativel' }
+    const variaveis = contarVariaveis(corpo) === 1 ? [primeiroNome(ctx.contato)] : []
     const renderizado = variaveis.length ? corpo.replace(/\{\{\s*1\s*\}\}/g, variaveis[0]!) : corpo
 
     const mensagemId = randomUUID()

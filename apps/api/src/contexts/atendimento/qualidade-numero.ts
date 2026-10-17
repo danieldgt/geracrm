@@ -22,7 +22,7 @@ export const TIPO_ALERTA_QUALIDADE = 'qualidade_numero'
 /** Teto de pessoas notificadas por evento — e ele é visível no retorno. */
 const TETO_NOTIFICADOS = 20
 
-export type ResultadoQualidade = 'suspendeu' | 'ja_suspensa' | 'liberou' | 'sem_mudanca'
+export type ResultadoQualidade = 'suspendeu' | 'ja_suspensa' | 'agravou' | 'liberou' | 'sem_mudanca'
 
 /** Aplica um evento de qualidade/conta a UM canal (tenant já setado). */
 export async function aplicarQualidadeNumero(
@@ -48,18 +48,31 @@ export async function aplicarQualidadeNumero(
   }
 
   if (ev.baixa === true) {
-    if (c.suspensa) return { resultado: 'ja_suspensa', notificados: 0 }
     const motivo = `${campo}:${ev.evento}${ev.qualidade ? `:${ev.qualidade}` : ''}`
+    const texto = campo === 'conta'
+      ? `A Meta restringiu a conta do número ${c.nome} (${ev.evento}). Retornos do agente e campanhas deste número foram `
+        + 'suspensos; respostas a quem escreve continuam. Confira a conta no Gerenciador do WhatsApp e libere na tela do agente.'
+      : `A qualidade do número ${c.nome} caiu (${ev.qualidade ?? ev.evento}). Retornos do agente e campanhas deste número `
+        + 'foram suspensos até a Meta normalizar; respostas a quem escreve continuam.'
+    if (c.suspensa) {
+      // ⚠️ Restrição de CONTA sobre uma suspensão de QUALIDADE agrava o motivo:
+      //    sem isto, o UNFLAGGED seguinte liberaria uma conta restrita.
+      if (campo === 'conta' && !(c.motivo ?? '').startsWith('conta:')) {
+        await tx`
+          UPDATE canal_conectado SET ativas_suspensas_motivo = ${motivo}
+           WHERE tenant_id = tenant_atual() AND id = ${canalId}`
+        await tx`
+          UPDATE alerta SET mensagem = ${texto}
+           WHERE tenant_id = tenant_atual() AND tipo = ${TIPO_ALERTA_QUALIDADE} AND resolvido_em IS NULL`
+        return { resultado: 'agravou', notificados: 0 }
+      }
+      return { resultado: 'ja_suspensa', notificados: 0 }
+    }
     await tx`
       UPDATE canal_conectado SET ativas_suspensas_em = ${agora}, ativas_suspensas_motivo = ${motivo}
        WHERE tenant_id = tenant_atual() AND id = ${canalId}`
-    const texto = campo === 'conta'
-      ? `A Meta restringiu a conta do número ${c.nome} (${ev.evento}). As mensagens ativas do agente foram suspensas; `
-        + 'respostas a quem escreve continuam. Confira a conta no Gerenciador do WhatsApp e libere na tela do agente.'
-      : `A qualidade do número ${c.nome} caiu (${ev.qualidade ?? ev.evento}). As mensagens ativas do agente foram suspensas `
-        + 'até a Meta normalizar; respostas a quem escreve continuam.'
     await abrirAlertaQualidade(tx, texto)
-    const notificados = await notificarQualidade(tx, canalId, `Número ${c.nome}: ativas suspensas pela Meta (${ev.qualidade ?? ev.evento})`)
+    const notificados = await notificarQualidade(tx, canalId, `Número ${c.nome}: retornos e campanhas suspensos pela Meta (${ev.qualidade ?? ev.evento})`)
     return { resultado: 'suspendeu', notificados }
   }
 
@@ -163,8 +176,8 @@ export function statusDoTemplate(evento: string): 'APPROVED' | 'REJECTED' | 'PAU
 export async function aplicarStatusTemplate(
   tx: Sql, ev: Extract<EventoMeta, { tipo: 'template_status' }>, agora: Date,
 ): Promise<{ atualizado: boolean; templateId: string | null }> {
-  const [alvo] = await tx<{ template_id: string; versao: number; status_meta: string }[]>`
-    SELECT tv.template_id, tv.versao, tv.status_meta
+  const [alvo] = await tx<{ template_id: string; versao: number; status_meta: string; status_atualizado_em: Date | null }[]>`
+    SELECT tv.template_id, tv.versao, tv.status_meta, tv.status_atualizado_em
       FROM template t
       JOIN template_versao tv ON tv.tenant_id = t.tenant_id AND tv.template_id = t.id
      WHERE t.tenant_id = tenant_atual() AND t.nome = ${ev.nome}
@@ -172,11 +185,17 @@ export async function aplicarStatusTemplate(
      ORDER BY (${ev.templateIdExterno}::text IS NOT NULL AND tv.id_externo = ${ev.templateIdExterno}) DESC, tv.versao DESC
      LIMIT 1`
   if (!alvo) return { atualizado: false, templateId: null }
+  // ⚠️ Fora de ordem: evento GERADO antes do último aplicado não regride o
+  //    status (PAUSED de ontem chegando depois do REINSTATED de hoje).
+  const momento = ev.momento ?? agora
+  if (alvo.status_atualizado_em && momento.getTime() < alvo.status_atualizado_em.getTime()) {
+    return { atualizado: false, templateId: alvo.template_id }
+  }
 
   const status = statusDoTemplate(ev.status)
   if (status === 'APPROVED' && alvo.status_meta !== 'APPROVED') {
     await tx`
-      UPDATE template_versao SET status_meta = 'DISABLED', status_atualizado_em = ${agora}
+      UPDATE template_versao SET status_meta = 'DISABLED', status_atualizado_em = ${momento}
        WHERE tenant_id = tenant_atual() AND template_id = ${alvo.template_id}
          AND status_meta = 'APPROVED' AND versao <> ${alvo.versao}`
   }
@@ -188,7 +207,7 @@ export async function aplicarStatusTemplate(
                              ELSE motivo_rejeicao END,
       id_externo = coalesce(id_externo, ${ev.templateIdExterno}::text),
       status_evento_meta = ${ev.status},
-      status_atualizado_em = ${agora},
+      status_atualizado_em = ${momento},
       revisado_em = ${agora}
      WHERE tenant_id = tenant_atual() AND template_id = ${alvo.template_id} AND versao = ${alvo.versao}`
   return { atualizado: true, templateId: alvo.template_id }

@@ -56,7 +56,9 @@ vi.mock('./canais/fabrica.js', async (importOriginal) => {
 const { criarApp } = await import('../../app.js')
 const { encerrarBanco, comTenantServico } = await import('../../db/index.js')
 const { cifrar } = await import('../integracao/cofre.js')
-const { processarPosIngestao, ATRASOS_POS_INGESTAO_MS, MAX_TENTATIVAS_POS_INGESTAO } = await import('../../workers/pos-ingestao.js')
+const { processarPosIngestao, purgarPosIngestao, ATRASOS_POS_INGESTAO_MS, MAX_TENTATIVAS_POS_INGESTAO } = await import('../../workers/pos-ingestao.js')
+const { normalizarTelefone } = await import('@geracrm/shared')
+const { ingerirMensagemEntrante } = await import('./ingestao-mensagem.js')
 
 const T = 'b11e0000-0000-4000-8000-000000000001'
 const PV = 'b11e0000-1111-4000-8000-000000000001'
@@ -257,6 +259,87 @@ describe('Worker de pós-ingestão — a rede sai daqui, com retry', () => {
     const [auto] = await tarefas()
     expect(auto).toMatchObject({ tipo: 'automatica', estado: 'feita', tentativas: 2 })
     expect(auto!.detalhe).toContain('ausencia=enviada')
+  })
+})
+
+describe('Ausência no worker: só transporte re-tenta; atrasada ou já respondida não sai', () => {
+  const textoDe = (id: string) => ({ ...imagemPlugZapi(id), image: undefined, text: { message: 'oi' } })
+  const bolhas = () => dono<{ status: string }[]>`
+    SELECT status FROM mensagem WHERE tenant_id = ${T} AND direcao = 'saliente' AND conteudo->>'automatica' = 'ausencia'`
+
+  it('⚠️ contato em OPT-OUT escreve duas vezes: no máximo 1 tentativa, 1 bolha, e o throttle de 6 h segura a segunda', async () => {
+    const chave = normalizarTelefone('5581998610011')!.chaveBloqueio
+    await dono`INSERT INTO lista_bloqueio (tenant_id, chave_bloqueio, motivo) VALUES (${T}, ${chave}, 'opt_out') ON CONFLICT DO NOTHING`
+    try {
+      await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: textoDe('P11-OPT-1') })
+      const r1 = await processarPosIngestao(dono as never, { somenteTenant: T }, new Date())
+      expect(r1).toMatchObject({ processadas: 1, feitas: 1, reagendadas: 0 })   // recusa é FINAL
+      expect(espioes.enviados).toEqual([])                                         // o gateway barrou antes do adaptador
+      expect(await bolhas()).toEqual([{ status: 'falhou' }])
+
+      await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: { ...textoDe('P11-OPT-2'), momment: Date.now() + 1000 } })
+      await processarPosIngestao(dono as never, { somenteTenant: T }, new Date(Date.now() + 2000))
+      expect(await bolhas()).toHaveLength(1)                                       // nenhuma bolha repetida
+      const ts = await tarefas()
+      expect(ts.map((t) => [t.estado, t.tentativas])).toEqual([['feita', 1], ['feita', 1]])
+      expect(ts.some((t) => t.detalhe?.includes('ausencia=ja_respondida'))).toBe(true)
+    } finally {
+      await dono`DELETE FROM lista_bloqueio WHERE tenant_id = ${T}`
+    }
+  })
+
+  it('tarefa de ausência com mais de 15 min é descartada (não responde fora de hora)', async () => {
+    await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: textoDe('P11-VELHA') })
+    await dono`UPDATE tarefa_pos_ingestao SET criado_em = now() - interval '16 minutes' WHERE tenant_id = ${T}`
+    expect(await processarPosIngestao(dono as never, { somenteTenant: T }, new Date())).toMatchObject({ descartadas: 1, feitas: 0 })
+    expect(espioes.enviados).toEqual([])
+    expect((await tarefas())[0]!.detalhe).toContain('atrasada')
+  })
+
+  it('alguém já respondeu depois da mensagem → a ausência é descartada', async () => {
+    await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: textoDe('P11-RESPONDIDA') })
+    const [c] = await dono<{ id: string }[]>`SELECT id FROM conversa WHERE tenant_id = ${T}`
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, criado_em)
+               VALUES (${T}, gen_random_uuid(), ${c!.id}, 'saliente', 'texto', '{"texto":"Oi! Já te ajudo."}'::jsonb, 'enviada', now() + interval '1 second')`
+    expect(await processarPosIngestao(dono as never, { somenteTenant: T }, new Date())).toMatchObject({ descartadas: 1 })
+    expect(espioes.enviados).toEqual([])
+  })
+})
+
+describe('Agendar a pós-ingestão falhou', () => {
+  it('a mensagem do cliente fica salva, o webhook responde 200 e a ingestão NOMEIA a falha (o webhook loga com a conversa)', async () => {
+    // Gatilho só para ESTE tenant: os outros arquivos de teste seguem intactos.
+    await dono.unsafe(`CREATE OR REPLACE FUNCTION p11_falha_pos() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.tenant_id = '${T}' THEN RAISE EXCEPTION 'falha simulada'; END IF; RETURN NEW; END $$`)
+    await dono.unsafe(`CREATE TRIGGER p11_falha_pos BEFORE INSERT ON tarefa_pos_ingestao FOR EACH ROW EXECUTE FUNCTION p11_falha_pos()`)
+    try {
+      const r = await comTenantServico(T, (tx) => ingerirMensagemEntrante(tx, NAO, {
+        deE164: '5581998610011', idExterno: 'P11-FALHA-POS', tipo: 'texto', texto: 'oi', recebidaEm: new Date(),
+      }))
+      expect(r).toMatchObject({ ok: true, duplicada: false, posIngestaoFalhou: expect.stringContaining('falha simulada') })
+      const w = await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: { ...imagemPlugZapi('P11-FALHA-POS-2') } })
+      expect(w.statusCode).toBe(200)
+      const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM mensagem WHERE tenant_id = ${T} AND direcao = 'entrante'`
+      expect(n!.n).toBe(2)
+      expect(await tarefas()).toEqual([])
+    } finally {
+      await dono.unsafe('DROP TRIGGER IF EXISTS p11_falha_pos ON tarefa_pos_ingestao')
+      await dono.unsafe('DROP FUNCTION IF EXISTS p11_falha_pos()')
+    }
+  })
+})
+
+describe('Retenção da tarefa_pos_ingestao', () => {
+  it('purga só as CONCLUÍDAS há mais de 30 dias; pendente nunca sai', async () => {
+    await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: imagemPlugZapi('P11-PURGA') })
+    // automatica: feita há 31 dias; midia: pendente velha.
+    await dono`UPDATE tarefa_pos_ingestao SET estado = 'feita', concluido_em = now() - interval '31 days'
+                WHERE tenant_id = ${T} AND tipo = 'automatica'`
+    await dono`UPDATE tarefa_pos_ingestao SET criado_em = now() - interval '60 days' WHERE tenant_id = ${T} AND tipo = 'midia'`
+    expect(await purgarPosIngestao(dono as never, new Date(), T)).toBe(1)
+    expect((await tarefas()).map((t) => [t.tipo, t.estado])).toEqual([['midia', 'pendente']])
+    await dono`UPDATE tarefa_pos_ingestao SET estado = 'falhou', concluido_em = now() - interval '29 days' WHERE tenant_id = ${T}`
+    expect(await purgarPosIngestao(dono as never, new Date(), T)).toBe(0)
   })
 })
 

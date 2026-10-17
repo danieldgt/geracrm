@@ -41,7 +41,9 @@ export type EventoMeta =
   | { tipo: 'status'; phoneNumberId: string; idExterno: string; status: string; timestamp: number }
   | { tipo: 'template_status'; wabaId: string; nome: string; idioma: string | null; status: string; motivo: string | null
       /** `message_template_id` — casa com `template_versao.id_externo` quando já submetido. */
-      templateIdExterno: string | null }
+      templateIdExterno: string | null
+      /** `entry.time` — quando a Meta gerou o evento; `null` se não veio. */
+      momento: Date | null }
   | EventoQualidadeMeta
   | { tipo: 'ignorado'; motivo: string }
 
@@ -104,8 +106,11 @@ export function parseWebhookMeta(corpo: unknown): EventoMeta[] {
 
   const eventos: EventoMeta[] = []
   for (const entryRaw of b.entry) {
-    const entry = entryRaw as { id?: string; changes?: unknown[] }
+    const entry = entryRaw as { id?: string; time?: number; changes?: unknown[] }
     const wabaId = entry.id ?? ''
+    // `entry.time` (segundos): quando a Meta gerou o evento — ordena status
+    // de template que chegam fora de ordem.
+    const momento = typeof entry.time === 'number' && entry.time > 0 ? new Date(entry.time * 1000) : null
     for (const chRaw of entry.changes ?? []) {
       const ch = chRaw as { field?: string; value?: Record<string, unknown> }
       const v = ch.value ?? {}
@@ -144,6 +149,7 @@ export function parseWebhookMeta(corpo: unknown): EventoMeta[] {
           status: String(v.event ?? 'UNKNOWN').toUpperCase(),
           motivo,
           templateIdExterno: typeof idTpl === 'number' || typeof idTpl === 'string' ? String(idTpl) : null,
+          momento,
         })
       } else if (ch.field === 'phone_number_quality_update' || ch.field === 'account_update') {
         const evento = String(v.event ?? ch.field).toUpperCase()

@@ -66,6 +66,10 @@ CREATE UNIQUE INDEX tarefa_pos_ingestao_unica
 CREATE INDEX tarefa_pos_ingestao_vencidas
     ON tarefa_pos_ingestao (executar_em) WHERE estado = 'pendente';
 
+-- Retenção: o worker purga as concluídas com mais de 30 dias, em lote, por aqui.
+CREATE INDEX tarefa_pos_ingestao_concluidas
+    ON tarefa_pos_ingestao (concluido_em) WHERE estado <> 'pendente';
+
 COMMENT ON TABLE tarefa_pos_ingestao IS
     'Passos pós-ingestão que fazem REDE (ausência, mídia), agendados na mesma transação '
     'da mensagem e executados pelo worker com retry. O webhook só grava, agenda e responde 200.';
@@ -78,7 +82,11 @@ ALTER TABLE canal_conectado
     ADD COLUMN ativas_suspensas_em     timestamptz,
     ADD COLUMN ativas_suspensas_motivo text,
     ADD COLUMN meta_waba_id            text,
-    ADD COLUMN meta_telefone           text;
+    ADD COLUMN meta_telefone           text,
+    -- Última vez que o worker conferiu o roteamento na credencial (e o erro, se
+    -- houve): é o rodízio — cada canal é decifrado no máximo a cada 10 min.
+    ADD COLUMN meta_roteamento_em      timestamptz,
+    ADD COLUMN meta_roteamento_erro    text;
 
 ALTER TABLE canal_conectado ADD CONSTRAINT canal_ativas_suspensas_coerente
     CHECK (ativas_suspensas_em IS NULL OR ativas_suspensas_motivo IS NOT NULL) NOT VALID;
@@ -126,6 +134,12 @@ COMMENT ON FUNCTION canais_meta_por_waba(text, text) IS
 
 ALTER TABLE agente_config
     ADD COLUMN ativas jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+-- Falhas de TRANSPORTE seguidas de um retorno (provedor fora). Distinto de
+-- `tentativa`, que é o passo da cadência: com teto, a mesma linha não fica
+-- reagendando para sempre.
+ALTER TABLE agente_retorno
+    ADD COLUMN falhas_transporte smallint NOT NULL DEFAULT 0;
 
 COMMENT ON COLUMN agente_config.ativas IS
     'Mensagens ativas do agente: {limiteDia, limiteSemana, templateRetorno (id do template)}. '

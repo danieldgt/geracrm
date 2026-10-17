@@ -114,7 +114,7 @@ beforeEach(async () => {
     await dono`DELETE FROM canal_saude_evento WHERE tenant_id = ${t}`
     await dono`DELETE FROM outbox WHERE tenant_id = ${t}`
     await dono`DELETE FROM template_versao WHERE tenant_id = ${t}`
-    await dono`UPDATE canal_conectado SET ativas_suspensas_em = NULL, ativas_suspensas_motivo = NULL, meta_waba_id = NULL, meta_telefone = NULL WHERE tenant_id = ${t}`
+    await dono`UPDATE canal_conectado SET ativas_suspensas_em = NULL, ativas_suspensas_motivo = NULL, meta_waba_id = NULL, meta_telefone = NULL, meta_roteamento_em = NULL WHERE tenant_id = ${t}`
   }
   await dono`INSERT INTO template_versao (tenant_id, template_id, versao, corpo, status_meta) VALUES
              (${A}, ${TPL_A}, 1, '{"body":{"texto":"Oi"}}'::jsonb, 'PENDING'),
@@ -142,6 +142,36 @@ describe('Roteamento por WABA', () => {
   it('o worker copia WABA e telefone (só dígitos) da credencial cifrada para as colunas de roteamento', async () => {
     const [c] = await dono<{ meta_waba_id: string; meta_telefone: string }[]>`SELECT meta_waba_id, meta_telefone FROM canal_conectado WHERE id = ${CANAL_A}`
     expect(c).toEqual({ meta_waba_id: WABA_A, meta_telefone: '15550783881' })
+  })
+
+  it('rodízio: conferido há menos de 10 min não é decifrado de novo; depois, é corrigido; credencial sem WABA registra o erro', async () => {
+    await dono`UPDATE canal_conectado SET meta_waba_id = 'ERRADO' WHERE id = ${CANAL_A}`
+    const agora = new Date()
+    expect(await sincronizarRoteamentoMeta(dono as never, agora, A)).toBe(0)
+    expect((await dono<{ w: string }[]>`SELECT meta_waba_id AS w FROM canal_conectado WHERE id = ${CANAL_A}`)[0]!.w).toBe('ERRADO')
+    expect(await sincronizarRoteamentoMeta(dono as never, new Date(agora.getTime() + 11 * 60_000), A)).toBe(1)
+    expect((await dono<{ w: string }[]>`SELECT meta_waba_id AS w FROM canal_conectado WHERE id = ${CANAL_A}`)[0]!.w).toBe(WABA_A)
+
+    await dono`UPDATE canal_conectado SET credenciais_cifradas = ${cifrar({ phoneNumberId: 'PN-P11-A2', token: 't' })}, meta_roteamento_em = NULL
+                WHERE id = ${CANAL_A2}`
+    try {
+      await sincronizarRoteamentoMeta(dono as never, agora, A)
+      const [c] = await dono<{ erro: string | null; em: Date | null }[]>`
+        SELECT meta_roteamento_erro AS erro, meta_roteamento_em AS em FROM canal_conectado WHERE id = ${CANAL_A2}`
+      expect(c).toMatchObject({ erro: 'credencial sem wabaId' })
+      expect(c!.em).not.toBeNull()   // carimbado: não volta a cada 2 s
+    } finally {
+      await dono`UPDATE canal_conectado SET credenciais_cifradas = ${cifrar({ telefone: '15550009999', wabaId: WABA_A, phoneNumberId: 'PN-P11-A2', token: 'tok' })}
+                  WHERE id = ${CANAL_A2}`
+    }
+  })
+
+  it('display_phone_number divergente: com UM canal na WABA aplica a ele; com vários, não aplica', async () => {
+    await postar(qualidade('FLAGGED', '19999999999', WABA_B))      // WABA_B tem só CANAL_B
+    expect((await canal(CANAL_B))[0]!.suspensa).not.toBeNull()
+    await postar(qualidade('FLAGGED', '19999999999', WABA_A))      // WABA_A tem dois
+    expect((await canal(CANAL_A))[0]!.suspensa).toBeNull()
+    expect((await canal(CANAL_A2))[0]!.suspensa).toBeNull()
   })
 
   it('WABA desconhecida → 200 e nada muda (falha permanente não trava a fila)', async () => {
@@ -215,6 +245,18 @@ describe('Restrição da conta (account_update)', () => {
     expect((await canal(CANAL_A))[0]!.suspensa).not.toBeNull()
   })
 
+  it('⚠️ restrição de conta chegando com suspensão de QUALIDADE ativa agrava o motivo; UNFLAGGED/GREEN não libera', async () => {
+    await postar(qualidade('FLAGGED'))
+    expect((await canal(CANAL_A))[0]).toMatchObject({ motivo: 'qualidade:FLAGGED' })
+    await postar(conta('ACCOUNT_RESTRICTION'))
+    expect((await canal(CANAL_A))[0]).toMatchObject({ motivo: 'conta:ACCOUNT_RESTRICTION' })
+    expect((await alertas())[0]!.mensagem).toContain('restringiu a conta')
+    await postar(qualidade('UNFLAGGED'))
+    await postar(qualidade('ONBOARDING', '15550783881', WABA_A, { current_quality_rating: 'GREEN' }))
+    expect((await canal(CANAL_A))[0]!.suspensa).not.toBeNull()
+    expect((await alertas())[0]!.resolvido_em).toBeNull()
+  })
+
   it('DISABLED_UPDATE com ban_info em lista (formato da documentação) é classificado como restrição', () => {
     const [ev] = parseWebhookMeta({ object: 'whatsapp_business_account', entry: [{ id: WABA_A, changes: [{
       field: 'account_update', value: { event: 'DISABLED_UPDATE', ban_info: { waba_ban_state: ['DISABLE'], waba_ban_date: 'November 9, 2022' } } }] }] })
@@ -247,6 +289,15 @@ describe('Status de template', () => {
     await dono`INSERT INTO template_versao (tenant_id, template_id, versao, corpo, status_meta) VALUES (${A}, ${TPL_A}, 2, '{"body":{"texto":"Oi 2"}}'::jsonb, 'PENDING')`
     await postar(templateStatus('APPROVED', { message_template_id: 'NOVO' }))
     expect((await versao(TPL_A)).map((v) => v.status_meta)).toEqual(['DISABLED', 'APPROVED'])
+  })
+
+  it('⚠️ fora de ordem: evento GERADO antes do último aplicado (entry.time) não regride o status', async () => {
+    const evento = (event: string, t: number) => ({ ...templateStatus(event), entry: [{ ...templateStatus(event).entry[0]!, time: t }] })
+    await postar(evento('REINSTATED', 1_700_000_200))
+    await postar(evento('PAUSED', 1_700_000_100))   // chegou depois, mas é mais velho
+    expect((await versao(TPL_A))[0]).toMatchObject({ status_meta: 'APPROVED', status_evento_meta: 'REINSTATED' })
+    await postar(evento('PAUSED', 1_700_000_300))
+    expect((await versao(TPL_A))[0]!.status_meta).toBe('PAUSED')
   })
 
   it('template desconhecido → 200 sem efeito', async () => {

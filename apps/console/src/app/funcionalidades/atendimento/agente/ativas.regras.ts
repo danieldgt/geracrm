@@ -58,6 +58,22 @@ export function rotuloFeriado(f: string): string {
   return m[1] ? `${m[3]}/${m[2]}/${m[1]}` : `${m[3]}/${m[2]} · todo ano`
 }
 
+/**
+ * Data/hora no fuso do TENANT (IANA), não no do navegador: "abre às 09:00"
+ * tem de ser 09:00 da loja, mesmo com o gestor viajando. Ex.: "qua., 21/10 09:00".
+ */
+export function formatarNoFuso(iso: string, fuso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: fuso, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).format(d).replace(/,/g, '').replace(/\s+/g, ' ')
+  } catch {
+    return d.toISOString()
+  }
+}
+
 /** O motivo gravado na suspensão, em português de quem opera. */
 export function rotuloSuspensao(motivo: string): string {
   const [origem, evento, nota] = motivo.split(':')

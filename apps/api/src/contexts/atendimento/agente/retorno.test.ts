@@ -4,7 +4,7 @@ import postgres from 'postgres'
 import { encerrarBanco, comTenantServico } from '../../../db/index.js'
 import {
   agendarRetorno, cancelarRetornosDaConversa, processarRetornos, textoDoRetorno,
-  CADENCIA_RETORNO_MS, MARCADOR_RETORNO, MAX_TENTATIVAS_RETORNO,
+  CADENCIA_RETORNO_MS, MARCADOR_RETORNO, MAX_TENTATIVAS_RETORNO, MAX_FALHAS_TRANSPORTE,
 } from './retorno.js'
 import { ingerirMensagemEntrante } from '../ingestao-mensagem.js'
 import { proporPedido } from '../../pedido/proposta.js'
@@ -204,6 +204,32 @@ describe('Processar os vencidos', () => {
     const [l] = await retornos()
     expect(l).toMatchObject({ estado: 'pendente', tentativa: 1, detalhe: 'transporte: indisponivel' })
     expect(l!.executar_em.getTime()).toBeGreaterThan(agora.getTime())
+  })
+
+  it('⚠️ erro PERMANENTE da Meta (destino inválido, credencial, template recusado 132xxx) → recusado na hora, sem reagendar', async () => {
+    for (const motivo of ['destino_invalido', 'credencial_invalida', 'resposta_inesperada']) {
+      await dono`DELETE FROM agente_retorno WHERE tenant_id = ${T}`
+      await pedido('aguardando_confirmacao')
+      respostaDoEnvio = () => ({ ok: false, classe: 'transporte', motivo, conversaId: CONVERSA })
+      await agendar('proposta_sem_resposta', new Date(Date.now() - 1000))
+      expect(await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T })).toMatchObject({ recusados: 1, reagendados: 0 })
+      expect((await retornos())[0]).toMatchObject({ estado: 'recusado', detalhe: `permanente: ${motivo}` })
+    }
+  })
+
+  it('transporte de verdade tem teto: a 4ª falha seguida encerra como recusado', async () => {
+    await pedido('aguardando_confirmacao')
+    respostaDoEnvio = () => ({ ok: false, classe: 'transporte', motivo: 'indisponivel', conversaId: CONVERSA })
+    let agora = new Date()
+    await agendar('proposta_sem_resposta', new Date(agora.getTime() - 1000))
+    for (let i = 1; i <= MAX_FALHAS_TRANSPORTE; i++) {
+      const r = await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T }, agora)
+      expect(r).toMatchObject(i < MAX_FALHAS_TRANSPORTE ? { reagendados: 1 } : { recusados: 1 })
+      agora = new Date(agora.getTime() + H)
+    }
+    const [l] = await retornos()
+    expect(l).toMatchObject({ estado: 'recusado', detalhe: 'transporte_esgotado: indisponivel' })
+    expect(enviados).toHaveLength(MAX_FALHAS_TRANSPORTE)
   })
 
   it('cliente escreveu depois de agendado → cancelado sem enviar (cinto e suspensório da ingestão)', async () => {

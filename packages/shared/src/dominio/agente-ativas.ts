@@ -104,6 +104,8 @@ export interface TemplateAprovadoResumo {
   readonly corpo: string
   /** Quantas variáveis posicionais o corpo tem. Só 0 ou 1 ({{1}} = primeiro nome) servem ao retorno. */
   readonly variaveis: number
+  /** Serve ao retorno? Nenhuma variável, ou só a {{1}} (ver `templateDeRetornoCompativel`). */
+  readonly compativel: boolean
 }
 
 /** O que a tela de ativas lê (GET /v1/canais/:id/agente/ativas). */
@@ -111,6 +113,8 @@ export interface EstadoAtivas {
   readonly config: ConfigAtivas
   readonly padroes: ConfigAtivas
   readonly feriados: readonly string[]
+  /** Fuso IANA do tenant — datas da tela (próxima abertura, suspensão) são mostradas nele. */
+  readonly fuso: string
   /** `whatsapp_oficial` exige template fora de 24h; os demais não. */
   readonly tipoCanal: string
   readonly exigeTemplateForaDaJanela: boolean
@@ -125,6 +129,16 @@ export interface EstadoAtivas {
 /** Quantas variáveis posicionais ({{1}}, {{2}}…) distintas o texto usa. */
 export function contarVariaveis(texto: string): number {
   return new Set([...texto.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => m[1])).size
+}
+
+/**
+ * O corpo serve de template de RETORNO? Só sem variáveis ou com a ÚNICA
+ * variável {{1}} (= primeiro nome). Um {{2}} sozinho, ou {{1}} + {{2}}, exigiria
+ * inventar valor — recusado na tela (PUT) e no envio, pela mesma regra.
+ */
+export function templateDeRetornoCompativel(texto: string): boolean {
+  const usadas = new Set([...texto.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => Number(m[1])))
+  return usadas.size === 0 || (usadas.size === 1 && usadas.has(1))
 }
 
 /** Primeiro nome para o {{1}} — nunca vazio (a Meta recusa parâmetro vazio). */

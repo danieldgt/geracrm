@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   ATIVAS_PADRAO, configAtivas, corpoAtivas, contarVariaveis, lerConfigAtivas, normalizarFeriados, primeiroNome,
+  templateDeRetornoCompativel,
 } from './agente-ativas.js'
 
 describe('Config das ativas', () => {
@@ -33,6 +34,13 @@ describe('Template de retorno', () => {
     expect(contarVariaveis('Oi! Seu pedido está salvo.')).toBe(0)
     expect(contarVariaveis('Oi, {{1}}! Tudo bem, {{1}}?')).toBe(1)
     expect(contarVariaveis('Oi, {{1}}! Seu pedido {{2}}')).toBe(2)
+  })
+
+  it('compatível com o retorno: sem variável ou SÓ o {{1}} — {{2}} sozinho não serve', () => {
+    expect(templateDeRetornoCompativel('Oi! Seu pedido está salvo.')).toBe(true)
+    expect(templateDeRetornoCompativel('Oi, {{1}}! Tudo bem, {{ 1 }}?')).toBe(true)
+    expect(templateDeRetornoCompativel('Oi! Seu pedido {{2}}')).toBe(false)
+    expect(templateDeRetornoCompativel('Oi, {{1}}! Pedido {{2}}')).toBe(false)
   })
 
   it('primeiro nome para o {{1}}: nunca vazio e nunca um telefone', () => {

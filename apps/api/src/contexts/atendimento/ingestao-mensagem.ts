@@ -38,6 +38,8 @@ export type ResultadoIngestaoMensagem =
       ok: true; conversaId: string; contatoId: string; duplicada: boolean; leadNovo: boolean
       /** Presente só quando é mídia nova apontando para URL externa (E5-14). */
       midiaExterna?: MidiaExterna
+      /** Erro ao agendar a pós-ingestão (ausência/mídia não sairão) — quem chama loga. */
+      posIngestaoFalhou?: string
     }
   | { ok: false; motivo: string }
 
@@ -256,11 +258,19 @@ export async function ingerirMensagemEntrante(
   //    clientes. Aqui só agendamos; `workers/pos-ingestao.ts` executa com retry.
   //    Se a mensagem reverter, as tarefas somem junto. A chave (mensagem, tipo)
   //    é única: reprocessar não manda duas ausências.
+  //    ⚠️ Falhar aqui não perde a mensagem (savepoint), mas a ausência e a mídia
+  //    dela não sairão: o resultado diz isso e o webhook registra um warn com a
+  //    conversa — senão o silêncio seria indistinguível de "não era o caso".
+  let posIngestaoFalhou: string | undefined
   try {
     await emSavepoint(tx, (sp) => agendarPosIngestao(sp, { conversaId, canalId, mensagemId, mensagemCriadoEm: msg.recebidaEm, midiaExterna }))
-  } catch { /* agendar é acessório; a mensagem do cliente não pode se perder por ele */ }
+  } catch (erro) { posIngestaoFalhou = erro instanceof Error ? erro.message : String(erro) }
 
-  return { ok: true, conversaId, contatoId, duplicada: false, leadNovo, ...(midiaExterna ? { midiaExterna } : {}) }
+  return {
+    ok: true, conversaId, contatoId, duplicada: false, leadNovo,
+    ...(midiaExterna ? { midiaExterna } : {}),
+    ...(posIngestaoFalhou ? { posIngestaoFalhou } : {}),
+  }
 }
 
 /**

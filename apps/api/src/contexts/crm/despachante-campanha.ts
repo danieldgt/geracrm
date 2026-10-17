@@ -42,11 +42,13 @@ export interface ResultadoDisparo {
   readonly falhas: number
   /** Ficaram para amanhã porque o teto de aquecimento do dia acabou. */
   readonly aguardandoAquecimento: number
+  /** Esperando: o número está com as ativas suspensas pela qualidade (P11). */
+  readonly suspensasPorQualidade: number
   readonly campanhasConcluidas: number
 }
 
 const VAZIO: ResultadoDisparo = {
-  enviados: 0, bloqueados: 0, falhas: 0, aguardandoAquecimento: 0, campanhasConcluidas: 0,
+  enviados: 0, bloqueados: 0, falhas: 0, aguardandoAquecimento: 0, suspensasPorQualidade: 0, campanhasConcluidas: 0,
 }
 
 interface CampanhaEmCurso {
@@ -71,7 +73,7 @@ export async function despacharCampanhasDoTenant(
      WHERE tenant_id = ${tenantId} AND estado = 'disparando'
      ORDER BY disparada_em ASC NULLS LAST`
 
-  let enviados = 0, bloqueados = 0, falhas = 0, aguardando = 0, concluidas = 0
+  let enviados = 0, bloqueados = 0, falhas = 0, aguardando = 0, concluidas = 0, suspensas = 0
 
   for (const c of campanhas) {
     // ⚠️ Campanha sem canal não tem por onde sair. Marcar como concluída
@@ -79,6 +81,24 @@ export async function despacharCampanhasDoTenant(
     //    caminho honesto é parar de tentar e deixar a fila intacta — a tela
     //    mostra os pendentes e alguém corrige o cadastro.
     if (!c.canal_id) continue
+
+    /**
+     * ⚠️ Número com ATIVAS SUSPENSAS pela Meta (qualidade em queda ou conta
+     * restrita, raia P11): campanha é o maior volume não transacional e o maior
+     * risco de banimento. Fica onde está — fila intacta, nada marcado como
+     * bloqueado — e volta sozinha quando a suspensão sai. O aviso visível é o
+     * alerta crítico `qualidade_numero`, que diz "retornos e campanhas suspensos".
+     */
+    const [susp] = await sql<{ suspensa: boolean }[]>`
+      SELECT (ativas_suspensas_em IS NOT NULL) AS suspensa FROM canal_conectado
+       WHERE tenant_id = ${tenantId} AND id = ${c.canal_id}`
+    if (susp?.suspensa) {
+      const [p] = await sql<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM campanha_envio
+         WHERE tenant_id = ${tenantId} AND campanha_id = ${c.id} AND estado = 'pendente'`
+      suspensas += p?.n ?? 0
+      continue
+    }
 
     /**
      * ⚠️ O teto do dia é lido DENTRO do laço, uma vez por campanha: duas
@@ -140,7 +160,7 @@ export async function despacharCampanhasDoTenant(
 
   return {
     enviados, bloqueados, falhas,
-    aguardandoAquecimento: aguardando, campanhasConcluidas: concluidas,
+    aguardandoAquecimento: aguardando, suspensasPorQualidade: suspensas, campanhasConcluidas: concluidas,
   }
 }
 
@@ -168,15 +188,15 @@ export async function despacharCampanhas(
     const tenants = await sql<{ tenant_id: string }[]>`
       SELECT DISTINCT tenant_id FROM campanha WHERE estado = 'disparando'`
 
-    let enviados = 0, bloqueados = 0, falhas = 0, aguardando = 0, concluidas = 0
+    let enviados = 0, bloqueados = 0, falhas = 0, aguardando = 0, concluidas = 0, suspensas = 0
     for (const { tenant_id } of tenants) {
       const r = await despacharCampanhasDoTenant(sql, tenant_id, agora, enviar)
       enviados += r.enviados; bloqueados += r.bloqueados; falhas += r.falhas
-      aguardando += r.aguardandoAquecimento; concluidas += r.campanhasConcluidas
+      aguardando += r.aguardandoAquecimento; concluidas += r.campanhasConcluidas; suspensas += r.suspensasPorQualidade
     }
     return {
       enviados, bloqueados, falhas,
-      aguardandoAquecimento: aguardando, campanhasConcluidas: concluidas,
+      aguardandoAquecimento: aguardando, suspensasPorQualidade: suspensas, campanhasConcluidas: concluidas,
     }
   } finally {
     await sql`SELECT pg_advisory_unlock(hashtext('campanha_despacho'))`

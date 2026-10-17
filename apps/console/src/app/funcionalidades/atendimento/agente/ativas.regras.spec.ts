@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  adicionarFeriado, badgeStatusTemplate, erroDaApi, feriadoDeData, removerFeriado, rotuloFeriado, rotuloSuspensao, validarAtivas,
+  adicionarFeriado, badgeStatusTemplate, erroDaApi, feriadoDeData, formatarNoFuso, removerFeriado, rotuloFeriado, rotuloSuspensao, validarAtivas,
 } from './ativas.regras.js'
 
 describe('Mensagens ativas — regras da tela', () => {
@@ -31,6 +31,13 @@ describe('Mensagens ativas — regras da tela', () => {
     expect(rotuloSuspensao('qualidade:FLAGGED')).toContain('Voltam sozinhas')
     expect(rotuloSuspensao('qualidade:DOWNGRADE:RED')).toContain('vermelho')
     expect(rotuloSuspensao('conta:ACCOUNT_VIOLATION')).toContain('Gerenciador do WhatsApp')
+  })
+
+  it('⚠️ próxima abertura no fuso do TENANT, não no do navegador', () => {
+    const abre = '2026-10-21T12:00:00Z'
+    expect(formatarNoFuso(abre, 'America/Sao_Paulo')).toBe('qua. 21/10 09:00')
+    expect(formatarNoFuso(abre, 'Asia/Tokyo')).toBe('qua. 21/10 21:00')
+    expect(formatarNoFuso('lixo', 'America/Sao_Paulo')).toBe('lixo')
   })
 
   it('status de template vira badge com tom', () => {

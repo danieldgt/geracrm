@@ -279,3 +279,27 @@ describe('O envio real passa pelo gateway', () => {
     }
   })
 })
+
+describe('⚠️ Qualidade do número (P11): suspensão também segura a campanha', () => {
+  it('número com ativas suspensas: nada sai, a fila fica intacta e a campanha continua quando a suspensão sai', async () => {
+    const id = await novaCampanha(2)
+    await dono`UPDATE canal_conectado SET ativas_suspensas_em = now(), ativas_suspensas_motivo = 'qualidade:FLAGGED'
+                WHERE tenant_id = ${T} AND id = ${CANAL}`
+    try {
+      const { enviar, chamadas } = envioFalso(() => ok())
+      const r = await despacharCampanhasDoTenant(sql, T, AGORA, enviar)
+      expect(chamadas).toHaveLength(0)
+      expect(r).toMatchObject({ enviados: 0, bloqueados: 0, suspensasPorQualidade: 2 })
+      expect(await estados(id)).toEqual([{ estado: 'pendente', n: 2 }])
+      expect(await estadoDaCampanha(id)).toBe('disparando')
+
+      await dono`UPDATE canal_conectado SET ativas_suspensas_em = NULL, ativas_suspensas_motivo = NULL
+                  WHERE tenant_id = ${T} AND id = ${CANAL}`
+      const r2 = await despacharCampanhasDoTenant(sql, T, AGORA, enviar)
+      expect(r2.enviados).toBe(2)
+    } finally {
+      await dono`UPDATE canal_conectado SET ativas_suspensas_em = NULL, ativas_suspensas_motivo = NULL
+                  WHERE tenant_id = ${T} AND id = ${CANAL}`
+    }
+  })
+})

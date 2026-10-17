@@ -110,6 +110,11 @@ export class CanalMetaOficial implements PortaCanal {
     if (code === 131030 || code === 131026 || code === 131047 || code === 131051) {
       return { ok: false, motivo: 'destino_invalido', detalhe: err?.message }
     }
+    // 132xxx = template recusado no envio (não existe, parâmetro errado, pausado,
+    // desativado): permanente — quem chama não deve repetir.
+    if (code !== undefined && code >= 132000 && code < 133000) {
+      return { ok: false, motivo: 'resposta_inesperada', detalhe: `template recusado pela Meta (${code}): ${err?.message ?? ''}` }
+    }
     // 131056/368/80007 = rate limit / throttle temporário — a ação é esperar.
     if (code === 131056 || code === 368 || code === 80007) return { ok: false, motivo: 'indisponivel', detalhe: err?.message }
     return { ok: false, motivo: 'resposta_inesperada', detalhe: err?.message ?? `HTTP ${status}` }

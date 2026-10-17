@@ -139,6 +139,7 @@ interface RetornoVencido {
   readonly tentativa: number
   readonly texto: string | null
   readonly criado_em: Date
+  readonly falhas_transporte: number
 }
 
 /**
@@ -161,7 +162,7 @@ export async function processarRetornos(
   if (!travou) return r
   try {
     const vencidos = await dono<RetornoVencido[]>`
-      SELECT tenant_id, id, conversa_id, canal_id, motivo, tentativa, texto, criado_em
+      SELECT tenant_id, id, conversa_id, canal_id, motivo, tentativa, texto, criado_em, falhas_transporte
         FROM agente_retorno
        WHERE estado = 'pendente' AND executar_em <= ${agora}
          ${deps.somenteTenant ? dono`AND tenant_id = ${deps.somenteTenant}` : dono``}
@@ -254,14 +255,33 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
       await encerrar(tx, v, 'recusado', envio.motivo, agora)
       return 'recusado'
     }
-    // Transporte: o provedor teve um mau dia. Mesma linha, mais tarde.
+    // ⚠️ "Transporte" que é PERMANENTE (destino não é WhatsApp, token
+    //    recusado, template recusado pela Meta — 132xxx vira resposta_inesperada):
+    //    reenviar não conserta, só gasta e insiste com a Meta. Final.
+    if (FALHAS_PERMANENTES.has(envio.motivo)) {
+      await encerrar(tx, v, 'recusado', `permanente: ${envio.motivo}`, agora)
+      return 'recusado'
+    }
+    // Transporte de verdade (provedor fora): mesma linha, mais tarde — com teto.
+    if (v.falhas_transporte + 1 >= MAX_FALHAS_TRANSPORTE) {
+      await tx`UPDATE agente_retorno SET falhas_transporte = falhas_transporte + 1
+                WHERE tenant_id = tenant_atual() AND id = ${v.id}`
+      await encerrar(tx, v, 'recusado', `transporte_esgotado: ${envio.motivo}`, agora)
+      return 'recusado'
+    }
     await tx`
       UPDATE agente_retorno SET executar_em = ${new Date(agora.getTime() + ATRASO_TRANSPORTE_MS)},
+             falhas_transporte = falhas_transporte + 1,
              detalhe = ${`transporte: ${envio.motivo}`}
        WHERE tenant_id = tenant_atual() AND id = ${v.id}`
     return 'reagendado'
   })
 }
+
+/** Falhas do provedor que nenhuma repetição resolve. */
+const FALHAS_PERMANENTES: ReadonlySet<string> = new Set(['destino_invalido', 'credencial_invalida', 'resposta_inesperada'])
+/** Teto de falhas de transporte seguidas por retorno (a 4ª encerra como recusado). */
+export const MAX_FALHAS_TRANSPORTE = 4
 
 /** Por que NÃO enviar — ou `envia`. Tudo lido sob RLS. */
 async function avaliar(tx: Sql, v: RetornoVencido): Promise<'envia' | string> {
