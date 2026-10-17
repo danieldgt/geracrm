@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
 import { criarApp } from '../../app.js'
-import { encerrarBanco } from '../../db/index.js'
+import { comTenantServico, encerrarBanco } from '../../db/index.js'
+import { abrirSessaoStaff } from '../plataforma/staff-sessao.js'
 import { ativasSuspensasDe } from './rotas-canais.js'
 
 /**
@@ -74,6 +75,8 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await dono`DELETE FROM staff_sessao WHERE tenant_id IN (${T}, ${T2})`
+  await dono`DELETE FROM auditoria WHERE tenant_id IN (${T}, ${T2})`
   await dono`DELETE FROM usuario_filial WHERE tenant_id IN (${T}, ${T2})`
   await dono`DELETE FROM agente_config WHERE tenant_id IN (${T}, ${T2})`
   await dono`DELETE FROM numero_whatsapp WHERE tenant_id IN (${T}, ${T2})`
@@ -88,7 +91,15 @@ afterAll(async () => {
 })
 
 describe('QR de pareamento — só admin', () => {
-  it('⚠️ modo fundador no PRIMEIRO acesso: a linha de usuário é garantida antes do papel', async () => {
+  it('⚠️ a LISTAGEM não escreve: sem linha de usuário, podeParear=false e nenhuma linha criada', async () => {
+    expect(await idDoUsuarioDev()).toBeUndefined()
+    const lista = await get('/v1/canais')
+    expect(lista.statusCode).toBe(200)
+    expect((lista.json() as { podeParear: boolean }).podeParear).toBe(false)
+    expect(await idDoUsuarioDev()).toBeUndefined()
+  })
+
+  it('⚠️ modo fundador no PRIMEIRO acesso ao QR: a linha de usuário é garantida antes do papel', async () => {
     // Nenhuma linha de usuário para o sub dev ainda (sem batimento de presença).
     expect(await idDoUsuarioDev()).toBeUndefined()
     const r = await get(`/v1/canais/${NAO_OFICIAL}/qrcode`)
@@ -138,6 +149,20 @@ describe('QR de pareamento — só admin', () => {
   it('papel retirado deixa de valer na próxima requisição', async () => {
     await papel((await idDoUsuarioDev())!, 'vendedor')
     expect((await get(`/v1/canais/${NAO_OFICIAL}/qrcode`)).statusCode).toBe(403)
+  })
+
+  it('sessão de STAFF vale admin (tenant estrito) e NÃO cria linha em usuario', async () => {
+    const STAFF_SUB = 'staff-sub-canal-qr'
+    const { token } = await comTenantServico(T, (tx) =>
+      abrirSessaoStaff(tx, { atorSub: STAFF_SUB, atorEmail: 'staff@gera3.test', motivo: 'teste P10' }))
+    const comStaff = (url: string) => app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${token}` } })
+
+    // Passa na checagem de papel (para na credencial ausente, sem rede).
+    expect((await comStaff(`/v1/canais/${NAO_OFICIAL}/qrcode`)).statusCode).toBe(422)
+    const lista = (await comStaff('/v1/canais')).json() as { podeParear: boolean }
+    expect(lista.podeParear).toBe(true)
+    const linhas = await dono`SELECT 1 FROM usuario WHERE tenant_id = ${T} AND cognito_sub = ${STAFF_SUB}`
+    expect(linhas).toHaveLength(0)
   })
 })
 

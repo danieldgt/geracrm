@@ -125,15 +125,40 @@ export const POLL_RAPIDO_MS = 3_000
 export const POLL_LENTO_MS = 30_000
 
 /**
+ * Teto do modo rápido para um número `conectando` PARADO: se ninguém observou
+ * nada novo nele (mesmo estado e mesmo `verificadoEm`) há mais que isto, ele
+ * não está "prestes a mudar" — está esquecido, e 3 s para sempre só gasta.
+ */
+export const TETO_CONECTANDO_MS = 2 * 60_000
+
+/** Recuo nas falhas seguidas do polling: 3 → 6 → 12 → 30 s. */
+const RECUO_MS = [3_000, 6_000, 12_000, 30_000] as const
+
+/** O que o polling precisa saber de cada número. */
+export interface ObservacaoDoCanal {
+  readonly estado: string
+  /** Há quanto tempo o número está neste estado com o mesmo `verificadoEm`. */
+  readonly paradoHaMs: number
+}
+
+/**
  * De quanto em quanto tempo a tela relê a frota.
  *
  * ⚠️ 3 s só enquanto ALGUÉM ESPERA: um QR aberto (aguardando a leitura) ou um
- * número `conectando`. É aí que a resposta muda em segundos e a pessoa está
- * olhando. No resto, 30 s — polling rápido de fundo foi o que dominou o
- * tráfego do GeraCloud. O polling para ao sair da tela (ngOnDestroy).
+ * número `conectando` que ainda está se mexendo (até `TETO_CONECTANDO_MS`).
+ * No resto, 30 s — polling rápido de fundo foi o que dominou o tráfego do
+ * GeraCloud. Com falhas seguidas, recua (3→6→12→30 s) em vez de martelar um
+ * servidor que já não responde. O polling para ao sair da tela (ngOnDestroy).
  */
-export function intervaloDePolling(estados: readonly string[], aguardandoQr: boolean): number {
-  return aguardandoQr || estados.includes('conectando') ? POLL_RAPIDO_MS : POLL_LENTO_MS
+export function intervaloDePolling(
+  canais: readonly ObservacaoDoCanal[],
+  aguardandoQr: boolean,
+  falhasSeguidas = 0,
+): number {
+  if (falhasSeguidas > 0) return RECUO_MS[Math.min(falhasSeguidas, RECUO_MS.length) - 1]!
+  if (aguardandoQr) return POLL_RAPIDO_MS
+  const mexendo = canais.some((c) => c.estado === 'conectando' && c.paradoHaMs <= TETO_CONECTANDO_MS)
+  return mexendo ? POLL_RAPIDO_MS : POLL_LENTO_MS
 }
 
 export type FalhaDeCarga = 'sem_permissao' | 'servidor_indisponivel' | 'erro'

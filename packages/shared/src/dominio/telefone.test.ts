@@ -76,9 +76,16 @@ describe('Telefone mascarado (tela de números, P10)', () => {
     expect(mascararTelefone('+12025550123')).toBe('+12 •••••-0123')
   })
 
-  it('já mascarado volta igual — mascarar duas vezes é inofensivo', () => {
+  it('já mascarado no formato canônico volta igual — mascarar duas vezes é inofensivo', () => {
     expect(mascararTelefone('+55 (85) •••••-7049')).toBe('+55 (85) •••••-7049')
-    expect(mascararTelefone('+55 85 9****-7049')).toBe('+55 85 9****-7049')
+    expect(mascararTelefone('+12 •••••-0123')).toBe('+12 •••••-0123')
+    expect(mascararTelefone(mascararTelefone('+5585998617049'))).toBe('+55 (85) •••••-7049')
+  })
+
+  it('⚠️ símbolo de máscara fora do formato canônico NÃO libera o número', () => {
+    expect(mascararTelefone('+5585998617049*')).toBe('+55 (85) •••••-7049')
+    expect(mascararTelefone('•5585998617049')).toBe('+55 (85) •••••-7049')
+    expect(mascararTelefone('+55 85 9****-7049')).not.toContain('9****')
   })
 
   it('⚠️ formato curto/desconhecido é mascarado INTEIRO, nunca ecoado', () => {

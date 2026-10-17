@@ -38,9 +38,9 @@ export interface Canal {
   readonly identificadorMascarado?: string | null
 }
 
+/** A tela usa o `podeParear` POR número; o do topo da resposta serve a outros clientes. */
 interface ListaCanais {
   readonly itens: Canal[]
-  readonly podeParear?: boolean
 }
 
 export interface ErroApi {
@@ -68,8 +68,6 @@ export class CanaisServico {
   readonly testando = signal<ReadonlySet<string>>(new Set())
   readonly saude = signal<SaudeFrota | null>(null)
   readonly vazio = computed(() => this.estado() === 'pronto' && this.canais().length === 0)
-  /** Quem chama pode parear (gerar QR)? Decidido pelo servidor a cada leitura. */
-  readonly podeParear = signal(false)
   /**
    * ⚠️ Servidor fora DURANTE o polling, com a frota já na tela: a lista fica
    * (é a última leitura) e a tela avisa desde quando não há notícia. Trocar a
@@ -77,11 +75,15 @@ export class CanaisServico {
    * estado de 5 min atrás passar por atual.
    */
   readonly indisponivelDesde = signal<Date | null>(null)
+  /** Falha de outro tipo no polling (ex.: 500 da API): avisa, mantendo a lista. */
+  readonly erroAtualizacao = signal<string | null>(null)
+  /** Falhas seguidas de leitura — o polling recua com elas (3→6→12→30 s). */
+  readonly falhasSeguidas = signal(0)
 
   async carregar(): Promise<void> {
-    // ⚠️ Servidor fora: a nova tentativa não troca o aviso por esqueleto a cada
-    //    30 s — a tela piscaria sem nada ter mudado.
-    if (this.estado() !== 'servidor_indisponivel') this.estado.set('carregando')
+    // ⚠️ Esqueleto só com a lista VAZIA e sem aviso de servidor fora na tela:
+    //    a nova tentativa não troca o que a pessoa vê por um esqueleto que pisca.
+    if (this.canais().length === 0 && this.estado() !== 'servidor_indisponivel') this.estado.set('carregando')
     this.erro.set(null)
     try {
       const [provs, lista, saude] = await Promise.all([
@@ -97,6 +99,7 @@ export class CanaisServico {
     } catch (e) {
       const falha = falhaDe(e)
       if (falha === 'sem_permissao') { this.estado.set('sem_permissao'); return }
+      this.falhasSeguidas.update((n) => n + 1)
       if (falha === 'servidor_indisponivel') {
         this.indisponivelDesde.update((d) => d ?? new Date())
         this.estado.set('servidor_indisponivel')
@@ -121,15 +124,19 @@ export class CanaisServico {
       const falha = falhaDe(e)
       // Papel retirado durante a sessão: a tela deixa de mostrar a frota.
       if (falha === 'sem_permissao') { this.estado.set('sem_permissao'); return }
-      // Qualquer outra falha no polling: mantém a última leitura e AVISA.
-      this.indisponivelDesde.update((d) => d ?? new Date())
+      // Qualquer outra falha no polling: mantém a última leitura e AVISA —
+      // com o nome certo: servidor fora × erro da API.
+      this.falhasSeguidas.update((n) => n + 1)
+      if (falha === 'servidor_indisponivel') this.indisponivelDesde.update((d) => d ?? new Date())
+      else this.erroAtualizacao.set('Erro ao atualizar a frota. Os estados abaixo são da última leitura.')
     }
   }
 
   #aplicarLista(lista: ListaCanais): void {
     this.canais.set(lista.itens)
-    this.podeParear.set(lista.podeParear === true)
     this.indisponivelDesde.set(null)
+    this.erroAtualizacao.set(null)
+    this.falhasSeguidas.set(0)
   }
 
   async criar(dados: { provedor: string; nomeAmigavel: string; credencial: Record<string, string> }):
@@ -233,7 +240,8 @@ export interface Aquecimento {
 
 /** Classifica a falha HTTP — regra pura em `canais.regras.ts`. */
 function falhaDe(e: unknown): FalhaDeCarga {
-  if (!(e instanceof HttpErrorResponse)) return classificarFalhaDeCarga(0, false)
+  // ⚠️ Exceção que não é HTTP é defeito NOSSO (código), não servidor fora.
+  if (!(e instanceof HttpErrorResponse)) return 'erro'
   return classificarFalhaDeCarga(e.status, corpoDaApi(e.error))
 }
 

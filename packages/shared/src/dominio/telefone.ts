@@ -98,13 +98,17 @@ export function formatarTelefoneBR(e164: string): string {
  * server for that, so the API masks BEFORE answering — the console never
  * receives a clear value to hide.
  *
- * ⚠️ Already masked input (`•`, `*`) comes back unchanged, so masking twice is
- * harmless. Input too short to be a phone is fully masked instead of echoed:
- * an unknown shape must not leak by falling through.
+ * ⚠️ Only input ALREADY in this function's canonical masked shape comes back
+ * unchanged (masking twice is harmless). Any other shape — even one carrying a
+ * `*` or `•` somewhere, like `+5585998617049*` — is masked again: a stray
+ * symbol must not be a way to echo the clear number. Input too short to be a
+ * phone is fully masked instead of echoed.
  */
+const JA_MASCARADO = /^\+\d{2} (\(\d{2}\) )?•••••-\d{4}$/
+
 export function mascararTelefone(bruto: string | null | undefined): string | null {
   if (!bruto) return null
-  if (/[•*]/.test(bruto)) return bruto
+  if (JA_MASCARADO.test(bruto) || bruto === '••••') return bruto
   const d = bruto.replace(/\D/g, '')
   if (d.length < 8) return '••••'
   const fim = d.slice(-4)

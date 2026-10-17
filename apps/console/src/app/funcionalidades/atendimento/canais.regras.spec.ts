@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   abrirAvancado, avisoDeRemocao, classificarFalhaDeCarga, corpoDaApi, idadeVerificacao, intervaloDePolling,
-  mensagemFalhaQr, mudancasDaEdicao, POLL_LENTO_MS, POLL_RAPIDO_MS, rotuloModoAgente, verificacaoAtrasada,
+  mensagemFalhaQr, mudancasDaEdicao, POLL_LENTO_MS, POLL_RAPIDO_MS, rotuloModoAgente, TETO_CONECTANDO_MS, verificacaoAtrasada,
 } from './canais.regras.js'
 
 /**
@@ -141,22 +141,34 @@ describe('Desfecho da remoção', () => {
 // POLLING POR ESTADO E SERVIDOR INDISPONÍVEL (P10)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('Polling da frota — rápido só enquanto alguém espera', () => {
+  const obs = (estado: string, paradoHaMs = 0) => ({ estado, paradoHaMs })
+
   it('dado QR aberto aguardando leitura, então 3 s', () => {
-    expect(intervaloDePolling(['conectado'], true)).toBe(POLL_RAPIDO_MS)
+    expect(intervaloDePolling([obs('conectado')], true)).toBe(POLL_RAPIDO_MS)
     expect(POLL_RAPIDO_MS).toBe(3_000)
   })
 
-  it('dado algum número conectando, então 3 s mesmo sem QR', () => {
-    expect(intervaloDePolling(['conectado', 'conectando'], false)).toBe(POLL_RAPIDO_MS)
+  it('dado algum número conectando e se mexendo, então 3 s mesmo sem QR', () => {
+    expect(intervaloDePolling([obs('conectado'), obs('conectando', 10_000)], false)).toBe(POLL_RAPIDO_MS)
+  })
+
+  it('⚠️ dado conectando PARADO além do teto, então volta a 30 s', () => {
+    expect(intervaloDePolling([obs('conectando', TETO_CONECTANDO_MS + 1)], false)).toBe(POLL_LENTO_MS)
+    expect(intervaloDePolling([obs('conectando', TETO_CONECTANDO_MS)], false)).toBe(POLL_RAPIDO_MS)
   })
 
   it('dado frota parada (conectado/desconectado), então 30 s', () => {
-    expect(intervaloDePolling(['conectado', 'desconectado', 'degradado'], false)).toBe(POLL_LENTO_MS)
+    expect(intervaloDePolling([obs('conectado'), obs('desconectado'), obs('degradado')], false)).toBe(POLL_LENTO_MS)
     expect(POLL_LENTO_MS).toBe(30_000)
   })
 
   it('dada frota vazia, então 30 s', () => {
     expect(intervaloDePolling([], false)).toBe(POLL_LENTO_MS)
+  })
+
+  it('dadas falhas seguidas, então recua 3 → 6 → 12 → 30 s, mesmo com QR aberto', () => {
+    expect([1, 2, 3, 4, 9].map((n) => intervaloDePolling([obs('conectando')], true, n)))
+      .toEqual([3_000, 6_000, 12_000, 30_000, 30_000])
   })
 })
 

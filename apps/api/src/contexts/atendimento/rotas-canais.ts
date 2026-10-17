@@ -51,8 +51,12 @@ async function garantirLinhaDeUsuario(tx: Sql, req: FastifyRequest): Promise<voi
   if (!req.atorStaff) await garantirUsuarioId(tx, req)
 }
 
+/**
+ * Só LEITURA: a listagem não escreve. ⚠️ Consequência aceita: um fundador sem
+ * linha em `usuario` vê `podeParear=false` até o batimento de presença (ou o
+ * próprio QR) criar a linha — o QR em si continua liberado pelo preHandler.
+ */
 async function podeParearNoTenant(tx: Sql, req: FastifyRequest): Promise<boolean> {
-  await garantirLinhaDeUsuario(tx, req)
   const acesso = await papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff })
   return atendePapel(acesso, PAPEIS_QUE_PAREIAM)
 }
@@ -90,7 +94,8 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
   app.get('/v1/canais', { preHandler: exigirTenant }, async (req) =>
     req.comTenant(async (tx) => {
       // ⚠️ Decidido NO SERVIDOR, uma vez por requisição (papel muda durante a
-      //    sessão). A tela só esconde o botão; a garantia é o 403 do QR.
+      //    sessão), sem escrever nada. A tela só esconde o botão; a garantia é
+      //    o 403 do QR.
       const podeParear = await podeParearNoTenant(tx, req)
       const linhas = await tx<{
         id: string; tipo: string; provedor: string | null; nome_amigavel: string; estado: string

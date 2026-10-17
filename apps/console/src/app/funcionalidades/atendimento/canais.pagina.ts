@@ -60,10 +60,12 @@ import {
         <!-- ⚠️ Servidor fora DURANTE o polling: a lista abaixo é a última
              leitura. Dizer desde quando evita que o estado velho passe por atual. -->
         @if (servico.indisponivelDesde(); as desde) {
-          <p class="indisponivel" role="status">
+          <p class="indisponivel txt-denso" role="status">
             <strong>Servidor indisponível desde {{ hora(desde) }}.</strong>
             Os estados abaixo são da última leitura; a tela tenta de novo sozinha.
           </p>
+        } @else if (servico.erroAtualizacao(); as m) {
+          <p class="indisponivel txt-denso" role="status">{{ m }} A tela tenta de novo sozinha.</p>
         }
         @if (servico.vazio()) {
           <div class="bloco vazio">
@@ -100,7 +102,7 @@ import {
                     <!-- ⚠️ Número e id chegam MASCARADOS da API (LGPD): dá para
                          distinguir os números da frota, não para discá-los. -->
                     @if (c.telefoneMascarado || c.identificadorMascarado) {
-                      <p class="numero">
+                      <p class="numero txt-dados">
                         @if (c.telefoneMascarado; as t) { <span>{{ t }}</span> }
                         @if (c.identificadorMascarado; as i) { <span class="id">ID {{ i }}</span> }
                       </p>
@@ -190,7 +192,7 @@ import {
                      Gestor vê o estado, nunca o QR — e a garantia é o 403 da
                      API; esconder o botão aqui é só para não oferecer o que falha. -->
                 @if (!ehOficial(c) && !c.podeParear) {
-                  <p class="so-admin">Parear um aparelho (QR) é com o administrador da conta. Você acompanha o estado por aqui.</p>
+                  <p class="so-admin txt-denso">Parear um aparelho (QR) é com o administrador da conta. Você acompanha o estado por aqui.</p>
                 }
                 @if (!ehOficial(c) && c.podeParear) {
                   <div class="reconectar">
@@ -396,15 +398,15 @@ import {
     /* flex-wrap: em tela estreita os botões quebram linha em vez de estourar o card. */
     .acoes { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
     .reconectar { margin-top: var(--espacamento-3); }
-    .so-admin { margin: var(--espacamento-3) 0 0; font-size: 12px; color: var(--texto-suave); }
-    .numero { margin: 0 0 var(--espacamento-1); font-size: 12px; color: var(--texto-secundario);
-      font-family: var(--tipografia-familia-dados, monospace); font-variant-numeric: tabular-nums;
+    /* Tipografia pelas classes .txt-* (escala única); aqui só cor e espaço. */
+    .so-admin { margin: var(--espacamento-3) 0 0; color: var(--texto-suave); }
+    .numero { margin: 0 0 var(--espacamento-1); color: var(--texto-secundario);
       display: flex; flex-wrap: wrap; gap: var(--espacamento-3); }
     .numero .id { color: var(--texto-suave); }
     .tag.agente--ligado { color: var(--acao); border-color: var(--acao); }
     .indisponivel { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3);
       border: 1px solid var(--atencao); border-radius: var(--raio-controle);
-      background: var(--atencao-suave); color: var(--texto); font-size: 13px; line-height: 1.5; }
+      background: var(--atencao-suave); color: var(--texto); }
     .quando { color: var(--texto-suave); font-size: 12px; }
     .qr { margin-top: var(--espacamento-3); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .qr img { display: block; margin: 0 auto var(--espacamento-3); border-radius: var(--raio-controle); }
@@ -479,6 +481,7 @@ export class CanaisPagina implements OnInit, OnDestroy {
   #relogio: ReturnType<typeof setInterval> | null = null
   #polling: ReturnType<typeof setTimeout> | null = null
   #destruida = false
+  #paradoDesde = new Map<string, { chave: string; desde: number }>()
   readonly qr = signal<Record<string, { imagem?: string; erro?: string }>>({})
   readonly buscandoQr = signal<string | null>(null)
 
@@ -732,6 +735,13 @@ export class CanaisPagina implements OnInit, OnDestroy {
       return true
     } catch (e) {
       this.qr.update((a) => ({ ...a, [canalId]: { erro: this.#mensagemQr(e) } }))
+      // ⚠️ 403 na RENOVAÇÃO: o papel foi retirado com o QR aberto. A sessão
+      //    acaba aqui (nada de seguir testando/renovando) e a frota é relida
+      //    para o botão sumir.
+      if (e instanceof HttpErrorResponse && e.status === 403) {
+        this.#encerrarSessao(canalId)
+        void this.servico.atualizar()
+      }
       return false
     }
   }
@@ -767,12 +777,32 @@ export class CanaisPagina implements OnInit, OnDestroy {
    */
   #agendarPolling(): void {
     if (this.#destruida) return
-    if (this.#polling) clearTimeout(this.#polling)
-    const ms = intervaloDePolling(this.servico.canais().map((c) => c.estado), this.#timers.size > 0)
+    if (this.#polling) { clearTimeout(this.#polling); this.#polling = null }
+    // ⚠️ Sem permissão não reagenda: insistir não muda a resposta.
+    if (this.servico.estado() === 'sem_permissao') return
+    const ms = intervaloDePolling(this.#observar(Date.now()), this.#timers.size > 0, this.servico.falhasSeguidas())
     this.#polling = setTimeout(() => {
       this.#polling = null
       void this.servico.atualizar().finally(() => this.#agendarPolling())
     }, ms)
+  }
+
+  /**
+   * Há quanto tempo cada número está PARADO (mesmo estado, mesmo carimbo).
+   * Mudou qualquer um dos dois → o relógio do número recomeça. É o que deixa
+   * `intervaloDePolling` largar o modo rápido de um `conectando` esquecido.
+   */
+  #observar(agoraMs: number): { estado: string; paradoHaMs: number }[] {
+    const vistos = new Map<string, { chave: string; desde: number }>()
+    const obs = this.servico.canais().map((c) => {
+      const chave = `${c.estado}|${c.verificadoEm ?? ''}`
+      const antes = this.#paradoDesde.get(c.id)
+      const desde = antes && antes.chave === chave ? antes.desde : agoraMs
+      vistos.set(c.id, { chave, desde })
+      return { estado: c.estado, paradoHaMs: agoraMs - desde }
+    })
+    this.#paradoDesde = vistos
+    return obs
   }
 
   hora(d: Date): string { return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
