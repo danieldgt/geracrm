@@ -14,7 +14,7 @@
 | P3 pergunta repetida | 1 | — | em andamento | | |
 | P4 gatilhos + privacidade | 1 | 0098 | em andamento | | |
 | P5 resiliência LLM | 1 | — | em andamento | | |
-| P6 custo e tetos | 1 | 0099 | em andamento | | |
+| P6 custo e tetos | 1 | 0099 | integrada (af264b2) | | |
 | P7 números ampliados | 1 | — | em andamento | | |
 | P8 saúde 3 estados | 1 | — | integrada (d589e00; main verde 1323 api) | | |
 | P9 histórico do conhecimento | 1 | 0100 | em andamento | | |
