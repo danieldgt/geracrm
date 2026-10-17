@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { fusoSeguro } from '../../plataforma/fuso.js'
 import { sql, comTenantServico, type Sql } from '../../../db/index.js'
 import type { UsoDoLaco } from './porta-llm.js'
 
@@ -337,11 +338,14 @@ export interface SituacaoMensal {
  *   migration própria (CONCURRENTLY fora da transação do runner).
  */
 export async function situacaoMensal(tx: Sql, agora: Date, custoExtraCentavos = 0): Promise<SituacaoMensal> {
+  // ⚠️ Fuso validado em TS (fuso.ts): um fuso inválido no AT TIME ZONE derrubava a consulta.
+  const [tf] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
+  const fuso = fusoSeguro(tf?.fuso)
   const [l] = await tx<{
     mes: string; gasto: string; modelos: string[] | null
     mensal: string | null; a80: string | null; a100: string | null
   }[]>`
-    WITH t AS (SELECT coalesce(fuso, 'America/Sao_Paulo') AS fuso FROM tenant WHERE id = tenant_atual()),
+    WITH t AS (SELECT ${fuso}::text AS fuso),
          janela AS (
            SELECT to_char(${agora}::timestamptz AT TIME ZONE t.fuso, 'YYYY-MM') AS mes,
                   date_trunc('month', ${agora}::timestamptz AT TIME ZONE t.fuso) AT TIME ZONE t.fuso AS inicio

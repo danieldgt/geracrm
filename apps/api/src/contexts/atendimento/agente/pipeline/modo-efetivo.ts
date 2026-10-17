@@ -1,9 +1,10 @@
 import {
-  decidirModoEfetivo, ehModoAgente, maisRestritivo, recorteAgente,
+  decidirModoEfetivo, ehModoAgente, maisRestritivo, normalizarFeriados, recorteAgente,
   type DecisaoModo, type ModoAgente, type MomentoLocal,
 } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../../../../db/index.js'
 import { momentoNoFuso } from '../../../plataforma/fuso.js'
+import { ehFeriado } from '../../expediente.js'
 import { segmentoRfvDoContato } from '../contexto-lead.js'
 import type { EtapaModoEfetivo } from './tipos.js'
 
@@ -36,23 +37,19 @@ export interface FatosDoModo {
  * Teto do tenant e momento local, na transação de quem chama. A hora local sai
  * em TS (`momentoNoFuso`): fuso inválido no banco cai no padrão, não derruba.
  */
-export async function lerFatosDoModo(tx: Sql, agora: Date): Promise<FatosDoModo> {
-  const [l] = await tx<{ modo_maximo: string | null; fuso: string | null }[]>`
+export async function lerFatosDoModo(tx: Sql, agora: Date, canalId?: string | null): Promise<FatosDoModo> {
+  const [l] = await tx<{ modo_maximo: string | null; fuso: string | null; feriados: unknown }[]>`
     SELECT (SELECT modo_maximo FROM agente_tenant WHERE tenant_id = tenant_atual()) AS modo_maximo,
-           (SELECT fuso FROM tenant WHERE id = tenant_atual()) AS fuso`
+           (SELECT fuso FROM tenant WHERE id = tenant_atual()) AS fuso,
+           ${canalId
+             ? tx`(SELECT feriados FROM canal_configuracao WHERE tenant_id = tenant_atual() AND canal_id = ${canalId})`
+             : tx`NULL::jsonb`} AS feriados`
   const teto = l?.modo_maximo
-  const momento = momentoNoFuso(agora, l?.fuso)
-  return { modoTenant: ehModoAgente(teto) ? teto : null, momento: { ...momento, feriado: await feriadoHoje(tx, agora) } }
-}
-
-/**
- * GANCHO DO FERIADO — feriado conta como FORA do horário do recorte
- * (`dentroDoHorarioRecorte`). ⚠️ Ainda sem fonte: o calendário de feriados do
- * expediente é da raia P11 e não está na main. Quando entrar, esta função passa a
- * consultá-lo (mesma régua da ausência); até lá, nenhum dia é feriado.
- */
-async function feriadoHoje(_tx: Sql, _agora: Date): Promise<boolean> {
-  return false
+  const { data, ...momento } = momentoNoFuso(agora, l?.fuso)
+  // ⚠️ FERIADO do número (P11, `canal_configuracao.feriados`, mesma régua da
+  //    ausência e das ativas — `ehFeriado`) conta como FORA do horário do recorte.
+  const feriado = ehFeriado(normalizarFeriados(l?.feriados), data)
+  return { modoTenant: ehModoAgente(teto) ? teto : null, momento: { ...momento, feriado } }
 }
 
 /** O recorte usa segmento? Só então vale a consulta às métricas do contato. */
@@ -63,9 +60,9 @@ function recorteUsaSegmento(recorte: unknown): boolean {
 
 /** Os fatos + a decisão, para um contato (turno) — o número já lido por quem chama. */
 export async function modoEfetivoDoContato(
-  tx: Sql, p: { modoDoNumero: ModoAgente; recorte: unknown; contatoId: string | null | undefined; agora: Date },
+  tx: Sql, p: { modoDoNumero: ModoAgente; recorte: unknown; canalId: string; contatoId: string | null | undefined; agora: Date },
 ): Promise<DecisaoModo> {
-  const fatos = await lerFatosDoModo(tx, p.agora)
+  const fatos = await lerFatosDoModo(tx, p.agora, p.canalId)
   const segmento = p.contatoId && recorteUsaSegmento(p.recorte) ? await segmentoRfvDoContato(tx, p.contatoId) : undefined
   return decidirModoEfetivo({ modoTenant: fatos.modoTenant, modoNumero: p.modoDoNumero, recorte: p.recorte ?? null, momento: fatos.momento, segmento })
 }
@@ -96,7 +93,7 @@ export async function modoEfetivoDoCanal(
   if (modoDoNumero === 'desligado') {
     return { modo: 'desligado', origem: 'numero', motivo: null, foraDoRecorte: [], recorteInvalido: false, modoDoNumero }
   }
-  const d = await modoEfetivoDoContato(tx, { modoDoNumero, recorte: cfg?.recorte ?? null, contatoId: p.contatoId, agora: p.agora })
+  const d = await modoEfetivoDoContato(tx, { modoDoNumero, recorte: cfg?.recorte ?? null, canalId: p.canalId, contatoId: p.contatoId, agora: p.agora })
   return { ...d, modoDoNumero }
 }
 
@@ -127,7 +124,7 @@ export const etapaModoEfetivo: EtapaModoEfetivo = {
     try {
       const d = await comTenantServico(entrada.tenantId, (tx) => modoEfetivoDoContato(tx, {
         modoDoNumero: entrada.modoDoNumero, recorte: entrada.cfgExtra['recorte'] ?? null,
-        contatoId: entrada.contatoId, agora: entrada.agora,
+        canalId: entrada.canalId, contatoId: entrada.contatoId, agora: entrada.agora,
       }))
       return { modo: d.modo, motivo: d.motivo }
     } catch {

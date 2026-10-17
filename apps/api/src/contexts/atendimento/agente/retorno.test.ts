@@ -69,6 +69,8 @@ beforeEach(async () => {
   enviados = []
   respostaDoEnvio = () => ({ ok: true, conversaId: CONVERSA, mensagemId: randomUUID() })
   await dono`DELETE FROM agente_retorno WHERE tenant_id = ${T}`
+  await dono`DELETE FROM agente_tenant WHERE tenant_id = ${T}`
+  await dono`UPDATE agente_config SET recorte = NULL WHERE tenant_id = ${T}`
   await dono`DELETE FROM agente_tarefa WHERE tenant_id = ${T}`
   await dono`DELETE FROM atendimento WHERE tenant_id = ${T}`
   await dono`DELETE FROM pedido_proposta WHERE tenant_id = ${T}`
@@ -82,7 +84,7 @@ beforeEach(async () => {
   await configurar('autonomo')
 })
 afterAll(async () => {
-  for (const t of ['agente_retorno', 'agente_tarefa', 'agente_config', 'atendimento', 'pedido_proposta', 'pedido', 'mensagem', 'mensagem_id_externo', 'outbox', 'conversa', 'contato_telefone', 'contato', 'canal_conectado']) {
+  for (const t of ['agente_retorno', 'agente_tarefa', 'agente_config', 'agente_tenant', 'atendimento', 'pedido_proposta', 'pedido', 'mensagem', 'mensagem_id_externo', 'outbox', 'conversa', 'contato_telefone', 'contato', 'canal_conectado']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`DELETE FROM tenant WHERE id = ${T}`
@@ -249,6 +251,26 @@ describe('Processar os vencidos', () => {
     await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T })
     expect(enviados).toEqual([])
     expect((await retornos())[0]).toMatchObject({ estado: 'cancelado', detalhe: 'modo:sombra' })
+  })
+
+  it('⚠️ número autônomo sob o KILL SWITCH do tenant → o retorno vencido não sai (modo efetivo, P14)', async () => {
+    await pedido('aguardando_confirmacao')
+    await dono`INSERT INTO agente_tenant (tenant_id, modo_maximo) VALUES (${T}, 'desligado')`
+    await agendar('proposta_sem_resposta', new Date(Date.now() - 1000))
+    await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T })
+    expect(enviados).toEqual([])
+    expect((await retornos())[0]).toMatchObject({ estado: 'cancelado', detalhe: 'modo:desligado (teto_do_tenant)' })
+  })
+
+  it('número autônomo FORA do recorte (horário) → o retorno vencido não sai', async () => {
+    await pedido('aguardando_confirmacao')
+    const [l] = await dono<{ dia: number }[]>`SELECT to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'ID')::int AS dia`
+    const outroDia = (['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'] as const)[l!.dia % 7]!
+    await dono`UPDATE agente_config SET recorte = ${JSON.stringify({ horario: { [outroDia]: { de: '00:00', ate: '23:59' } } })}::text::jsonb WHERE tenant_id = ${T}`
+    await agendar('proposta_sem_resposta', new Date(Date.now() - 1000))
+    await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T })
+    expect(enviados).toEqual([])
+    expect((await retornos())[0]).toMatchObject({ estado: 'cancelado', detalhe: 'modo:sombra (fora_do_recorte_horario)' })
   })
 
   it('atendimento humano aberto cala o retorno', async () => {

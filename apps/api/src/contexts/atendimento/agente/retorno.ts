@@ -3,6 +3,7 @@ import { comTenantServico, type Sql } from '../../../db/index.js'
 import { enviarTextoNaConversa } from '../envio-conversa.js'
 import { enviarTemplateNaConversa } from '../envio-template.js'
 import { decidirAtiva, lerContextoAtiva, type DecisaoAtiva } from './ativas.js'
+import { modoEfetivoDoCanal } from './pipeline/modo-efetivo.js'
 
 /**
  * O RETORNO DO AGENTE (follow-up, R5) — a cutucada programada quando o cliente
@@ -202,7 +203,7 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
   // 1. Decidir, sob o tenant: o motivo ainda vale? o agente pode falar sozinho?
   //    E a política das ATIVAS: suspensão, expediente, limites, janela/template.
   const veredito = await comTenantServico(v.tenant_id, async (tx): Promise<Veredito> => {
-    const motivo = await avaliar(tx, v)
+    const motivo = await avaliar(tx, v, agora)
     if (motivo !== 'envia') return { tipo: 'cancelar', motivo }
     const ctx = await lerContextoAtiva(tx, { conversaId: v.conversa_id, agora })
     if (!ctx) return { tipo: 'cancelar', motivo: 'conversa_inexistente' }
@@ -284,11 +285,11 @@ const FALHAS_PERMANENTES: ReadonlySet<string> = new Set(['destino_invalido', 'cr
 export const MAX_FALHAS_TRANSPORTE = 4
 
 /** Por que NÃO enviar — ou `envia`. Tudo lido sob RLS. */
-async function avaliar(tx: Sql, v: RetornoVencido): Promise<'envia' | string> {
+async function avaliar(tx: Sql, v: RetornoVencido, agora: Date): Promise<'envia' | string> {
   // Cliente escreveu depois de agendado (cinto e suspensório: a ingestão já
   // cancela, mas um webhook pode ter corrido sem o savepoint acessório).
-  const [conv] = await tx<{ ultima_entrante_em: Date | null; humano_assumiu: boolean }[]>`
-    SELECT c.ultima_entrante_em,
+  const [conv] = await tx<{ ultima_entrante_em: Date | null; humano_assumiu: boolean; contato_id: string }[]>`
+    SELECT c.ultima_entrante_em, c.contato_id,
            EXISTS (SELECT 1 FROM atendimento a
                     WHERE a.tenant_id = c.tenant_id AND a.conversa_id = c.id AND a.estado <> 'encerrado') AS humano_assumiu
       FROM conversa c WHERE c.tenant_id = tenant_atual() AND c.id = ${v.conversa_id}`
@@ -297,9 +298,11 @@ async function avaliar(tx: Sql, v: RetornoVencido): Promise<'envia' | string> {
   // Atendimento humano aberto cala o agente — inclusive a cutucada.
   if (conv.humano_assumiu) return 'humano_atendendo'
 
-  const [cfg] = await tx<{ modo: string }[]>`
-    SELECT modo FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${v.canal_id}`
-  if (!cfg || cfg.modo !== 'autonomo') return `modo:${cfg?.modo ?? 'desligado'}`
+  // ⚠️ O modo EFETIVO (P14, ADR-028): teto do tenant (kill switch), recorte de
+  //    horário/segmento/feriado — nunca a coluna `agente_config.modo` direto.
+  //    A cutucada é o agente falando sozinho: só em autônomo de fato.
+  const efetivo = await modoEfetivoDoCanal(tx, { canalId: v.canal_id, contatoId: conv.contato_id, agora })
+  if (efetivo.modo !== 'autonomo') return `modo:${efetivo.modo}${efetivo.motivo ? ` (${efetivo.motivo})` : ''}`
 
   if (v.motivo === 'proposta_sem_resposta') {
     const [p] = await tx<{ ok: boolean }[]>`

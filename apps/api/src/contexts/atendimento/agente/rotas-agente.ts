@@ -127,7 +127,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
             FROM canal_configuracao
            WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
         await garantirUsuarioId(tx, req)
-        return { cfg: linha, temMensagemAusencia: canal?.tem ?? false, fatos: await lerFatosDoModo(tx, new Date()) }
+        return { cfg: linha, temMensagemAusencia: canal?.tem ?? false, fatos: await lerFatosDoModo(tx, new Date(), req.params.id) }
       })
       const podeConfigurar = await temPapel(req, 'admin')
       const modoDoNumero: ModoAgente = cfg?.modo ?? 'desligado'

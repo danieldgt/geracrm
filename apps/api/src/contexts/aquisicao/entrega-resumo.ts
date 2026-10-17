@@ -1,4 +1,5 @@
 import type { Sql } from '../../db/index.js'
+import { momentoNoFuso } from '../plataforma/fuso.js'
 import { montarResumo, type ResumoDiario } from './resumo-diario.js'
 
 /**
@@ -97,18 +98,19 @@ export async function entregarNoOutbox(
  * O resumo de UM tenant: decide a hora no fuso DELE, confere o recibo do dia,
  * monta e entrega.
  *
- * ⚠️ A hora e o dia saem do **fuso do tenant**, calculados pelo banco. Ler o
+ * ⚠️ A hora e o dia saem do **fuso do tenant** (validado em `fuso.ts`). Ler o
  * relógio do servidor (UTC) mandaria o resumo de Manaus (UTC-4) carimbado com o
  * dia seguinte — e às 16h da tarde dele.
  */
 export async function entregarResumoDoTenant(
   sql: Sql, tenantId: string, agora: Date,
 ): Promise<ResultadoTenant> {
-  const [t] = await sql<{ hora_local: number; dia_local: string }[]>`
-    SELECT EXTRACT(HOUR FROM (${agora}::timestamptz AT TIME ZONE t.fuso))::int AS hora_local,
-           to_char((${agora}::timestamptz AT TIME ZONE t.fuso)::date, 'YYYY-MM-DD') AS dia_local
-      FROM tenant t WHERE t.id = ${tenantId}`
-  if (!t) return 'tenant_desconhecido'
+  const [linha] = await sql<{ fuso: string | null }[]>`SELECT t.fuso FROM tenant t WHERE t.id = ${tenantId}`
+  if (!linha) return 'tenant_desconhecido'
+  // ⚠️ Hora e dia locais em TS com o fuso VALIDADO (fuso.ts): um fuso inválido
+  //    no AT TIME ZONE derrubava a consulta — e o resumo do tenant nunca saía.
+  const local = momentoNoFuso(agora, linha.fuso)
+  const t = { hora_local: Number(local.hora.slice(0, 2)), dia_local: local.data }
   if (t.hora_local < HORA_RESUMO_LOCAL) return 'fora_da_hora'
 
   const [ja] = await sql<{ dia: string }[]>`

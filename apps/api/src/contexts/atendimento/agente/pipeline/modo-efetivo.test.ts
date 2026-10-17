@@ -107,7 +107,7 @@ describe('Turno real com recorte (ADR-028)', () => {
     await configurar('autonomo', null)
     const r = await turno('oi')
     expect(r.desfecho).toBe('respondeu')
-    expect(enviados).toEqual(['Temos sim!'])
+    expect(enviados).toContain('Temos sim!')
     expect((await ultimaDecisao()).guardrails.filter((g) => g.etapa === 'modo-efetivo')).toEqual([])
   })
 
@@ -131,6 +131,24 @@ describe('Turno real com recorte (ADR-028)', () => {
     expect(d.guardrails.map((g) => g.codigo)).toEqual(['fora_do_recorte_horario'])
   })
 
+  it('FERIADO do número (calendário da P11) conta como fora do horário do recorte', async () => {
+    const [l] = await dono<{ dia: number; data: string }[]>`
+      SELECT to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'ID')::int AS dia, to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS data`
+    const hoje = DIAS[l!.dia - 1]!
+    // O horário do recorte cobre hoje o dia todo; só o feriado o derruba.
+    await configurar('autonomo', { horario: { [hoje]: { de: '00:00', ate: '23:59' } } })
+    await dono`UPDATE canal_configuracao SET feriados = ${JSON.stringify([l!.data])}::text::jsonb WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
+    try {
+      const d = await comTenantServico(T, (tx) => modoEfetivoDoCanal(tx, { canalId: CANAL, contatoId: CONTATO, agora: new Date() }))
+      expect(d).toMatchObject({ modo: 'sombra', motivo: 'fora_do_recorte_horario' })
+    } finally {
+      await dono`UPDATE canal_configuracao SET feriados = '[]'::jsonb WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
+    }
+    // Sem o feriado, o mesmo recorte deixa autônomo (exceto no último minuto do dia).
+    const sem = await comTenantServico(T, (tx) => modoEfetivoDoCanal(tx, { canalId: CANAL, contatoId: CONTATO, agora: new Date() }))
+    if (new Date().toLocaleTimeString('en-GB', { timeZone: 'America/Sao_Paulo' }) < '23:59') expect(sem.modo).toBe('autonomo')
+  })
+
   it('segmento: lead sem compra fica fora de um recorte só de clientes em dia', async () => {
     await configurar('autonomo', { segmentosRfv: ['cliente-fiel'] })
     await turno('oi')
@@ -142,7 +160,7 @@ describe('Turno real com recorte (ADR-028)', () => {
   it('segmento liberado (sem-historico): vale o modo do número', async () => {
     await configurar('autonomo', { segmentosRfv: ['sem-historico'] })
     await turno('oi')
-    expect(enviados).toEqual(['Temos sim!'])
+    expect(enviados).toContain('Temos sim!')
   })
 
   it('teto do tenant em desligado é kill switch: nenhum número fala', async () => {

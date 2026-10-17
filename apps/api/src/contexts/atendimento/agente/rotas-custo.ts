@@ -4,6 +4,7 @@ import { exigirTenant } from '../../../plugins/tenant.js'
 import { exigirPapel } from '../../plataforma/papel.js'
 import { auditar } from '../../plataforma/auditoria.js'
 import { garantirUsuarioId } from '../rotas-fila.js'
+import { fusoSeguro } from '../../plataforma/fuso.js'
 import { cambioBrl, situacaoMensal, tetoSessaoDoAmbiente, tetoSessaoEfetivo, limiarAtingido } from './custo.js'
 
 /**
@@ -97,11 +98,13 @@ export async function rotasCusto(app: FastifyInstance): Promise<void> {
           SELECT teto_sessao_centavos::text AS teto, orcamento_dia_centavos::text AS orcamento_dia
             FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
         // Gasto de hoje no fuso do tenant — a mesma régua do teto diário (vendedor.ts).
+        // ⚠️ Fuso validado em TS (fuso.ts): fuso inválido no AT TIME ZONE dava 500 na tela.
+        const [tf] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
+        const fuso = fusoSeguro(tf?.fuso)
         const [hoje] = await tx<{ total: string }[]>`
           SELECT coalesce(sum(custo_centavos), 0)::text AS total FROM agente_decisao
            WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}
-             AND criado_em >= (SELECT date_trunc('day', now() AT TIME ZONE coalesce(fuso, 'America/Sao_Paulo')) AT TIME ZONE coalesce(fuso, 'America/Sao_Paulo')
-                                 FROM tenant WHERE id = tenant_atual())`
+             AND criado_em >= (date_trunc('day', now() AT TIME ZONE ${fuso}::text) AT TIME ZONE ${fuso}::text)`
         // Referência para escolher o teto: custo das sessões dos últimos 30 dias (limitado).
         const [sessoes] = await tx<{ n: string; media: string | null; maior: string | null }[]>`
           SELECT count(*)::text AS n, round(avg(custo_centavos))::text AS media, max(custo_centavos)::text AS maior
