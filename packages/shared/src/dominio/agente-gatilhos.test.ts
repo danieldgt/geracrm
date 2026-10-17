@@ -21,7 +21,11 @@ describe('detectarOptOut — o que é opt-out CLARO', () => {
     'quero parar de receber mensagens', 'gostaria de parar de receber isso', 'parar de receber mensagens', 'não receber mais nada',
     'não me manda mais', 'não me chama mais', 'quero sair da lista', 'sair da sua lista',
     // (c) a palavra com fecho de cortesia
-    'pare por favor', 'pare, obrigado'])(
+    'pare por favor', 'pare, obrigado',
+    // nota 2 da 3ª revisão: falsos negativos
+    'quero parar de receber', 'quero parar de receber as mensagens', 'parar de receber', 'chega de spam',
+    'não precisa me mandar mais mensagem', 'nao quero mais ser contatado', 'me bloqueia', 'pode me bloquear', 'desinscrever',
+    'quero me desinscrever'])(
     'dado "%s", então é opt-out', (t) => expect(detectarOptOut(t)).toBe('opt_out'))
 
   it('dado pedido de apagar os dados junto, então é exclusão LGPD', () => {
@@ -32,22 +36,28 @@ describe('detectarOptOut — o que é opt-out CLARO', () => {
 
 describe('detectarOptOut — ambíguo vai para uma PESSOA (possivel_opt_out), nunca para o bloqueio', () => {
   it.each([
-    // revisão 1: verbo de parar + mercadoria/pagamento — nunca bloqueia; e o modelo também não segue vendendo
-    'não quero receber em caixa', 'não quero receber o pedido em caixa', 'não quero receber boleto, só pix',
-    'nao quero mais receber a mercadoria com atraso', 'não desejo receber nota fiscal impressa',
-    'não quero mais receber essa marca', 'pare de me mandar boleto errado', 'parem de me enviar produto vencido',
-    'pare de mandar mensagem errada pro meu financeiro', 'não quero mais que você me mande o boleto por email',
-    'não quero mais receber a entrega na loja 2',
-    'apaga meus dados do cartão antigo', 'pode remover meus dados bancários antigos', 'descadastrar o meu cartão antigo',
-    'me tira dessa lista de espera',
-    // re-revisão (a): falsos negativos — opt-out com palavra de negócio no meio
+    // verbo de parar + negócio + objeto de MENSAGEM
     'não quero mais receber mensagens dessa loja', 'não quero mais receber promoção de produtos',
     'para de mandar mensagem por favor, não tenho interesse em produtos', 'descadastrar meu número do whatsapp da loja',
-    // re-revisão (d): palavra solta
+    'pare de mandar mensagem errada pro meu financeiro',
+    // palavra solta
     'para', 'Para!', 'parar', 'chega', 'chega.', 'Chega!',
+    // irritação sem pedido explícito (decisão: pessoa, não bloqueio)
+    'não aguento mais mensagem', 'nao aguento mais receber essas promoções',
     // verbo de parar sem objeto de mensagem
     'não quero mais receber essas coisas', 'para de me mandar esses links', 'não quero receber ligação', 'não me chama mais de senhor',
   ])('dado "%s", então é possivel_opt_out', (t) => expect(detectarOptOut(t)).toBe('possivel_opt_out'))
+})
+
+describe('detectarOptOut — verbo de parar só com mercadoria/pagamento é conversa de venda (null)', () => {
+  it.each([
+    'não quero receber em caixa', 'não quero receber o pedido em caixa', 'não quero receber boleto, só pix',
+    'nao quero mais receber a mercadoria com atraso', 'não desejo receber nota fiscal impressa',
+    'não quero mais receber essa marca', 'pare de me mandar boleto errado', 'parem de me enviar produto vencido',
+    'não quero mais que você me mande o boleto por email', 'não quero mais receber a entrega na loja 2',
+    'apaga meus dados do cartão antigo', 'pode remover meus dados bancários antigos', 'descadastrar o meu cartão antigo',
+    'me tira dessa lista de espera',
+  ])('dado "%s", então é null', (t) => expect(detectarOptOut(t)).toBeNull())
 })
 
 describe('detectarOptOut — sem verbo de parar, não é opt-out', () => {

@@ -37,7 +37,7 @@ function palavras(texto: string): string {
 // ── opt-out ─────────────────────────────────────────────────────────────────
 
 /** A mensagem inteira é só a palavra. "chega", "para" e "cancelar" ficam FORA. */
-const OPT_OUT_PALAVRA_UNICA = /^(pare|sair|stop|descadastrar|descadastra|descadastre)( (por favor|pfv|pf|obrigad[oa]|obg|valeu|grat[oa]))*$/
+const OPT_OUT_PALAVRA_UNICA = /^(pare|sair|stop|descadastrar|descadastra|descadastre|desinscrever|desinscreve)( (por favor|pfv|pf|obrigad[oa]|obg|valeu|grat[oa]))*$/
 /**
  * Palavra solta que PODE ser "pare" ou resposta a "mais algum item?" ("chega",
  * "para"): vai para uma pessoa (`possivel_opt_out`), nunca para o bloqueio.
@@ -49,7 +49,12 @@ const VERBO_PARAR = new RegExp([
   String.raw`nao (quero|desejo|quer) (mais )?receber`,
   // Formas explícitas com o objeto JÁ no padrão (o resto ainda é conferido).
   String.raw`nao (quero|desejo) mais (mensagem|mensagens|msg|msgs|contato|contatos)\b`,
-  String.raw`chega de (mensagem|mensagens|msg|msgs|propaganda|propagandas|promocao|promocoes|oferta|ofertas)\b`,
+  String.raw`chega de (mensagem|mensagens|msg|msgs|propaganda|propagandas|promocao|promocoes|oferta|ofertas|spam)\b`,
+  String.raw`(quero |gostaria de )?parar de receber\b`,
+  String.raw`nao precisa (me )?(mandar|enviar|mandarem|enviarem) mais\b`,
+  String.raw`nao (quero|desejo) (mais )?ser (contatad[oa]|chamad[oa]|incomodad[oa]|procurad[oa])\b`,
+  String.raw`(pode |podem )?me (bloqueia|bloqueie|bloquear|bloqueiem)\b`,
+  String.raw`(quero |pode |podem )?(me )?desinscrev\w*`,
   String.raw`(quero |gostaria de )?(parar de|nao) receber (mais )?(mensagem|mensagens|msg|msgs|isso|nada)\b`,
   String.raw`nao (me )?(manda|chama|mandem|chamem) mais\b`,
   String.raw`(quero )?sair da (sua |tua )?lista\b`,
@@ -81,6 +86,11 @@ function terminaOuFalaDeMensagem(resto: string): boolean {
   return r === '' || OBJETO_MENSAGEM.test(r) || FECHO.test(r)
 }
 
+/** Objeto de mensagem em QUALQUER ponto da frase (desempata verbo de parar + palavra de negócio). */
+const MENCIONA_MENSAGEM = /\b(mensagem|mensagens|msg|msgs|promocao|promocoes|propagandas?|ofertas?|catalogos?|contatos?|whatsapp|whats|zap|spam)\b/
+/** "não aguento mais mensagem" — reclamação das mensagens, não pedido claro: vai para uma pessoa. */
+const IRRITACAO = /\bnao aguento mais (receber )?(essas |tantas )?(mensagem|mensagens|msg|msgs|propaganda|propagandas|promocao|promocoes|spam)\b/
+
 const EXCLUSAO_DADOS = /(apag|exclu|delet|remov)\w* (os |todos os )?meus dados|\blgpd\b/
 
 export type MotivoOptOut = 'opt_out' | 'lgpd_exclusao' | 'possivel_opt_out'
@@ -90,9 +100,11 @@ export type MotivoOptOut = 'opt_out' | 'lgpd_exclusao' | 'possivel_opt_out'
  *   - `opt_out` / `lgpd_exclusao` (também pediu para apagar os dados): CLARO.
  *   - `possivel_opt_out`: verbo de parar com objeto que não é mensagem nem
  *     mercadoria ("não quero mais receber essas coisas") — vai para uma pessoa.
- *     Também: verbo de parar junto de mercadoria/pagamento ("não quero
- *     receber boleto") e as palavras soltas "para", "parar", "chega".
- *   - null: nenhum verbo de parar.
+ *     Também: verbo de parar + mercadoria/pagamento + objeto de MENSAGEM
+ *     ("não quero mais receber promoção de produtos"), irritação sem pedido
+ *     ("não aguento mais mensagem") e as palavras soltas "para", "parar", "chega".
+ *   - null: nenhum verbo de parar, ou verbo de parar só com mercadoria/pagamento
+ *     ("não quero receber boleto, só pix") — é conversa de venda.
  */
 export function detectarOptOut(texto: string): MotivoOptOut | null {
   const t = palavras(texto)
@@ -100,11 +112,12 @@ export function detectarOptOut(texto: string): MotivoOptOut | null {
   if (OPT_OUT_PALAVRA_UNICA.test(t)) return 'opt_out'
   if (PALAVRA_AMBIGUA.test(t)) return 'possivel_opt_out'
   const casos = [...t.matchAll(VERBO_PARAR)]
-  if (casos.length === 0) return null
-  // ⚠️ Verbo de parar + mercadoria/pagamento: pode ser "não quero receber
-  //    boleto" OU "não quero mais receber promoção de produtos". Não bloqueia
-  //    e não deixa o modelo seguir vendendo: uma pessoa decide.
-  if (SOBRE_O_NEGOCIO.test(t)) return 'possivel_opt_out'
+  // Irritação com as mensagens, sem pedido explícito: uma pessoa decide.
+  if (casos.length === 0) return IRRITACAO.test(t) ? 'possivel_opt_out' : null
+  // ⚠️ Verbo de parar + mercadoria/pagamento. Com objeto de MENSAGEM junto ("promoção de produtos", "mensagens dessa
+  //    loja"): pessoa decide. Só mercadoria/pagamento ("não quero receber
+  //    boleto", "pare de mandar produto vencido"): é conversa de venda — null.
+  if (SOBRE_O_NEGOCIO.test(t)) return MENCIONA_MENSAGEM.test(t) ? 'possivel_opt_out' : null
   const claro = casos.some((m) => terminaOuFalaDeMensagem(t.slice((m.index ?? 0) + m[0].length)))
   if (!claro) return 'possivel_opt_out'
   return EXCLUSAO_DADOS.test(t) ? 'lgpd_exclusao' : 'opt_out'

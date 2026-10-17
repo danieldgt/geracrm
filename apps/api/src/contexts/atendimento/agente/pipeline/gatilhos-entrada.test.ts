@@ -174,6 +174,35 @@ describe('Opt-out em autônomo — "pare" bloqueia sem LLM, DEPOIS da confirmaç
     expect(codigos(d)).not.toContain('opt_out_confirmacao_nao_enviada')
   })
 
+  it('"pendente" antigo (> 2 min) não prova a confirmação: no retry ela sai de novo; "pendente" recente conta', async () => {
+    await configurar('autonomo')
+    await avisoVigente()
+    const conf = JSON.stringify({ texto: 'Certo. Não vamos mais te enviar mensagens por aqui.', automatica: 'agente' })
+    const entrante = async (min: number) => {
+      const id = crypto.randomUUID()
+      await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+                 VALUES (${T}, ${id}, ${CONVERSA}, 'entrante', 'texto', '{"texto":"pare"}'::jsonb, now() - make_interval(mins => ${min}))`
+      return id
+    }
+    const idVelho = await entrante(10)
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, criado_em)
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', ${conf}::text::jsonb, 'pendente', now() - interval '5 minutes')`
+    await turno([idVelho])
+    expect(enviados).toHaveLength(1)
+
+    // Recente (o envio pode estar em voo): conta como enviada.
+    await dono`DELETE FROM lista_bloqueio WHERE tenant_id = ${T}`
+    await dono`DELETE FROM mensagem WHERE tenant_id = ${T}`
+    await dono`DELETE FROM agente_sessao WHERE tenant_id = ${T}`
+    enviados.length = 0
+    const idNovo = await entrante(1)
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, criado_em)
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', ${conf}::text::jsonb, 'pendente', now() - interval '30 seconds')`
+    await turno([idNovo])
+    expect(enviados).toHaveLength(0)
+    expect(await bloqueios()).toBe(1)
+  })
+
   it('confirmação recusada pelo gateway: o bloqueio vale assim mesmo e a falha fica marcada', async () => {
     await configurar('autonomo')
     await avisoVigente()
@@ -227,7 +256,8 @@ describe('Opt-out em autônomo — "pare" bloqueia sem LLM, DEPOIS da confirmaç
 })
 
 describe('Falso opt-out e falso negativo — nada novo é bloqueado sozinho', () => {
-  it.each(['quero cancelar o pedido', 'cancelar', 'para quando chega?'])(
+  it.each(['quero cancelar o pedido', 'cancelar', 'para quando chega?', 'não quero receber boleto, só pix', 'pare de me mandar boleto errado',
+    'parem de me enviar produto vencido', 'não quero receber em caixa', 'me tira dessa lista de espera'])(
     'dado "%s", então o modelo responde e NADA é bloqueado', async (frase) => {
       await configurar('autonomo')
       await avisoVigente()
@@ -237,10 +267,9 @@ describe('Falso opt-out e falso negativo — nada novo é bloqueado sozinho', ()
     })
 
   it.each([
-    'não quero receber boleto, só pix', 'pare de me mandar boleto errado', 'me tira dessa lista de espera',
     'não quero mais receber mensagens dessa loja', 'não quero mais receber promoção de produtos',
     'para de mandar mensagem por favor, não tenho interesse em produtos', 'descadastrar meu número do whatsapp da loja',
-    'para', 'Para!', 'parar', 'chega', 'não quero mais receber essas coisas',
+    'para', 'Para!', 'parar', 'chega', 'não quero mais receber essas coisas', 'não aguento mais mensagem',
   ])('dado "%s" (ambíguo), então vai para uma PESSOA com possivel_opt_out — sem modelo e sem bloqueio', async (frase) => {
     await configurar('autonomo')
     await avisoVigente()
@@ -253,7 +282,8 @@ describe('Falso opt-out e falso negativo — nada novo é bloqueado sozinho', ()
     expect((await dono`SELECT 1 FROM atendimento WHERE tenant_id = ${T}`).length).toBe(1)
   })
 
-  it.each(['pare por favor', 'pare, obrigado', 'não quero mais mensagens', 'chega de propaganda', 'não me manda mais', 'quero sair da lista'])(
+  it.each(['pare por favor', 'pare, obrigado', 'não quero mais mensagens', 'chega de propaganda', 'não me manda mais', 'quero sair da lista',
+    'quero parar de receber as mensagens', 'chega de spam', 'nao quero mais ser contatado', 'me bloqueia', 'desinscrever'])(
     'dado "%s" (explícito), então bloqueia', async (frase) => {
       await configurar('autonomo')
       await avisoVigente()
@@ -374,6 +404,18 @@ describe('Abertura e aviso de privacidade', () => {
     expect(enviados.map((e) => e.texto)).toEqual(['Posso te ajudar com os produtos.'])
     const [s] = await dono<{ estado_agente: { gatilhos?: { aberturaFeita?: boolean } } }[]>`SELECT estado_agente FROM agente_sessao WHERE tenant_id = ${T} AND estado = 'ativa'`
     expect(s!.estado_agente.gatilhos?.aberturaFeita).toBe(true)
+  })
+
+  it('aberturaFeita só com a abertura de fato enviada (igualdade com as fatias): resposta que cita um trecho não conta', async () => {
+    await configurar('autonomo')
+    // O filtro troca a abertura inteira: nenhuma mensagem enviada é fatia dela, e a resposta só a cita em parte.
+    const filtro: EtapaPosResposta = { nome: 'filtro', async executar(_c, e) {
+      return { mensagens: e.mensagens.map((m) => (m.includes('assistente virtual') ? 'Oi!' : m)), guardrails: [] }
+    } }
+    await diz('oi', { pipeline: { filtro } })
+    const [s] = await dono<{ estado_agente: { gatilhos?: { aberturaFeita?: boolean } } }[]>`SELECT estado_agente FROM agente_sessao WHERE tenant_id = ${T}`
+    expect(s!.estado_agente.gatilhos?.aberturaFeita).toBeUndefined()
+    expect(codigos(await ultimaDecisao())).toContain('abertura_nao_enviada')
   })
 
   it('aviso com valor (gravado fora da tela): a rede descarta SÓ a abertura; a resposta sai e não vira handoff', async () => {

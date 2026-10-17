@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import {
   detectarOptOut, detectarPedidoHumano, detectarReclamacao, detectarPerguntaRobo, gatilhoExtra,
   textoAbertura, textoRobo, textoOptOut, textoHandoffGatilho, TEXTO_PEDE_TEXTO_AUDIO, INSTRUCAO_ABERTURA_ENVIADA,
-  AVISO_CONFIRMAR_OPT_OUT, RESUMO_POSSIVEL_OPT_OUT,
+  AVISO_CONFIRMAR_OPT_OUT, RESUMO_POSSIVEL_OPT_OUT, REGRAS_AGENTE_PADRAO, fatiarMensagem,
   type MarcaGuardrail, type MotivoHandoff,
 } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../../../../db/index.js'
@@ -221,6 +221,8 @@ async function confirmacaoJaEnviada(tx: Sql, ctx: ContextoPipeline, confirmacao:
       SELECT 1 FROM mensagem m
        WHERE m.tenant_id = tenant_atual() AND m.conversa_id = ${ctx.conversaId} AND m.direcao = 'saliente'
          AND m.status IS DISTINCT FROM 'falhou' AND m.conteudo->>'texto' = ${confirmacao}
+         -- 'pendente' antigo é envio que morreu no meio: não prova que o cliente recebeu.
+         AND NOT (m.status = 'pendente' AND m.criado_em < ${ctx.agora}::timestamptz - interval '2 minutes')
          AND m.criado_em >= (SELECT min(e.criado_em) FROM mensagem e
                               WHERE e.tenant_id = tenant_atual() AND e.conversa_id = ${ctx.conversaId}
                                 AND e.id = ANY(${ids}::uuid[]))) AS ja`
@@ -316,6 +318,8 @@ async function aberturaDoTurno(ctx: ContextoPipeline): Promise<{ texto: string; 
     ...identidade(ctx), clienteNome: prep.nome,
     privacidade: { url: prep.privacidade.url, textoPadrao: prep.privacidade.textoPadrao },
   })
+  const maxCaracteres = Number(ctx.cfgExtra['max_caracteres']) || REGRAS_AGENTE_PADRAO.maxCaracteres
+  const fatias = fatiarMensagem(texto, maxCaracteres * 4)
   return {
     texto,
     marca: marca(ETAPA, 'abertura', 'INFO', 'anexado'),
@@ -331,8 +335,8 @@ async function aberturaDoTurno(ctx: ContextoPipeline): Promise<{ texto: string; 
           })
           if (x.registrado) registrou = true
         }
-        // A abertura saiu (inteira ou fatiada): não repete nesta sessão.
-        const saiu = registrou || r.enviadas.some((e) => texto.includes(e.texto))
+        // A abertura saiu (inteira ou em fatias — as MESMAS que o rabo faz): não repete nesta sessão.
+        const saiu = registrou || r.enviadas.some((e) => fatias.includes(e.texto))
         if (saiu && r.sessaoId) {
           const atual = await lerEstado(tx, r.sessaoId)
           const g = atual['gatilhos'] && typeof atual['gatilhos'] === 'object' ? (atual['gatilhos'] as EstadoGatilhos) : {}
