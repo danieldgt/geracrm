@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import type { MetricaSlaHandoff } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { respostaHumanaDoAtendimento } from '../atendimento/sla-handoff.js'
 
@@ -94,7 +95,7 @@ export async function rotasPerformance(app: FastifyInstance): Promise<void> {
 
       const g = dados.geral
       const h = dados.handoff
-      const slaHandoff = {
+      const slaHandoff: MetricaSlaHandoff = {
         medidos: h?.medidos ?? 0, cumpridos: h?.cumpridos ?? 0, estourados: h?.estourados ?? 0, pendentes: h?.pendentes ?? 0,
         respondidos: h?.respondidos ?? 0,
         pctCumprido: h?.medidos ? Math.round((h.cumpridos / h.medidos) * 100) : null,

@@ -1,6 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import type { MetricaSlaHandoff } from '@geracrm/shared'
 
 interface Perf {
   readonly dias: number
@@ -10,7 +11,7 @@ interface Perf {
   readonly slaMinutosVariam?: boolean
   /** Contagem geral de atendimentos respondidos por gente (com SLA configurado, `respondidos` vira a base do SLA). */
   readonly respondidosPorGente?: number
-  readonly slaHandoff?: { medidos: number; cumpridos: number; estourados: number; pendentes: number; pctCumprido: number | null }
+  readonly slaHandoff?: MetricaSlaHandoff
   readonly total: number
   readonly assumidos: number
   readonly respondidos: number

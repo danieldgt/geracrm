@@ -153,6 +153,23 @@ export function duracaoCurta(ms: number): string {
   return `${Math.floor(h / 24)} d ${h % 24} h`
 }
 
+// ── métrica ────────────────────────────────────────────────────────────────
+
+/**
+ * `GET /v1/performance` → `slaHandoff`: o SLA do handoff medido (P18).
+ * medidos = decididos (respondidos ou estourados); cumpridos = resposta humana
+ * até `sla_vence_em`; pendentes = ainda no prazo sem resposta; respondidos =
+ * com resposta humana (no prazo ou não). `pctCumprido` = cumpridos / medidos.
+ */
+export interface MetricaSlaHandoff {
+  readonly medidos: number
+  readonly cumpridos: number
+  readonly estourados: number
+  readonly pendentes: number
+  readonly respondidos: number
+  readonly pctCumprido: number | null
+}
+
 // ── mensagem única de espera ───────────────────────────────────────────────
 
 /**

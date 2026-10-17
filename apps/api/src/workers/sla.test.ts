@@ -371,6 +371,25 @@ describe('worker do SLA', () => {
     expect((await atendimentoDe(c2.conversa)).aviso_espera_resultado).toBe('enviada')
   })
 
+  it('exceção DENTRO da trava depois de reservas commitadas: reservas viram "falhou", nada sai e a trava é solta', async () => {
+    const c1 = await novaConversa()
+    const c2 = await novaConversa()
+    const t0 = new Date()
+    await handoff(c1.conversa, t0)
+    await handoff(c2.conversa, new Date(t0.getTime() + 1000))
+    let passos = 0
+    const explodeNo2 = async () => { if (++passos === 2) throw new Error('banco caiu no meio') }
+    await expect(processarSla(dono as never, { somenteTenant: A, enviar: enviarFalso, depoisDoPasso: explodeNo2 }, min(32, t0)))
+      .rejects.toThrow('banco caiu no meio')
+    expect(enviados).toEqual([])
+    expect((await atendimentoDe(c1.conversa)).aviso_espera_resultado).toBe('falhou')
+    expect((await atendimentoDe(c2.conversa)).aviso_espera_resultado).toBe('falhou')
+    // A trava foi solta: a passada seguinte roda (e não reenvia nada).
+    const r = await passada(min(61, t0))
+    expect(r.liberados).toBe(2)
+    expect(enviados).toEqual([])
+  })
+
   it('handoff de opt-out AMBÍGUO (marca possivel_opt_out, P4) não recebe espera: registra opt_out', async () => {
     const { conversa } = await novaConversa()
     const t0 = new Date()

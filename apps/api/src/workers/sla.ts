@@ -55,6 +55,8 @@ export interface RelatorioSla {
 export interface DepsSla {
   readonly somenteTenant?: string | undefined
   readonly enviar?: typeof enviarTextoNaConversa | undefined
+  /** Só para teste: roda depois de cada candidato processado (simula falha no meio do lote). */
+  readonly depoisDoPasso?: (() => Promise<void>) | undefined
 }
 
 export async function processarSla(dono: Sql, deps: DepsSla = {}, agora: Date = new Date()): Promise<RelatorioSla> {
@@ -63,7 +65,9 @@ export async function processarSla(dono: Sql, deps: DepsSla = {}, agora: Date = 
   // ⚠️ Trava de SESSÃO numa conexão RESERVADA: no pool, o unlock poderia sair
   //    por outra conexão, a trava vazaria e as passadas seguintes que caíssem
   //    na conexão presa voltariam vazias sem dizer por quê. Toda consulta de DONO
-  //    da passada usa ESTA conexão (o `server.ts` dá ao worker um pool de 1).
+  //    da passada usa ESTA conexão — e ela é a ÚNICA do pool de dono do
+  //    `server.ts` (max 1), COMPARTILHADO com ~13 workers: fica reservada só
+  //    para decidir e reservar, nunca durante a rede (envio abaixo, já solta).
   const conexao = await dono.reserve()
   let travou = false
   try {
@@ -110,6 +114,7 @@ export async function processarSla(dono: Sql, deps: DepsSla = {}, agora: Date = 
       if (passo.aviso && passo.aviso.tipo === 'enviar') {
         aEnviar.push({ tenantId: c.tenant_id, atendimentoId: c.id, conversaId: passo.conversaId, texto: passo.aviso.texto })
       }
+      await deps.depoisDoPasso?.()
     }
     // Alerta aberto cujos estourados foram encerrados (ou respondidos) sem passar por aqui.
     const comAlerta = await conexao<{ tenant_id: string }[]>`
@@ -118,6 +123,18 @@ export async function processarSla(dono: Sql, deps: DepsSla = {}, agora: Date = 
          AND ${deps.somenteTenant ? conexao`tenant_id = ${deps.somenteTenant}` : conexao`true`}
        LIMIT ${LOTE}`
     for (const t of comAlerta) await comTenantServico(t.tenant_id, (tx) => resolverAlertaSeLimpo(tx))
+  } catch (erro) {
+    // ⚠️ Reservas JÁ COMMITADAS ('pendente') desta passada não serão enviadas:
+    //    ficam 'falhou' (nunca reenviam) em vez de 'pendente' para sempre, que a
+    //    tela mostraria como "em envio".
+    for (const e of aEnviar) {
+      try {
+        await comTenantServico(e.tenantId, (tx) => tx`
+          UPDATE atendimento SET aviso_espera_resultado = 'falhou'
+           WHERE tenant_id = tenant_atual() AND id = ${e.atendimentoId} AND aviso_espera_resultado = 'pendente'`)
+      } catch { /* segue: no pior caso fica 'pendente', e nunca reenvia */ }
+    }
+    throw erro
   } finally {
     try { await conexao`SELECT pg_advisory_unlock(hashtext(${chave}))` } finally { conexao.release() }
   }
