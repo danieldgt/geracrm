@@ -172,6 +172,11 @@ para acordar gente de madrugada, recalibrar com 2–4 semanas de histórico.
   decisão: falso positivo vira ajuste de regra; verdadeiro vira ajuste de playbook/conhecimento e caso
   de regressão. **Duas CRÍTICA no mesmo número na semana** → rebaixar o modo (`agente-go-live.md` §3).
 - **Volta:** registrar a decisão na revisão semanal (`agente-revisao-semanal.md`).
+- **Juiz parado** (sem avaliações novas na aba Qualidade): o worker de qualidade escolhe o lote numa
+  transação curta e reserva cada sessão em `qualidade_juiz_concessao` com TTL; instância que morreu no
+  meio deixa a linha expirar e a sessão volta a ser escolhida sozinha. Sessão com erro do juiz conta como
+  falha e o lote segue. Se nada anda: conferir `agente_qualidade_teto` (teto mensal do juiz no número) e
+  o provedor (§1).
 
 ## 11. Webhook parado
 
@@ -211,6 +216,9 @@ para acordar gente de madrugada, recalibrar com 2–4 semanas de histórico.
 - **Sintoma:** muitos cronômetros vermelhos no inbox e no kanban; gestores recebendo aviso de estouro.
 - **Confirmar:** alerta `sla_handoff_estourado`; `GET /v1/performance` → `slaHandoff`
   (`estourados`, `pendentes`, `pctCumprido`); por conversa, `GET /v1/conversas/:id/sla`.
+- **Antes, descartar falso estouro:** o SLA para quando uma **pessoa** responde — mensagem com autor
+  (`enviada_por_id`). Se o time responde e o cronômetro não para, algum caminho de envio humano não está
+  gravando o autor (bug; a régua também alimenta `primeira_resposta_humana_em` em `GET /v1/performance`).
 - **Ação:** é falta de gente na fila, não falha do agente. Redistribuir: depois do 2º limiar a
   reatribuição fica liberada a todos do número; gestão (admin/gestor/supervisor) assume a qualquer
   momento. Se o volume de handoff subiu de repente, ver o motivo dominante em

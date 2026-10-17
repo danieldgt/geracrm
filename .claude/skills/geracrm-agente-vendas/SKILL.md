@@ -88,7 +88,8 @@ Regras que não admitem exceção:
 ## Prompt (instrucao-vendedor.ts)
 
 Três blocos: `BLOCO_GLOBAL` (igual para todos; cache), `blocoTenant` (persona, políticas,
-método, capacidades, alçada; cache), `instrucaoDoTurno` (o que sabemos, resumo, pedido aberto,
+método, capacidades, alçada e o **playbook publicado** — estilo, conduta e roteiro; cache, P0d),
+`instrucaoDoTurno` (só o volátil) (o que sabemos, resumo, pedido aberto,
 hora — vai como **operador** dentro das mensagens, nunca no system). Mudar o bloco global é
 mudança de comportamento: changelog + rodar as evals. Nada volátil no system (`cache_read_input_tokens`
 zerando em produção = algo volátil entrou no prefixo).
@@ -203,7 +204,10 @@ Guia completo: `apps/api/src/contexts/atendimento/agente/evals/README.md`.
 - Real: `IA_E2E=1` (recusa `IA_PROVEDOR=simulado`), juiz do ambiente (`IA_QUALIDADE_MODELO`); nunca no CI.
 - Scripts: `agente:smoke` (provedor e reserva, nunca imprime chave), `agente:avaliar` (transcrição;
   sai 2 com CRÍTICA), `agente:medir-prefixo` (volátil no system).
-- Fases e critérios: `docs/agente-go-live.md`; incidentes: `docs/agente-runbook.md`.
+- Fases e critérios: painel `GET /v1/agente/go-live?canalId` (aba Métricas) com avaliação pura em
+  shared `agente-fases.ts` (`avaliarFase`, alvos `ALVO_*` = PROPOSTA; falta de amostra = sem medida;
+  conversão por Newcombe). Mudar alvo é mudar a constante e o ADR-031. Procedimento:
+  `docs/agente-go-live.md`; incidentes: `docs/agente-runbook.md`.
 
 ## Checklist antes de ligar num cliente
 

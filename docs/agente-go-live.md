@@ -6,10 +6,11 @@
 > fase), ADR-032 (custo) e ADR-034 (SLA do handoff). Estrutura portada do GO-LIVE da AM Consórcio; o
 > conteúdo é do GeraCRM.
 
-⚠️ **Números de fase são PROPOSTA** (ADR-031). O painel com o critério calculado é da raia P19
-(`GET /v1/agente/go-live?canalId`, shared `agente-fases.ts`), **ainda não integrada**. Até lá cada
-número é medido à mão pelas rotas da §2. Onde houver `⚠️ P19:` o texto será conferido com
-`agente-fases.ts` quando a P19 entrar.
+⚠️ **Os alvos são PROPOSTA** (ADR-031): números da AM adaptados ao B2B, a validar com o primeiro
+cliente. Eles moram como constantes nomeadas `ALVO_*` em `packages/shared/src/dominio/agente-fases.ts`, e
+este documento os repete; se divergirem, vale o código. O painel (aba **Métricas** do agente,
+`GET /v1/agente/go-live?canalId`, gestor/admin, só leitura) calcula cada critério e devolve
+`alvosProposta: true`. O painel **só informa**: quem muda o modo é uma pessoa, na Configuração.
 
 ## 0. O que liga e desliga
 
@@ -22,143 +23,180 @@ número é medido à mão pelas rotas da §2. Onde houver `⚠️ P19:` o texto 
 | Tetos de custo (dia e sessão do número; orçamento mensal da conta) | aba Proteções; `PUT /v1/canais/:id/agente/custo`, `PUT /v1/agente/orcamento` | admin |
 | Amostra do juiz e teto mensal do juiz | aba Qualidade; `PUT /v1/canais/:id/agente/qualidade` | admin |
 | SLA do handoff (minutos úteis, reatribuição, aviso de espera) | `PUT /v1/canais/:id/sla` | admin |
+| Conferência de homologação (douradas, smoke) | aba Métricas; `POST /v1/agente/go-live/conferencia` | admin, auditado |
 
 O modo **efetivo** é o mais restritivo entre conta, número e recorte (ADR-028). A tela mostra de onde
 veio a restrição.
 
-## 1. Fases
+## 1. Fases e como o painel decide
 
-| Fase | O agente fala com o cliente? | Quem envia | Duração mínima (proposta) | Quem decide |
-|---|---|---|---|---|
-| 0 Homologação | não — playground e evals | ninguém | — | nosso time |
-| 1 Sombra | não | o vendedor; o agente decide e grava | ≥ 10 dias úteis, ≥ 150 turnos e ≥ 50 conversas | nosso time + dono da loja |
-| 2 Assistido | não — sugere no inbox | o vendedor (Usar, editar ou Descartar) | ≥ 10 dias úteis, ≥ 100 sugestões | nosso time + dono da loja |
-| 3 Autônomo num recorte | sim, dentro do recorte | o agente | 21 dias | dono da loja |
-| 4 Autônomo amplo | sim | o agente | permanente, revisão a cada 30 dias | dono da loja |
+| Fase (`FASES_AGENTE`) | Vem do modo do número | O agente fala com o cliente? | Quem decide |
+|---|---|---|---|
+| Homologação (`homologacao`) | `desligado` | não — playground e evals | nosso time |
+| Sombra (`sombra`) | `sombra` | não; decide e grava | nosso time + dono da loja |
+| Assistido (`assistido`) | `assistido` | não — sugere no inbox | nosso time + dono da loja |
+| Autônomo num recorte (`autonomo_recorte`) | `autonomo` com recorte que restringe | sim, dentro do recorte | dono da loja |
+| Autônomo amplo (`autonomo_amplo`) | `autonomo` sem recorte | sim | dono da loja; revisão a cada 30 dias |
 
-"Autônomo num recorte" é o que a AM chama de "assistido" (ADR-028): `autonomo` no número com
-`agente_config.recorte` limitando horário e segmento. Fora do recorte o modo cai para o
-`foraDoRecorte` (padrão `sombra`).
+- A fase vem do modo **do número** e do recorte (`faseDoModo`), não do modo do minuto: fora do horário do
+  recorte o agente está em sombra agora, mas a fase continua "autônomo num recorte". Recorte inválido
+  conta como recorte. O "assistido" da AM é o nosso autônomo num recorte (ADR-028).
+- **Início da fase**: a última mudança auditada (`agente.config_alterada`) que **trocou a fase**
+  (`inicioDaFasePorAuditoria`). Mudar a persona ou ajustar o horário do recorte não zera a contagem. Sem
+  auditoria, o início é estimado pela 1ª decisão no modo (`inicioEstimado`).
+- **Dias pausados pelo teto**: com o kill switch do tenant segurando o número abaixo do modo dele, o número
+  aparece "pausado pelo teto" (`pausadoPeloTeto`), a fase **não muda** e esses dias **não contam**
+  (`diasPausados`, descontados de `dias`).
+- **Três resultados por critério**: cumpre (`ok: true`); reprova (`ok: false`: a medida existe, tem
+  amostra e ficou fora do alvo); ou **sem medida** (`ok: null`: fonte ausente, sem conferência, ou
+  **amostra insuficiente**, sempre com o motivo). **Falta de amostra nunca é reprovação.**
+- **Avançar** (`podeAvancar`) exige **todos** os critérios com `ok: true` (falha fechada). No autônomo
+  amplo só **reprovação** recomenda voltar (`recomendacao: 'voltar'`, `voltarPara`); sem medida mantém e
+  mostra o que falta medir.
+- **Janela das medidas**: desde o início da fase (1 a 90 dias). No recorte, a CRÍTICA olha os últimos
+  14 dias; no amplo, tudo olha os últimos 30.
 
 ### Fase 0 — Homologação
 
-**Objetivo:** provar catálogo, políticas, playbook e provedor sem cliente real.
+**Objetivo:** provar catálogo, políticas, playbook e provedor sem cliente real. Pré-requisitos no
+checklist de `agente-vendedor-operacao.md` §2.
 
-Pré-requisitos (checklist de `agente-vendedor-operacao.md` §2): catálogo indexado, políticas escritas,
-persona, alçada, aviso de privacidade (`PUT /v1/privacidade`), playbook importado e publicado.
+| Critério (id) | Alvo (PROPOSTA) | Fonte |
+|---|---|---|
+| Conversas douradas sem CRÍTICA (`douradas`) | ≥ 25 cenários, 0 CRÍTICA | **conferência manual**: um admin roda os evals (`IA_E2E=1`, `evals/README.md`) e registra cenários e CRÍTICAs |
+| Smoke do provedor de IA (`smoke`) | ok | **conferência manual**: um admin roda `pnpm --filter @geracrm/api agente:smoke` (e `-- --reserva`) e registra |
+| Conversas testadas no playground (`playground_conversas`) | ≥ 30, cada uma com ≥ 3 turnos | **medido pelo sistema** a cada reinício do playground |
+| CRÍTICA no playground (`playground_critica`) | 0 | idem; regras de qualidade (P12) sobre as marcas das decisões |
 
-| Critério (proposta) | Como medir |
-|---|---|
-| Evals B2B e conversas douradas com 0 CRÍTICA | `pnpm test` (CI, simulado) e a rodada real `IA_E2E=1` (`apps/api/src/contexts/atendimento/agente/evals/README.md`) |
-| Smoke do provedor ok, inclusive a reserva | `pnpm --filter @geracrm/api agente:smoke` e `-- --reserva` (saída 0) |
-| ≥ 30 conversas no playground com 0 CRÍTICA | aba Playground (`POST /v1/canais/:id/agente/simular`); transcrições difíceis em `agente:avaliar` (saída 2 = CRÍTICA) |
-
-⚠️ P19: conferir nomes e alvos com `agente-fases.ts`.
+- **Conferência** (`POST /v1/agente/go-live/conferencia`, só admin, auditada com antes/depois):
+  `{item: 'douradas', canalId, cenarios, criticas}` ou `{item: 'smoke', canalId, ok}`. Vale **30 dias**
+  (`VALIDADE_CONFERENCIA_DIAS`); o painel mostra quem declarou e quando. Fica em `agente_homologacao`.
+- **Playground por reinício**: cada "Reiniciar conversa" grava uma entrada `{em, turnos, criticas}`
+  (`somarPlayground`). Contam só as entradas dos últimos 30 dias **e depois do corte**: a última
+  publicação do playbook ou mudança na configuração do número. Teste de uma versão anterior não vale para
+  a atual.
 
 ### Fase 1 — Sombra
 
-**Objetivo:** medir se o agente diria o que o vendedor disse, sem risco ao cliente.
+**Objetivo:** medir se o agente diria o que o vendedor disse, sem risco ao cliente. Liga: modo `sombra`;
+amostra do juiz 1,0; revisão semanal começa (`agente-revisao-semanal.md`).
 
-Liga: modo `sombra`; amostra do juiz 1,0 (padrão do modo); revisão semanal começa
-(`agente-revisao-semanal.md`).
-
-| Critério (proposta, ADR-031) | Alvo | Como medir |
+| Critério (id) | Alvo (PROPOSTA) | Fonte |
 |---|---|---|
-| Similaridade sombra × humano | ≥ 0,6 em ≥ 60% dos turnos comparados | `GET /v1/agente/sugestoes/metricas?canalId&dias` → `sombra.taxaAcimaDoLimiar` (limiar 0,6) |
-| Violações CRÍTICA | 0 | `GET /v1/agente/qualidade/resumo?canalId&dias` → `porGravidade.CRITICA` |
-| Nota média do juiz | ≥ 4 | mesmo resumo → `notaMedia` |
-| Concordância juiz × gestor | ≥ 85% com ≥ 20 conversas distintas e 0 falso negativo crítico | `GET /v1/agente/revisao/concordancia?canalId&semana` → `atingeMeta` |
-| Custo por conversa | ≤ R$ 1,50 | `GET /v1/agente/metricas?canalId&dias` → `custoPorConversaCentavos` |
-| Turnos com número bloqueado | ≤ 2% | mesma rota: `turnosComNumeroBloqueado` ÷ `turnos` |
+| Tempo na fase (`dias_uteis`) | ≥ 10 dias úteis | auditoria do modo (P14), menos os dias pausados |
+| Turnos na fase (`turnos`) | ≥ 150 | `agente_decisao` |
+| Conversas na fase (`conversas`) | ≥ 50 | `agente_decisao` |
+| Sombra parecida com o humano (`similaridade_sombra`) | ≥ 60% dos turnos comparados com similaridade ≥ 0,6 | `agente_decisao.sombra_similaridade` (P13) |
+| CRÍTICA que escapou (`critica`) | 0 | `agente_avaliacao` (P12) |
+| Nota média do juiz (`nota_juiz`) | ≥ 4,0, **só com a concordância na meta** | juiz amostrado (P12) |
+| Concordância humano × juiz (`concordancia`) | ≥ 85% com ≥ 20 conversas revisadas e 0 CRÍTICA não vista | `agente_revisao` (P16) |
+| Custo por conversa (`custo_conversa`) | ≤ R$ 1,50 (o juiz aparece à parte, fora do alvo) | `agente_decisao.custo_centavos` (P6) |
+| Turnos com número bloqueado (`numeros_bloqueados`) | ≤ 2% | guardrail numérico (P7) |
 
-⚠️ A similaridade de sombra é **sinal a calibrar**, não régua firme: é Jaccard de palavras
-(`similaridadeTextos`), e dois textos certos escritos de jeitos diferentes pontuam baixo. Use junto
-com a concordância; não reprove só por ela até haver histórico real (ADR-031, atualização).
+Fica sem medida quando: nenhuma resposta humana depois de um turno de sombra (similaridade); menos de 20
+conversas revisadas comparáveis (concordância); nenhuma avaliação do juiz, ou concordância fora da meta
+(nota). Uma **CRÍTICA não vista pelo juiz reprova com qualquer amostra**.
 
-⚠️ P19: conferir alvos e fonte de cada critério com `agente-fases.ts`.
+⚠️ A similaridade de sombra é **sinal a calibrar** (Jaccard de palavras): leia junto com a concordância.
 
 ### Fase 2 — Assistido
 
-**Objetivo:** o vendedor usa a sugestão? E usa sem mexer?
+**Objetivo:** o vendedor usa a sugestão, e usa sem mexer? Liga: modo `assistido`; amostra do juiz 0,2;
+treinamento do time (`agente-treinamento-1h.md`).
 
-Liga: modo `assistido`; amostra do juiz 0,2. Treinamento do time: `agente-treinamento-1h.md`.
-
-| Critério (proposta) | Alvo | Como medir |
+| Critério (id) | Alvo (PROPOSTA) | Fonte |
 |---|---|---|
-| Uso da sugestão | ≥ 40% | `GET /v1/agente/sugestoes/metricas` → `assistido.taxaUso` |
-| Enviadas sem edição | ≥ 70% (com ≥ 50 enviadas) | `assistido.taxaSemEdicao` |
-| Violações CRÍTICA | 0 | `GET /v1/agente/qualidade/resumo` |
-
-⚠️ P19: conferir.
+| Tempo na fase (`dias_uteis`) | ≥ 10 dias úteis | auditoria do modo |
+| Sugestões geradas (`sugestoes`) | ≥ 100 | `agente_decisao.sugestao_estado` (P13) |
+| Sugestões usadas pelo vendedor (`uso_sugestao`) | ≥ 40% | idem: (enviadas + editadas) ÷ geradas |
+| Enviadas sem edição (`sem_edicao`) | ≥ 70% com ≥ 50 enviadas (abaixo de 50: sem medida) | idem |
+| CRÍTICA que escapou (`critica`) | 0 | `agente_avaliacao` (P12) |
 
 ### Fase 3 — Autônomo num recorte
 
-**Objetivo:** o agente responde sozinho onde a equipe está de olho (ex.: horário comercial, segmento
-de recompra).
+**Objetivo:** o agente responde sozinho onde a equipe está de olho. Liga: modo `autonomo` + recorte;
+amostra do juiz 0,05; SLA do handoff do número (sem configuração vale 30/60 min úteis com aviso de
+espera ligado, ADR-034).
 
-Liga: modo `autonomo` + recorte; amostra do juiz 0,05; SLA do handoff configurado no número (sem linha
-vale 30/60 minutos úteis com aviso de espera ligado — ADR-034).
-
-| Critério (proposta) | Alvo | Como medir |
+| Critério (id) | Alvo (PROPOSTA) | Fonte |
 |---|---|---|
-| Violações CRÍTICA | 0 nos últimos 14 dias | `GET /v1/agente/qualidade/resumo?dias=14` |
-| 1ª resposta | p95 ≤ 6 s | `GET /v1/agente/metricas` → `latenciaP95Ms` |
-| Handoff | entre 10% e 40% dos turnos | mesma rota: `handoffs` ÷ `turnos` e `handoffPorMotivo` |
-| Opt-out | ≤ 1% | linha `opt_out` de `handoffPorMotivo` ÷ `conversas` |
-| Conversão | não-inferior à coorte sem agente (−2 p.p.) | `pedidos` (propostos, confirmados, efetivados) da mesma rota × período anterior |
-| Pedido confirmado errado | 0 | revisão semanal (decisão registrada) |
-| SLA do handoff cumprido | acompanhar | `GET /v1/performance` → `slaHandoff.pctCumprido` |
+| Tempo na fase (`dias`) | ≥ 21 dias corridos | auditoria do modo, menos os dias pausados |
+| CRÍTICA nos últimos 14 dias (`critica`) | 0 | `agente_avaliacao` (P12) |
+| p95 do cliente falar até a 1ª resposta (`p95_primeira`) | ≤ 6,0 s | 1ª mensagem do cliente → 1ª mensagem do agente na sessão; inclui a espera da fila (debounce) |
+| Conversas passadas para humano (`handoff`) | entre 10% e 40% | `agente_decisao.desfecho = handoff` |
+| Opt-out nas conversas do agente (`opt_out`) | ≤ 1% | marcas de opt-out (P4) |
+| Conversão em pedido × coorte humana (`conversao`) | não-inferior: limite inferior do IC unilateral de 95% da diferença ≥ −2,0 p.p. | pedido confirmado ou efetivado por conversa, coortes maduras |
+| Pedido confirmado errado (`pedido_errado`) | 0 | pedido do agente confirmado e depois cancelado (aproximação) |
+| SLA do handoff cumprido (`sla_handoff`) | ≥ 90% | `atendimento` (P18): cumpridos ÷ medidos, sem arredondar |
 
-⚠️ P19: conferir; a conversão não-inferior depende de coorte que a P19 define.
+**Conversão** (`julgarConversao`):
+- Coortes **maduras** (conversa com ≥ 14 dias, `CONVERSAO_MATURACAO_DIAS`) do mesmo número. A coorte humana
+  é a conversa respondida por pessoa (régua da P18, `enviada_por_id`). As coortes não são aleatorizadas
+  (o agente atende o recorte, o humano o resto); o painel nomeia o **viés de seleção**.
+- Diferença agente − humano com o **intervalo de Newcombe** (híbrido de Wilson), IC unilateral de 95%.
+- Coorte vazia → **sem medida**.
+- Intervalo inteiro abaixo de −2 p.p. → **reprova** (inferioridade clara, com qualquer n).
+- n abaixo do necessário para poder de 80% (`amostraParaNaoInferioridade`; no B2B costuma passar de
+  milhares por coorte) → **cumpre com alerta** "amostra sem poder para −2,0 p.p.; leitura indicativa",
+  com o limite inferior e o n. É leitura, não prova.
+- Com poder → cumpre se o limite inferior ≥ −2 p.p.
 
 ### Fase 4 — Autônomo amplo
 
-Recorte removido (tirar o recorte de número autônomo pede a palavra `autonomo`). Revisão a cada 30
-dias (§4). Critério violado → volta uma fase.
+Recorte removido (tirar o recorte de número autônomo pede a palavra `autonomo`). Permanente, revisado a
+cada 30 dias (§4). Critérios, todos nos **últimos 30 dias**: CRÍTICA = 0, p95, handoff, opt-out,
+conversão, pedido confirmado errado e SLA ≥ 90%, com os mesmos alvos da Fase 3. Aqui o pedido cancelado
+depois da confirmação vira **alerta "Revise…"**, não reprovação. Critério **reprovado** → o painel
+recomenda voltar para o recorte.
 
 ## 2. Como medir
 
-Todas as rotas abaixo são do tenant do token (RLS) e aceitam `canalId`; as de período aceitam
-`dias` (1–90, padrão 7).
+O painel junta tudo: `GET /v1/agente/go-live?canalId` (gestor/admin) devolve `fase`, `dias`,
+`diasUteis`, `diasPausados`, `inicioFase`, `janelaDias`, `criterios[{id, rotulo, alvo, valor, ok, fonte,
+motivo?, alerta?}]`, `podeAvancar`, `recomendacao` e `pendencias`. Cada fonte é coletada à parte: a que
+falha vira "sem medida" com o motivo e as outras seguem. Para investigar um número, as rotas de origem
+(todas do tenant do token, com `canalId` e `dias` de 1 a 90):
 
 | Pergunta | Rota |
 |---|---|
-| Quantos turnos, respostas, sugestões, handoffs por motivo, custo, p95, números bloqueados, pedidos | `GET /v1/agente/metricas` |
+| Turnos, respostas, sugestões, handoffs por motivo, custo, p95, números bloqueados, pedidos | `GET /v1/agente/metricas` (`MetricasAgenteDto`) |
 | Sugestões usadas, editadas, descartadas; sombra × humano | `GET /v1/agente/sugestoes/metricas` |
 | Notas do juiz e violações por gravidade | `GET /v1/agente/qualidade/resumo`; lista em `GET /v1/agente/qualidade` (cursor) |
 | Concordância da semana por número | `GET /v1/agente/revisao/concordancia` (gestor/admin) |
-| SLA do handoff | `GET /v1/performance` → `slaHandoff` (`MetricaSlaHandoff`) |
+| SLA do handoff | `GET /v1/performance` → `slaHandoff` (`MetricaSlaHandoff`, a mesma conta do painel) |
 | Por que o agente disse isso | `GET /v1/agente/decisoes` (cursor): marcas de guardrail, ferramentas, custo, modo efetivo |
 | Saúde da operação | `GET /saude/detalhada` (`agente-runbook.md`) |
 
 ## 3. Rollback (voltar uma fase)
 
-Gatilhos (qualquer um): violação CRÍTICA confirmada na revisão; duas CRÍTICA no mesmo número na
-semana; falso negativo crítico (o gestor viu CRÍTICA que o sistema não viu); critério da fase violado
-na revisão de 30 dias; pedido confirmado errado.
+Gatilhos (qualquer um): recomendação "voltar" do painel; violação CRÍTICA confirmada na revisão; duas
+CRÍTICA no mesmo número na semana; CRÍTICA não vista pelo juiz; pedido confirmado errado confirmado na
+revisão.
 
 Procedimento:
 1. **Rebaixar o modo do número** (`autonomo` → `assistido` ou `sombra`) em Configuração. Vale na
    próxima mensagem. Emergência na conta inteira: `PUT /v1/agente/tenant` com `modoMaximo: 'sombra'`
-   ou `'desligado'` (kill switch; o registro das mensagens não para — ADR-028).
-2. Conferir que nenhuma conversa ficou sem dono: handoffs em espera aparecem na fila (contador,
-   inbox e kanban) com o cronômetro do SLA.
+   ou `'desligado'` (kill switch: o número fica "pausado pelo teto", a fase não muda, os dias pausados
+   não contam, e o registro das mensagens não para — ADR-028).
+2. Conferir que nenhuma conversa ficou sem dono: handoffs em espera aparecem na fila (contador, inbox e
+   kanban) com o cronômetro do SLA.
 3. Registrar a decisão na revisão (`decisao = recuar_modo`, com responsável e prazo).
 4. Se o problema foi conteúdo: corrigir no playbook (rascunho → testar → publicar) ou no conhecimento,
-   e virar caso de regressão (`cenarios-b2b.ts` ou `agente:avaliar`).
-5. Voltar a subir só depois de cumprir de novo o critério da fase de onde voltou.
+   e virar caso de regressão (`cenarios-b2b.ts` ou `agente:avaliar`). Publicar o playbook corta o
+   playground da homologação: os testes têm de ser refeitos sobre a versão nova.
+5. Voltar a subir só depois de cumprir de novo o critério da fase de onde voltou. A troca de modo que
+   muda a fase reinicia a contagem de dias.
 
 Nada é apagado no rollback: decisões, avaliações e revisões ficam no banco e continuam medindo.
 
 ## 4. Revisão a cada 30 dias (autônomo)
 
-Reunião do nosso time com o dono da loja, por número autônomo:
-- critérios da Fase 3 recalculados nos últimos 30 dias (§2);
+Reunião do nosso time com o dono da loja, por número autônomo, a partir da aba Métricas:
+- critérios do painel (janela de 30 dias no amplo): reprovados, sem medida e alertas (conversão sem
+  poder, pedido cancelado depois da confirmação);
 - concordância das quatro semanas e decisões abertas da revisão semanal;
 - custo: teto do dia, teto da sessão, orçamento mensal (alertas `agente_orcamento_80`/`_100`) e
   modelos sem preço (`preco_desconhecido`);
 - SLA do handoff: `slaHandoff.pctCumprido` e estouros (`sla_handoff_estourado`);
 - playbook: versões publicadas no período (histórico, com observação);
 - resultado: manter, ampliar o recorte, ou voltar uma fase. Registrar na ata da loja.
-
-⚠️ P19: quando o painel de fase existir, a revisão parte dele.

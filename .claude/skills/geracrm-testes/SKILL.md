@@ -151,6 +151,18 @@ arquivo rodando em paralelo — e os dois falham de forma intermitente (foi a ca
 - Contagem global (ex.: "nenhuma tarefa pendente", alertas) filtra pelo tenant do arquivo — e alerta,
   também pelo `tipo`.
 
+### Servidor ligado no banco da suíte
+
+Um servidor (`pnpm dev`, ou um `tsx watch` órfão de outro worktree) no MESMO banco consome as filas dos
+testes como dono — isolar por tenant não adianta. O `globalSetup` do Vitest (`vitest.global-setup.ts` →
+`db/servidor-no-banco.ts`) **recusa a suíte** se houver conexão com `application_name=geracrm-workers`
+(`APLICACAO_WORKERS`, nome das conexões dos workers do `server.ts`) no banco, dizendo o porquê. Banco
+inacessível só avisa e segue. Solução: parar o servidor ou usar banco próprio (abaixo).
+
+⚠️ Relógio: compare instantes com o `now()` do banco ou com um `agora` injetado, nunca com o relógio do
+host — host e contêiner divergem e o teste vira flaky (causa corrigida na P0d em debounce, webhook e
+concessões).
+
 ### Banco próprio por raia
 
 Raias em paralelo rodam a suíte contra o **mesmo Postgres** (porta 5442): duas suítes no mesmo banco

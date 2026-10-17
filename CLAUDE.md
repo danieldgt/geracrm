@@ -50,7 +50,7 @@ para venda B2B recorrente. Monorepo pnpm+Turborepo: `apps/api` (Fastify), `apps/
   Stack no Railway com chat bidirecional, pedido assistido, campanhas e agente VENDEDOR (laço de
   ferramentas sob RLS, fila `agente_tarefa`, modos sombra/assistido/autônomo, propor-e-confirmar). O port
   (`docs/plano-port-playbook-am.md`, ADR-028…034) pôs pipeline determinístico, qualidade com revisão
-  humana, playbook versionado e SLA do handoff; P19 (painel de fase) e P0d (estabilização) em andamento.
+  humana, playbook versionado, SLA do handoff e painel de fase (`GET /v1/agente/go-live`, alvos PROPOSTA).
   Operação: `docs/agente-go-live.md`, `agente-runbook.md`, `agente-revisao-semanal.md`. Skills da área:
   `geracrm-agente-vendas`, `geracrm-catalogo`.
 - **O turno do agente é um pipeline de ordem fixa** (`agente/pipeline/`, ADR-029): regra nova é etapa

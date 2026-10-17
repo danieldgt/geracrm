@@ -124,6 +124,24 @@ Alertas **de processo** (sem tenant) não vão para a tabela: saem no log com o 
 (`llm_reserva_ativo`, `llm_reserva_encerrado`, `llm_reserva_falhou`, `modelo_bloqueado`, contexto
 `agente.llm`) e aparecem como motivo em `/saude/detalhada`.
 
+## Workers: trava sem vazar
+
+- Worker que trabalha entre instâncias usa **concessão com TTL numa tabela** (linha por item, token,
+  `expira_em`), nunca `pg_advisory_lock` de sessão pelo pool: com pool > 1 o unlock cai noutra conexão e a
+  trava vaza presa, parando o worker em todas as instâncias. Padrões: `copiloto_geracao` (0103) e
+  `qualidade_juiz_concessao` (0108, juiz por sessão). A escolha do lote fica sob
+  `pg_try_advisory_xact_lock` numa transação curta; a chamada externa roda fora de transação.
+- As conexões dono dos workers do `server.ts` usam `application_name=geracrm-workers`: em
+  `pg_stat_activity` dá para ver quem está consumindo fila.
+
+## Resposta humana: `enviada_por_id`
+
+"Alguém respondeu" é `mensagem.enviada_por_id IS NOT NULL` (régua única): o envio humano grava o autor
+na rota de envio, no resumo da proposta e no template; agente, aviso de espera e campanha não têm autor.
+Alimenta o SLA do handoff (`sla_respondido_em`), a coorte humana da conversão e
+`atendimento.primeira_resposta_humana_em` (tempo de 1ª resposta em `GET /v1/performance`). Envio humano
+novo que não grave o autor some dessas métricas.
+
 ## Logs estruturados do agente
 
 - Uma linha JSON por evento, com `contexto` (`agente.llm`, `agente.qualidade`…), ids (`tenantId`,

@@ -365,8 +365,15 @@ Integrado na `main`:
 | Qualidade (P12, P15, P16) | regras em 100%, pausa em CRÍTICA, juiz amostrado com rubrica única; evals B2B no pipeline real e scripts `agente:smoke/avaliar/medir-prefixo`; revisão humana semanal cega com concordância (ADR-031) |
 | Vendedor e modo (P13, P14, P17) | sugestão do assistido no inbox, copiloto sob demanda, métrica de edição; modo efetivo com recorte, kill switch do tenant e confirmação digitada (ADR-028); playbook versionado com sandbox (ADR-033) |
 | Handoff (P18) | SLA por número em minutos úteis, roteamento, reserva, aviso único de espera e cronômetro na fila (ADR-034) |
+| Painel de fase (P19) | `GET /v1/agente/go-live?canalId` e aba Métricas: critérios numéricos por fase (alvos PROPOSTA em `agente-fases.ts`), falta de amostra = sem medida, conversão por IC de Newcombe com alerta sem poder, homologação medida (conferência por admin + playground por reinício), dias pausados pelo teto (ADR-031) |
+| Estabilização (P0d) | suíte determinística (guarda contra servidor com workers no banco, relógio do banco), concessão do juiz com TTL (0108), `enviada_por_id` nos envios humanos (SLA e 1ª resposta humana), playbook no system cacheado |
 | Docs (P20) | `agente-go-live.md`, `agente-runbook.md`, `agente-revisao-semanal.md`, `agente-guia-vendedor.md`, `agente-treinamento-1h.md`; skills e ADRs alinhados |
 
-Em andamento: P19 (painel e critério de fase, `GET /v1/agente/go-live`) e P0d (estabilização final:
-testes instáveis, lock do worker de qualidade, `primeira_resposta_humana_em`, estilo do playbook no bloco
-cacheado). Os critérios de fase continuam **proposta** até a P19 e a calibração com o primeiro cliente.
+Os critérios de fase continuam **proposta** até a calibração com o primeiro cliente.
+
+**Pendência fora do escopo do port** (achada na revisão da P19; abrir raia própria): as partições de
+`auditoria` só existem até **2027-09** e nenhum job cria as próximas. As partições mensais nascem
+dentro das migrations (`0004` auditoria, `0012` mensagem — com `garantir_particoes_mensais('mensagem', 12,
+12)` —, `0014` venda e item_venda); a função `garantir_particoes_mensais` existe e é idempotente, mas
+nada a agenda. Verificar o horizonte de `mensagem`, `venda` e `item_venda` também e agendar a criação
+(worker ou passo do pre-deploy) antes do vencimento: INSERT sem partição falha.

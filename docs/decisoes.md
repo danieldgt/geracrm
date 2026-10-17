@@ -854,6 +854,25 @@ validar com o primeiro cliente antes de virarem regra; painel na raia P19):
   `IA_QUALIDADE_TETO_MES_CENTAVOS` = R$ 20,00), com alerta `agente_qualidade_teto`. A rubrica tem fonte
   única no shared (`promptJuizQualidade`, `interpretarRubrica`), usada pela produção e pelos evals.
 
+**Atualização (2026-10-17, integração da P19) — critérios de fase no painel.** Os alvos continuam
+**PROPOSTA** e moram como constantes `ALVO_*` em `packages/shared/src/dominio/agente-fases.ts`; o painel
+é `GET /v1/agente/go-live?canalId` (só informa; quem muda o modo é a pessoa). Acréscimos à tabela acima:
+- **SLA do handoff ≥ 90%** (cumpridos ÷ medidos, ADR-034) passa a ser critério do autônomo num recorte
+  e do amplo.
+- **Falta de amostra não reprova**: critério sem fonte, sem conferência ou com amostra abaixo do mínimo
+  fica "sem medida" (com o motivo); avançar exige todos medidos e cumpridos; no amplo só reprovação manda
+  voltar.
+- **Conversão −2 p.p.**: coortes maduras (≥ 14 dias), diferença com IC de Newcombe unilateral de 95%. A
+  margem só é **julgável acima do n com poder de 80%** (`amostraParaNaoInferioridade`); abaixo dele o
+  critério cumpre com **alerta de leitura indicativa**, e só a inferioridade clara (intervalo inteiro
+  abaixo de −2 p.p.) reprova. As coortes não são aleatorizadas (viés de seleção nomeado no painel).
+- **Homologação medida**: douradas e smoke por **conferência manual de um admin**
+  (`POST /v1/agente/go-live/conferencia`, auditada, válida por 30 dias, em `agente_homologacao`);
+  playground medido pelo sistema a cada reinício, contando só o que veio depois da última publicação do
+  playbook ou mudança de configuração do número.
+- Dias em que o teto do tenant pausou o número não contam na fase; a fase só reinicia quando uma mudança
+  auditada troca a fase.
+
 ## ADR-032 — Custo pelo catálogo `modelo_ia`, teto por sessão e alerta mensal por tenant
 
 **Data:** 2026-10-17.
