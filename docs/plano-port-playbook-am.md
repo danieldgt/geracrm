@@ -433,3 +433,5 @@ PRONTO     skills descrevem o pipeline e onde estender
   como o worker de SLA (P18); `primeira_resposta_humana_em` nunca é preenchida (métrica fixa de 5 min da
   performance sempre vazia) — preencher no envio humano; `DepsTurno.ligacoes.canalId` declarado; estilo/roteiro
   do playbook no bloco de sistema cacheado.
+  Flaky adicional: rotas-sugestao.test.ts:511 "concessão por conversa ENTRE instâncias" — conta copiloto_geracao
+  antes de a concessão ser solta (DELETE assíncrono após a resposta); passa 5/5 isolado.
