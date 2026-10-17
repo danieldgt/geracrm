@@ -27,7 +27,7 @@
 | P16 revisão humana | 3 | 0105 | integrada (86c7bef; 3 revisões; main verde 1980 api) | | |
 | P17 playbook versionado | 3 | 0106 | integrada (8359966; 3 revisões; main verde 2018 api) | | |
 | P18 SLA do handoff | 3 | 0107 | integrada (2f1946d; 2 revisões; main verde 2075 api) | | fatia mínima de INB-22 (decisão padrão: fazer; ver ADR-034) |
-| P19 painel de fase | 3 | — | em andamento | | |
+| P19 painel de fase | 3 | 0109 | integrada (bf7b1a7; 3 revisões) | | |
 | P20 operação/docs/skills | 4 | — | em andamento | | |
 
 Integração: `pnpm lint typecheck test` verde **e** revisão adversarial (`revisar-raia`) aprovada, merge na `main`
