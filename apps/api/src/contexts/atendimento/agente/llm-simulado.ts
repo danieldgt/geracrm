@@ -1,3 +1,4 @@
+import { LIMITES_PLAYBOOK } from '@geracrm/shared'
 import type { PedidoDeLaco, PortaLlmFerramentas, ResultadoLaco, CapacidadesLlmFerramentas, ChamadaRegistrada } from './porta-llm.js'
 
 /**
@@ -32,6 +33,9 @@ export class LlmSimulado implements PortaLlmFerramentas {
       ok: true as const, saida,
       rastro: { chamadas, rodadas: chamadas.length + 1, uso: { entrada: 0, saida: 0, cacheLeitura: 0, cacheEscrita: 0 }, modelo: 'simulado', latenciaMs: Date.now() - inicio, parouPor: 'fim' as const },
     })
+    // 0. "Atualizar a partir de documento" (P17): tarefa de saída estruturada, sem ferramentas.
+    if (ehSugestaoDePlaybook(p)) return fim(sugestaoSimulada(p))
+
     const ultimas = p.mensagens.filter((m) => m.papel === 'cliente')
     const texto = (ultimas[ultimas.length - 1]?.texto ?? '').trim()
     const t = normalizar(texto)
@@ -112,4 +116,33 @@ export class LlmSimulado implements PortaLlmFerramentas {
 
 function normalizar(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/** O pedido é o "a partir de documento"? Reconhecido pelo schema da saída, não pelo texto do prompt. */
+function ehSugestaoDePlaybook(p: PedidoDeLaco): boolean {
+  const props = (p.esquemaSaida as { properties?: Record<string, unknown> } | undefined)?.properties
+  return !!props && 'resumoMudancas' in props && 'frasesProibidasNovas' in props
+}
+
+/**
+ * Rascunho determinístico e VÁLIDO no schema `sugestaoDoDocumento` (e na validação
+ * do playbook): acrescenta às orientações uma linha que nomeia o documento e não
+ * mexe no resto. ⚠️ Não copia o texto do documento — ele pode trazer valor, prazo
+ * ou promessa que a validação recusa, e o objetivo aqui é exercitar o fluxo
+ * (gerar → revisar no diff → publicar/descartar) em dev sem chave de IA.
+ */
+function sugestaoSimulada(p: PedidoDeLaco): Record<string, unknown> {
+  const prompt = p.mensagens.map((m) => m.texto).join('\n')
+  let orientacoes = ''
+  const atual = prompt.match(/<playbook_atual>([\s\S]*?)<\/playbook_atual>/)?.[1]
+  try { orientacoes = String((JSON.parse(atual ?? '{}') as { orientacoes?: unknown }).orientacoes ?? '') } catch { /* sem base: só a linha nova */ }
+  // Nome sem dígitos: a validação de orientação recusa número que não veio de ferramenta.
+  const nome = (prompt.match(/<documento nome="([^"]*)">/)?.[1] ?? 'documento').replace(/[0-9]+/g, '').replace(/\s+/g, ' ').trim() || 'documento'
+  const linha = `Rascunho simulado a partir de "${nome.slice(0, 80)}": revise esta conduta antes de publicar.`
+  const base = orientacoes.trim().slice(0, Math.max(0, LIMITES_PLAYBOOK.orientacoes - linha.length - 2))
+  return {
+    orientacoes: base ? `${base}\n\n${linha}` : linha,
+    qualificacao: null, mensagens: null, frasesProibidasNovas: [], gatilhosHandoffNovos: [],
+    resumoMudancas: [`Orientações: acrescentada a conduta do documento "${nome.slice(0, 80)}" (modelo simulado).`],
+  }
 }

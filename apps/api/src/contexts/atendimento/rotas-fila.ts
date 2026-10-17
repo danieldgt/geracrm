@@ -6,7 +6,7 @@ import { auditar } from '../plataforma/auditoria.js'
 import { atendePapel, papeisDoUsuario } from '../plataforma/papel.js'
 import { operadorAusente, RECUSA_OPERADOR_AUSENTE } from './presenca-operador.js'
 import { garantirEtapasAtendimento } from './rotas-atendimento-kanban.js'
-import { fragmentoNaFila, respostaHumanaDoAtendimento } from './sla-handoff.js'
+import { fragmentoForaDaSimulacao, fragmentoNaFila, respostaHumanaDoAtendimento } from './sla-handoff.js'
 
 /**
  * Fila e assunção (EP-06).
@@ -74,7 +74,7 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
 
   /** Contadores das abas (E6-02): fila (não assumidas) e meus (em atendimento). */
   app.get('/v1/fila/contadores', { preHandler: exigirTenant }, async (req, reply) => {
-    const sub = req.usuarioSub ?? 'dev-header-sub'
+    const sub = subDoUsuario(req) // a MESMA regra do assumir (dev: "dev-<tenant>")
     const r = await req.comTenant(async (tx) => {
       const [fila] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM conversa cv
@@ -82,7 +82,9 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
       const [meus] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM atendimento a
          JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id
-         WHERE a.tenant_id = tenant_atual() AND a.estado <> 'encerrado' AND u.cognito_sub = ${sub}`
+         JOIN conversa cv ON cv.tenant_id = a.tenant_id AND cv.id = a.conversa_id
+         WHERE a.tenant_id = tenant_atual() AND a.estado <> 'encerrado' AND u.cognito_sub = ${sub}
+           AND ${fragmentoForaDaSimulacao(tx)}`
       return { fila: fila?.n ?? 0, meus: meus?.n ?? 0 }
     })
     return reply.send(r)

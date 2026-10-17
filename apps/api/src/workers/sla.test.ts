@@ -59,11 +59,11 @@ const pedir = (metodo: 'GET' | 'PUT' | 'POST', url: string, tenant = A, payload?
   app.inject({ method: metodo, url, headers: { 'x-tenant-id': tenant }, ...(payload ? { payload } : {}) })
 
 /** Uma conversa nova (um contato por conversa) no canal, com a última entrante há `entranteHaMin`. */
-async function novaConversa(p: { canal?: string; tenant?: string; entranteHaMin?: number; conduzida?: 'humano' | 'ia'; dono?: string } = {}) {
+async function novaConversa(p: { canal?: string; tenant?: string; entranteHaMin?: number; conduzida?: 'humano' | 'ia'; dono?: string; origem?: string } = {}) {
   const t = p.tenant ?? A
   const contato = randomUUID(), conversa = randomUUID()
   const fone = `55859${String(Math.floor(Math.random() * 1e8)).padStart(8, '0')}`
-  await dono`INSERT INTO contato (tenant_id, id, nome, ativo) VALUES (${t}, ${contato}, 'Cliente Sla', true)`
+  await dono`INSERT INTO contato (tenant_id, id, nome, ativo, origem_carga) VALUES (${t}, ${contato}, 'Cliente Sla', true, ${p.origem ?? null})`
   await dono`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
              VALUES (${t}, ${contato}, 1, ${fone}, ${fone}, true, true, 'teste')`
   await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao, conduzida_por, ultima_entrante_em, ultima_direcao, ultima_mensagem_em)
@@ -606,18 +606,32 @@ describe('configuração por número', () => {
 })
 
 describe('performance: SLA cumprido', () => {
-  it('sem configuração: fixo de 5 min; com configuração: % de handoffs respondidos no SLA', async () => {
+  it('sem configuração e sem handoff medido: fixo de 5 min', async () => {
+    const r = (await pedir('GET', '/v1/performance?dias=7')).json()
+    expect(r).toMatchObject({ slaFonte: 'fixo', slaMinutos: 5, slaHandoff: { medidos: 0, pctCumprido: null } })
+  })
+
+  it('sem configuração, com handoffs medidos: SLA cumprido pelo padrão (30 min úteis); com configuração: o configurado', async () => {
     const t0 = new Date(Date.now() - 2 * 3_600_000)
     const c1 = await novaConversa(); await handoff(c1.conversa, t0)
     const c2 = await novaConversa(); await handoff(c2.conversa, t0)
     await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, enviada_por_id, criado_em)
                VALUES (${A}, ${randomUUID()}, ${c1.conversa}, 'saliente', 'texto', '{"texto":"oi"}'::jsonb, ${ANA}, ${min(10, t0)})`
     await passada(new Date())
-    const fixo = (await pedir('GET', '/v1/performance?dias=7')).json()
-    expect(fixo).toMatchObject({ slaFonte: 'fixo', slaMinutos: 5, slaHandoff: { medidos: 2, cumpridos: 1, estourados: 1, pctCumprido: 50 } })
+    const padrao = (await pedir('GET', '/v1/performance?dias=7')).json()
+    expect(padrao).toMatchObject({
+      slaFonte: 'handoff', slaMinutos: SLA_PADRAO.slaMinutos, slaMinutosVariam: false, dentroSla: 1, respondidos: 2, pctDentroSla: 50,
+      slaHandoff: { medidos: 2, cumpridos: 1, estourados: 1, pctCumprido: 50 },
+    })
+    // Linha sem sla_minutos segue o padrão — não muda a régua.
+    await dono`INSERT INTO atendimento_sla_config (tenant_id, canal_id) VALUES (${A}, ${OFICIAL})`
+    expect((await pedir('GET', '/v1/performance?dias=7')).json()).toMatchObject({ slaMinutos: 30, slaMinutosVariam: false })
     await dono`INSERT INTO atendimento_sla_config (tenant_id, canal_id, sla_minutos, reatribuicao_minutos) VALUES (${A}, ${NAO_OFICIAL}, 20, 40)`
     const cfg = (await pedir('GET', '/v1/performance?dias=7')).json()
-    expect(cfg).toMatchObject({ slaFonte: 'handoff', slaMinutos: 20, slaMinutosVariam: false, dentroSla: 1, respondidos: 2, pctDentroSla: 50 })
+    // O número oficial segue no padrão (30): os SLAs variam entre números.
+    expect(cfg).toMatchObject({ slaFonte: 'handoff', slaMinutos: 20, slaMinutosVariam: true, dentroSla: 1, respondidos: 2, pctDentroSla: 50 })
+    await dono`UPDATE atendimento_sla_config SET sla_minutos = 20 WHERE tenant_id = ${A} AND canal_id = ${OFICIAL}`
+    expect((await pedir('GET', '/v1/performance?dias=7')).json()).toMatchObject({ slaMinutos: 20, slaMinutosVariam: false })
   })
 
   it('mede na consulta: respondido e encerrado antes de o worker passar conta como cumprido', async () => {
@@ -628,5 +642,51 @@ describe('performance: SLA cumprido', () => {
     await dono`UPDATE atendimento SET estado = 'encerrado', encerrado_em = now() WHERE conversa_id = ${c.conversa}`
     const r = (await pedir('GET', '/v1/performance?dias=7')).json()
     expect(r.slaHandoff).toMatchObject({ medidos: 1, cumpridos: 1, estourados: 0, respondidos: 1, pctCumprido: 100 })
+  })
+})
+
+describe('conversa do playground fora da operação (Pvis2)', () => {
+  it('a conversa do "Cliente de simulação" não entra no inbox/trilho, na fila, no kanban nem nos contadores', async () => {
+    const agora = new Date()
+    // Handoff (na fila): um real e um do playground.
+    const real = await novaConversa(); await handoff(real.conversa, agora)
+    const sim = await novaConversa({ origem: 'simulacao' }); await handoff(sim.conversa, agora)
+    // Entrante assumida por mim (coluna do kanban + "meus"): um real e um do playground.
+    const realMeu = await novaConversa({ conduzida: 'humano' })
+    const simMeu = await novaConversa({ conduzida: 'humano', origem: 'simulacao' })
+    expect((await pedir('POST', `/v1/conversas/${realMeu.conversa}/assumir`)).statusCode).toBe(201)
+    expect((await pedir('POST', `/v1/conversas/${simMeu.conversa}/assumir`)).statusCode).toBe(201)
+
+    const ids = (r: { json(): { itens: { id?: string; conversaId?: string }[] } }) => r.json().itens.map((i) => i.id ?? i.conversaId)
+    const todas = ids(await pedir('GET', '/v1/conversas'))
+    expect(todas).toEqual(expect.arrayContaining([real.conversa, realMeu.conversa]))
+    expect(todas).not.toContain(sim.conversa); expect(todas).not.toContain(simMeu.conversa)
+    expect(ids(await pedir('GET', '/v1/conversas?filtro=fila'))).toEqual([real.conversa])
+    expect(ids(await pedir('GET', '/v1/conversas?filtro=meus'))).toEqual([realMeu.conversa])
+
+    expect((await pedir('GET', '/v1/fila/contadores')).json()).toEqual({ fila: 1, meus: 1 })
+
+    expect(ids(await pedir('GET', '/v1/atendimento-kanban/aguardando'))).toEqual([real.conversa])
+    const etapas = (await pedir('GET', '/v1/atendimento-kanban/etapas')).json() as {
+      aguardando: { total: number }; itens: { id: string; ordem: number; total: number }[]
+    }
+    expect(etapas.aguardando.total).toBe(1)
+    const primeira = etapas.itens.sort((a, b) => a.ordem - b.ordem)[0]!
+    expect(primeira.total).toBe(1)
+    expect(ids(await pedir('GET', `/v1/atendimento-kanban/coluna/${primeira.id}`))).toEqual([realMeu.conversa])
+  })
+})
+
+describe('prévia da conversa (Pvis2)', () => {
+  it('a mensagem de sistema do handoff não vira a prévia: a lista mostra a última mensagem real', async () => {
+    const c = await novaConversa()
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+               VALUES (${A}, ${randomUUID()}, ${c.conversa}, 'entrante', 'texto', '{"texto":"quero falar com alguém"}'::jsonb, now() - interval '1 minute')`
+    await handoff(c.conversa, new Date())
+    const [sis] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM mensagem WHERE conversa_id = ${c.conversa} AND tipo = 'sistema'`
+    expect(sis!.n).toBe(1)
+    const item = ((await pedir('GET', '/v1/conversas')).json() as { itens: { id: string; ultimaMensagem: unknown }[] })
+      .itens.find((i) => i.id === c.conversa)
+    expect(item?.ultimaMensagem).toEqual({ texto: 'quero falar com alguém', direcao: 'entrante' })
   })
 })

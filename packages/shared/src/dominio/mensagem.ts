@@ -84,6 +84,9 @@ export function previewMensagem(tipo: string, conteudo: unknown): string {
       return `📎 ${c['nome'] ? String(c['nome']) : 'Documento'}`
     case 'acao':
       return `📋 ${c['titulo'] ? String(c['titulo']) : 'Ação'}`
+    case 'sistema':
+      // Not authored by anyone — a neutral label, never "[sistema]".
+      return 'Aviso do sistema'
     default:
       return `[${tipo}]`
   }

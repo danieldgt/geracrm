@@ -150,6 +150,19 @@ export function respostaHumanaDoAtendimento(sql: Sql) {
 }
 
 /**
+ * A conversa NÃO é a do playground (alias `cv` = conversa). O playground conversa
+ * com o "Cliente de simulação" (`contato.origem_carga = 'simulacao'`, um por
+ * canal — rotas-agente `/simular`) num canal real: sem este corte, o teste do
+ * admin aparecia para a operação no trilho, no inbox, no kanban e nos contadores.
+ * Mesmo marcador que o painel de fase (go-live) usa para medir a homologação.
+ */
+export function fragmentoForaDaSimulacao(sql: Sql) {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM contato sim
+     WHERE sim.tenant_id = cv.tenant_id AND sim.id = cv.contato_id AND sim.origem_carga = 'simulacao')`
+}
+
+/**
  * A conversa está NA FILA? (alias `cv` = conversa) — UMA régua para o contador,
  * o filtro "Fila" do inbox e a coluna "Aguardando" do kanban.
  *
@@ -164,7 +177,7 @@ export function respostaHumanaDoAtendimento(sql: Sql) {
  *      respondido direto pelo inbox, sem Assumir, saem da fila.
  */
 export function fragmentoNaFila(sql: Sql) {
-  return sql`(
+  return sql`${fragmentoForaDaSimulacao(sql)} AND (
     (cv.ultima_direcao = 'entrante' AND NOT EXISTS (
        SELECT 1 FROM atendimento a
         WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado <> 'encerrado'))

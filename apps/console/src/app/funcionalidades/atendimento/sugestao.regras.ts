@@ -28,6 +28,23 @@ export function rotuloModo(modo: ModoAgente | null): string {
   }
 }
 
+/**
+ * Selo do CARTÃO da sugestão: o modo em que ELA foi gerada (`agente_decisao.modo`,
+ * exposto como `origem`), não o modo atual do número. Uma sugestão do assistido
+ * continua "assistido" depois que o número passa a autônomo ou sombra — o modo
+ * atual vai na dica, quando difere.
+ */
+export function seloDaSugestao(
+  s: Pick<SugestaoVigente, 'origem'>, modoAtual: ModoAgente | null,
+): { readonly rotulo: string; readonly dica: string } {
+  const rotulo = s.origem === 'copiloto' ? 'Copiloto' : rotuloModo('assistido')
+  const dica = s.origem === 'copiloto'
+    ? 'Gerada a pedido, pelo copiloto. Nada é enviado sem você.'
+    : 'Gerada com o agente em modo assistido: ele sugere; você envia, edita ou descarta.'
+  const mudou = s.origem === 'assistido' && modoAtual !== null && modoAtual !== 'assistido'
+  return { rotulo, dica: mudou ? `${dica} Agora o número está em: ${rotuloModo(modoAtual).toLowerCase()}.` : dica }
+}
+
 /** Dica curta do que o modo significa para quem está atendendo. */
 export function dicaModo(modo: ModoAgente | null): string {
   switch (modo) {

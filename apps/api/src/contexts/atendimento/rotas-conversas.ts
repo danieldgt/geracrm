@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { calcularJanela, previewMensagem } from '@geracrm/shared'
-import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from './rotas-fila.js'
-import { fragmentoNaFila } from './sla-handoff.js'
+import { fragmentoForaDaSimulacao, fragmentoNaFila } from './sla-handoff.js'
 import { midiaHabilitada, urlAssinada, ehChaveMidia } from './midia/armazenamento.js'
 
 /**
@@ -125,7 +125,7 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
       if (em && id) { cursorEm = em; cursorId = id }
     }
 
-    const sub = req.usuarioSub ?? 'dev-header-sub'
+    const sub = subDoUsuario(req) // a MESMA regra do assumir (dev: "dev-<tenant>")
     const linhas = await req.comTenant((tx) => tx<{
       id: string; contato_id: string; nome: string; conduzida_por: string
       ultima_mensagem_em: Date | null; ultima_entrante_em: Date | null
@@ -158,14 +158,17 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
         LEFT JOIN conversa_leitura cl
           ON cl.tenant_id = cv.tenant_id AND cl.conversa_id = cv.id
          AND cl.usuario_id = (SELECT id FROM usuario WHERE tenant_id = tenant_atual() AND cognito_sub = ${sub})
+        -- ⚠️ A prévia é a última mensagem REAL: a de sistema (tipo 'sistema' — "Agente
+        --    transferiu…") não é de ninguém, e aparecia como "Você: [sistema]".
         LEFT JOIN LATERAL (
           SELECT m.tipo, m.conteudo, m.direcao
             FROM mensagem m
-           WHERE m.tenant_id = cv.tenant_id AND m.conversa_id = cv.id
+           WHERE m.tenant_id = cv.tenant_id AND m.conversa_id = cv.id AND m.tipo <> 'sistema'
            ORDER BY m.criado_em DESC
            LIMIT 1
         ) um ON true
        WHERE NOT cv.arquivada
+         AND ${fragmentoForaDaSimulacao(tx)}
          AND ${q.canal ? tx`cv.canal_id = ${q.canal}::uuid` : tx`true`}
          AND ${
            filtro === 'fila'

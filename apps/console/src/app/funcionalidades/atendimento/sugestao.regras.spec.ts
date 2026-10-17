@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { dicaModo, idadeDaSugestao, mensagemErroGerar, motivoSemCopiloto, rotuloModo, tituloDaSugestao } from './sugestao.regras.js'
+import { dicaModo, idadeDaSugestao, mensagemErroGerar, motivoSemCopiloto, rotuloModo, seloDaSugestao, tituloDaSugestao } from './sugestao.regras.js'
 
 describe('Painel de sugestão — selo do modo', () => {
   it('nomeia cada modo e o caso sem configuração', () => {
@@ -7,6 +7,20 @@ describe('Painel de sugestão — selo do modo', () => {
     expect(rotuloModo('desligado')).toBe('Agente desligado')
     expect(rotuloModo(null)).toBe('Agente não configurado')
     expect(dicaModo('assistido')).toMatch(/sugere/)
+  })
+})
+
+describe('Painel de sugestão — selo do cartão é o modo em que a sugestão foi gerada', () => {
+  it('gerada em assistido mostra "assistido" mesmo com o número já em autônomo, e a dica cita o modo atual', () => {
+    const selo = seloDaSugestao({ origem: 'assistido' }, 'autonomo')
+    expect(selo.rotulo).toBe('Agente assistido')
+    expect(selo.dica).toMatch(/agente autônomo/)
+  })
+  it('gerada em assistido com o número em assistido: sem nota de mudança', () => {
+    expect(seloDaSugestao({ origem: 'assistido' }, 'assistido').dica).not.toMatch(/Agora/)
+  })
+  it('do copiloto (pedida em sombra) mostra "Copiloto", não "Agente em sombra"', () => {
+    expect(seloDaSugestao({ origem: 'copiloto' }, 'sombra').rotulo).toBe('Copiloto')
   })
 })
 

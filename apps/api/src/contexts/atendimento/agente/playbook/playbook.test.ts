@@ -513,6 +513,27 @@ describe('Atualizar a partir de documento (só rascunho)', () => {
   })
 })
 
+describe('Atualizar a partir de documento em dev (IA_PROVEDOR=simulado, Pvis2)', () => {
+  it('dado o modelo simulado, então devolve um rascunho válido no schema, com resumo, sem mexer em persona/ações', async () => {
+    depsPlaybook.llm = null // a fábrica do ambiente: IA_PROVEDOR=simulado → LlmSimulado
+    const antes = await espelho(CANAL)
+    const r = await chamar(A, 'POST', '/v1/agente/playbook/a-partir-de-documento', {
+      canalId: CANAL, nome: 'politica-2026.txt', tipo: 'text/plain',
+      conteudoBase64: Buffer.from('Política comercial: tudo a partir de R$ 19,90 com entrega garantida em 2 dias.').toString('base64'),
+    })
+    expect(r.statusCode).toBe(201)
+    const s = r.json() as { versao: { estado: string; origem: string; conteudo: ConteudoPlaybook }; resumoMudancas: string[] }
+    expect(s.versao).toMatchObject({ estado: 'rascunho', origem: 'documento' })
+    expect(s.resumoMudancas.length).toBeGreaterThan(0)
+    // Nomeia o documento sem copiar valor/prazo do texto (a validação recusaria).
+    expect(s.versao.conteudo.estilo.orientacoes).toContain('politica-.txt')
+    expect(s.versao.conteudo.estilo.orientacoes).not.toMatch(/R\$|\d/)
+    expect(s.versao.conteudo.persona).toEqual(antes.playbook!.conteudo.persona)
+    expect(s.versao.conteudo.acoes).toEqual(antes.playbook!.conteudo.acoes)
+    await chamar(A, 'DELETE', `/v1/agente/playbook/rascunho?canalId=${CANAL}`)
+  })
+})
+
 describe('Revisão adversarial da P17', () => {
   it('[2] limite de estilo NÃO corta a abertura: identificação ("uma IA") e aviso de privacidade próprio saem inteiros com maxCaracteres 120', async () => {
     const AVISO = 'Seus dados são tratados conforme a LGPD e a política interna da Atacado Sol, com registro desta conversa para atendimento.'

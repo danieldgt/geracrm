@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { SLA_PADRAO } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { metricaSlaHandoff } from '../atendimento/sla-metrica.js'
 
@@ -17,9 +18,11 @@ import { metricaSlaHandoff } from '../atendimento/sla-metrica.js'
  * P18 (SLA do handoff, ADR-034): quando o tenant CONFIGUROU o SLA em algum
  * número (`atendimento_sla_config`), o "% dentro do SLA" passa a ser o SLA
  * CUMPRIDO dos handoffs — resposta humana até `sla_vence_em`, em minutos
- * ÚTEIS — e substitui o limiar fixo de 5 min (`slaFonte: 'handoff'`). Sem
- * configuração, o fixo continua (`slaFonte: 'fixo'`); o bloco `slaHandoff`
- * vem sempre, porque o SLA padrão (30 min úteis) mede os handoffs de todo jeito.
+ * ÚTEIS — e substitui o limiar fixo de 5 min (`slaFonte: 'handoff'`). Pvis2:
+ * o mesmo vale SEM configuração quando já há handoffs medidos — o SLA padrão
+ * (`SLA_PADRAO`, 30 min úteis) mede os handoffs de todo jeito, e mostrar o fixo
+ * de 5 min ali contradizia a fila. O fixo só sobra sem handoff medido nem
+ * configuração (`slaFonte: 'fixo'`). O bloco `slaHandoff` vem sempre.
  *
  *   medidos  = handoffs com SLA decidido: respondidos (no prazo ou não) ou estourados;
  *   cumpridos = resposta humana até `sla_vence_em`.
@@ -74,29 +77,37 @@ export async function rotasPerformance(app: FastifyInstance): Promise<void> {
         // A régua do SLA do handoff é UMA, compartilhada com o painel de fase (P19).
         const agora = new Date()
         const slaHandoff = await metricaSlaHandoff(tx, { desde: new Date(agora.getTime() - dias * 86_400_000), agora })
-        const [cfg] = await tx<{ n: number; min: number | null; max: number | null }[]>`
-          SELECT count(*)::int AS n, min(sla_minutos) AS min, max(sla_minutos) AS max
+        // Linha sem `sla_minutos` segue o padrão (lerContextoSla); número sem linha também.
+        const [cfg] = await tx<{ n: number; min: number | null; max: number | null; canais: number }[]>`
+          SELECT count(*) FILTER (WHERE sla_minutos IS NOT NULL)::int AS n, min(sla_minutos) AS min, max(sla_minutos) AS max,
+                 (SELECT count(*)::int FROM canal_conectado WHERE tenant_id = tenant_atual()) AS canais
             FROM atendimento_sla_config WHERE tenant_id = tenant_atual()`
         return { geral, porAtendente, slaHandoff, cfg }
       })
 
       const g = dados.geral
       const slaHandoff = dados.slaHandoff
-      const configurado = (dados.cfg?.n ?? 0) > 0
+      const configurados = dados.cfg?.n ?? 0
+      const porHandoff = configurados > 0 || slaHandoff.medidos > 0
+      // SLA vigente por número: o configurado, ou o padrão em quem não configurou.
+      const vigentes = [
+        ...(configurados > 0 ? [dados.cfg!.min!, dados.cfg!.max!] : []),
+        ...(configurados < (dados.cfg?.canais ?? 0) || configurados === 0 ? [SLA_PADRAO.slaMinutos] : []),
+      ]
       return reply.send({
         dias,
-        slaFonte: configurado ? 'handoff' : 'fixo',
-        // Configurado: o MENOR SLA entre os números (minutos ÚTEIS); `slaMinutosVariam` diz se há números diferentes.
-        slaMinutos: configurado ? (dados.cfg?.min ?? SLA_MINUTOS) : SLA_MINUTOS,
-        slaMinutosVariam: configurado && dados.cfg?.min !== dados.cfg?.max,
+        slaFonte: porHandoff ? 'handoff' : 'fixo',
+        // Handoff: o MENOR SLA vigente entre os números (minutos ÚTEIS); `slaMinutosVariam` diz se há números diferentes.
+        slaMinutos: porHandoff ? Math.min(...vigentes) : SLA_MINUTOS,
+        slaMinutosVariam: porHandoff && Math.min(...vigentes) !== Math.max(...vigentes),
         total: g?.total ?? 0,
         assumidos: g?.assumidos ?? 0,
-        // Configurado: `respondidos` é a BASE do SLA (handoffs decididos), para que
+        // Por handoff: `respondidos` é a BASE do SLA (handoffs decididos), para que
         // dentroSla / respondidos = pctDentroSla. A contagem geral vai em `respondidosPorGente`.
-        respondidos: configurado ? slaHandoff.medidos : g?.respondidos ?? 0,
+        respondidos: porHandoff ? slaHandoff.medidos : g?.respondidos ?? 0,
         respondidosPorGente: g?.respondidos ?? 0,
-        dentroSla: configurado ? slaHandoff.cumpridos : g?.dentro_sla ?? 0,
-        pctDentroSla: configurado ? slaHandoff.pctCumprido
+        dentroSla: porHandoff ? slaHandoff.cumpridos : g?.dentro_sla ?? 0,
+        pctDentroSla: porHandoff ? slaHandoff.pctCumprido
           : g?.respondidos ? Math.round(((g.dentro_sla) / g.respondidos) * 100) : null,
         slaHandoff,
         medianaRespostaSeg: g?.mediana_seg !== null && g?.mediana_seg !== undefined ? Math.round(g.mediana_seg) : null,

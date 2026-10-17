@@ -9,7 +9,7 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { PresencaServico } from '../../nucleo/presenca.servico.js'
 import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.componente.js'
 import { SugestaoServico } from './sugestao.servico.js'
-import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo, tituloDaSugestao } from './sugestao.regras.js'
+import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo, seloDaSugestao, tituloDaSugestao } from './sugestao.regras.js'
 import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.js'
 import { SlaCronometroComponente } from './sla-cronometro.componente.js'
 
@@ -309,7 +309,8 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
                           <div class="sug-cartao" [class.critica]="s.naoEnvie" aria-live="polite">
                             <div class="sug-topo">
                               <span class="sug-titulo">{{ tituloSugestao(s) }}</span>
-                              <span class="selo" [title]="dicaModo(r.modoAgente)">{{ rotuloModo(r.modoAgente) }}</span>
+                              @let selo = seloSugestao(s, r.modoAgente);
+                              <span class="selo" [title]="selo.dica">{{ selo.rotulo }}</span>
                               <span class="sug-idade">{{ idade(s.criadaEm) }}</span>
                             </div>
                             @if (s.bloqueada) {
@@ -880,6 +881,7 @@ export class InboxPagina implements OnDestroy {
   }
 
   tituloSugestao(s: SugestaoVigente): string { return tituloDaSugestao(s) }
+  readonly seloSugestao = seloDaSugestao
   idade(iso: string): string { return idadeDaSugestao(iso) }
   rotuloGravidade(g: string): string { return g === 'CRITICA' ? 'Crítico' : g === 'ALTA' ? 'Alto' : 'Atenção' }
 

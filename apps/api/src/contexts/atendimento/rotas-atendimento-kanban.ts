@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import type { Sql } from '../../db/index.js'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
-import { fragmentoNaFila } from './sla-handoff.js'
+import { fragmentoForaDaSimulacao, fragmentoNaFila } from './sla-handoff.js'
 
 /**
  * Kanban de ATENDIMENTOS com etapas configuráveis por empresa (a visão do gestor).
@@ -61,7 +61,8 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
       const etapas = await tx<{ id: string; chave: string; nome: string; tipo: string; ordem: number; total: number }[]>`
         SELECT e.id, e.chave, e.nome, e.tipo, e.ordem,
                (SELECT count(*) FROM atendimento a
-                 WHERE a.tenant_id = e.tenant_id AND a.etapa_id = e.id
+                  JOIN conversa cv ON cv.tenant_id = a.tenant_id AND cv.id = a.conversa_id
+                 WHERE a.tenant_id = e.tenant_id AND a.etapa_id = e.id AND ${fragmentoForaDaSimulacao(tx)}
                    AND (e.tipo = 'atendimento' OR a.entrou_etapa_em >= now() - (${DIAS_ENCERRADO} || ' days')::interval))::int AS total
           FROM atendimento_etapa e
          WHERE e.tenant_id = tenant_atual() AND e.ativo
@@ -157,7 +158,7 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
           JOIN conversa cv ON cv.tenant_id = a.tenant_id AND cv.id = a.conversa_id
           JOIN contato ct ON ct.tenant_id = cv.tenant_id AND ct.id = cv.contato_id
           LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id
-         WHERE a.tenant_id = tenant_atual() AND a.etapa_id = ${req.params.etapaId}
+         WHERE a.tenant_id = tenant_atual() AND a.etapa_id = ${req.params.etapaId} AND ${fragmentoForaDaSimulacao(tx)}
            AND (e.tipo = 'atendimento' OR a.entrou_etapa_em >= now() - (${DIAS_ENCERRADO} || ' days')::interval)
            AND ${curEm === null ? tx`true` : tx`(a.entrou_etapa_em, a.id) > (${curEm}::timestamptz, ${curId}::uuid)`}
          ORDER BY a.entrou_etapa_em ASC, a.id ASC
