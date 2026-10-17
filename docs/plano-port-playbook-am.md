@@ -398,3 +398,6 @@ PRONTO     skills descrevem o pipeline e onde estender
   (c) passar `tenantId` a `custoDoLaco` em vendedor.ts (alerta `preco_desconhecido` imediato — P6);
   (d) remover `custoEstimadoCentavos`/`PRECO_USD_POR_MILHAO` de porta-llm.ts depois de P5 e P6 integradas;
   (e) slots ditos no 1º turno com resposta fixa sem sessão se perdem (P3).
+  (f) `workers/transcricao.ts registrarFalha`: falha definitiva deve chamar `agendarTurno` para o "1º pede texto"
+      sair sem esperar nova mensagem (P4);
+  (g) lista de avisos de privacidade por contato na tela do contato (API pronta na P4).
