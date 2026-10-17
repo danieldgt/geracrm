@@ -100,6 +100,10 @@ describe('filtro de saída — promessas afirmativas saem', () => {
     'Só a gente garante entrega amanhã.',
     'Garanto que verifico e chega sexta.',
     'Garanto que amanhã o vendedor confirma e chega sexta.',
+    'Garantimos, com toda a certeza, a entrega amanhã.',
+    'Garantimos (pode confiar) a entrega amanhã.',
+    'Garanto que o seu pedido de 10 caixas chega na sexta.',
+    'Garantimos que o produto que você pediu ontem vai chegar amanhã.',
   ])('restrição, pontuação ou encaminhamento seguido de promessa não abonam: %s', (t) => {
     expect(ids(t)).toEqual(['garantia_sem_fonte'])
   })

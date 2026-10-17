@@ -269,6 +269,25 @@ function promessaDepoisDoEncaminhamento(ws: readonly string[], i: number): boole
   return ws.slice(j).some((w) => DURO_RE.test(w) || ehData(w))
 }
 
+/** Inciso curto sem conteúdo ("com toda a certeza", "pode confiar"): não é o que se promete. */
+const MAX_PALAVRAS_INCISO = 4
+function ehInciso(ws: readonly string[]): boolean {
+  return ws.length <= MAX_PALAVRAS_INCISO && ws[0] !== 'que'
+    && !ws.some((w) => OBJETO_TOKEN_RE.test(w) || ehData(w) || ENCAMINHA_RE.test(w) || QUEM_ENCAMINHA_RE.test(w))
+}
+
+/**
+ * A oração que o verbo promete: a primeira depois dele, pulando até dois
+ * incisos ("garantimos, com toda a certeza, a entrega amanhã", "garantimos
+ * (pode confiar) a entrega amanhã"). Intervalo de datas vira espaço.
+ */
+function oracaoDaPromessa(depois: string): string {
+  const oracoes = depois.split(/[,;:—–()]/).filter((o) => /[\p{L}\p{N}]/u.test(o))
+  let i = 0
+  while (i < Math.min(2, oracoes.length - 1) && ehInciso(tokensDe(oracoes[i]!))) i++
+  return (oracoes[i] ?? '').replace(INTERVALO_DE_DATAS_RE, ' ')
+}
+
 /** Promessa por verbo (garantir/assegurar/prometer) na frase, não negada. */
 export function promessaPorVerbo(frase: string): boolean {
   VERBO_PROMESSA_RE.lastIndex = 0
@@ -276,10 +295,12 @@ export function promessaPorVerbo(frase: string): boolean {
     const ini = m.index ?? 0
     if (termoNegado(frase, ini)) continue
     const depois = frase.slice(ini + m[0].length).replace(/^[\s,:;—–]+/u, '')
-    const oracao = (depois.split(/[,;:—–()]/)[0] ?? '').replace(INTERVALO_DE_DATAS_RE, ' ')
-    const ws = tokensDe(oracao)
+    const ws = tokensDe(oracaoDaPromessa(depois))
+    // Depois de "que" a oração inteira é o conteúdo prometido ("garanto que o
+    // seu pedido de 10 caixas chega na sexta"); sem "que", só as primeiras palavras.
+    const limite = ws[0] === 'que' ? ws.length : Math.min(ws.length, JANELA_OBJETO)
     let encaminhou = -1
-    for (let i = 0; i < Math.min(ws.length, JANELA_OBJETO); i++) {
+    for (let i = 0; i < limite; i++) {
       const w = ws[i]!
       if (ENCAMINHA_RE.test(w)) { encaminhou = i; break }
       if (ehData(w)) {
