@@ -13,7 +13,9 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 // ─────────────────────────────────────────────────────────────────────────────
 import postgres from 'postgres'
 import { responderAusencia } from './ausencia.js'
-import { encerrarBanco } from '../../db/index.js'
+import { encerrarBanco, comTenantServico } from '../../db/index.js'
+import { ninguemDisponivel, quemAtende } from './disponibilidade.js'
+import { partesLocais } from './expediente.js'
 
 const TA = 'a0525000-0000-4000-8000-000000000001'
 const PVA = 'a0525000-1111-4000-8000-000000000001'
@@ -226,5 +228,44 @@ describe('⚠️ Ninguém disponível é ausência, mesmo em horário comercial'
     expect(await responderAusencia(TA, CONVERSAA, CANALA, new Date(), {
       vinculados: 2, logados: 2, ativos: 2, foraDoExpediente: false,
     })).toBe('tem_quem_atenda')
+  })
+})
+
+describe('⚠️ Feriado do número (P11) é fora do expediente — para a disponibilidade do agente e para a ausência', () => {
+  /** Hoje, no fuso do tenant (padrão America/Sao_Paulo) — vale a qualquer hora que a suíte rode. */
+  const hojeLocal = () => partesLocais(new Date(), 'America/Sao_Paulo').data
+  const feriados = (lista: string[]) => donoA`
+    UPDATE canal_configuracao SET feriados = ${JSON.stringify(lista)}::text::jsonb
+     WHERE tenant_id = ${TA} AND canal_id = ${CANALA}`
+
+  beforeEach(async () => {
+    await donoA`DELETE FROM usuario_canal WHERE tenant_id = ${TA}`
+    await semHorario()
+    // Ana logada e disponível: sem o feriado, quem responde é gente.
+    await vincularAoCanal()
+    await batimentoHaMinutos(1, false)
+    await ausenciaRecente()
+  })
+  afterAll(async () => { await feriados([]); await restaurarHorario() })
+
+  it('sem feriado hoje, Ana disponível: dentro do expediente e a ausência não fala', async () => {
+    await feriados([])
+    const q = await comTenantServico(TA, (tx) => quemAtende(tx, CANALA, new Date()))
+    expect(q.foraDoExpediente).toBe(false)
+    expect(await responderAusencia(TA, CONVERSAA, CANALA)).toBe('tem_quem_atenda')
+  })
+
+  it('hoje é feriado (data exata): fora do expediente — o agente pode assumir e a ausência responde', async () => {
+    await feriados([hojeLocal()])
+    const q = await comTenantServico(TA, (tx) => quemAtende(tx, CANALA, new Date()))
+    expect(q.foraDoExpediente).toBe(true)
+    expect(ninguemDisponivel(q)).toBe(true)
+    expect(await responderAusencia(TA, CONVERSAA, CANALA)).toBe('ja_respondida')   // passou da régua; a sentinela evita a rede
+  })
+
+  it('feriado recorrente (MM-DD) também vale', async () => {
+    await feriados([hojeLocal().slice(5)])
+    const q = await comTenantServico(TA, (tx) => quemAtende(tx, CANALA, new Date()))
+    expect(q.foraDoExpediente).toBe(true)
   })
 })

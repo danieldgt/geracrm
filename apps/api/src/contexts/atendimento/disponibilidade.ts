@@ -1,5 +1,6 @@
 import type { Sql } from '../../db/index.js'
-import { foraDoExpediente, type HorarioAtendimento } from './expediente.js'
+import { ehFeriado, foraDoExpediente, type HorarioAtendimento } from './expediente.js'
+import { normalizarFeriados } from '@geracrm/shared'
 
 /**
  * TEM ALGUÉM PARA ATENDER ESTE NÚMERO?
@@ -76,7 +77,7 @@ export async function quemAtende(
 ): Promise<QuemAtende> {
   const [linha] = await tx<{
     vinculados: number; logados: number; ativos: number
-    horario: HorarioAtendimento | null; dia_iso: number; hora_local: string
+    horario: HorarioAtendimento | null; feriados: unknown; dia_iso: number; hora_local: string; data_local: string
   }[]>`
     SELECT
       count(*)::int AS vinculados,
@@ -89,6 +90,9 @@ export async function quemAtende(
       )::int AS ativos,
       (SELECT cfg.horario_atendimento FROM canal_configuracao cfg
         WHERE cfg.tenant_id = tenant_atual() AND cfg.canal_id = ${canalId}) AS horario,
+      (SELECT cfg.feriados FROM canal_configuracao cfg
+        WHERE cfg.tenant_id = tenant_atual() AND cfg.canal_id = ${canalId}) AS feriados,
+      to_char(${agora}::timestamptz AT TIME ZONE t.fuso, 'YYYY-MM-DD')        AS data_local,
       EXTRACT(ISODOW FROM (${agora}::timestamptz AT TIME ZONE t.fuso))::int AS dia_iso,
       to_char(${agora}::timestamptz AT TIME ZONE t.fuso, 'HH24:MI')          AS hora_local
       FROM tenant t
@@ -102,6 +106,10 @@ export async function quemAtende(
     vinculados: linha?.vinculados ?? 0,
     logados: linha?.logados ?? 0,
     ativos: linha?.ativos ?? 0,
-    foraDoExpediente: foraDoExpediente(linha?.horario ?? null, linha?.dia_iso ?? 1, linha?.hora_local ?? '12:00'),
+    // ⚠️ Feriado do número (P11, `canal_configuracao.feriados`) fecha o dia local
+    //    inteiro — a mesma régua das ativas (`situacaoDoExpediente`): no feriado a
+    //    ausência responde e o agente entra, como fora do expediente.
+    foraDoExpediente: foraDoExpediente(linha?.horario ?? null, linha?.dia_iso ?? 1, linha?.hora_local ?? '12:00')
+      || (!!linha?.data_local && ehFeriado(normalizarFeriados(linha.feriados), linha.data_local)),
   }
 }

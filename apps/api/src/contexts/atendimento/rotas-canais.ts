@@ -307,7 +307,10 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
               UPDATE canal_conectado
                  SET credenciais_cifradas = ${cifrada},
                      estado = 'conectando', verificado_em = NULL, ultimo_erro = NULL,
-                     identificador_externo = coalesce(${identificadorExterno ?? null}, identificador_externo)
+                     identificador_externo = coalesce(${identificadorExterno ?? null}, identificador_externo),
+                     -- P11: o worker de pós-ingestão reconfere a WABA/telefone
+                     -- desta credencial na próxima passada (2 s), não em 10 min.
+                     meta_roteamento_em = NULL, meta_roteamento_erro = NULL
                WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
           }
           const atorId = await garantirUsuarioId(tx, req)

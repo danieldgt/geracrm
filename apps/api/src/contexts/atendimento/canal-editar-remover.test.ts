@@ -5,6 +5,7 @@ import postgres from 'postgres'
 import { criarApp } from '../../app.js'
 import { encerrarBanco } from '../../db/index.js'
 import { decifrar } from '../integracao/cofre.js'
+import { sincronizarRoteamentoMeta } from '../../workers/pos-ingestao.js'
 
 /**
  * Editar e remover número (0083).
@@ -108,6 +109,26 @@ describe('Editar número', () => {
       SELECT estado, verificado_em, ultimo_erro FROM canal_conectado WHERE id = ${id}`
     // ⚠️ Credencial nova que ninguém testou não pode continuar dizendo "conectado".
     expect(l).toMatchObject({ estado: 'conectando', verificado_em: null, ultimo_erro: null })
+  })
+
+  it('⚠️ P11: trocar a credencial do oficial zera o carimbo de roteamento — a WABA nova vale na próxima passada, não em 10 min', async () => {
+    const r = await app.inject({
+      method: 'POST', url: '/v1/canais', headers: { 'x-tenant-id': T },
+      payload: { provedor: 'meta_oficial', nomeAmigavel: 'Oficial', credencial: {
+        telefone: '5585900003333', wabaId: 'WABA-EDITAR-1', phoneNumberId: 'PN-EDITAR-1', token: 'tok' } },
+    })
+    expect(r.statusCode).toBe(201)
+    const id = (r.json() as { id: string }).id
+    const agora = new Date()
+    await sincronizarRoteamentoMeta(dono as never, agora, T)
+    const roteamento = () => dono<{ waba: string | null; em: Date | null }[]>`
+      SELECT meta_waba_id AS waba, meta_roteamento_em AS em FROM canal_conectado WHERE id = ${id}`.then((l) => l[0]!)
+    expect((await roteamento()).waba).toBe('WABA-EDITAR-1')
+
+    await chamar('PUT', `/v1/canais/${id}`, { credencial: { wabaId: 'WABA-EDITAR-2' } })
+    expect((await roteamento()).em).toBeNull()
+    await sincronizarRoteamentoMeta(dono as never, agora, T)   // MESMO instante: sem esperar os 10 min
+    expect((await roteamento()).waba).toBe('WABA-EDITAR-2')
   })
 
   it('dado só a troca de nome, quando salvo, então a credencial fica intacta', async () => {
