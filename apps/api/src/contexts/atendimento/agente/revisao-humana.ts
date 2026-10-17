@@ -24,7 +24,6 @@ import { transcricaoDaSessao } from './qualidade/avaliacao.js'
  */
 
 const peso = (col: string): string => `CASE ${col} WHEN 'CRITICA' THEN 3 WHEN 'ALTA' THEN 2 WHEN 'MEDIA' THEN 1 ELSE 0 END`
-const PESO_SQL = peso('pior_gravidade')
 const PESO_A = peso('a.pior_gravidade')
 
 export interface SemanaDaLoja {
@@ -66,7 +65,7 @@ export type ItemDaAmostra = LinhaConversa & {
  * As conversas do número na semana, na ordem da P12 (`ordenarAmostraSemanal`), com
  * a avaliação representativa: a do JUIZ com a menor nota (a que pôs a conversa na
  * amostra), ou — sem juiz — a de REGRAS mais grave. A consulta espelha a do CSV
- * (mesma ordenação e teto) para a amostra das duas sair igual.
+ * (mesma ordenação, filtro e teto) para a amostra das duas sair igual.
  */
 export async function amostraDaSemana(tx: Sql, canalId: string, s: SemanaDaLoja): Promise<ItemDaAmostra[]> {
   const linhas = await tx<LinhaConversa[]>`
@@ -79,6 +78,8 @@ export async function amostraDaSemana(tx: Sql, canalId: string, s: SemanaDaLoja)
       FROM agente_avaliacao a
      WHERE a.tenant_id = tenant_atual() AND a.canal_id = ${canalId}
        AND a.criado_em >= ${s.ini} AND a.criado_em < ${s.fim}
+       -- Juiz que falhou não é avaliação: não põe a conversa na amostra (o CSV da P12 filtra igual).
+       AND a.erro IS NULL
      GROUP BY a.conversa_id
      ORDER BY max(${tx.unsafe(PESO_A)}) DESC, min(a.nota_media) ASC NULLS LAST, a.conversa_id
      LIMIT 5000`
@@ -138,7 +139,7 @@ export async function itensDaAmostra(tx: Sql, canalId: string, s: SemanaDaLoja, 
     SELECT conversa_id, count(DISTINCT revisor_id)::int AS n FROM agente_revisao
      WHERE tenant_id = tenant_atual() AND semana = ${s.semana} AND canal_id = ${canalId} AND conversa_id = ANY(${conversas}::uuid[])
      GROUP BY conversa_id`
-  const notasPorId = new Map(notas.map((n) => [n.id, n.notas]))
+  const notasPorId = new Map(notas.map((n) => [n.id, n.notas !== null]))
   return amostra.map((i, idx) => {
     // Revisão de quem pede: a da avaliação representativa, ou a de outra avaliação da mesma conversa
     // na semana (a representativa pode ter mudado depois — chegou um juiz com nota menor).
@@ -146,10 +147,14 @@ export async function itensDaAmostra(tx: Sql, canalId: string, s: SemanaDaLoja, 
     const minha = minhas.find((m) => m.conversa_id === i.conversaId && m.avaliacao_id === rep)
       ?? minhas.find((m) => m.conversa_id === i.conversaId)
     const avaliacaoId = minha?.avaliacao_id ?? rep
+    // CEGO até a 1ª revisão de quem pede: nada do que o sistema achou sai do servidor.
+    const cego = !minha
+    const comJuiz = minha ? minha.notas_llm !== null : notasPorId.get(rep) === true
     return {
-      ordem: idx + 1, motivo: i.motivo, conversaId: i.conversaId, canalId, avaliacaoId,
-      origem: i.origem as OrigemAvaliacao, piorGravidade: i.piorGravidade, menorNota: i.menorNota,
-      notasJuiz: minha ? notasDoJuiz(minha.notas_llm) : notasDoJuiz(notasPorId.get(rep)),
+      ordem: idx + 1, motivo: cego ? null : i.motivo, conversaId: i.conversaId, canalId, avaliacaoId,
+      origem: i.origem as OrigemAvaliacao, cego, comJuiz,
+      piorGravidade: cego ? null : i.piorGravidade, menorNota: cego ? null : i.menorNota,
+      notasJuiz: minha ? notasDoJuiz(minha.notas_llm) : null,
       revisao: minha ? revisaoDto(minha) : null,
       revisoes: contagem.find((c) => c.conversa_id === i.conversaId)?.n ?? 0,
     }
@@ -175,13 +180,22 @@ async function avaliacaoComSemana(tx: Sql, avaliacaoId: string): Promise<LinhaAv
   return a ?? null
 }
 
-/** Pior gravidade que as regras registraram na conversa na semana (a que escapou; corrigidas não contam). */
+/**
+ * O recorte do que o revisor lê: a MESMA sessão da transcrição mostrada (e, por
+ * segurança, a semana). Sem sessão, a conversa na semana. Alias fixo `av`.
+ */
+function recorte(tx: Sql, a: LinhaAvaliacao) {
+  return tx`av.tenant_id = tenant_atual() AND av.conversa_id = ${a.conversa_id} AND av.canal_id = ${a.canal_id}
+    AND av.criado_em >= ${a.ini} AND av.criado_em < ${a.fim}
+    ${a.sessao_id ? tx`AND av.sessao_id = ${a.sessao_id}` : tx``}`
+}
+
+/** Pior gravidade que as regras registraram na sessão mostrada (a que escapou; corrigidas não contam). */
 async function gravidadeDoSistema(tx: Sql, a: LinhaAvaliacao): Promise<GravidadeQualidade | null> {
   const [g] = await tx<{ pior: string | null }[]>`
-    SELECT (array_agg(pior_gravidade ORDER BY ${tx.unsafe(PESO_SQL)} DESC))[1] AS pior
-      FROM agente_avaliacao
-     WHERE tenant_id = tenant_atual() AND conversa_id = ${a.conversa_id} AND canal_id = ${a.canal_id}
-       AND criado_em >= ${a.ini} AND criado_em < ${a.fim} AND pior_gravidade IS NOT NULL`
+    SELECT (array_agg(av.pior_gravidade ORDER BY ${tx.unsafe(peso('av.pior_gravidade'))} DESC))[1] AS pior
+      FROM agente_avaliacao av
+     WHERE ${recorte(tx, a)} AND av.pior_gravidade IS NOT NULL`
   return (g?.pior ?? null) as GravidadeQualidade | null
 }
 
@@ -212,25 +226,27 @@ export async function detalheParaRevisar(tx: Sql, avaliacaoId: string, revisorId
   const t = a.sessao_id ? await transcricaoDaSessao(tx, a.sessao_id) : null
   const { falas, cortada } = t ? falasDaTranscricao(t.texto) : { falas: [], cortada: false }
   const violacoes = await tx<{ v: ViolacaoQualidade }[]>`
-    SELECT v FROM agente_avaliacao a2, jsonb_array_elements(a2.violacoes) v
-     WHERE a2.tenant_id = tenant_atual() AND a2.conversa_id = ${a.conversa_id} AND a2.canal_id = ${a.canal_id}
-       AND a2.criado_em >= ${a.ini} AND a2.criado_em < ${a.fim} AND a2.tipo = 'regras'
+    SELECT v FROM agente_avaliacao av, jsonb_array_elements(av.violacoes) v
+     WHERE ${recorte(tx, a)} AND av.tipo = 'regras'
        AND NOT coalesce((v->>'corrigida')::boolean, false)
-     ORDER BY a2.criado_em
+     ORDER BY av.criado_em
      LIMIT 50`
   const [minha] = await tx<LinhaRevisao[]>`
     SELECT ${tx.unsafe(COLUNAS_REVISAO)}
       FROM agente_revisao r JOIN usuario u ON u.tenant_id = r.tenant_id AND u.id = r.revisor_id
      WHERE r.tenant_id = tenant_atual() AND r.avaliacao_id = ${a.id} AND r.revisor_id = ${revisorId}`
+  // CEGO até a 1ª revisão de quem pede desta avaliação: sem notas, justificativas nem gravidades do sistema.
+  const cego = !minha
+  const comJuiz = a.tipo === 'juiz' && a.notas !== null
   return {
     avaliacaoId: a.id, conversaId: a.conversa_id, canalId: a.canal_id, semana: a.semana, origem: a.origem as OrigemAvaliacao,
-    transcricao: falas, cortada,
-    notasJuiz: a.tipo === 'juiz' ? notasDoJuiz(a.notas) : null,
-    justificativas: a.tipo === 'juiz' && a.justificativas
+    transcricao: falas, cortada, cego, comJuiz,
+    notasJuiz: !cego && comJuiz ? notasDoJuiz(a.notas) : null,
+    justificativas: !cego && comJuiz && a.justificativas
       ? Object.fromEntries(Object.entries(a.justificativas).map(([k, v]) => [k, mascararTextoQualidade(String(v))]))
       : null,
-    gravidadeSistema: await gravidadeDoSistema(tx, a),
-    violacoes: violacoes.map(({ v }) => ({ ...v, trecho: mascararTextoQualidade(v.trecho ?? '') })),
+    gravidadeSistema: cego ? null : await gravidadeDoSistema(tx, a),
+    violacoes: violacoes.map(({ v }) => ({ ...v, gravidade: cego ? null : v.gravidade, trecho: mascararTextoQualidade(v.trecho ?? '') })),
     revisao: minha ? revisaoDto(minha) : null,
   }
 }
@@ -238,23 +254,35 @@ export async function detalheParaRevisar(tx: Sql, avaliacaoId: string, revisorId
 export type ResultadoGravacao =
   | { readonly tipo: 'gravada'; readonly criada: boolean; readonly revisao: RevisaoDto }
   | { readonly tipo: 'nao_encontrada' }
+  | { readonly tipo: 'fora_da_amostra' }
 
 /**
- * Grava (ou regrava) a revisão do revisor sobre a avaliação. A concordância é
- * calculada AQUI e congelada com o que o sistema disse — notas do juiz DESTA
- * avaliação e a pior gravidade das regras na conversa naquela semana.
+ * Grava a revisão do revisor sobre a avaliação. A concordância é calculada AQUI
+ * e congelada com o que o sistema disse — notas do juiz DESTA avaliação e a pior
+ * gravidade das regras na sessão mostrada.
+ *
+ * ⚠️ A 1ª gravação é IMUTÁVEL no que mede (notas, gravidade, concordância,
+ *    concorda, falso negativo): depois dela o revisor vê o juiz, e regravar a
+ *    nota inflaria a métrica. Regravar só muda veredito, decisão, responsável,
+ *    prazo e observação.
+ * ⚠️ Só avaliação da AMOSTRA da semana: a representativa da conversa (ou uma
+ *    que o revisor já revisou). Fora dela → `fora_da_amostra` (o denominador
+ *    não aceita conversa escolhida a dedo).
  */
 export async function gravarRevisao(tx: Sql, corpo: RevisaoValidada, revisorId: string): Promise<ResultadoGravacao> {
   const a = await avaliacaoComSemana(tx, corpo.avaliacaoId)
   if (!a) return { tipo: 'nao_encontrada' }
+  const semana: SemanaDaLoja = { semana: a.semana, inicio: '', ini: a.ini, fim: a.fim, fuso: '' }
+  const item = (await amostraDaSemana(tx, a.canal_id, semana)).find((i) => i.conversaId === a.conversa_id)
+  const [ja] = await tx<{ id: string }[]>`
+    SELECT id FROM agente_revisao WHERE tenant_id = tenant_atual() AND avaliacao_id = ${a.id} AND revisor_id = ${revisorId}`
+  if (!item || (!ja && (item.juiz_id ?? item.regras_id) !== a.id)) return { tipo: 'fora_da_amostra' }
+  const motivo = item.motivo
   const notasLlm = a.tipo === 'juiz' ? notasDoJuiz(a.notas) : null
   const gravidadeSistema = await gravidadeDoSistema(tx, a)
   const r = calcularConcordancia({
     notasLlm, notasHumanas: corpo.notas, gravidadeSistema, gravidadeHumana: corpo.gravidade,
   })
-  // Motivo da amostra daquela semana (null = a conversa não está na amostra; a revisão vale igual).
-  const semana: SemanaDaLoja = { semana: a.semana, inicio: '', ini: a.ini, fim: a.fim, fuso: '' }
-  const motivo = (await amostraDaSemana(tx, a.canal_id, semana)).find((i) => i.conversaId === a.conversa_id)?.motivo ?? null
   const concordancia = { ...r.porCriterio, gravidade: r.gravidade }
   const [l] = await tx<{ id: string; criada: boolean }[]>`
     INSERT INTO agente_revisao (tenant_id, id, avaliacao_id, revisor_id, conversa_id, canal_id, semana, motivo, notas, gravidade,
@@ -265,11 +293,10 @@ export async function gravarRevisao(tx: Sql, corpo: RevisaoValidada, revisorId: 
             ${corpo.responsavel}, ${corpo.prazo}, ${corpo.observacao},
             ${notasLlm ? JSON.stringify(notasLlm) : null}::text::jsonb, ${gravidadeSistema},
             ${JSON.stringify(concordancia)}::text::jsonb, ${r.concorda}, ${r.falsoNegativoCritica})
+    -- Regravar: SÓ os campos editáveis. O que mede (notas, gravidade, concordância, FN) fica o da 1ª gravação.
     ON CONFLICT (tenant_id, avaliacao_id, revisor_id) DO UPDATE SET
-      motivo = EXCLUDED.motivo, notas = EXCLUDED.notas, gravidade = EXCLUDED.gravidade, veredito = EXCLUDED.veredito,
-      decisao = EXCLUDED.decisao, responsavel = EXCLUDED.responsavel, prazo = EXCLUDED.prazo, observacao = EXCLUDED.observacao,
-      notas_llm = EXCLUDED.notas_llm, gravidade_sistema = EXCLUDED.gravidade_sistema, concordancia = EXCLUDED.concordancia,
-      concorda = EXCLUDED.concorda, falso_negativo_critica = EXCLUDED.falso_negativo_critica, atualizado_em = now()
+      veredito = EXCLUDED.veredito, decisao = EXCLUDED.decisao, responsavel = EXCLUDED.responsavel,
+      prazo = EXCLUDED.prazo, observacao = EXCLUDED.observacao, atualizado_em = now()
     RETURNING id, (xmax = 0) AS criada`
   const [linha] = await tx<LinhaRevisao[]>`
     SELECT ${tx.unsafe(COLUNAS_REVISAO)}
@@ -280,14 +307,19 @@ export async function gravarRevisao(tx: Sql, corpo: RevisaoValidada, revisorId: 
 
 /**
  * A concordância das semanas pedidas, por número (e no total). É o contrato da
- * P19: `concordancia >= META_CONCORDANCIA` com `comparaveis >= MIN_REVISADAS_CONCORDANCIA`
- * e `falsosNegativosCritica === 0` (= `atingeMeta`). Sem papel aqui — quem chama decide.
+ * P19: `atingeMeta` = `concordancia >= META_CONCORDANCIA` com
+ * `conversasComparaveis >= MIN_REVISADAS_CONCORDANCIA` (conversas DISTINTAS) e
+ * `falsosNegativosCritica === 0`. Uma revisão por (conversa, semana): a 1ª
+ * comparável. Sem papel aqui — quem chama decide.
  */
 export async function concordancia(
   tx: Sql, p: { readonly semanas: readonly string[]; readonly canalId?: string | undefined },
 ): Promise<{ total: SomaConcordancia; porNumero: ConcordanciaNumeroDto[] }> {
-  const linhas = await tx<{ canal_id: string; concordancia: Record<string, boolean | null>; concorda: boolean | null; motivo: string | null; falso_negativo_critica: boolean }[]>`
-    SELECT canal_id, concordancia, concorda, motivo, falso_negativo_critica FROM agente_revisao
+  const linhas = await tx<{
+    canal_id: string; conversa_id: string; semana: string; criado_em: Date; concordancia: Record<string, boolean | null>
+    concorda: boolean | null; motivo: string | null; falso_negativo_critica: boolean
+  }[]>`
+    SELECT canal_id, conversa_id, semana, criado_em, concordancia, concorda, motivo, falso_negativo_critica FROM agente_revisao
      WHERE tenant_id = tenant_atual() AND semana = ANY(${p.semanas as string[]}::text[])
        ${p.canalId ? tx`AND canal_id = ${p.canalId}` : tx``}`
   const canais = await tx<{ id: string; nome: string }[]>`
@@ -295,7 +327,9 @@ export async function concordancia(
      WHERE tenant_id = tenant_atual()
        AND ${p.canalId ? tx`id = ${p.canalId}` : tx`id = ANY(${[...new Set(linhas.map((l) => l.canal_id))]}::uuid[])`}
      ORDER BY nome_amigavel, id`
+  // A soma conta UMA revisão por (conversa, semana) — a 1ª comparável (shared `umaPorConversa`).
   const paraSomar = (l: (typeof linhas)[number]): RevisaoParaSomar => ({
+    conversaId: l.conversa_id, semana: l.semana, criadoEm: l.criado_em.toISOString(),
     concorda: l.concorda, motivo: l.motivo as MotivoAmostra | null, falsoNegativoCritica: l.falso_negativo_critica,
     gravidade: l.concordancia['gravidade'] === true,
     porCriterio: Object.fromEntries(CRITERIOS_RUBRICA.map((c) => [c, l.concordancia[c] ?? null])),
@@ -313,8 +347,10 @@ export async function concordancia(
  * A planilha da semana do número (o modelo da AM, `planilha-revisao.csv`): uma
  * linha por item da amostra × revisor (sem revisão, uma linha com as colunas
  * humanas vazias). Textos livres saem mascarados.
+ * ⚠️ Cega como a tela: conversa que QUEM EXPORTA ainda não revisou sai sem
+ *    motivo, gravidade, nota, notas do juiz nem as revisões dos outros.
  */
-export async function planilhaDaSemana(tx: Sql, canalId: string, s: SemanaDaLoja): Promise<{ cabecalho: string[]; linhas: unknown[][] }> {
+export async function planilhaDaSemana(tx: Sql, canalId: string, s: SemanaDaLoja, revisorId: string): Promise<{ cabecalho: string[]; linhas: unknown[][] }> {
   const amostra = await amostraDaSemana(tx, canalId, s)
   const [canal] = await tx<{ nome: string }[]>`SELECT nome_amigavel AS nome FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${canalId}`
   const conversas = amostra.map((i) => i.conversaId)
@@ -337,8 +373,15 @@ export async function planilhaDaSemana(tx: Sql, canalId: string, s: SemanaDaLoja
   const nome = mascararTextoQualidade(canal?.nome ?? '')
   amostra.forEach((i, idx) => {
     const rep = (i.juiz_id ?? i.regras_id)!
-    const comum = [s.semana, nome, idx + 1, i.motivo, i.conversaId]
     const daConversa = revs.filter((r) => r.conversa_id === i.conversaId)
+    const cego = !daConversa.some((r) => r.revisor_id === revisorId)
+    const comum = [s.semana, nome, idx + 1, cego ? '' : i.motivo, i.conversaId]
+    if (cego) {
+      linhas.push([...comum, rep, i.origem, '', '', '',
+        ...CRITERIOS_RUBRICA.map(() => ''), ...CRITERIOS_RUBRICA.map(() => ''), '', '',
+        ...CRITERIOS_RUBRICA.map(() => ''), '', '', '', '', '', '', ''])
+      return
+    }
     if (daConversa.length === 0) {
       const nj = notasDoJuiz(notas.find((n) => n.id === rep)?.notas)
       linhas.push([...comum, rep, i.origem, i.piorGravidade ?? '', i.menorNota ?? '', '',

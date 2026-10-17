@@ -13,8 +13,13 @@
 --     comparando com o que o revisor viu.
 --       concorda = |LLM − humano| <= 1 em cada critério E mesma classe de
 --       gravidade. NULL = não comparável (a avaliação não tinha nota do juiz).
---     UNIQUE (tenant_id, avaliacao_id, revisor_id): regravar do mesmo revisor
---     substitui (idempotente); dois revisores contam duas vezes.
+--     UNIQUE (tenant_id, avaliacao_id, revisor_id): regravar do mesmo revisor é
+--     idempotente, mas a 1ª gravação é IMUTÁVEL no que mede: notas, gravidade,
+--     concordância, concorda e falso negativo não mudam depois (a API só atualiza
+--     veredito, decisão, responsável, prazo e observação). Sem isso o revisor
+--     veria as notas do juiz e "corrigiria" a própria nota para inflar a métrica.
+--     A soma conta UMA revisão por (conversa, semana) — a 1ª comparável (shared
+--     somarConcordancia): dois revisores na mesma conversa não dobram o peso.
 --     semana (IYYY-Www, fuso da loja) e motivo da amostra ficam gravados: a
 --     concordância semanal por número é uma soma sobre esta tabela.
 --
@@ -75,6 +80,8 @@ SELECT aplicar_rls('agente_revisao');
 -- Concordância da semana por número e o estado "revisada" da amostra.
 CREATE INDEX agente_revisao_por_semana   ON agente_revisao (tenant_id, semana, canal_id);
 CREATE INDEX agente_revisao_por_conversa ON agente_revisao (tenant_id, conversa_id, semana);
+-- FK do revisor (exclusão/consulta de usuário sem varrer a tabela).
+CREATE INDEX agente_revisao_por_revisor  ON agente_revisao (tenant_id, revisor_id);
 
 COMMENT ON TABLE agente_revisao IS
     'Revisão humana semanal das avaliações de qualidade (ADR-031 §5): notas por critério, gravidade, veredito e decisão; '

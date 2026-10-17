@@ -133,7 +133,8 @@ export function rotuloGravidade(g: GravidadeQualidade | null): string {
 export function mensagemDaFalhaRevisao(codigo: string, padrao: string): string {
   return ({
     'revisao.avaliacao_nao_encontrada': 'Esta avaliação não existe mais. Recarregue a amostra.',
-    'revisao.campo_invalido': 'Confira os campos da revisão.',
+    'revisao.fora_da_amostra': 'Esta conversa não está mais na amostra da semana. Recarregue a lista.',
+    'revisao.campo_invalido':'Confira os campos da revisão.',
     'canal.nao_encontrado': 'Este número não existe mais.',
     'acesso.papel_insuficiente': 'Só gestor ou administrador revisa. Peça a um administrador.',
   } as Record<string, string>)[codigo] ?? padrao

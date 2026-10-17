@@ -139,16 +139,18 @@ describe('GET /v1/agente/revisao/amostra — 20 por número na ordem da P12', ()
     expect(b).toMatchObject({ semana: SEMANA, canalId: CANAL_A, proximoCursor: null })
     expect(b.itens).toHaveLength(20)
     expect(b.itens.map((i: { ordem: number }) => i.ordem)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
-    expect(b.itens.slice(0, 2).every((i: { motivo: string; conversaId: string }) => i.motivo === 'critica' && criticas.has(i.conversaId))).toBe(true)
-    expect(b.itens.slice(2, 10).every((i: { motivo: string; conversaId: string }) => i.motivo === 'alta_ou_nota_baixa' && baixas.has(i.conversaId))).toBe(true)
-    expect(b.itens.slice(10).every((i: { motivo: string }) => i.motivo === 'aleatoria')).toBe(true)
-    // A crítica com juiz é revisada pela avaliação do JUIZ (com notas); a ALTA sem juiz, pela de regras.
-    expect(b.itens[0]).toMatchObject({ piorGravidade: 'CRITICA', menorNota: 2, notasJuiz: todas(2), revisao: null, revisoes: 0, origem: 'sugestao' })
-    const alta = b.itens.find((i: { piorGravidade: string | null }) => i.piorGravidade === 'ALTA')
-    expect(alta.notasJuiz).toBeNull()
-    // A MESMA amostra (e ordem) do CSV semanal da P12.
-    const csv = (await get(A, `/v1/agente/qualidade/amostra-semanal.csv?canalId=${CANAL_A}`)).body.replace(/^\uFEFF/, '').trim().split('\r\n').slice(1)
-    expect(csv.map((l) => l.split(';')[4])).toEqual(b.itens.map((i: { conversaId: string }) => i.conversaId))
+    // A MESMA amostra (e ordem) do CSV semanal da P12 — que diz o motivo de cada uma.
+    const csv = (await get(A, `/v1/agente/qualidade/amostra-semanal.csv?canalId=${CANAL_A}`)).body.replace(/^\uFEFF/, '').trim().split('\r\n').slice(1).map((l) => l.split(';'))
+    expect(csv.map((l) => l[4])).toEqual(b.itens.map((i: { conversaId: string }) => i.conversaId))
+    expect(csv.slice(0, 2).every((l) => l[3] === 'critica' && criticas.has(l[4]!))).toBe(true)
+    expect(csv.slice(2, 10).every((l) => l[3] === 'alta_ou_nota_baixa' && baixas.has(l[4]!))).toBe(true)
+    expect(csv.slice(10).every((l) => l[3] === 'aleatoria')).toBe(true)
+    // CEGO antes da 1ª revisão: nada do que o sistema achou sai do servidor (só se há juiz).
+    for (const i of b.itens) expect(i).toMatchObject({ cego: true, motivo: null, piorGravidade: null, menorNota: null, notasJuiz: null, revisao: null })
+    expect(b.itens[0]).toMatchObject({ comJuiz: true, revisoes: 0, origem: 'sugestao' })
+    // A ALTA sem juiz é revisada pela avaliação de regras.
+    const altaSemJuiz = b.itens.find((i: { conversaId: string; comJuiz: boolean }) => baixas.has(i.conversaId) && !i.comJuiz)
+    expect(altaSemJuiz).toBeTruthy()
     // Estável: pedir de novo dá a mesma ordem; semana atual é o padrão.
     expect((await get(A, `/v1/agente/revisao/amostra?canalId=${CANAL_A}`)).json().itens).toEqual(b.itens)
     // Outro número e outro tenant não aparecem.
@@ -161,9 +163,10 @@ describe('GET /v1/agente/revisao/amostra — 20 por número na ordem da P12', ()
     expect((await post(A, { avaliacaoId: item.avaliacaoId, notas: todas(2), gravidade: 'CRITICA', veredito: 'grave', decisao: 'ajustar_prompt', responsavel: 'Time técnico', prazo: '2026-12-01' })).statusCode).toBe(201)
     const depois = (await get(A, `/v1/agente/revisao/amostra?canalId=${CANAL_A}&semana=${SEMANA}`)).json().itens[0]
     expect(depois.revisao).toMatchObject({ veredito: 'grave', concorda: true, motivo: 'critica', revisorNome: 'Gina' })
-    expect(depois.revisoes).toBe(1)
+    // Depois de revisar, o sistema aparece para quem revisou.
+    expect(depois).toMatchObject({ cego: false, motivo: 'critica', piorGravidade: 'CRITICA', menorNota: 2, notasJuiz: todas(2), revisoes: 1 })
     const daAdmin = (await get(A, `/v1/agente/revisao/amostra?canalId=${CANAL_A}&semana=${SEMANA}`, SUB_ADMIN)).json().itens[0]
-    expect(daAdmin).toMatchObject({ revisao: null, revisoes: 1 })
+    expect(daAdmin).toMatchObject({ revisao: null, revisoes: 1, cego: true, notasJuiz: null, motivo: null })
 
     // Planilha da semana: 20 itens (1 linha por revisor), notas do juiz e humanas lado a lado, concordância S/N.
     const pl = await get(A, `/v1/agente/revisao/planilha.csv?canalId=${CANAL_A}&semana=${SEMANA}`)
@@ -174,7 +177,10 @@ describe('GET /v1/agente/revisao/amostra — 20 por número na ordem da P12', ()
     const cab = pls[0]!.split(';')
     const l1 = Object.fromEntries(cab.map((c, i) => [c, pls[1]!.split(';')[i]]))
     expect(l1).toMatchObject({ ordem: '1', motivo: 'critica', revisor: 'Gina', nota_juiz_clareza: '2', nota_humana_clareza: '2', concorda: 'S', decisao: 'ajustar_prompt', prazo: '2026-12-01' })
-    expect(Object.fromEntries(cab.map((c, i) => [c, pls[2]!.split(';')[i]]))).toMatchObject({ revisor: '', nota_humana_clareza: '', concorda: '' })
+    // Planilha cega como a tela: conversa que quem exporta não revisou sai sem motivo, gravidade e notas do juiz.
+    expect(Object.fromEntries(cab.map((c, i) => [c, pls[2]!.split(';')[i]]))).toMatchObject({ motivo: '', gravidade_sistema: '', nota_juiz_clareza: '', revisor: '', concorda: '' })
+    const plAdmin = (await get(A, `/v1/agente/revisao/planilha.csv?canalId=${CANAL_A}&semana=${SEMANA}`, SUB_ADMIN)).body.replace(/^\uFEFF/, '').trim().split('\r\n')
+    expect(Object.fromEntries(cab.map((c, i) => [c, plAdmin[1]!.split(';')[i]]))).toMatchObject({ motivo: '', revisor: '', nota_humana_clareza: '', nota_juiz_clareza: '' })
     expect((await get(A, `/v1/agente/revisao/planilha.csv?canalId=${CANAL_A}`, SUB_VENDEDOR)).statusCode).toBe(403)
   })
 
@@ -187,18 +193,42 @@ describe('GET /v1/agente/revisao/amostra — 20 por número na ordem da P12', ()
 })
 
 describe('GET /v1/agente/revisao/avaliacoes/:id — o que o revisor lê', () => {
-  it('transcrição mascarada com a SUGESTÃO (sombra), notas e justificativas do juiz, violações da semana', async () => {
+  it('transcrição mascarada com a SUGESTÃO (sombra); cego até revisar; depois notas, justificativas e gravidades', async () => {
     await limpar(A)
     const c = await conversa(A, CANAL_A, { pior: 'ALTA', nota: 3 })
     const r = await get(A, `/v1/agente/revisao/avaliacoes/${c.juiz}`)
     expect(r.statusCode).toBe(200)
     const d = r.json()
-    expect(d).toMatchObject({ avaliacaoId: c.juiz, conversaId: c.conversa, semana: SEMANA, origem: 'sugestao', notasJuiz: todas(3), gravidadeSistema: 'ALTA', revisao: null })
+    expect(d).toMatchObject({ avaliacaoId: c.juiz, conversaId: c.conversa, semana: SEMANA, origem: 'sugestao', revisao: null,
+      cego: true, comJuiz: true, notasJuiz: null, justificativas: null, gravidadeSistema: null })
     expect(d.transcricao.map((f: { autor: string }) => f.autor)).toEqual(['cliente', 'sugestao', 'humano'])
     expect(d.transcricao[1].texto).toBe('Temos sim, quantas caixas?')
-    expect(d.violacoes).toHaveLength(1)
-    expect(JSON.stringify(d)).not.toMatch(/99999|x@y\.com/)
+    expect(d.violacoes).toEqual([{ regra: 'palavra_proibida', gravidade: null, trecho: 'ligue [telefone]', corrigida: false }])
+    expect(JSON.stringify(d)).not.toMatch(/99999|x@y\.com|ALTA/)
     expect((await get(B, `/v1/agente/revisao/avaliacoes/${c.juiz}`)).statusCode).toBe(404)
+    await post(A, { avaliacaoId: c.juiz, notas: todas(3), gravidade: 'ALTA', veredito: 'ajustar' })
+    const depois = (await get(A, `/v1/agente/revisao/avaliacoes/${c.juiz}`)).json()
+    expect(depois).toMatchObject({ cego: false, notasJuiz: todas(3), gravidadeSistema: 'ALTA', violacoes: [{ gravidade: 'ALTA' }] })
+    expect(depois.justificativas.clareza).toBe('cliente [e-mail] ok')
+    // Outro revisor continua cego.
+    expect((await get(A, `/v1/agente/revisao/avaliacoes/${c.juiz}`, SUB_ADMIN)).json()).toMatchObject({ cego: true, notasJuiz: null })
+  })
+
+  it('gravidade do sistema vem da MESMA sessão da transcrição, não da conversa na semana', async () => {
+    await limpar(A)
+    const c = await conversa(A, CANAL_A, { pior: null, nota: 4 })
+    // Outra sessão (mais antiga) da mesma conversa, com ALTA nas regras.
+    const s2 = crypto.randomUUID(), d2 = crypto.randomUUID()
+    await dono`INSERT INTO agente_sessao (tenant_id, id, conversa_id, canal_id, modo, turnos, estado, iniciada_em, encerrada_em, motivo_saida)
+               VALUES (${A}, ${s2}, ${c.conversa}, ${CANAL_A}, 'sombra', 1, 'entregue', now() - interval '3 hours', now() - interval '170 minutes', 'teste')`
+    await dono`INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, sessao_id, modo, desfecho, resposta, criado_em)
+               VALUES (${A}, ${d2}, ${c.conversa}, ${CANAL_A}, ${s2}, 'sombra', 'sugeriu', '{"mensagens":["x"]}'::jsonb, now() - interval '175 minutes')`
+    await dono`INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, sessao_id, origem, tipo, gatilho, violacoes, pior_gravidade, acao, criado_em)
+               VALUES (${A}, ${crypto.randomUUID()}, ${d2}, ${c.conversa}, ${CANAL_A}, ${s2}, 'sugestao', 'regras', 'turno',
+                       '[{"regra":"promessa_prazo","gravidade":"ALTA","trecho":"x","corrigida":false}]'::jsonb, 'ALTA', 'registrado', now() - interval '175 minutes')`
+    const r = (await post(A, { avaliacaoId: c.juiz, notas: todas(4), gravidade: null, veredito: 'ok' })).json()
+    expect(r).toMatchObject({ gravidadeSistema: null, concordaGravidade: true, concorda: true })
+    expect((await get(A, `/v1/agente/revisao/avaliacoes/${c.juiz}`)).json().violacoes).toEqual([])
   })
 
   it('falas: linha de continuação junta na fala anterior; corte marcado', () => {
@@ -209,16 +239,19 @@ describe('GET /v1/agente/revisao/avaliacoes/:id — o que o revisor lê', () => 
 })
 
 describe('POST /v1/agente/revisao — idempotente por revisor', () => {
-  it('regravar do mesmo revisor substitui (201 → 200); outro revisor soma uma linha', async () => {
+  it('regravar do mesmo revisor (201 → 200) só muda veredito/decisão/dono/prazo/observação; outro revisor soma uma linha', async () => {
     await limpar(A)
     const c = await conversa(A, CANAL_A, { pior: null, nota: 4 })
     const corpo = { avaliacaoId: c.juiz, notas: todas(4), gravidade: null, veredito: 'ok' }
     const r1 = await post(A, corpo)
     expect(r1.statusCode).toBe(201)
     expect(r1.json()).toMatchObject({ concorda: true, notasLlm: todas(4), gravidadeSistema: null, decisao: 'nenhuma', semana: SEMANA })
-    const r2 = await post(A, { ...corpo, notas: { ...todas(4), compliance: 1 }, veredito: 'grave' })
+    // Regravar tentando mudar a nota (depois de ver o juiz) NÃO muda o que mede.
+    const r2 = await post(A, { ...corpo, notas: { ...todas(4), compliance: 1 }, gravidade: 'CRITICA', veredito: 'grave',
+      decisao: 'calibrar_juiz', responsavel: 'Time técnico', prazo: '2026-12-01', observacao: 'rever' })
     expect(r2.statusCode).toBe(200)
-    expect(r2.json()).toMatchObject({ id: r1.json().id, concorda: false, veredito: 'grave', porCriterio: { compliance: false, clareza: true } })
+    expect(r2.json()).toMatchObject({ id: r1.json().id, veredito: 'grave', decisao: 'calibrar_juiz', responsavel: 'Time técnico', prazo: '2026-12-01', observacao: 'rever',
+      notas: todas(4), gravidade: null, concorda: true, falsoNegativoCritica: false, porCriterio: { compliance: true } })
     expect((await post(A, corpo, SUB_ADMIN)).statusCode).toBe(201)
     const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM agente_revisao WHERE tenant_id = ${A} AND avaliacao_id = ${c.juiz}`
     expect(n!.n).toBe(2)
@@ -233,12 +266,43 @@ describe('POST /v1/agente/revisao — idempotente por revisor', () => {
     expect(d.revisao).toMatchObject({ concorda: true, notasLlm: todas(4) })
   })
 
-  it('sem nota do juiz: grava, mas não é comparável; falso negativo CRÍTICO marcado', async () => {
+  it('sem nota do juiz: grava, mas não é comparável; falso negativo CRÍTICO marcado e imutável', async () => {
     await limpar(A)
     const c = await conversa(A, CANAL_A, { pior: null })
     const r = await post(A, { avaliacaoId: c.regras, notas: todas(1), gravidade: 'CRITICA', veredito: 'grave' })
     expect(r.statusCode).toBe(201)
     expect(r.json()).toMatchObject({ concorda: null, notasLlm: null, falsoNegativoCritica: true, concordaGravidade: false })
+    // Regravar com "nenhuma" não apaga o falso negativo.
+    const r2 = await post(A, { avaliacaoId: c.regras, notas: todas(4), gravidade: null, veredito: 'ok' })
+    expect(r2.json()).toMatchObject({ falsoNegativoCritica: true, gravidade: 'CRITICA', notas: todas(1), veredito: 'ok' })
+  })
+
+  it('fora da amostra é 422: avaliação que não é a da conversa na amostra, ou conversa que não entrou nas 20', async () => {
+    await limpar(A)
+    const c = await conversa(A, CANAL_A, { pior: 'MEDIA', nota: 4 })
+    // A conversa tem juiz: a avaliação da amostra é a do juiz, não a de regras.
+    const r = await post(A, { avaliacaoId: c.regras, notas: todas(4), gravidade: 'MEDIA', veredito: 'ok' })
+    expect(r.statusCode).toBe(422)
+    expect(r.json()).toMatchObject({ erro: 'revisao.fora_da_amostra' })
+    for (let i = 0; i < 21; i++) await conversa(A, CANAL_A, { pior: null, nota: 5 })
+    const naAmostra = new Set((await get(A, `/v1/agente/revisao/amostra?canalId=${CANAL_A}`)).json().itens.map((i: { avaliacaoId: string }) => i.avaliacaoId))
+    const [fora] = await dono<{ id: string }[]>`
+      SELECT id FROM agente_avaliacao WHERE tenant_id = ${A} AND tipo = 'juiz' AND NOT (id = ANY(${[...naAmostra] as string[]}::uuid[])) LIMIT 1`
+    expect((await post(A, { avaliacaoId: fora!.id, notas: todas(5), gravidade: null, veredito: 'ok' })).json()).toMatchObject({ erro: 'revisao.fora_da_amostra' })
+  })
+
+  it('juiz com erro não põe a conversa na amostra (aqui e no CSV da P12)', async () => {
+    await limpar(A)
+    const ok = await conversa(A, CANAL_A, { nota: 4 })
+    const soErro = await conversa(A, CANAL_A)
+    await dono`INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, sessao_id, origem, tipo, gatilho, modelo, erro)
+               SELECT ${A}, ${crypto.randomUUID()}, d.id, d.conversa_id, d.canal_id, d.sessao_id, 'sugestao', 'juiz', 'fim_sessao', 'simulado', 'timeout'
+                 FROM agente_decisao d WHERE d.tenant_id = ${A} AND d.conversa_id = ${soErro.conversa}`
+    const itens = (await get(A, `/v1/agente/revisao/amostra?canalId=${CANAL_A}`)).json().itens
+    expect(itens.map((i: { conversaId: string }) => i.conversaId)).toEqual([ok.conversa])
+    const csv = (await get(A, `/v1/agente/qualidade/amostra-semanal.csv?canalId=${CANAL_A}`)).body
+    expect(csv).toContain(ok.conversa)
+    expect(csv).not.toContain(soErro.conversa)
   })
 
   it('valida o corpo; avaliação de outro tenant é 404; tenant no corpo é recusado', async () => {
@@ -266,11 +330,13 @@ describe('GET /v1/agente/revisao/concordancia — por número', () => {
     await post(A, { avaliacaoId: a2.juiz, notas: todas(4), gravidade: null, veredito: 'ok' }) // gravidade diverge
     await post(A, { avaliacaoId: a3.juiz, notas: todas(3), gravidade: null, veredito: 'ajustar' }) // concorda
     await post(A, { avaliacaoId: a4.regras, notas: todas(3), gravidade: null, veredito: 'ok' }) // não comparável
+    // 2º revisor na MESMA conversa a1, discordando: vira linha, mas não conta (uma por conversa e semana — a 1ª).
+    await post(A, { avaliacaoId: a1.juiz, notas: todas(0), gravidade: null, veredito: 'grave' }, SUB_ADMIN)
     const b1 = await conversa(B, CANAL_B, { pior: null, nota: 4 })
     await post(B, { avaliacaoId: b1.juiz, notas: todas(0), gravidade: 'CRITICA', veredito: 'grave' })
 
     const r = (await get(A, `/v1/agente/revisao/concordancia?semana=${SEMANA}`)).json()
-    expect(r).toMatchObject({ semana: SEMANA, canalId: null, meta: 0.85, minimoRevisadas: 20, revisadas: 4, comparaveis: 3, concordantes: 2, concordancia: 0.6667, atingeMeta: false })
+    expect(r).toMatchObject({ semana: SEMANA, canalId: null, meta: 0.85, minimoRevisadas: 20, revisoes: 5, revisadas: 4, comparaveis: 3, conversasComparaveis: 3, concordantes: 2, concordancia: 0.6667, atingeMeta: false })
     expect(r.porCriterio.clareza).toBe(1)
     expect(r.porNumero.map((n: { canalId: string; revisadas: number; concordancia: number | null }) => [n.canalId, n.revisadas, n.concordancia]))
       .toEqual([[CANAL_A, 3, 0.5], [CANAL_A2, 1, 1]])

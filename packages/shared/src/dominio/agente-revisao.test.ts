@@ -38,6 +38,7 @@ describe('Concordância juiz × humano (ADR-031): |LLM − humano| ≤ 1 por cri
 
 describe('Soma da semana', () => {
   const rev = (concorda: boolean | null, motivo: RevisaoParaSomar['motivo'] = 'aleatoria', extra: Partial<RevisaoParaSomar> = {}): RevisaoParaSomar => ({
+    conversaId: crypto.randomUUID(), semana: '2026-W42', criadoEm: '2026-10-13T10:00:00Z',
     concorda, motivo, gravidade: concorda !== false, falsoNegativoCritica: false,
     porCriterio: concorda === null ? {} : Object.fromEntries(CRITERIOS_RUBRICA.map((c) => [c, concorda])), ...extra,
   })
@@ -55,6 +56,21 @@ describe('Soma da semana', () => {
     expect(somarConcordancia(vinte)).toMatchObject({ concordancia: 0.85, atingeMeta: true })
     expect(somarConcordancia(vinte.slice(1))).toMatchObject({ atingeMeta: false }) // 19 comparáveis
     expect(somarConcordancia([...vinte, rev(true, 'critica', { falsoNegativoCritica: true })]).atingeMeta).toBe(false)
+  })
+
+  it('uma por (conversa, semana): a 1ª comparável conta; dois revisores não dobram o peso nem o mínimo de 20', () => {
+    const c = { conversaId: 'c1', semana: '2026-W42' }
+    const primeira = rev(true, 'aleatoria', { ...c, criadoEm: '2026-10-13T10:00:00Z' })
+    const depois = rev(false, 'aleatoria', { ...c, criadoEm: '2026-10-14T10:00:00Z' })
+    const semJuizAntes = rev(null, 'aleatoria', { ...c, criadoEm: '2026-10-12T10:00:00Z' })
+    expect(somarConcordancia([depois, primeira, semJuizAntes])).toMatchObject({ revisoes: 3, revisadas: 1, comparaveis: 1, conversasComparaveis: 1, concordancia: 1 })
+    // Mesma conversa em outra semana é outra unidade.
+    expect(somarConcordancia([primeira, { ...depois, semana: '2026-W43' }]).revisadas).toBe(2)
+    // 20 linhas de 10 conversas (2 revisores cada) não atingem o mínimo.
+    const dez = Array.from({ length: 10 }, (_, i) => [rev(true, 'aleatoria', { conversaId: `k${i}` }), rev(true, 'aleatoria', { conversaId: `k${i}`, criadoEm: '2026-10-15T00:00:00Z' })]).flat()
+    expect(somarConcordancia(dez)).toMatchObject({ revisoes: 20, conversasComparaveis: 10, atingeMeta: false })
+    // Falso negativo de QUALQUER revisor conta (uma vez por conversa).
+    expect(somarConcordancia([primeira, { ...depois, falsoNegativoCritica: true }]).falsosNegativosCritica).toBe(1)
   })
 
   it('vazio: tudo null, sem meta', () => {

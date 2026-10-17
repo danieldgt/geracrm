@@ -7,9 +7,10 @@ import {
 
 const todas = (n: number) => Object.fromEntries(CRITERIOS_RUBRICA.map((c) => [c, n])) as Record<(typeof CRITERIOS_RUBRICA)[number], number>
 const rev = (concorda: boolean | null, extra: Partial<RevisaoParaSomar> = {}): RevisaoParaSomar => ({
+  conversaId: crypto.randomUUID(), semana: '2026-W42', criadoEm: '2026-10-13T10:00:00Z',
   concorda, motivo: 'aleatoria', gravidade: true, falsoNegativoCritica: false,
   porCriterio: Object.fromEntries(CRITERIOS_RUBRICA.map((c) => [c, concorda])), ...extra,
-})
+} as RevisaoParaSomar)
 const revisao = (r: Partial<RevisaoDto> = {}): RevisaoDto => ({
   id: 'r', avaliacaoId: 'a', revisorId: 'u', revisorNome: 'Gina', semana: '2026-W42', motivo: 'critica', notas: todas(4),
   gravidade: null, veredito: 'ok', decisao: 'nenhuma', responsavel: null, prazo: null, observacao: null, notasLlm: todas(4),

@@ -116,6 +116,11 @@ export function calcularConcordancia(e: EntradaConcordancia): ResultadoConcordan
 
 /** Uma revisão gravada, só o que a soma precisa. */
 export interface RevisaoParaSomar {
+  /** A unidade da soma é (conversa, semana): ver `umaPorConversa`. */
+  readonly conversaId: string
+  readonly semana: string
+  /** ISO; decide a "primeira". */
+  readonly criadoEm: string
   readonly concorda: boolean | null
   readonly porCriterio: Readonly<Partial<Record<CriterioRubrica, boolean | null>>>
   readonly gravidade: boolean
@@ -123,42 +128,72 @@ export interface RevisaoParaSomar {
   readonly falsoNegativoCritica: boolean
 }
 
+/**
+ * UMA revisão por (conversa, semana) entra na soma: a PRIMEIRA COMPARÁVEL
+ * (com nota do juiz) ou, sem nenhuma comparável, a primeira. Por quê:
+ *   - a 1ª é a revisão cega (o revisor ainda não tinha visto o juiz);
+ *   - dois revisores (ou duas avaliações) na mesma conversa não dobram o peso
+ *     dela — o mínimo de 20 é de CONVERSAS distintas, não de linhas.
+ * A média entre revisores foi descartada: produz frações de "concorda" e
+ * deixaria um revisor tardio (que já viu o juiz) puxar o resultado.
+ */
+export function umaPorConversa<T extends RevisaoParaSomar>(revs: readonly T[]): T[] {
+  const porChave = new Map<string, T>()
+  const ordem = (r: T) => [r.concorda === null ? 1 : 0, r.criadoEm] as const
+  for (const r of revs) {
+    const k = `${r.conversaId}|${r.semana}`
+    const atual = porChave.get(k)
+    if (!atual) { porChave.set(k, r); continue }
+    const [a1, a2] = ordem(atual), [b1, b2] = ordem(r)
+    if (b1 < a1 || (b1 === a1 && b2 < a2)) porChave.set(k, r)
+  }
+  return [...porChave.values()]
+}
+
 export interface SomaConcordancia {
-  /** Revisões gravadas (comparáveis ou não). */
+  /** Linhas gravadas (todas as revisões, de todos os revisores). */
+  readonly revisoes: number
+  /** Conversas revisadas (uma por conversa e semana). */
   readonly revisadas: number
-  /** Revisões com nota do juiz — o denominador. */
+  /** Conversas cuja revisão que conta tem nota do juiz — o denominador. */
   readonly comparaveis: number
+  /** O mesmo número, com o nome que a P19 usa para o mínimo de 20 (conversas DISTINTAS). */
+  readonly conversasComparaveis: number
   readonly concordantes: number
   /** concordantes ÷ comparáveis (0..1); null sem comparáveis. */
   readonly concordancia: number | null
   /** Por critério: fração de comparáveis em que o critério concordou. */
   readonly porCriterio: Readonly<Record<CriterioRubrica, number | null>>
-  /** Fração das revisões (todas) com a mesma classe de gravidade. */
+  /** Fração das conversas revisadas com a mesma classe de gravidade. */
   readonly gravidade: number | null
   /** Só as aleatórias — o que estima a concordância real (a amostra é enviesada para casos difíceis). */
   readonly aleatorias: { readonly comparaveis: number; readonly concordancia: number | null }
   readonly falsosNegativosCritica: number
-  /** concordancia ≥ META com comparáveis ≥ MIN e nenhum falso negativo CRÍTICO. */
+  /** concordancia ≥ META com conversasComparaveis ≥ MIN e nenhum falso negativo CRÍTICO. */
   readonly atingeMeta: boolean
 }
 
 const fracao = (a: number, b: number): number | null => (b > 0 ? Math.round((a / b) * 10_000) / 10_000 : null)
 
-/** Soma as revisões de uma semana (de um número ou de todos). Pura. */
-export function somarConcordancia(revs: readonly RevisaoParaSomar[]): SomaConcordancia {
+/** Soma as revisões (de um número ou de todos), uma por conversa e semana. Pura. */
+export function somarConcordancia(todas: readonly RevisaoParaSomar[]): SomaConcordancia {
+  const revs = umaPorConversa(todas)
   const comp = revs.filter((r) => r.concorda !== null)
   const concordantes = comp.filter((r) => r.concorda === true).length
   const porCriterio = {} as Record<CriterioRubrica, number | null>
   for (const c of CRITERIOS_RUBRICA) {
-    const vs = revs.map((r) => r.porCriterio[c]).filter((v): v is boolean => typeof v === 'boolean')
+    const vs = comp.map((r) => r.porCriterio[c]).filter((v): v is boolean => typeof v === 'boolean')
     porCriterio[c] = fracao(vs.filter(Boolean).length, vs.length)
   }
   const alea = comp.filter((r) => r.motivo === 'aleatoria')
   const concordancia = fracao(concordantes, comp.length)
-  const falsos = revs.filter((r) => r.falsoNegativoCritica).length
+  // Falso negativo conta em QUALQUER revisão: uma crítica que só um revisor viu ainda é crítica.
+  const falsos = new Set(todas.filter((r) => r.falsoNegativoCritica).map((r) => `${r.conversaId}|${r.semana}`)).size
   return {
+    revisoes: todas.length,
     revisadas: revs.length,
     comparaveis: comp.length,
+    conversasComparaveis: comp.length,
     concordantes,
     concordancia,
     porCriterio,
@@ -261,18 +296,30 @@ export interface RevisaoDto {
 }
 
 /** Um item de GET /v1/agente/revisao/amostra. */
+/**
+ * ⚠️ CEGO até a 1ª revisão de quem pede (`cego: true`): o servidor omite tudo
+ *    o que diz o que o SISTEMA achou — motivo da amostra, gravidade, nota e
+ *    notas do juiz. Revisar vendo a resposta infla a concordância.
+ */
 export interface ItemAmostraRevisaoDto {
   /** 1..20, a ordem da P12. */
   readonly ordem: number
-  readonly motivo: MotivoAmostra
+  /** null enquanto cego. */
+  readonly motivo: MotivoAmostra | null
   readonly conversaId: string
   readonly canalId: string
   /** A avaliação que se revisa: a do juiz com a menor nota da semana; sem juiz, a de regras mais grave. */
   readonly avaliacaoId: string
   readonly origem: OrigemAvaliacao
+  /** Quem pede ainda não revisou: os campos do sistema vêm null. */
+  readonly cego: boolean
+  /** Há nota do juiz na avaliação (sem ela, a revisão não entra na concordância). Não revela a nota. */
+  readonly comJuiz: boolean
+  /** null enquanto cego. */
   readonly piorGravidade: GravidadeQualidade | null
+  /** null enquanto cego. */
   readonly menorNota: number | null
-  /** Notas do juiz da avaliação revisada (null = sem juiz: a revisão não entra na concordância). */
+  /** Notas do juiz da avaliação revisada; null enquanto cego ou sem juiz. */
   readonly notasJuiz: NotasDoJuiz | null
   /** A revisão DE QUEM PEDE (null = ainda não revisou). */
   readonly revisao: RevisaoDto | null
@@ -307,11 +354,15 @@ export interface DetalheRevisaoDto {
   readonly transcricao: readonly FalaRevisao[]
   /** A transcrição foi cortada no início (conversa longa). */
   readonly cortada: boolean
+  /** Quem pede ainda não revisou esta avaliação: notas, justificativas, gravidade do sistema e gravidade das violações vêm omitidas. */
+  readonly cego: boolean
+  readonly comJuiz: boolean
   readonly notasJuiz: NotasDoJuiz | null
   readonly justificativas: Readonly<Partial<Record<CriterioRubrica, string>>> | null
+  /** Pior gravidade das regras na MESMA sessão da transcrição; null enquanto cego. */
   readonly gravidadeSistema: GravidadeQualidade | null
-  /** O que escapou das regras na semana (mascarado). */
-  readonly violacoes: readonly ViolacaoQualidade[]
+  /** O que escapou das regras na sessão (mascarado); `gravidade` null enquanto cego. */
+  readonly violacoes: ReadonlyArray<Omit<ViolacaoQualidade, 'gravidade'> & { readonly gravidade: GravidadeQualidade | null }>
   readonly revisao: RevisaoDto | null
 }
 

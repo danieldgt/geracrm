@@ -231,6 +231,8 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
             FROM agente_avaliacao a
             JOIN canal_conectado cc ON cc.tenant_id = a.tenant_id AND cc.id = a.canal_id
            WHERE a.tenant_id = tenant_atual() AND a.criado_em >= ${sem!.ini} AND a.criado_em < ${sem!.fim}
+             -- Juiz que falhou não é avaliação: não põe a conversa na amostra (P16 filtra igual).
+             AND a.erro IS NULL
              ${canalId ? tx`AND a.canal_id = ${canalId}` : tx``}
            GROUP BY a.tenant_id, a.canal_id, cc.nome_amigavel, a.conversa_id
            -- O teto de linhas nunca corta uma CRÍTICA: as piores vêm primeiro.

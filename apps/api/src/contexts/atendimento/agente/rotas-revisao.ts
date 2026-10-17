@@ -73,7 +73,7 @@ export async function rotasRevisao(app: FastifyInstance): Promise<void> {
         if (!s) return 'semana_invalida' as const
         const [canal] = await tx<{ id: string }[]>`SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${canalId}`
         if (!canal) return 'sem_canal' as const
-        return { s, p: await planilhaDaSemana(tx, canalId, s) }
+        return { s, p: await planilhaDaSemana(tx, canalId, s, await garantirUsuarioId(tx, req)) }
       })
       if (r === 'semana_invalida') return semanaInvalida(reply)
       if (r === 'sem_canal') return reply.code(404).send({ erro: 'canal.nao_encontrado' })
@@ -98,6 +98,9 @@ export async function rotasRevisao(app: FastifyInstance): Promise<void> {
     if (!p.success) return invalido(reply, p.error)
     const r = await req.comTenant(async (tx) => gravarRevisao(tx, p.data, await garantirUsuarioId(tx, req)))
     if (r.tipo === 'nao_encontrada') return reply.code(404).send({ erro: 'revisao.avaliacao_nao_encontrada', mensagem: 'A avaliação não existe mais.' })
+    if (r.tipo === 'fora_da_amostra') {
+      return reply.code(422).send({ erro: 'revisao.fora_da_amostra', mensagem: 'Esta avaliação não está na amostra da semana do número. Revise pela lista da amostra.' })
+    }
     return reply.code(r.criada ? 201 : 200).send(r.revisao)
   })
 

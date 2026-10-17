@@ -1,7 +1,7 @@
 import { Component, ChangeDetectionStrategy, computed, effect, inject, input, signal, untracked } from '@angular/core'
 import {
   CRITERIOS_RUBRICA, DECISOES_REVISAO, DESCRICAO_CRITERIO, META_CONCORDANCIA, MIN_REVISADAS_CONCORDANCIA, ROTULO_CRITERIO,
-  ROTULO_DECISAO, ROTULO_VEREDITO, VEREDITOS_REVISAO, deslocarSemana,
+  ROTULO_DECISAO, ROTULO_VEREDITO, VEREDITOS_REVISAO, deslocarSemana, somarConcordancia,
   type AmostraRevisaoDto, type ConcordanciaDto, type CriterioRubrica, type DecisaoRevisao, type DetalheRevisaoDto,
   type FalaRevisao, type GravidadeQualidade, type ItemAmostraRevisaoDto, type SomaConcordancia, type VereditoRevisao,
 } from '@geracrm/shared'
@@ -92,9 +92,9 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
                   <span class="txt-kpi txt-dados">{{ pct(n.concordancia) }}</span>
                   <span class="suave">meta {{ meta }} · {{ n.concordantes }} de {{ n.comparaveis }}</span>
                 </div>
-                <div class="kpi"><span class="txt-rotulo">Revisões com juiz</span>
-                  <span class="txt-kpi txt-dados">{{ n.comparaveis }}<span class="de">/{{ minimo }}</span></span>
-                  <span class="suave">{{ n.revisadas }} revisão(ões) na semana</span></div>
+                <div class="kpi"><span class="txt-rotulo">Conversas com juiz</span>
+                  <span class="txt-kpi txt-dados">{{ n.conversasComparaveis }}<span class="de">/{{ minimo }}</span></span>
+                  <span class="suave">{{ n.revisadas }} conversa(s) revisada(s) · {{ n.revisoes }} revisão(ões); conta a 1ª de cada conversa</span></div>
                 <div class="kpi"><span class="txt-rotulo">Só aleatórias</span>
                   <span class="txt-kpi txt-dados">{{ pct(n.aleatorias.concordancia) }}</span>
                   <span class="suave">{{ n.aleatorias.comparaveis }} comparável(is) — estima a concordância real</span></div>
@@ -163,11 +163,17 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
                 <li class="item" [class.aberto]="aberto() === i.avaliacaoId">
                   <div class="linha">
                     <span class="txt-dados ordem">{{ i.ordem }}</span>
-                    <ui-badge [tom]="i.motivo === 'critica' ? 'erro' : i.motivo === 'aleatoria' ? 'neutro' : 'atencao'">{{ motivo(i) }}</ui-badge>
-                    <span class="encolhe resumo">
-                      Regras: {{ grav(i.piorGravidade) }} · Juiz: {{ i.menorNota === null ? 'sem nota' : nota(i.menorNota) }}
-                      · {{ i.origem === 'agente' ? 'Autônomo' : 'Sugestão' }}
-                    </span>
+                    @if (i.cego) {
+                      <!-- Cego até revisar: nem motivo, nem gravidade, nem nota (o servidor nem manda). -->
+                      <ui-badge tom="neutro">Na amostra</ui-badge>
+                      <span class="encolhe resumo">{{ i.origem === 'agente' ? 'Autônomo' : 'Sugestão' }} · {{ i.comJuiz ? 'com nota do juiz' : 'sem nota do juiz' }}</span>
+                    } @else {
+                      <ui-badge [tom]="i.motivo === 'critica' ? 'erro' : i.motivo === 'aleatoria' ? 'neutro' : 'atencao'">{{ motivo(i) }}</ui-badge>
+                      <span class="encolhe resumo">
+                        Regras: {{ grav(i.piorGravidade) }} · Juiz: {{ i.menorNota === null ? 'sem nota' : nota(i.menorNota) }}
+                        · {{ i.origem === 'agente' ? 'Autônomo' : 'Sugestão' }}
+                      </span>
+                    }
                     @if (i.revisao; as r) {
                       <ui-badge [tom]="r.concorda === false ? 'atencao' : 'sucesso'">Revisada{{ r.concorda === false ? ' · diverge' : '' }}</ui-badge>
                     } @else {
@@ -213,7 +219,7 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
                                 <h4 class="txt-rotulo sub">O que as regras pegaram</h4>
                                 <ul class="violacoes">
                                   @for (v of d.violacoes; track $index) {
-                                    <li><ui-badge [tom]="badgeG(v.gravidade).tom">{{ badgeG(v.gravidade).rotulo }}</ui-badge>
+                                    <li>@if (v.gravidade; as g) { <ui-badge [tom]="badgeG(g).tom">{{ badgeG(g).rotulo }}</ui-badge> }
                                       <span>{{ violacao(v) }}</span>
                                       @if (v.trecho) { <q class="trecho">{{ v.trecho }}</q> }</li>
                                   }
@@ -225,56 +231,58 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
                             <form class="form" (submit)="$event.preventDefault(); salvar(i)" novalidate>
                               <div class="form-cab">
                                 <h4 class="txt-rotulo sub">Sua avaliação</h4>
-                                @if (d.notasJuiz) {
-                                  <button type="button" class="link" (click)="verJuiz.set(!verJuiz())" [attr.aria-pressed]="verJuiz()">
-                                    {{ verJuiz() ? 'Esconder notas do juiz' : 'Mostrar notas do juiz' }}</button>
-                                } @else {
-                                  <span class="suave">Sem nota do juiz — esta revisão não entra na concordância.</span>
-                                }
+                                @if (!d.comJuiz) { <span class="suave">Sem nota do juiz — esta revisão não entra na concordância.</span> }
                               </div>
-                              @if (d.notasJuiz && !verJuiz()) {
-                                <p class="suave">Dê a sua nota antes de olhar a do juiz: evita ancorar no número dele.</p>
+                              @if (d.cego) {
+                                <p class="suave">Dê a sua nota sem ver a do juiz. As notas dele e a gravidade das regras aparecem depois que você salvar.</p>
+                              } @else {
+                                <p class="suave">Notas e gravidade ficam fixas na 1ª gravação (são a base da concordância). Veredito, decisão, responsável, prazo e observação podem mudar.</p>
                               }
-                              <div class="grade" role="group" aria-label="Notas por critério, de 0 a 5">
-                                @for (k of criterios; track k) {
-                                  <div class="criterio">
-                                    <span class="c-nome" [title]="descricao(k)">{{ rotuloCriterio(k) }}</span>
-                                    <span class="notas" role="radiogroup" [attr.aria-label]="rotuloCriterio(k)">
+                              @for (k of criterios; track k) {
+                                <fieldset class="criterio" [attr.aria-describedby]="erros().notas && form().notas[k] === undefined ? idErro('notas') : null">
+                                  <legend class="c-nome">{{ rotuloCriterio(k) }}</legend>
+                                  <p class="c-desc">{{ descricao(k) }}</p>
+                                  <div class="c-linha">
+                                    <span class="notas">
                                       @for (n of notas; track n) {
-                                        <button type="button" role="radio" class="n" [class.sel]="form().notas[k] === n"
-                                                [attr.aria-checked]="form().notas[k] === n" (click)="darNota(k, n)">{{ n }}</button>
+                                        <label class="n" [class.sel]="form().notas[k] === n" [class.travado]="travado()">
+                                          <input type="radio" class="vh" [name]="'nota-' + k" [value]="n" [checked]="form().notas[k] === n"
+                                                 [disabled]="travado()" (change)="darNota(k, n)" />
+                                          <span aria-hidden="true">{{ n }}</span><span class="vh">nota {{ n }}</span>
+                                        </label>
                                       }
                                     </span>
-                                    @if (verJuiz() && d.notasJuiz; as nj) {
-                                      <span class="juiz" [title]="d.justificativas?.[k] ?? ''">
+                                    @if (d.notasJuiz; as nj) {
+                                      <span class="juiz">
                                         <ui-badge [tom]="tomNota(nj[k] ?? null)">Juiz {{ nj[k] ?? '—' }}</ui-badge>
                                         @if (d.justificativas?.[k]; as j) { <span class="just">{{ j }}</span> }
                                       </span>
                                     }
                                   </div>
-                                }
-                              </div>
-                              @if (erros().notas; as e) { <span class="msg-erro">{{ e }}</span> }
+                                </fieldset>
+                              }
+                              @if (erros().notas; as e) { <span class="msg-erro" role="alert" [id]="idErro('notas')">{{ e }}</span> }
 
-                              <fieldset class="grupo">
+                              <fieldset class="grupo" [attr.aria-describedby]="erros().gravidade ? idErro('gravidade') : null">
                                 <legend>Gravidade que você viu</legend>
-                                <span class="opcoes" role="radiogroup" aria-label="Gravidade">
+                                <span class="opcoes">
                                   @for (g of gravidades; track $index) {
-                                    <button type="button" role="radio" class="op" [class.sel]="form().gravidade === g && form().gravidade !== undefined"
-                                            [attr.aria-checked]="form().gravidade === g" (click)="campo('gravidade', g)">{{ grav(g) }}</button>
+                                    <label class="op" [class.sel]="form().gravidade === g" [class.travado]="travado()">
+                                      <input type="radio" class="vh" name="gravidade" [checked]="form().gravidade === g" [disabled]="travado()"
+                                             (change)="campo('gravidade', g)" />{{ grav(g) }}</label>
                                   }
                                 </span>
-                                @if (verJuiz()) { <span class="suave">Regras: {{ grav(d.gravidadeSistema) }}</span> }
-                                @if (erros().gravidade; as e) { <span class="msg-erro">{{ e }}</span> }
+                                @if (!d.cego) { <span class="suave">Regras nesta sessão: {{ grav(d.gravidadeSistema) }}</span> }
+                                @if (erros().gravidade; as e) { <span class="msg-erro" role="alert" [id]="idErro('gravidade')">{{ e }}</span> }
                               </fieldset>
 
-                              <fieldset class="grupo">
+                              <fieldset class="grupo" [attr.aria-describedby]="erros().veredito ? idErro('veredito') : null">
                                 <legend>Veredito</legend>
                                 @for (v of vereditos; track v) {
                                   <label class="radio"><input type="radio" name="veredito" [checked]="form().veredito === v" (change)="campo('veredito', v)" />
                                     {{ rotuloVeredito(v) }}</label>
                                 }
-                                @if (erros().veredito; as e) { <span class="msg-erro">{{ e }}</span> }
+                                @if (erros().veredito; as e) { <span class="msg-erro" role="alert" [id]="idErro('veredito')">{{ e }}</span> }
                               </fieldset>
 
                               <label class="campo">
@@ -288,14 +296,16 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
                                   <label class="campo">
                                     <span>Responsável</span>
                                     <input type="text" maxlength="120" [value]="form().responsavel" (input)="campo('responsavel', $any($event.target).value)"
-                                           [attr.aria-invalid]="erros().responsavel ? 'true' : null" />
-                                    @if (erros().responsavel; as e) { <span class="msg-erro">{{ e }}</span> }
+                                           [attr.aria-invalid]="erros().responsavel ? 'true' : null"
+                                           [attr.aria-describedby]="erros().responsavel ? idErro('responsavel') : null" />
+                                    @if (erros().responsavel; as e) { <span class="msg-erro" role="alert" [id]="idErro('responsavel')">{{ e }}</span> }
                                   </label>
                                   <label class="campo">
                                     <span>Prazo</span>
                                     <input type="date" [value]="form().prazo" (input)="campo('prazo', $any($event.target).value)"
-                                           [attr.aria-invalid]="erros().prazo ? 'true' : null" />
-                                    @if (erros().prazo; as e) { <span class="msg-erro">{{ e }}</span> }
+                                           [attr.aria-invalid]="erros().prazo ? 'true' : null"
+                                           [attr.aria-describedby]="erros().prazo ? idErro('prazo') : null" />
+                                    @if (erros().prazo; as e) { <span class="msg-erro" role="alert" [id]="idErro('prazo')">{{ e }}</span> }
                                   </label>
                                 </div>
                               }
@@ -387,17 +397,20 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
     .trecho { color: var(--texto-secundario); overflow-wrap: anywhere; min-width: 0; flex: 1 1 200px; }
     .form { display: grid; gap: var(--espacamento-3); min-width: 0; }
     .form-cab { display: flex; justify-content: space-between; align-items: baseline; gap: var(--espacamento-2); flex-wrap: wrap; }
-    .grade { display: grid; gap: var(--espacamento-2); }
-    .criterio { display: flex; flex-wrap: wrap; gap: var(--espacamento-1) var(--espacamento-2); align-items: center; min-width: 0; }
-    .criterio .c-nome { flex: 0 0 140px; }
-    .criterio .juiz { flex: 1 1 120px; }
-    .c-nome { font-size: 13px; color: var(--texto); cursor: help; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .criterio { border: 0; margin: 0; padding: 0; display: grid; gap: var(--espacamento-1); min-width: 0; }
+    .c-nome { font-size: 13px; color: var(--texto); padding: 0; }
+    .c-desc { margin: 0; font-size: 12px; color: var(--texto-suave); }
+    .c-linha { display: flex; flex-wrap: wrap; gap: var(--espacamento-1) var(--espacamento-2); align-items: center; min-width: 0; }
+    .c-linha .juiz { flex: 1 1 120px; }
+    .vh { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
     .notas, .opcoes { display: inline-flex; flex-wrap: wrap; gap: 2px; }
-    .n, .op { font: inherit; font-size: 13px; min-width: 32px; height: 32px; padding: 0 var(--espacamento-2); border: 1px solid var(--borda-controle);
-      background: var(--superficie); color: var(--texto-secundario); border-radius: var(--raio-controle); cursor: pointer; }
+    .n, .op { position: relative; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; min-width: 32px; height: 32px;
+      padding: 0 var(--espacamento-2); border: 1px solid var(--borda-controle); background: var(--superficie); color: var(--texto-secundario);
+      border-radius: var(--raio-controle); cursor: pointer; }
     .n:hover, .op:hover { background: var(--superficie-hover); }
     .n.sel, .op.sel { border-color: var(--acao); background: var(--acao); color: var(--acao-texto); }
-    .n:focus-visible, .op:focus-visible, .nav:focus-visible, .link:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 1px; }
+    .n.travado, .op.travado { cursor: default; opacity: .7; }
+    .n:has(input:focus-visible), .op:has(input:focus-visible), .nav:focus-visible, .link:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 1px; }
     .juiz { display: flex; gap: var(--espacamento-1); align-items: baseline; min-width: 0; }
     .just { font-size: 12px; color: var(--texto-suave); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .grupo { border: 0; margin: 0; padding: 0; display: grid; gap: var(--espacamento-1); min-width: 0; }
@@ -449,7 +462,8 @@ export class AgenteRevisaoComponente {
   readonly detalhe = signal<DetalheRevisaoDto | null>(null)
   readonly form = signal<FormularioRevisao>(formularioVazio())
   readonly erros = signal<ErrosFormulario>({})
-  readonly verJuiz = signal(false)
+  /** Notas e gravidade ficam fixas depois da 1ª gravação (o servidor também não as muda). */
+  readonly travado = computed(() => this.detalhe()?.revisao !== null && this.detalhe()?.revisao !== undefined)
   readonly salvando = signal(false)
 
   readonly itens = computed(() => this.amostra()?.itens ?? [])
@@ -479,7 +493,7 @@ export class AgenteRevisaoComponente {
   descricao(c: CriterioRubrica): string { return DESCRICAO_CRITERIO[c] }
   rotuloVeredito(v: VereditoRevisao): string { return ROTULO_VEREDITO[v] }
   rotuloDecisao(d: DecisaoRevisao): string { return ROTULO_DECISAO[d] }
-  violacao(v: DetalheRevisaoDto['violacoes'][number]): string { return linhaDaViolacao(v) }
+  violacao(v: DetalheRevisaoDto['violacoes'][number]): string { return linhaDaViolacao({ ...v, gravidade: v.gravidade ?? 'MEDIA' }) }
   resultado(r: NonNullable<ItemAmostraRevisaoDto['revisao']>) { return resultadoDaRevisao(r) }
   autor(f: FalaRevisao): string {
     return { cliente: 'Cliente', agente: 'Agente (enviou)', sugestao: 'Sugestão do agente', humano: 'Vendedor (contexto)' }[f.autor]
@@ -515,7 +529,7 @@ export class AgenteRevisaoComponente {
 
   async abrir(i: ItemAmostraRevisaoDto): Promise<void> {
     this.aberto.set(i.avaliacaoId); this.estadoDetalhe.set('carregando'); this.erros.set({})
-    this.form.set(formularioDe(i.revisao)); this.verJuiz.set(i.revisao !== null)
+    this.form.set(formularioDe(i.revisao)); this.detalhe.set(null)
     try {
       const d = await this.#api.detalhe(i.avaliacaoId)
       if (this.aberto() !== i.avaliacaoId) return
@@ -533,6 +547,8 @@ export class AgenteRevisaoComponente {
     this.limparErro(k)
   }
 
+  idErro(campo: string): string { return `erro-revisao-${campo}` }
+
   limparErro(k: string): void {
     if (!(k in this.erros())) return
     this.erros.update((e) => Object.fromEntries(Object.entries(e).filter(([x]) => x !== k)) as ErrosFormulario)
@@ -549,14 +565,17 @@ export class AgenteRevisaoComponente {
       this.#toast.erro(mensagemDaFalhaRevisao(r.erro.erro, r.erro.mensagem ?? 'Não foi possível salvar a revisão.'))
       return
     }
-    // A revisão volta para o item (estado "revisada") e as notas do juiz se abrem para comparar.
+    // A revisão volta para o item (estado "revisada") já sem venda — o servidor decide o que mostrar.
     this.amostra.update((a) => a && {
       ...a,
       itens: a.itens.map((x) => x.avaliacaoId === i.avaliacaoId
         ? { ...x, revisao: r.revisao, revisoes: x.revisao ? x.revisoes : x.revisoes + 1 }
         : x),
     })
-    this.verJuiz.set(true)
+    try { this.amostra.set(await this.#api.amostra(this.canalId(), this.semana())) } catch { /* fica a atualização local */ }
+    this.form.set(formularioDe(r.revisao))
+    // Agora o detalhe vem sem venda: notas e justificativas do juiz e gravidade das regras.
+    try { this.detalhe.set(await this.#api.detalhe(r.revisao.avaliacaoId)) } catch { /* fica o que estava */ }
     this.#toast.sucesso('Revisão salva.')
     void this.carregarConcordancia()
   }
@@ -579,8 +598,4 @@ export class AgenteRevisaoComponente {
   }
 }
 
-const VAZIA: SomaConcordancia = {
-  revisadas: 0, comparaveis: 0, concordantes: 0, concordancia: null,
-  porCriterio: { aderencia: null, clareza: null, empatia: null, conducao: null, compliance: null },
-  gravidade: null, aleatorias: { comparaveis: 0, concordancia: null }, falsosNegativosCritica: 0, atingeMeta: false,
-}
+const VAZIA: SomaConcordancia = somarConcordancia([])
