@@ -128,6 +128,36 @@ describe('A versão nasce na mesma transação da escrita', () => {
     expect(n!.n).toBe(1)
   })
 
+  it('registrar uma versão que já tem linha é ERRO e desfaz a transação inteira (não engole a segunda escrita)', async () => {
+    const d = await criar(T, 'Conflito', 'texto 1')
+    await expect(comTenantServico(T, async (tx) => {
+      await tx`UPDATE conhecimento_documento SET publicado = false WHERE tenant_id = tenant_atual() AND id = ${d.id}`
+      await registrarVersao(tx, { id: d.id, versao: 1, titulo: 'Conflito', tipo: 'faq', canal_id: null, conteudo: 'outro texto' }, { origem: 'edicao' })
+    })).rejects.toThrow(/duplicate key|conhecimento_documento_versao_pkey/)
+    const [doc] = await dono<{ publicado: boolean }[]>`SELECT publicado FROM conhecimento_documento WHERE tenant_id = ${T} AND id = ${d.id}`
+    const [v] = await dono<{ conteudo: string }[]>`
+      SELECT conteudo FROM conhecimento_documento_versao WHERE tenant_id = ${T} AND documento_id = ${d.id} AND versao = 1`
+    expect(doc!.publicado).toBe(true)
+    expect(v!.conteudo).toBe('texto 1')
+  })
+
+  it('dois PATCH em paralelo viram v2 e v3, cada uma com o próprio texto, sem perda', async () => {
+    const d = await criar(T, 'Concorrência', 'base')
+    const [a, b] = await Promise.all([
+      chamar(T, 'PATCH', `/v1/agente/conhecimento/${d.id}`, { conteudo: 'texto A' }),
+      chamar(T, 'PATCH', `/v1/agente/conhecimento/${d.id}`, { conteudo: 'texto B' }),
+    ])
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200])
+    const porTexto = new Map([[(a.json() as Doc).conteudo, (a.json() as Doc).versao], [(b.json() as Doc).conteudo, (b.json() as Doc).versao]])
+    expect([...porTexto.values()].sort()).toEqual([2, 3])
+    const vs = await dono<{ versao: number; conteudo: string }[]>`
+      SELECT versao, conteudo FROM conhecimento_documento_versao WHERE tenant_id = ${T} AND documento_id = ${d.id} ORDER BY versao`
+    expect(vs.map((v) => v.versao)).toEqual([1, 2, 3])
+    for (const v of vs.slice(1)) expect(porTexto.get(v.conteudo)).toBe(v.versao)
+    const [doc] = await dono<{ versao: number; conteudo: string }[]>`SELECT versao, conteudo FROM conhecimento_documento WHERE tenant_id = ${T} AND id = ${d.id}`
+    expect(doc).toEqual({ versao: 3, conteudo: vs[2]!.conteudo })
+  })
+
   it('escritor que não registra (a API anterior, no meio do deploy) ganha a versão "automatica" pelo trigger no commit', async () => {
     const d = await criar(T, 'Legado', 'antes')
     await comTenantServico(T, (tx) => tx`
@@ -208,6 +238,21 @@ describe('Ler uma versão: o texto exato', () => {
     expect(r.json()).toMatchObject({ erro: 'conhecimento.versao_anterior_ao_historico', primeiraRegistrada: 4 })
     expect((await chamar(T, 'GET', `/v1/agente/conhecimento/${id}/versoes/4`)).json()).toMatchObject({ conteudo: 'texto da v4', origem: 'backfill' })
   })
+
+  it('versão apagada depois (exclusão do titular, R10d) → versao_removida, distinta de "anterior ao histórico"; restaurar recusa', async () => {
+    const d = await criar(T, 'Com dado pessoal', 'v1')
+    await chamar(T, 'PATCH', `/v1/agente/conhecimento/${d.id}`, { conteudo: 'v2 com CPF do cliente' })
+    await chamar(T, 'PATCH', `/v1/agente/conhecimento/${d.id}`, { conteudo: 'v3 limpa' })
+    // DELETE continua permitido (decisão "a" da revisão): é o caminho da exclusão do titular.
+    await dono`DELETE FROM conhecimento_documento_versao WHERE tenant_id = ${T} AND documento_id = ${d.id} AND versao = 2`
+    const r = await chamar(T, 'GET', `/v1/agente/conhecimento/${d.id}/versoes/2`)
+    expect(r.statusCode).toBe(404)
+    expect(r.json()).toMatchObject({ erro: 'conhecimento.versao_removida', primeiraRegistrada: 1 })
+    const rr = await chamar(T, 'POST', `/v1/agente/conhecimento/${d.id}/restaurar`, { versao: 2 })
+    expect(rr.statusCode).toBe(422)
+    expect(rr.json()).toMatchObject({ erro: 'conhecimento.versao_removida', campos: ['versao'] })
+    expect((await chamar(T, 'GET', `/v1/agente/conhecimento/${d.id}/versoes/1`)).json()).toMatchObject({ conteudo: 'v1' })
+  })
 })
 
 describe('Restaurar cria versão nova', () => {
@@ -257,8 +302,23 @@ describe('Restaurar cria versão nova', () => {
       SELECT origem FROM conhecimento_documento_versao WHERE tenant_id = ${T} AND documento_id = ${pol!.id} ORDER BY versao`
     expect(origens.map((o) => o.origem)).toEqual(['sincronismo', 'sincronismo'])
 
+    // Dois salvamentos da Configuração em paralelo: v3 e v4, cada uma com o próprio texto.
+    const textos = ['Pedido mínimo R$ 600.', 'Pedido mínimo R$ 700.']
+    const rs = await Promise.all(textos.map((p) => chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, { modo: 'sombra', politicas: p })))
+    expect(rs.map((x) => x.statusCode)).toEqual([200, 200])
+    const novas = await dono<{ versao: number; conteudo: string; origem: string }[]>`
+      SELECT versao, conteudo, origem FROM conhecimento_documento_versao
+       WHERE tenant_id = ${T} AND documento_id = ${pol!.id} AND versao > 2 ORDER BY versao`
+    expect(novas.map((v) => v.versao)).toEqual([3, 4])
+    expect(novas.map((v) => v.conteudo).sort()).toEqual(textos)
+    expect(novas.every((v) => v.origem === 'sincronismo')).toBe(true)
+    const [atualPol] = await dono<{ conteudo: string }[]>`SELECT conteudo FROM conhecimento_documento WHERE tenant_id = ${T} AND id = ${pol!.id}`
+    expect(atualPol!.conteudo).toBe(novas[1]!.conteudo)
+    // Volta ao ponto que o resto do teste espera (v5 = R$ 800, restaurar a v1 vira v6).
+    await chamar(T, 'PUT', `/v1/canais/${CANAL}/agente`, { modo: 'sombra', politicas: 'Pedido mínimo R$ 800.' })
+
     const r = await chamar(T, 'POST', `/v1/agente/conhecimento/${pol!.id}/restaurar`, { versao: 1 })
-    expect(r.json()).toMatchObject({ versao: 3, conteudo: 'Pedido mínimo R$ 500.' })
+    expect(r.json()).toMatchObject({ versao: 6, conteudo: 'Pedido mínimo R$ 500.' })
     const cfg = (await chamar(T, 'GET', `/v1/canais/${CANAL}/agente`)).json() as { politicas: string }
     expect(cfg.politicas).toBe('Pedido mínimo R$ 500.')
   })

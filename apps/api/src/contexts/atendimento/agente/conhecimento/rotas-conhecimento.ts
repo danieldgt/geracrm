@@ -90,6 +90,19 @@ async function autoria(tx: Sql, req: FastifyRequest): Promise<{ autorId: string 
   return { autorId: await garantirUsuarioId(tx, req), autorStaff: false }
 }
 
+/**
+ * Ordem de locks do documento-espelho das políticas: `agente_config` ANTES do
+ * documento — a mesma do PUT do agente (upsert da config → sincronizarPoliticas).
+ * Ordem invertida entre os dois caminhos é deadlock quando salvam juntos.
+ */
+async function travarConfigDoEspelho(tx: Sql, documentoId: string): Promise<void> {
+  await tx`
+    SELECT 1 FROM agente_config ac
+      JOIN conhecimento_documento d ON d.tenant_id = ac.tenant_id AND d.canal_id = ac.canal_id
+     WHERE d.tenant_id = tenant_atual() AND d.id = ${documentoId} AND d.tipo = 'politicas'
+       FOR UPDATE OF ac`
+}
+
 const SELECT_DOCUMENTO_SAIDA = (tx: Sql, id: string) => tx<LinhaDocumento[]>`
   SELECT d.id, d.canal_id, d.titulo, d.tipo, d.conteudo, d.versao, d.publicado, d.atualizado_em, d.criado_em,
          (SELECT count(*)::int FROM conhecimento_trecho t WHERE t.tenant_id = d.tenant_id AND t.documento_id = d.id) AS trechos
@@ -185,6 +198,7 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
       const c = parse.data
       const r = await req.comTenant(async (tx) => {
         // FOR UPDATE: duas edições simultâneas comparam com o texto que vão substituir, uma de cada vez.
+        await travarConfigDoEspelho(tx, req.params.id)
         const [atual] = await tx<{ id: string; canal_id: string | null; tipo: TipoDocumento; titulo: string; conteudo: string; publicado: boolean; versao: number }[]>`
           SELECT id, canal_id, tipo, titulo, conteudo, publicado, versao FROM conhecimento_documento
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id} FOR UPDATE`
@@ -326,6 +340,13 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
           ...(r.primeiraRegistrada ? { primeiraRegistrada: r.primeiraRegistrada } : {}),
         })
       }
+      if (r.erro === 'versao_removida') {
+        return reply.code(404).send({
+          erro: 'conhecimento.versao_removida',
+          mensagem: 'O texto desta versão foi removido do histórico (exclusão a pedido do titular dos dados).',
+          primeiraRegistrada: r.primeiraRegistrada,
+        })
+      }
       return reply.code(404).send({ erro: 'conhecimento.versao_nao_encontrada', mensagem: 'Este documento não tem essa versão.' })
     },
   )
@@ -342,6 +363,7 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
       if (!parse.success) return campoInvalido(reply, parse.error)
       const c = parse.data
       const r = await req.comTenant(async (tx) => {
+        await travarConfigDoEspelho(tx, req.params.id)
         const [atual] = await tx<{ id: string; canal_id: string | null; tipo: TipoDocumento; titulo: string; conteudo: string; versao: number }[]>`
           SELECT id, canal_id, tipo, titulo, conteudo, versao FROM conhecimento_documento
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id} FOR UPDATE`
@@ -380,6 +402,11 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
           return reply.code(422).send({
             erro: 'conhecimento.versao_anterior_ao_historico',
             mensagem: 'Esta versão foi sobrescrita antes de o histórico existir — não há texto para restaurar.', campos: ['versao'],
+          })
+        case 'versao_removida':
+          return reply.code(422).send({
+            erro: 'conhecimento.versao_removida',
+            mensagem: 'O texto desta versão foi removido do histórico — não há texto para restaurar.', campos: ['versao'],
           })
         case 'versao_nao_encontrada':
           return reply.code(422).send({ erro: 'conhecimento.versao_nao_encontrada', mensagem: 'Este documento não tem essa versão.', campos: ['versao'] })

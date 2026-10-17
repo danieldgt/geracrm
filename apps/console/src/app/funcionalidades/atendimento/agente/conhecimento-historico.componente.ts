@@ -7,7 +7,7 @@ import {
 import { ehSemPermissao } from './agente.servico.js'
 import { ConhecimentoServico, type Documento, type VersaoCompleta, type VersaoItem } from './conhecimento.servico.js'
 import {
-  OBSERVACAO_MAX, badgeOrigem, compactarDiff, diffLinhas, formatarInteiro, mensagemFalhaVersao, resumoDiff, rotuloAutor,
+  OBSERVACAO_MAX, badgeOrigem, compactarDiff, diffDesenhavel, diffLinhas, formatarInteiro, mensagemFalhaVersao, resumoDiff, rotuloAutor,
   validarObservacao, type BlocoDiff,
 } from './conhecimento.regras.js'
 
@@ -90,13 +90,17 @@ type Carga<T> = { readonly estado: 'carregando' } | { readonly estado: 'pronto';
                     <div class="vistas" role="radiogroup" aria-label="O que mostrar">
                       <label class="radio"><input type="radio" name="vista" [checked]="vista() === 'texto'" (change)="mudarVista('texto')" /> Texto da v{{ v.versao }}</label>
                       @if (!v.atual) {
-                        <label class="radio"><input type="radio" name="vista" [checked]="vista() === 'atual'" (change)="mudarVista('atual')" /> Diferença para a atual (v{{ documento().versao }})</label>
+                        <label class="radio"><input type="radio" name="vista" [checked]="vista() === 'atual'" (change)="mudarVista('atual')" /> Diferença para a atual (v{{ versaoAtualReal() }})</label>
                       }
                       @if (v.versao > 1) {
                         <label class="radio"><input type="radio" name="vista" [checked]="vista() === 'anterior'" (change)="mudarVista('anterior')" /> O que mudou na v{{ v.versao }}</label>
                       }
                     </div>
 
+                    @if (defasada(); as nova) {
+                      <p class="aviso" role="status">O documento mudou desde que este histórico abriu: a atual agora é a v{{ nova }}. A comparação usa a v{{ nova }}.
+                        <button type="button" class="link" (click)="carregar()">Recarregar histórico</button></p>
+                    }
                     @if (vista() === 'texto') {
                       <pre class="texto rolagem-x">{{ v.conteudo }}</pre>
                     } @else {
@@ -106,6 +110,10 @@ type Carga<T> = { readonly estado: 'carregando' } | { readonly estado: 'pronto';
                         @case ('pronto') {
                           <p class="dica">{{ legendaDiff() }} · <span class="txt-dados">{{ resumo() }}</span></p>
                           @if (aproximado()) { <p class="dica">Diferença muito grande: mostrada em blocos inteiros.</p> }
+                          @if (!desenhavel()) {
+                            <p class="aviso" role="status">Diferença grande demais para desenhar aqui ({{ resumo() }}) — veja o texto.
+                              <button type="button" class="link" (click)="mudarVista('texto')">Ver o texto da v{{ v.versao }}</button></p>
+                          } @else {
                           <div class="diff rolagem-x" role="table" aria-label="Diferença linha a linha">
                             @for (b of blocos(); track $index) {
                               @if (b.tipo === 'omitidas') {
@@ -118,6 +126,7 @@ type Carga<T> = { readonly estado: 'carregando' } | { readonly estado: 'pronto';
                               }
                             }
                           </div>
+                          }
                         }
                       }
                     }
@@ -132,7 +141,7 @@ type Carga<T> = { readonly estado: 'carregando' } | { readonly estado: 'pronto';
                           @if (erroObservacao(); as e) { <span class="msg-erro">{{ e }}</span> }
                         </label>
                         <ui-botao tipo="submit" variante="secundario" [carregando]="restaurando()" [desabilitado]="erroObservacao() !== null">
-                          {{ restaurando() ? 'Restaurando…' : 'Restaurar como v' + (documento().versao + 1) }}</ui-botao>
+                          {{ restaurando() ? 'Restaurando…' : 'Restaurar como v' + (versaoAtualReal() + 1) }}</ui-botao>
                       </form>
                     }
                   }
@@ -178,6 +187,8 @@ type Carga<T> = { readonly estado: 'carregando' } | { readonly estado: 'pronto';
     .aviso { margin: 0; padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle);
       background: var(--atencao-suave); color: var(--texto); font-size: 13px; }
     .aviso--erro { background: var(--erro-suave); }
+    .link { border: 0; background: transparent; padding: 0; font: inherit; color: var(--acao); cursor: pointer; text-decoration: underline; }
+    .link:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
     .restaurar { display: flex; align-items: end; gap: var(--espacamento-2); flex-wrap: wrap; margin-top: var(--espacamento-2); }
     .restaurar .campo { flex: 1 1 260px; min-width: 0; display: grid; gap: 2px; font-size: 12px; color: var(--texto-secundario); }
     .restaurar input { font: inherit; width: 100%; min-height: var(--densidade-alvo-clique-console); }
@@ -204,6 +215,12 @@ export class ConhecimentoHistoricoComponente {
   readonly selecionada = signal<number | null>(null)
   readonly versao = signal<Carga<VersaoCompleta>>({ estado: 'carregando' })
   readonly anterior = signal<Carga<VersaoCompleta> | null>(null)
+  /**
+   * A versão ATUAL lida do servidor quando a lista está defasada (a versão
+   * aberta diz `versaoAtual` > a do documento que a aba tem): sem isso, a
+   * "diferença para a atual" compararia com um texto que já não é o atual.
+   */
+  readonly atualDoServidor = signal<Carga<VersaoCompleta> | null>(null)
   readonly vista = signal<Vista>('texto')
   readonly observacao = signal('')
   readonly restaurando = signal(false)
@@ -213,30 +230,47 @@ export class ConhecimentoHistoricoComponente {
 
   readonly versaoPronta = computed(() => { const c = this.versao(); return c.estado === 'pronto' ? c.valor : null })
   readonly erroVersao = computed(() => { const c = this.versao(); return c.estado === 'erro' ? c.mensagem : '' })
-  readonly erroAnterior = computed(() => { const c = this.anterior(); return c?.estado === 'erro' ? c.mensagem : '' })
+  readonly erroAnterior = computed(() => {
+    const c = this.vista() === 'atual' ? this.atualDoServidor() : this.anterior()
+    return c?.estado === 'erro' ? c.mensagem : ''
+  })
   readonly erroObservacao = computed(() => validarObservacao(this.observacao()))
+
+  /** Número da versão atual de fato: o maior entre o que a aba tem e o que o servidor disse. */
+  readonly versaoAtualReal = computed(() => Math.max(this.documento().versao, this.versaoPronta()?.versaoAtual ?? 0))
+  /** A versão atual nova, quando a aba está defasada; `null` quando está em dia. */
+  readonly defasada = computed(() => {
+    const v = this.versaoPronta()
+    return v && v.versaoAtual > this.documento().versao ? v.versaoAtual : null
+  })
 
   /** Os dois textos comparados: [antigo, novo]. `null` enquanto o lado de lá não chegou. */
   private readonly pares = computed<readonly [string, string] | null>(() => {
     const v = this.versaoPronta()
     if (!v) return null
-    if (this.vista() === 'atual') return [v.conteudo, this.documento().conteudo]
+    if (this.vista() === 'atual') {
+      if (this.defasada() === null) return [v.conteudo, this.documento().conteudo]
+      const a = this.atualDoServidor()
+      return a?.estado === 'pronto' ? [v.conteudo, a.valor.conteudo] : null
+    }
     if (this.vista() === 'anterior') { const a = this.anterior(); return a?.estado === 'pronto' ? [a.valor.conteudo, v.conteudo] : null }
     return null
   })
   readonly estadoDiff = computed<'carregando' | 'erro' | 'pronto'>(() => {
     if (this.vista() === 'anterior') { const a = this.anterior(); if (!a || a.estado === 'carregando') return 'carregando'; if (a.estado === 'erro') return 'erro' }
+    if (this.vista() === 'atual' && this.defasada() !== null && this.atualDoServidor()?.estado === 'erro') return 'erro'
     return this.pares() ? 'pronto' : 'carregando'
   })
   private readonly diff = computed(() => { const p = this.pares(); return p ? diffLinhas(p[0], p[1]) : null })
   readonly blocos = computed<readonly BlocoDiff[]>(() => { const d = this.diff(); return d ? compactarDiff(d.linhas) : [] })
   readonly resumo = computed(() => { const d = this.diff(); return d ? resumoDiff(d) : '' })
   readonly aproximado = computed(() => this.diff()?.aproximado ?? false)
+  readonly desenhavel = computed(() => diffDesenhavel(this.blocos()))
   readonly legendaDiff = computed(() => {
     const v = this.versaoPronta()
     if (!v) return ''
     return this.vista() === 'atual'
-      ? `− o que está na v${v.versao} · + o que está na atual (v${this.documento().versao}) — restaurar troca o + pelo −`
+      ? `− o que está na v${v.versao} · + o que está na atual (v${this.versaoAtualReal()}) — restaurar troca o + pelo −`
       : `− v${v.versao - 1} · + v${v.versao}`
   })
 
@@ -257,7 +291,7 @@ export class ConhecimentoHistoricoComponente {
 
   async carregar(): Promise<void> {
     this.estado.set('carregando'); this.erroMais.set(null)
-    this.selecionada.set(null); this.anterior.set(null); this.observacao.set('')
+    this.selecionada.set(null); this.anterior.set(null); this.atualDoServidor.set(null); this.observacao.set('')
     try {
       const p = await this.api.listarVersoes(this.documento().id, null)
       this.itens.set(p.itens)
@@ -284,11 +318,20 @@ export class ConhecimentoHistoricoComponente {
   async abrir(v: VersaoItem): Promise<void> {
     const n = ++this.pedido
     this.selecionada.set(v.versao)
-    this.versao.set({ estado: 'carregando' }); this.anterior.set(null); this.observacao.set('')
+    this.versao.set({ estado: 'carregando' }); this.anterior.set(null); this.atualDoServidor.set(null); this.observacao.set('')
     this.vista.set(v.atual ? 'texto' : 'atual')
     const r = await this.api.lerVersao(this.documento().id, v.versao)
     if (n !== this.pedido) return
     this.versao.set(r.ok ? { estado: 'pronto', valor: r.versao } : { estado: 'erro', mensagem: mensagemFalhaVersao(r.erro.erro, r.erro.primeiraRegistrada) })
+    // Defasagem: o servidor já está numa versão depois da que a aba conhece → busca o texto atual de verdade.
+    if (r.ok && r.versao.versaoAtual > this.documento().versao) void this.carregarAtualDoServidor(r.versao.versaoAtual, n)
+  }
+
+  private async carregarAtualDoServidor(versaoAtual: number, n: number): Promise<void> {
+    this.atualDoServidor.set({ estado: 'carregando' })
+    const r = await this.api.lerVersao(this.documento().id, versaoAtual)
+    if (n !== this.pedido) return
+    this.atualDoServidor.set(r.ok ? { estado: 'pronto', valor: r.versao } : { estado: 'erro', mensagem: mensagemFalhaVersao(r.erro.erro, r.erro.primeiraRegistrada) })
   }
 
   mudarVista(vista: Vista): void {
@@ -309,7 +352,7 @@ export class ConhecimentoHistoricoComponente {
   async restaurar(ev: Event, v: VersaoCompleta): Promise<void> {
     ev.preventDefault()
     if (this.restaurando() || this.erroObservacao()) return
-    const nova = this.documento().versao + 1
+    const nova = this.versaoAtualReal() + 1
     const ok = await this.confirmacao.confirmar({
       titulo: `Restaurar a v${v.versao}?`,
       mensagem: `O texto da v${v.versao} vira a v${nova} e o agente passa a usá-lo na próxima resposta. Nenhuma versão é apagada.`,

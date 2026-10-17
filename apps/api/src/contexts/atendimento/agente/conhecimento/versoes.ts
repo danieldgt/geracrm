@@ -13,8 +13,12 @@ import type { TipoDocumento } from './porta.js'
  *    com os valores devolvidos pelo próprio UPDATE/INSERT (RETURNING) — nunca
  *    com uma leitura anterior, que pode estar velha sob concorrência.
  * ⚠️ Rede de segurança no banco: um trigger deferido grava, no commit, a versão
- *    que ficou sem linha (origem 'automatica'). Aqui o INSERT é idempotente
- *    (`ON CONFLICT DO NOTHING`) pelo mesmo motivo.
+ *    que ficou sem linha (origem 'automatica'). Aqui o INSERT é SIMPLES: a
+ *    linha desta versão já existir é bug (duas escritas disputando o mesmo
+ *    número) — o erro derruba a transação inteira em vez de engolir a segunda.
+ * ⚠️ LGPD (decisão da revisão da P9, opção "a"): DELETE de versão continua
+ *    possível — é o caminho da exclusão a pedido do titular (R10d). Versão
+ *    entre a primeira registrada e a atual sem linha = `versao_removida`.
  */
 
 export const ORIGENS_VERSAO = ['criacao', 'edicao', 'restauracao', 'sincronismo', 'backfill', 'automatica'] as const
@@ -47,8 +51,7 @@ export async function registrarVersao(tx: Sql, doc: SnapshotDocumento, meta: Met
     INSERT INTO conhecimento_documento_versao
       (tenant_id, documento_id, versao, titulo, tipo, canal_id, conteudo, origem, restaurada_de, observacao, autor_id, autor_staff)
     VALUES (tenant_atual(), ${doc.id}, ${doc.versao}, ${doc.titulo}, ${doc.tipo}, ${doc.canal_id}, ${doc.conteudo},
-            ${meta.origem}, ${meta.restauradaDe ?? null}, ${meta.observacao ?? null}, ${meta.autorId ?? null}, ${meta.autorStaff ?? false})
-    ON CONFLICT (tenant_id, documento_id, versao) DO NOTHING`
+            ${meta.origem}, ${meta.restauradaDe ?? null}, ${meta.observacao ?? null}, ${meta.autorId ?? null}, ${meta.autorStaff ?? false})`
 }
 
 interface LinhaVersao {
@@ -117,12 +120,19 @@ export interface VersaoCompleta extends ItemVersao {
 
 export type ResultadoLerVersao =
   | { readonly ok: true; readonly versao: VersaoCompleta }
-  | { readonly ok: false; readonly erro: 'nao_encontrado' | 'versao_nao_encontrada' | 'versao_anterior_ao_historico'; readonly primeiraRegistrada?: number }
+  | {
+    readonly ok: false
+    readonly erro: 'nao_encontrado' | 'versao_nao_encontrada' | 'versao_anterior_ao_historico' | 'versao_removida'
+    readonly primeiraRegistrada?: number
+  }
 
 /**
- * O texto exato da versão N. Versão que existiu (N ≤ atual) mas não tem linha
- * é anterior ao histórico (sobrescrita antes da 0100) — falha NOMEADA, nunca o
- * texto de outra versão no lugar.
+ * O texto exato da versão N. Versão que existiu (N ≤ atual) mas não tem linha:
+ *   - N antes da primeira registrada → sobrescrita antes da 0100
+ *     (`versao_anterior_ao_historico`);
+ *   - N entre a primeira e a atual → apagada depois (exclusão do titular,
+ *     R10d) → `versao_removida`.
+ * Falha NOMEADA, nunca o texto de outra versão no lugar.
  */
 export async function lerVersao(tx: Sql, documentoId: string, versao: number): Promise<ResultadoLerVersao> {
   const [doc] = await tx<{ versao: number }[]>`
@@ -139,5 +149,7 @@ export async function lerVersao(tx: Sql, documentoId: string, versao: number): P
   const [p] = await tx<{ primeira: number | null }[]>`
     SELECT min(versao)::int AS primeira FROM conhecimento_documento_versao
      WHERE tenant_id = tenant_atual() AND documento_id = ${documentoId}`
-  return { ok: false, erro: 'versao_anterior_ao_historico', ...(p?.primeira ? { primeiraRegistrada: p.primeira } : {}) }
+  const primeira = p?.primeira ?? null
+  if (primeira !== null && versao > primeira) return { ok: false, erro: 'versao_removida', primeiraRegistrada: primeira }
+  return { ok: false, erro: 'versao_anterior_ao_historico', ...(primeira !== null ? { primeiraRegistrada: primeira } : {}) }
 }

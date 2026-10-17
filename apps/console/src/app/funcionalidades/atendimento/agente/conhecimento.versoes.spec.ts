@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  OBSERVACAO_MAX, badgeOrigem, citacoesDaDecisao, compactarDiff, diffLinhas, mensagemFalhaVersao, resumoDiff, rotuloAutor,
+  DIFF_MAX_LINHAS_DESENHADAS, OBSERVACAO_MAX, badgeOrigem, citacoesDaDecisao, compactarDiff, diffDesenhavel, diffLinhas,
+  mensagemFalhaVersao, resumoDiff, rotuloAutor,
   validarObservacao, type LinhaDiff,
 } from './conhecimento.regras.js'
 
@@ -79,6 +80,21 @@ describe('compactarDiff', () => {
   })
 })
 
+describe('diffDesenhavel (teto de 2.000 linhas na tela)', () => {
+  it('até o teto desenha; acima, a tela manda ver o texto', () => {
+    const grande = diffLinhas('', Array.from({ length: DIFF_MAX_LINHAS_DESENHADAS + 1 }, (_, i) => `l${i}`).join('\n'))
+    expect(diffDesenhavel(compactarDiff(grande.linhas))).toBe(false)
+    const noTeto = diffLinhas('', Array.from({ length: DIFF_MAX_LINHAS_DESENHADAS }, (_, i) => `l${i}`).join('\n'))
+    expect(diffDesenhavel(compactarDiff(noTeto.linhas))).toBe(true)
+  })
+
+  it('linhas iguais omitidas não contam (documento grande, mudança pequena, desenha)', () => {
+    const base = Array.from({ length: 10_000 }, (_, i) => `linha ${i}`)
+    const novo = [...base]; novo[5000] = 'mudou'
+    expect(diffDesenhavel(compactarDiff(diffLinhas(base.join('\n'), novo.join('\n')).linhas))).toBe(true)
+  })
+})
+
 describe('citacoesDaDecisao', () => {
   it('lê documento + versão de saida.citacoes, sem repetir', () => {
     const cs = citacoesDaDecisao([
@@ -126,6 +142,7 @@ describe('Textos do histórico', () => {
   it('versão anterior ao histórico é explicada, com onde o histórico começa', () => {
     expect(mensagemFalhaVersao('conhecimento.versao_anterior_ao_historico', 4)).toMatch(/sobrescrita.*começa na v4/)
     expect(mensagemFalhaVersao('conhecimento.restaurar_sem_mudanca')).toMatch(/mesmo título e texto/)
+    expect(mensagemFalhaVersao('conhecimento.versao_removida')).toMatch(/removido.*titular/)
     expect(mensagemFalhaVersao(undefined)).toMatch(/Tente de novo/)
   })
 

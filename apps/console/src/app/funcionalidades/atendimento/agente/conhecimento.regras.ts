@@ -308,6 +308,8 @@ export function mensagemFalhaVersao(erro: string | undefined, primeiraRegistrada
     case 'conhecimento.versao_anterior_ao_historico':
       return `Esta versão foi sobrescrita antes de o histórico existir — o texto dela não foi guardado.${
         primeiraRegistrada ? ` O histórico deste documento começa na v${primeiraRegistrada}.` : ''}`
+    case 'conhecimento.versao_removida':
+      return 'O texto desta versão foi removido do histórico (exclusão a pedido do titular dos dados).'
     case 'conhecimento.versao_nao_encontrada': return 'Este documento não tem essa versão.'
     case 'conhecimento.nao_encontrado': return 'Este documento não existe mais.'
     case 'conhecimento.restaurar_sem_mudanca': return 'Essa versão tem o mesmo título e texto da atual — não há o que restaurar.'
@@ -421,6 +423,19 @@ export function compactarDiff(linhas: readonly LinhaDiff[], contexto = 2): Bloco
   }
   if (omitidas > 0) saida.push({ tipo: 'omitidas', quantidade: omitidas })
   return saida
+}
+
+/**
+ * Teto de linhas DESENHADAS de um diff (P9). Acima disso o DOM de milhares de
+ * linhas trava a aba; a tela avisa e manda ver o texto. "… N linhas iguais"
+ * não conta — é uma linha só.
+ */
+export const DIFF_MAX_LINHAS_DESENHADAS = 2000
+
+export function diffDesenhavel(blocos: readonly BlocoDiff[], max: number = DIFF_MAX_LINHAS_DESENHADAS): boolean {
+  let n = 0
+  for (const b of blocos) if (b.tipo !== 'omitidas' && ++n > max) return false
+  return true
 }
 
 /** "+3 −1 linhas" / "sem diferença no texto". */

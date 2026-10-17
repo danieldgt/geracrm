@@ -165,7 +165,10 @@ export async function sincronizarPoliticas(tx: Sql, canalId: string, politicas: 
 
   const [existente] = await tx<{ id: string; conteudo: string; versao: number; publicado: boolean }[]>`
     SELECT id, conteudo, versao, publicado FROM conhecimento_documento
-     WHERE tenant_id = tenant_atual() AND canal_id = ${canalId} AND tipo = 'politicas'`
+     WHERE tenant_id = tenant_atual() AND canal_id = ${canalId} AND tipo = 'politicas'
+       FOR UPDATE`
+  // ⚠️ FOR UPDATE (P9): dois salvamentos simultâneos comparam o texto com o que
+  //    vão substituir, um de cada vez — cada um vira a sua versão, com o seu texto.
 
   if (texto === '') {
     if (!existente || !existente.publicado) {

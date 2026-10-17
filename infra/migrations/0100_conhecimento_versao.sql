@@ -20,13 +20,19 @@
 -- feita por ela no meio do deploy não fica sem histórico.
 --
 -- ⚠️ Aditiva: tabela nova, função e trigger novos. Nada da versão anterior
---    muda de comportamento — o trigger só INSERE na tabela nova, e o
---    `ON CONFLICT DO NOTHING` torna a escrita explícita da API nova e a do
---    trigger idempotentes entre si.
+--    muda de comportamento — o trigger só INSERE na tabela nova. A API nova
+--    grava com INSERT simples (conflito = erro e rollback: duas escritas da
+--    mesma versão são bug, não caso normal); só o trigger e o backfill usam
+--    `ON CONFLICT DO NOTHING`, porque rodam depois de quem já registrou.
 -- ⚠️ Imutável: UPDATE é recusado por trigger (inclusive para o dono) e o
---    privilégio de UPDATE é retirado do papel da aplicação. DELETE só acontece
---    em cascata, se o documento for apagado — e documento não se apaga, se
---    despublica.
+--    privilégio de UPDATE é retirado do papel da aplicação.
+-- ⚠️ DELETE continua PERMITIDO, de propósito (decisão da revisão da P9, opção
+--    "a"): é o caminho da exclusão a pedido do titular (LGPD, raia R10d) — um
+--    documento pode conter dado pessoal, e "imutável" não pode significar
+--    "impossível de apagar". Além da cascata do documento, uma versão pode ser
+--    removida isoladamente; a API então responde `conhecimento.versao_removida`
+--    (versão entre a primeira registrada e a atual, sem linha) — distinto de
+--    `versao_anterior_ao_historico` — e nunca mostra outro texto no lugar.
 -- ⚠️ Backfill: só a versão ATUAL de cada documento existe para copiar. As
 --    versões anteriores a esta migration foram sobrescritas e não voltam; a API
 --    responde `conhecimento.versao_anterior_ao_historico` para elas, em vez de
@@ -133,3 +139,23 @@ INSERT INTO conhecimento_documento_versao
 SELECT d.tenant_id, d.id, d.versao, d.titulo, d.tipo, d.canal_id, d.conteudo, 'backfill', d.atualizado_em
   FROM conhecimento_documento d
 ON CONFLICT (tenant_id, documento_id, versao) DO NOTHING;
+
+-- Conferência do backfill: TODO documento tem a sua versão vigente no
+-- histórico. Faltou alguma (RLS no papel do runner, por exemplo) → a migration
+-- falha e o deploy não prossegue, em vez de nascer um histórico furado.
+DO $$
+DECLARE
+    documentos integer;
+    vigentes   integer;
+BEGIN
+    SELECT count(*) INTO documentos FROM conhecimento_documento;
+    SELECT count(*) INTO vigentes
+      FROM conhecimento_documento d
+      JOIN conhecimento_documento_versao v
+        ON v.tenant_id = d.tenant_id AND v.documento_id = d.id AND v.versao = d.versao;
+    IF documentos <> vigentes THEN
+        RAISE EXCEPTION 'backfill de conhecimento_documento_versao incompleto: % documentos, % versões vigentes',
+            documentos, vigentes;
+    END IF;
+END
+$$;
