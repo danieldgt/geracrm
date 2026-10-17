@@ -1,18 +1,95 @@
-import type { EtapaPosResposta } from './tipos.js'
+import {
+  CODIGO_NAO_ENVIE, ETAPA_REGRAS_QUALIDADE, NumerosVistos, avaliarRegrasQualidade, extrairNumerosDeNegocio, lerComplianceExtra,
+  perguntasJaRespondiveis, type MarcaGuardrail, type ViolacaoQualidade,
+} from '@geracrm/shared'
+import { fontesDoTurno } from './numeros-ampliados.js'
+import { abrirAlertaViolacaoCritica } from '../qualidade/alerta.js'
+import { marca, type ContextoPipeline, type EntradaPosResposta, type EtapaPosResposta } from './tipos.js'
 
 /**
- * REGRAS DE QUALIDADE ANTES DO ENVIO — STUB da raia P12 (ADR-031).
+ * REGRAS DE QUALIDADE ANTES DO ENVIO (ADR-031 §1 e §3, raia P12).
  *
- * Contrato a preencher (P12): regras determinísticas em 100% dos turnos; uma
- * violação CRÍTICA → `bloquear` com `qualidade_violacao_critica` (autônomo não
- * envia e entrega ao humano; assistido vira sugestão "não envie") + alerta. A
- * amostragem do juiz roda fora do turno (`workers/qualidade.ts`).
+ * Última etapa depois do modelo: roda as regras determinísticas de
+ * `avaliarRegrasQualidade` (shared) sobre o que VAI SAIR — depois de números,
+ * filtro e pergunta repetida —, em 100% dos turnos e em todo modo. Mede o que
+ * ESCAPOU: o que as etapas anteriores corrigiram fica nas marcas delas.
  *
- * ⚠️ Enquanto stub: devolve as mensagens intactas, sem marcas.
+ * Cada violação vira uma marca `regras-qualidade` com a gravidade da regra
+ * ('registrado'); o worker (`workers/qualidade.ts`) transforma as marcas do
+ * turno em `agente_avaliacao` tipo 'regras'.
+ *
+ * Violação CRÍTICA (pausa POR CONVERSA, nunca do modo inteiro):
+ *   - autônomo e simulação → `bloquear` com `qualidade_violacao_critica` SEM
+ *     mensagem substituta: nada sai e a conversa vai ao humano (a simulação
+ *     mostra no playground o que aconteceria de verdade);
+ *   - sombra, assistido e copiloto → a sugestão segue, marcada
+ *     `nao_envie` (CRITICA 'bloqueado'): a tela do vendedor mostra "não envie
+ *     assim". O humano decide; nada sai sozinho nesses modos mesmo.
+ *   - sempre (fora da simulação/copiloto) → alerta `agente_violacao_critica`
+ *     (um aberto por tenant; sem conteúdo da conversa) + log estruturado.
+ *
+ * ⚠️ Nunca lança para controlar fluxo; o alerta é melhor-esforço (falha vira
+ *    log, o turno continua com a pausa).
  */
+
+const ETAPA = ETAPA_REGRAS_QUALIDADE
+
+/** Resumo do handoff: as regras, nunca o texto (o resumo vai para a fila do humano). */
+function resumoDaPausa(criticas: readonly ViolacaoQualidade[]): string {
+  const ids = [...new Set(criticas.map((v) => v.detalhe ? `${v.regra}/${v.detalhe}` : v.regra))].join(', ')
+  return `Resposta do agente barrada pela qualidade (violação crítica: ${ids}). Nada foi enviado; continue o atendimento.`.slice(0, 600)
+}
+
+/** O limite do número (`agente_config.max_caracteres`), lido de forma tolerante. */
+function maxCaracteresDe(cfgExtra: Readonly<Record<string, unknown>>): number | undefined {
+  const v = cfgExtra['max_caracteres']
+  return typeof v === 'number' && v > 0 ? v : undefined
+}
+
+export async function violacoesDoTurno(ctx: ContextoPipeline, entrada: EntradaPosResposta): Promise<ViolacaoQualidade[]> {
+  const compliance = lerComplianceExtra(ctx.cfgExtra['compliance'])
+  // Barato: só vai ao banco pelas fontes de número quando há número de negócio.
+  const temNumero = entrada.mensagens.some((m) => extrairNumerosDeNegocio(m).length > 0)
+  let fontes = null
+  if (temNumero) {
+    const f = await fontesDoTurno(ctx)
+    for (const n of entrada.numerosVistos) f.gerais.add(n)
+    if (entrada.numerosVistos instanceof NumerosVistos) for (const p of entrada.numerosVistos.percentuais) f.percentuais.add(p)
+    fontes = f
+  }
+  return avaliarRegrasQualidade({
+    mensagens: entrada.mensagens,
+    extras: compliance.frasesProibidas,
+    perguntasAnteriores: perguntasJaRespondiveis(ctx.historico),
+    fontes,
+    maxCaracteres: maxCaracteresDe(ctx.cfgExtra),
+  })
+}
+
 export const etapaRegrasQualidade: EtapaPosResposta = {
-  nome: 'regras-qualidade',
-  async executar(_ctx, entrada) {
-    return { mensagens: entrada.mensagens, guardrails: [] }
+  nome: ETAPA,
+  async executar(ctx, entrada) {
+    if (entrada.mensagens.length === 0) return { mensagens: entrada.mensagens, guardrails: [] }
+    const violacoes = await violacoesDoTurno(ctx, entrada)
+    const guardrails: MarcaGuardrail[] = violacoes.map((v) => marca(ETAPA, v.regra, v.gravidade, 'registrado', v.trecho))
+    const criticas = violacoes.filter((v) => v.gravidade === 'CRITICA')
+    if (criticas.length === 0) return { mensagens: entrada.mensagens, guardrails }
+
+    const pausa = ctx.modo === 'autonomo' || ctx.modo === 'simulacao'
+    if (ctx.modo !== 'simulacao' && ctx.modo !== 'copiloto') {
+      await abrirAlertaViolacaoCritica({
+        tenantId: ctx.tenantId, conversaId: ctx.conversaId, canalId: ctx.canalId, modo: ctx.modo,
+        regras: criticas.map((v) => v.detalhe ?? v.regra), pausou: pausa,
+      })
+    }
+    if (pausa) {
+      guardrails.push(marca(ETAPA, 'qualidade_violacao_critica', 'CRITICA', 'handoff'))
+      return {
+        mensagens: [], guardrails,
+        bloquear: { motivo: 'qualidade_violacao_critica', resumo: resumoDaPausa(criticas), mensagensSubstitutas: [] },
+      }
+    }
+    guardrails.push(marca(ETAPA, CODIGO_NAO_ENVIE, 'CRITICA', 'bloqueado'))
+    return { mensagens: entrada.mensagens, guardrails }
   },
 }

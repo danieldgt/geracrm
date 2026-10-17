@@ -364,7 +364,9 @@ describe('Pontos 5–8 — depois do modelo (P7, P2, P3, P12)', () => {
       expect(enviados[0]!.endsWith('R$ 1.')).toBe(true)
       expect(enviados.join('')).toBe(texto)
       const d = await ultimaDecisao()
-      expect(d.guardrails).toEqual([])
+      // A regra de qualidade (P12) registra a mensagem longa (MEDIA) — só anota; nenhuma etapa MEXEU no texto.
+      expect(d.guardrails.filter((g) => g.etapa !== 'regras-qualidade')).toEqual([])
+      expect(d.guardrails.every((g) => g.acao === 'registrado')).toBe(true)
       expect(d.numeros_bloqueados).toEqual([])
     } finally {
       await dono`UPDATE agente_config SET max_caracteres = 320 WHERE tenant_id = ${T}`
