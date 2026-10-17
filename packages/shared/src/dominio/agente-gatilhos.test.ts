@@ -14,7 +14,14 @@ describe('detectarOptOut — o que é opt-out CLARO', () => {
   it.each(['pare', 'PARE!', 'Sair', 'stop', 'descadastrar', 'quero me descadastrar',
     'não quero mais receber mensagens', 'Para de me mandar mensagem', 'parem de me enviar isso', 'me tira dessa lista',
     'nao desejo receber', 'não quero mais receber', 'não quero mais receber essas promoções', 'pare de me mandar mensagem por favor',
-    'não me mande mais nada', 'não quero mais que vocês me mandem mensagem'])(
+    'não me mande mais nada', 'não quero mais que vocês me mandem mensagem',
+    // (b) formas explícitas da re-revisão
+    'não quero mais mensagem', 'não quero mais mensagens', 'não quero mais msg', 'não quero mais contato', 'nao quero mais mensagens de vocês',
+    'chega de mensagem', 'chega de mensagens', 'chega de propaganda', 'chega de promoção', 'chega de oferta',
+    'quero parar de receber mensagens', 'gostaria de parar de receber isso', 'parar de receber mensagens', 'não receber mais nada',
+    'não me manda mais', 'não me chama mais', 'quero sair da lista', 'sair da sua lista',
+    // (c) a palavra com fecho de cortesia
+    'pare por favor', 'pare, obrigado'])(
     'dado "%s", então é opt-out', (t) => expect(detectarOptOut(t)).toBe('opt_out'))
 
   it('dado pedido de apagar os dados junto, então é exclusão LGPD', () => {
@@ -23,27 +30,30 @@ describe('detectarOptOut — o que é opt-out CLARO', () => {
   })
 })
 
-describe('detectarOptOut — falsos positivos da revisão (mercadoria, pagamento, logística)', () => {
+describe('detectarOptOut — ambíguo vai para uma PESSOA (possivel_opt_out), nunca para o bloqueio', () => {
   it.each([
+    // revisão 1: verbo de parar + mercadoria/pagamento — nunca bloqueia; e o modelo também não segue vendendo
     'não quero receber em caixa', 'não quero receber o pedido em caixa', 'não quero receber boleto, só pix',
     'nao quero mais receber a mercadoria com atraso', 'não desejo receber nota fiscal impressa',
     'não quero mais receber essa marca', 'pare de me mandar boleto errado', 'parem de me enviar produto vencido',
     'pare de mandar mensagem errada pro meu financeiro', 'não quero mais que você me mande o boleto por email',
     'não quero mais receber a entrega na loja 2',
-    // item 5: resposta a "mais algum item?"
-    'chega', 'chega.', 'Chega!',
-    // item 10: LGPD com objeto de negócio
     'apaga meus dados do cartão antigo', 'pode remover meus dados bancários antigos', 'descadastrar o meu cartão antigo',
     'me tira dessa lista de espera',
-    // pedido, não canal
-    'cancelar pedido', 'quero cancelar o pedido', 'cancelar', 'para', 'pode parar o pedido', 'desisti da compra',
-    'para quando chega?', 'chega amanhã?', 'para mim está bom', 'quero 2 caixas para revenda',
-  ])('dado "%s", então NÃO é opt-out', (t) => expect(detectarOptOut(t)).toBeNull())
+    // re-revisão (a): falsos negativos — opt-out com palavra de negócio no meio
+    'não quero mais receber mensagens dessa loja', 'não quero mais receber promoção de produtos',
+    'para de mandar mensagem por favor, não tenho interesse em produtos', 'descadastrar meu número do whatsapp da loja',
+    // re-revisão (d): palavra solta
+    'para', 'Para!', 'parar', 'chega', 'chega.', 'Chega!',
+    // verbo de parar sem objeto de mensagem
+    'não quero mais receber essas coisas', 'para de me mandar esses links', 'não quero receber ligação', 'não me chama mais de senhor',
+  ])('dado "%s", então é possivel_opt_out', (t) => expect(detectarOptOut(t)).toBe('possivel_opt_out'))
 })
 
-describe('detectarOptOut — ambíguo vai para uma pessoa, nunca para o bloqueio', () => {
-  it.each(['não quero mais receber essas coisas', 'para de me mandar esses links', 'não quero receber ligação'])(
-    'dado "%s", então é possivel_opt_out', (t) => expect(detectarOptOut(t)).toBe('possivel_opt_out'))
+describe('detectarOptOut — sem verbo de parar, não é opt-out', () => {
+  it.each(['cancelar pedido', 'quero cancelar o pedido', 'cancelar', 'pode parar o pedido', 'desisti da compra',
+    'para quando chega?', 'chega amanhã?', 'para mim está bom', 'quero 2 caixas para revenda', 'quero mais mensagens de promoção'])(
+    'dado "%s", então é null', (t) => expect(detectarOptOut(t)).toBeNull())
 })
 
 describe('pedido de humano', () => {

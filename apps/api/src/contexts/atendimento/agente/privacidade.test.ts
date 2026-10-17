@@ -143,6 +143,10 @@ describe('Rotas de privacidade', () => {
     expect(validarPrivacidade({ url: '  ', versao: '', textoPadrao: '' })).toEqual({ ok: true, url: null, versao: 'padrao', textoPadrao: null })
     expect(validarPrivacidade({ versao: 'x'.repeat(41) })).toMatchObject({ ok: false, campo: 'versao' })
     expect(validarPrivacidade({ textoPadrao: 'x'.repeat(501) })).toMatchObject({ ok: false, campo: 'textoPadrao' })
+    // O aviso sai antes de qualquer ferramenta: valor ou percentual seria número sem fonte.
+    for (const t of ['Frete grátis acima de R$ 500,00.', 'Ganhe 10% no próximo pedido.', 'Taxa de R$5.'])
+      expect(validarPrivacidade({ textoPadrao: t })).toMatchObject({ ok: false, campo: 'textoPadrao' })
+    expect(validarPrivacidade({ textoPadrao: 'Seus dados ficam guardados por 5 anos, conforme a LGPD.' })).toMatchObject({ ok: true })
   })
 
   it('avisos por contato: paginados por cursor, sem repetir nem perder, e sem atravessar tenant', async () => {

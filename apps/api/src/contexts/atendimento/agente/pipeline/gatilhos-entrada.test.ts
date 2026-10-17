@@ -158,6 +158,22 @@ describe('Opt-out em autônomo — "pare" bloqueia sem LLM, DEPOIS da confirmaç
     expect(al!.mensagem).not.toContain(CHAVE)
   })
 
+  it('retry da MESMA tarefa depois da confirmação enviada: não confirma de novo, só completa o bloqueio', async () => {
+    await configurar('autonomo')
+    await avisoVigente()
+    const id = await mensagemDoCliente('pare')
+    // A 1ª execução chegou a enviar (o gateway gravou a mensagem) e caiu antes de gravar a decisão.
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, criado_em)
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto',
+                       ${JSON.stringify({ texto: 'Certo. Não vamos mais te enviar mensagens por aqui.', automatica: 'agente' })}::text::jsonb, 'enviada', now() + interval '1 second')`
+    await turno([id])
+    expect(enviados).toHaveLength(0)
+    expect(await bloqueios()).toBe(1)
+    const d = await ultimaDecisao()
+    expect(codigos(d)).toContain('opt_out_confirmacao_ja_enviada')
+    expect(codigos(d)).not.toContain('opt_out_confirmacao_nao_enviada')
+  })
+
   it('confirmação recusada pelo gateway: o bloqueio vale assim mesmo e a falha fica marcada', async () => {
     await configurar('autonomo')
     await avisoVigente()
@@ -210,8 +226,8 @@ describe('Opt-out em autônomo — "pare" bloqueia sem LLM, DEPOIS da confirmaç
   })
 })
 
-describe('Falso opt-out — o erro mais caro', () => {
-  it.each(['não quero receber boleto, só pix', 'pare de me mandar boleto errado', 'chega', 'quero cancelar o pedido', 'me tira dessa lista de espera'])(
+describe('Falso opt-out e falso negativo — nada novo é bloqueado sozinho', () => {
+  it.each(['quero cancelar o pedido', 'cancelar', 'para quando chega?'])(
     'dado "%s", então o modelo responde e NADA é bloqueado', async (frase) => {
       await configurar('autonomo')
       await avisoVigente()
@@ -220,10 +236,15 @@ describe('Falso opt-out — o erro mais caro', () => {
       expect(await bloqueios()).toBe(0)
     })
 
-  it('frase ambígua vai para uma pessoa com a marca possivel_opt_out — nunca bloqueia', async () => {
+  it.each([
+    'não quero receber boleto, só pix', 'pare de me mandar boleto errado', 'me tira dessa lista de espera',
+    'não quero mais receber mensagens dessa loja', 'não quero mais receber promoção de produtos',
+    'para de mandar mensagem por favor, não tenho interesse em produtos', 'descadastrar meu número do whatsapp da loja',
+    'para', 'Para!', 'parar', 'chega', 'não quero mais receber essas coisas',
+  ])('dado "%s" (ambíguo), então vai para uma PESSOA com possivel_opt_out — sem modelo e sem bloqueio', async (frase) => {
     await configurar('autonomo')
     await avisoVigente()
-    const r = await diz('não quero mais receber essas coisas')
+    const r = await diz(frase)
     expect(chamadasLlm).toBe(0)
     expect(r.handoff?.motivo).toBe('incerteza')
     expect(await bloqueios()).toBe(0)
@@ -231,6 +252,15 @@ describe('Falso opt-out — o erro mais caro', () => {
     expect(d.guardrails).toContainEqual(expect.objectContaining({ codigo: 'possivel_opt_out', gravidade: 'ALTA' }))
     expect((await dono`SELECT 1 FROM atendimento WHERE tenant_id = ${T}`).length).toBe(1)
   })
+
+  it.each(['pare por favor', 'pare, obrigado', 'não quero mais mensagens', 'chega de propaganda', 'não me manda mais', 'quero sair da lista'])(
+    'dado "%s" (explícito), então bloqueia', async (frase) => {
+      await configurar('autonomo')
+      await avisoVigente()
+      await diz(frase)
+      expect(chamadasLlm).toBe(0)
+      expect(await bloqueios()).toBe(1)
+    })
 })
 
 describe('Opt-out fora do autônomo — o modo diz quem age (ADR-028)', () => {
@@ -253,6 +283,12 @@ describe('Opt-out fora do autônomo — o modo diz quem age (ADR-028)', () => {
     expect(d.resposta!.mensagens).toEqual(['Certo. Não vamos mais te enviar mensagens por aqui.'])
     expect(d.guardrails).toContainEqual(expect.objectContaining({ codigo: 'opt_out_confirmar', gravidade: 'ALTA' }))
     expect((await dono`SELECT 1 FROM outbox WHERE tenant_id = ${T} AND tipo = 'agente.sugestao'`).length).toBe(1)
+    // Visível antes da P13: nota de sistema na conversa + alerta, sem bloqueio.
+    const [nota] = await dono<{ conteudo: { automatica: string; texto: string } }[]>`SELECT conteudo FROM mensagem WHERE tenant_id = ${T} AND tipo = 'sistema'`
+    expect(nota!.conteudo).toMatchObject({ automatica: 'opt_out_confirmar' })
+    expect(nota!.conteudo.texto).toMatch(/confirme/)
+    const [al] = await dono<{ tipo: string }[]>`SELECT tipo FROM alerta WHERE tenant_id = ${T}`
+    expect(al!.tipo).toBe('opt_out_confirmar')
   })
 })
 
@@ -316,6 +352,39 @@ describe('Abertura e aviso de privacidade', () => {
                VALUES (${T}, gen_random_uuid(), ${CONTATO}, ${CONVERSA}, ${CANAL}, gen_random_uuid(), 'antigo', 'v3', 'agente', now() - interval '181 days')`
     await diz('faz tempo')
     expect(enviados).toHaveLength(2)
+  })
+
+  it('a condição é o aviso vigente, não a sessão nova: sessão que nasceu em sombra recebe a abertura ao virar autônomo', async () => {
+    await configurar('sombra')
+    await diz('oi')
+    expect(enviados).toHaveLength(0)
+    await configurar('autonomo')
+    await diz('e o prazo?')
+    expect(enviados).toHaveLength(2)
+    expect(enviados[0]!.texto).toContain('assistente virtual')
+    expect(await avisos()).toHaveLength(1)
+  })
+
+  it('na MESMA sessão a abertura não se repete — nem quando o tenant troca a versão no meio (fica para a próxima sessão)', async () => {
+    await configurar('autonomo')
+    await diz('oi')
+    enviados.length = 0
+    await dono`INSERT INTO tenant_privacidade (tenant_id, versao) VALUES (${T}, 'v9')`
+    await diz('e o frete?')
+    expect(enviados.map((e) => e.texto)).toEqual(['Posso te ajudar com os produtos.'])
+    const [s] = await dono<{ estado_agente: { gatilhos?: { aberturaFeita?: boolean } } }[]>`SELECT estado_agente FROM agente_sessao WHERE tenant_id = ${T} AND estado = 'ativa'`
+    expect(s!.estado_agente.gatilhos?.aberturaFeita).toBe(true)
+  })
+
+  it('aviso com valor (gravado fora da tela): a rede descarta SÓ a abertura; a resposta sai e não vira handoff', async () => {
+    await configurar('autonomo')
+    await dono`INSERT INTO tenant_privacidade (tenant_id, versao, texto_padrao) VALUES (${T}, 'v1', 'Frete grátis acima de R$ 500,00.')`
+    const r = await diz('oi')
+    expect(r.desfecho).toBe('respondeu')
+    expect(enviados.map((e) => e.texto)).toEqual(['Posso te ajudar com os produtos.'])
+    const d = await ultimaDecisao()
+    expect(d.guardrails).toContainEqual(expect.objectContaining({ codigo: 'valor_sem_fonte', acao: 'removido' }))
+    expect(d.handoff_motivo).toBeNull()
   })
 
   it('mensagens antigas do agente (antes da P4) não contam como "já viu o aviso"', async () => {

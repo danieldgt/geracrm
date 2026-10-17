@@ -426,9 +426,9 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
 
   /**
    * PREFIXO das etapas pré-modelo (P4: a abertura): passa pelo FILTRO de saída
-   * (P2) como qualquer texto que sai; a rede final de R$ vem depois, no rabo,
-   * sobre o prefixo e a resposta juntos. Filtro que barra o prefixo o descarta
-   * (a resposta segue) — o prefixo é cortesia, nunca motivo de handoff.
+   * (P2) e pela rede de R$ ISOLADA (`avisoPelaRede`) — filtro que barra ou valor
+   * sem fonte descartam SÓ o prefixo (a resposta segue): o prefixo é cortesia,
+   * nunca motivo de handoff. A rede final do rabo ainda passa sobre tudo.
    */
   const prefixoFiltrado = async (handoffAtual: { motivo: string; resumo: string } | null) => {
     if (pre.prefixo.length === 0) return { mensagens: [] as readonly string[], guardrails: [] as readonly MarcaGuardrail[], estado: {} as PatchEstado }
@@ -436,7 +436,12 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       mensagens: pre.prefixo, handoff: handoffAtual, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
       falasAnterioresDoAgente: historico.filter((h) => h.de === 'nos').map((h) => h.texto),
     })
-    return { mensagens: r.bloquear ? [] : r.mensagens, guardrails: r.guardrails, estado: r.estado ?? {} }
+    if (r.bloquear) return { mensagens: [] as readonly string[], guardrails: r.guardrails, estado: r.estado ?? {} }
+    const redes = r.mensagens.map((m) => avisoPelaRede(m, registro.centavosVistos))
+    if (redes.some((x) => x.texto === null)) {
+      return { mensagens: [] as readonly string[], guardrails: [...r.guardrails, ...redes.flatMap((x) => x.guardrails)], estado: r.estado ?? {} }
+    }
+    return { mensagens: r.mensagens, guardrails: r.guardrails, estado: r.estado ?? {} }
   }
 
   // ── 4b. Resposta fixa de uma etapa: sem modelo, mesmo rabo ───────────────

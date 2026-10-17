@@ -37,11 +37,22 @@ function palavras(texto: string): string {
 // ── opt-out ─────────────────────────────────────────────────────────────────
 
 /** A mensagem inteira é só a palavra. "chega", "para" e "cancelar" ficam FORA. */
-const OPT_OUT_PALAVRA_UNICA = /^(pare|sair|stop|descadastrar|descadastra|descadastre)$/
+const OPT_OUT_PALAVRA_UNICA = /^(pare|sair|stop|descadastrar|descadastra|descadastre)( (por favor|pfv|pf|obrigad[oa]|obg|valeu|grat[oa]))*$/
+/**
+ * Palavra solta que PODE ser "pare" ou resposta a "mais algum item?" ("chega",
+ * "para"): vai para uma pessoa (`possivel_opt_out`), nunca para o bloqueio.
+ */
+const PALAVRA_AMBIGUA = /^(para|parar|chega|chega disso)( (por favor|pfv|obrigad[oa]))*$/
 
 /** Verbos de "parar de receber". O que vem DEPOIS decide se é opt-out. */
 const VERBO_PARAR = new RegExp([
   String.raw`nao (quero|desejo|quer) (mais )?receber`,
+  // Formas explícitas com o objeto JÁ no padrão (o resto ainda é conferido).
+  String.raw`nao (quero|desejo) mais (mensagem|mensagens|msg|msgs|contato|contatos)\b`,
+  String.raw`chega de (mensagem|mensagens|msg|msgs|propaganda|propagandas|promocao|promocoes|oferta|ofertas)\b`,
+  String.raw`(quero |gostaria de )?(parar de|nao) receber (mais )?(mensagem|mensagens|msg|msgs|isso|nada)\b`,
+  String.raw`nao (me )?(manda|chama|mandem|chamem) mais\b`,
+  String.raw`(quero )?sair da (sua |tua )?lista\b`,
   String.raw`nao (quero|desejo) mais que (voce|vc|voces|vcs) (me )?(mandem|enviem|chamem|mande|envie|chame)\b`,
   String.raw`(parem|parar|para|pare) de (me )?(mandarem|enviarem|mandar|enviar|chamar)\b`,
   String.raw`nao (me )?(mandem|enviem|mande|envie) mais\b`,
@@ -79,15 +90,21 @@ export type MotivoOptOut = 'opt_out' | 'lgpd_exclusao' | 'possivel_opt_out'
  *   - `opt_out` / `lgpd_exclusao` (também pediu para apagar os dados): CLARO.
  *   - `possivel_opt_out`: verbo de parar com objeto que não é mensagem nem
  *     mercadoria ("não quero mais receber essas coisas") — vai para uma pessoa.
- *   - null: não é opt-out (inclusive tudo que fala de mercadoria/pagamento).
+ *     Também: verbo de parar junto de mercadoria/pagamento ("não quero
+ *     receber boleto") e as palavras soltas "para", "parar", "chega".
+ *   - null: nenhum verbo de parar.
  */
 export function detectarOptOut(texto: string): MotivoOptOut | null {
   const t = palavras(texto)
   if (!t) return null
   if (OPT_OUT_PALAVRA_UNICA.test(t)) return 'opt_out'
+  if (PALAVRA_AMBIGUA.test(t)) return 'possivel_opt_out'
   const casos = [...t.matchAll(VERBO_PARAR)]
   if (casos.length === 0) return null
-  if (SOBRE_O_NEGOCIO.test(t)) return null
+  // ⚠️ Verbo de parar + mercadoria/pagamento: pode ser "não quero receber
+  //    boleto" OU "não quero mais receber promoção de produtos". Não bloqueia
+  //    e não deixa o modelo seguir vendendo: uma pessoa decide.
+  if (SOBRE_O_NEGOCIO.test(t)) return 'possivel_opt_out'
   const claro = casos.some((m) => terminaOuFalaDeMensagem(t.slice((m.index ?? 0) + m[0].length)))
   if (!claro) return 'possivel_opt_out'
   return EXCLUSAO_DADOS.test(t) ? 'lgpd_exclusao' : 'opt_out'

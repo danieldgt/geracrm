@@ -8,6 +8,7 @@ import {
 import { comTenantServico, type Sql } from '../../../../db/index.js'
 import { registrarOptOut, contatoBloqueado } from '../../../crm/opt-out.js'
 import { lerPrivacidade, registrarAvisoSeExibido } from '../privacidade.js'
+import { lerEstado, patchEstado } from '../estado-agente.js'
 import {
   marca, mascararTexto, type ContextoPipeline, type DecisaoPreLlm, type EfeitoPosEnvio, type EtapaPreLlm,
 } from './tipos.js'
@@ -24,8 +25,9 @@ import {
  *      opt-out AMBÍGUO                          → transfere com marca `possivel_opt_out`, NUNCA bloqueia
  *   2. ameaça formal · pedido de humano · gatilho extra do número → transfere com aviso sem prazo
  *   3. áudio ainda transcrevendo                 → silêncio; áudio perdido → 1º pede texto, 2º transfere
- *   4. sessão NOVA e sem aviso de privacidade vigente para o contato (autônomo/simulação) → a
- *      ABERTURA vai como PREFIXO da resposta; o aviso é registrado (efeito) só se o gateway aceitou
+ *   4. contato sem aviso de privacidade vigente e abertura ainda não feita nesta sessão
+ *      (autônomo/simulação) → a ABERTURA vai como PREFIXO da resposta; o aviso é registrado
+ *      (efeito) só se o gateway aceitou
  *   5. "é robô?"                                 → 1º resposta fixa honesta, 2º transfere
  *
  * Regras puras em `@geracrm/shared` (`agente-gatilhos.ts`); aqui só a coreografia.
@@ -43,6 +45,8 @@ export const VALIDADE_AVISO_DIAS = 180
 export interface EstadoGatilhos {
   readonly audiosSemTexto?: number
   readonly perguntouRobo?: boolean
+  /** A abertura (com o aviso de privacidade) já saiu nesta sessão. */
+  readonly aberturaFeita?: boolean
 }
 
 /** O que o cliente ESCREVEU neste turno (texto, legenda, áudio transcrito). */
@@ -100,7 +104,7 @@ export const etapaGatilhosEntrada: EtapaPreLlm = {
     if (optOut === 'possivel_opt_out') {
       return handoffComAviso(ctx, 'incerteza', 'possivel_opt_out', `${RESUMO_POSSIVEL_OPT_OUT} Cliente: "${mascararTexto(texto).slice(0, 300)}"`, texto, 'ALTA')
     }
-    if (optOut) return decidirOptOut(ctx, optOut === 'lgpd_exclusao', texto)
+    if (optOut) return await decidirOptOut(ctx, optOut === 'lgpd_exclusao', texto)
 
     // ── 2. Ameaça formal · humano · extra ─────────────────────────────────
     if (texto) {
@@ -164,28 +168,81 @@ export const etapaGatilhosEntrada: EtapaPreLlm = {
 /**
  * Opt-out CLARO, por modo (ADR-028: o modo diz quem age):
  *   - autônomo: confirmação fixa (sai pelo rabo) e, DEPOIS do envio, o bloqueio;
- *   - assistido: a confirmação vira SUGESTÃO com aviso "confirme e bloqueie" —
- *     o bloqueio é do vendedor, pelo fluxo existente (Opt-out / Bloqueios);
+ *   - assistido: a confirmação vira SUGESTÃO com aviso "confirme e bloqueie" +
+ *     nota de sistema na conversa + alerta — o bloqueio é do vendedor, pelo
+ *     fluxo existente (Opt-out / Bloqueios);
  *   - sombra: só registra a marca (o robô observa; quem atende decide);
  *   - simulação/copiloto: mostra a confirmação, sem efeito nenhum.
  */
-function decidirOptOut(ctx: ContextoPipeline, exclusao: boolean, texto: string): DecisaoPreLlm {
+async function decidirOptOut(ctx: ContextoPipeline, exclusao: boolean, texto: string): Promise<DecisaoPreLlm> {
   const codigo = exclusao ? 'lgpd_exclusao' : 'opt_out'
   const confirmacao = textoOptOut({ exclusao })
   if (ctx.modo === 'autonomo') {
+    // ⚠️ IDEMPOTÊNCIA POR TAREFA: se esta tarefa já foi processada até o envio
+    //    (o gateway aceitou a confirmação) e caiu antes de gravar, o retry NÃO
+    //    manda a confirmação de novo — só completa o bloqueio. A prova é a
+    //    própria mensagem enviada no banco (gravada pelo gateway antes do
+    //    despacho), não o estado da sessão, que teria caído junto.
+    const jaConfirmou = await comTenantServico(ctx.tenantId, (tx) => confirmacaoJaEnviada(tx, ctx, confirmacao))
     return {
-      tipo: 'resposta_fixa', mensagens: [confirmacao],
-      guardrails: [marca(ETAPA, codigo, 'INFO', 'bloqueado', texto)],
-      efeitos: [efeitoBloquearOptOut(ctx, exclusao)],
+      tipo: 'resposta_fixa', mensagens: jaConfirmou ? [] : [confirmacao],
+      guardrails: [
+        marca(ETAPA, codigo, 'INFO', 'bloqueado', texto),
+        ...(jaConfirmou ? [marca(ETAPA, 'opt_out_confirmacao_ja_enviada', 'INFO', 'registrado')] : []),
+      ],
+      efeitos: [efeitoBloquearOptOut(ctx, exclusao, jaConfirmou)],
     }
   }
   if (ctx.modo === 'assistido') {
     return {
       tipo: 'resposta_fixa', mensagens: [confirmacao],
       guardrails: [marca(ETAPA, codigo, 'INFO', 'registrado', texto), marca(ETAPA, 'opt_out_confirmar', 'ALTA', 'registrado', AVISO_CONFIRMAR_OPT_OUT)],
+      efeitos: [{
+        nome: 'opt-out-a-confirmar',
+        async executar(tx) {
+          await notaEAlerta(tx, ctx, {
+            nota: `${AVISO_CONFIRMAR_OPT_OUT} Nada foi bloqueado.`, automatica: 'opt_out_confirmar',
+            alertaTipo: 'opt_out_confirmar', alerta: 'Cliente pediu pelo WhatsApp para não receber mensagens; confirme e bloqueie em Opt-out / Bloqueios.',
+          })
+          return []
+        },
+      }],
     }
   }
   return { tipo: 'resposta_fixa', mensagens: [confirmacao], guardrails: [marca(ETAPA, codigo, 'INFO', 'registrado', texto)] }
+}
+
+/** A confirmação de opt-out já saiu para as mensagens DESTA tarefa? */
+async function confirmacaoJaEnviada(tx: Sql, ctx: ContextoPipeline, confirmacao: string): Promise<boolean> {
+  const ids = ctx.entrantes.map((e) => e.id)
+  if (ids.length === 0) return false
+  const [l] = await tx<{ ja: boolean }[]>`
+    SELECT EXISTS (
+      SELECT 1 FROM mensagem m
+       WHERE m.tenant_id = tenant_atual() AND m.conversa_id = ${ctx.conversaId} AND m.direcao = 'saliente'
+         AND m.status IS DISTINCT FROM 'falhou' AND m.conteudo->>'texto' = ${confirmacao}
+         AND m.criado_em >= (SELECT min(e.criado_em) FROM mensagem e
+                              WHERE e.tenant_id = tenant_atual() AND e.conversa_id = ${ctx.conversaId}
+                                AND e.id = ANY(${ids}::uuid[]))) AS ja`
+  return l?.ja ?? false
+}
+
+/** Nota de sistema na conversa (o vendedor vê no inbox) + alerta do tenant (um aberto por tipo, sem PII). */
+async function notaEAlerta(tx: Sql, ctx: ContextoPipeline, p: { nota: string; automatica: string; alertaTipo: string; alerta: string }): Promise<void> {
+  await tx`
+    INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+    VALUES (tenant_atual(), ${randomUUID()}, ${ctx.conversaId}, 'saliente', 'sistema',
+            ${JSON.stringify({ texto: p.nota, automatica: p.automatica })}::text::jsonb, ${ctx.agora})`
+  const [conv] = await tx<{ versao: string }[]>`
+    UPDATE conversa SET versao = versao + 1 WHERE tenant_id = tenant_atual() AND id = ${ctx.conversaId} RETURNING versao`
+  await tx`
+    INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+    VALUES (tenant_atual(), 'mensagem.enviada', 'conversa', ${ctx.conversaId},
+            ${JSON.stringify({ conversaId: ctx.conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
+  await tx`
+    INSERT INTO alerta (tenant_id, id, tipo, severidade, mensagem)
+    VALUES (tenant_atual(), ${randomUUID()}, ${p.alertaTipo}, 'aviso', ${p.alerta})
+    ON CONFLICT (tenant_id, tipo) WHERE resolvido_em IS NULL DO NOTHING`
 }
 
 /**
@@ -196,12 +253,12 @@ function decidirOptOut(ctx: ContextoPipeline, exclusao: boolean, texto: string):
  * Bloqueia, cancela retornos pendentes do contato, ENCERRA a sessão sem criar
  * atendimento na fila, e deixa visível: nota de sistema na conversa + alerta.
  */
-function efeitoBloquearOptOut(ctx: ContextoPipeline, exclusao: boolean): EfeitoPosEnvio {
+function efeitoBloquearOptOut(ctx: ContextoPipeline, exclusao: boolean, jaConfirmou: boolean): EfeitoPosEnvio {
   return {
     nome: 'opt-out',
     async executar(tx: Sql, r) {
       const marcas: MarcaGuardrail[] = []
-      if (r.enviadas.length === 0) marcas.push(marca(ETAPA, 'opt_out_confirmacao_nao_enviada', 'ALTA', 'registrado'))
+      if (r.enviadas.length === 0 && !jaConfirmou) marcas.push(marca(ETAPA, 'opt_out_confirmacao_nao_enviada', 'ALTA', 'registrado'))
       const b = await registrarOptOut(tx, { contatoId: ctx.contatoId, origem: 'agente', agora: ctx.agora })
       if (!b.temTelefone) marcas.push(marca(ETAPA, 'opt_out_sem_telefone', 'ALTA', 'registrado', 'Contato sem telefone: bloqueio registrado no consentimento do contato.'))
       await tx`
@@ -215,25 +272,13 @@ function efeitoBloquearOptOut(ctx: ContextoPipeline, exclusao: boolean): EfeitoP
                  encerrada_em = ${ctx.agora}
            WHERE tenant_id = tenant_atual() AND id = ${r.sessaoId} AND estado = 'ativa'`
       }
-      const nota = exclusao
-        ? 'O cliente pediu para não receber mensagens e para EXCLUIR os dados (LGPD). Número bloqueado; conclua a exclusão.'
-        : 'O cliente pediu para não receber mais mensagens. Número bloqueado (opt-out). Para desfazer, só a pedido dele, em Opt-out / Bloqueios.'
-      await tx`
-        INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-        VALUES (tenant_atual(), ${randomUUID()}, ${ctx.conversaId}, 'saliente', 'sistema',
-                ${JSON.stringify({ texto: nota, automatica: 'opt_out' })}::text::jsonb, ${ctx.agora})`
-      const [conv] = await tx<{ versao: string }[]>`
-        UPDATE conversa SET versao = versao + 1 WHERE tenant_id = tenant_atual() AND id = ${ctx.conversaId} RETURNING versao`
-      await tx`
-        INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
-        VALUES (tenant_atual(), 'mensagem.enviada', 'conversa', ${ctx.conversaId},
-                ${JSON.stringify({ conversaId: ctx.conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
-      // ⚠️ Sem PII no alerta; um aberto por tipo (índice parcial da 0031).
-      await tx`
-        INSERT INTO alerta (tenant_id, id, tipo, severidade, mensagem)
-        VALUES (tenant_atual(), ${randomUUID()}, 'opt_out_cliente', 'aviso',
-                'Cliente pediu pelo WhatsApp para não receber mensagens; o agente bloqueou o número. Veja Opt-out / Bloqueios.')
-        ON CONFLICT (tenant_id, tipo) WHERE resolvido_em IS NULL DO NOTHING`
+      await notaEAlerta(tx, ctx, {
+        nota: exclusao
+          ? 'O cliente pediu para não receber mensagens e para EXCLUIR os dados (LGPD). Número bloqueado; conclua a exclusão.'
+          : 'O cliente pediu para não receber mais mensagens. Número bloqueado (opt-out). Para desfazer, só a pedido dele, em Opt-out / Bloqueios.',
+        automatica: 'opt_out', alertaTipo: 'opt_out_cliente',
+        alerta: 'Cliente pediu pelo WhatsApp para não receber mensagens; o agente bloqueou o número. Veja Opt-out / Bloqueios.',
+      })
       return marcas
     },
   }
@@ -242,17 +287,18 @@ function efeitoBloquearOptOut(ctx: ContextoPipeline, exclusao: boolean): EfeitoP
 // ── abertura ────────────────────────────────────────────────────────────────
 
 /**
- * A abertura vai quando a sessão é NOVA e o contato não tem aviso de
- * privacidade VIGENTE (mesma versão do tenant, exibido há ≤ 180 dias). A
+ * A abertura vai quando o contato NÃO tem aviso de privacidade VIGENTE (mesma
+ * versão do tenant, exibido há ≤ 180 dias) e ainda não saiu nesta sessão
+ * (`estado.gatilhos.aberturaFeita`, gravado só quando o gateway aceitou). A
  * fonte é `aviso_privacidade`, não o histórico: mensagens antigas do agente
  * (antes da P4) não provam que o aviso foi exibido. Só autônomo (fala sozinho)
  * e simulação (mostra o que sairia).
  */
 async function aberturaDoTurno(ctx: ContextoPipeline): Promise<{ texto: string; marca: MarcaGuardrail; efeito: EfeitoPosEnvio } | null> {
   if (ctx.modo !== 'autonomo' && ctx.modo !== 'simulacao') return null
-  // ⚠️ Simulação não abre sessão (sessaoId é sempre null): lá a abertura vale
-  //    só na primeira fala do agente na conversa do playground.
-  if (ctx.modo === 'simulacao' ? !ctx.primeiraResposta : ctx.sessaoId !== null) return null
+  // ⚠️ Simulação não abre sessão nem grava estado: lá a abertura vale só na
+  //    primeira fala do agente na conversa do playground.
+  if (ctx.modo === 'simulacao' ? !ctx.primeiraResposta : lerEstadoGatilhos(ctx).aberturaFeita) return null
   const prep = await comTenantServico(ctx.tenantId, async (tx) => {
     const privacidade = await lerPrivacidade(tx)
     const [v] = await tx<{ vigente: boolean }[]>`
@@ -285,7 +331,14 @@ async function aberturaDoTurno(ctx: ContextoPipeline): Promise<{ texto: string; 
           })
           if (x.registrado) registrou = true
         }
-        return registrou || ctx.modo !== 'autonomo' ? [] : [marca(ETAPA, 'abertura_nao_enviada', 'ALTA', 'registrado')]
+        // A abertura saiu (inteira ou fatiada): não repete nesta sessão.
+        const saiu = registrou || r.enviadas.some((e) => texto.includes(e.texto))
+        if (saiu && r.sessaoId) {
+          const atual = await lerEstado(tx, r.sessaoId)
+          const g = atual['gatilhos'] && typeof atual['gatilhos'] === 'object' ? (atual['gatilhos'] as EstadoGatilhos) : {}
+          await patchEstado(tx, r.sessaoId, { gatilhos: { ...g, aberturaFeita: true } })
+        }
+        return saiu || ctx.modo !== 'autonomo' ? [] : [marca(ETAPA, 'abertura_nao_enviada', 'ALTA', 'registrado')]
       },
     },
   }

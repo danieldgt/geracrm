@@ -97,9 +97,13 @@ beforeEach(async () => {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`UPDATE conversa SET conduzida_por = 'humano' WHERE tenant_id = ${T}`
+  // P4: aviso de privacidade VIGENTE para o contato — sem ele o turno autônomo leva a abertura como prefixo.
+  await dono`DELETE FROM aviso_privacidade WHERE tenant_id = ${T}`
+  await dono`INSERT INTO aviso_privacidade (tenant_id, id, contato_id, conversa_id, canal_id, mensagem_id, texto, versao, origem)
+             VALUES (${T}, gen_random_uuid(), ${CONTATO}, ${CONVERSA}, ${CANAL}, gen_random_uuid(), 'Esta conversa fica registrada.', 'padrao', 'agente')`
 })
 afterAll(async () => {
-  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_config', 'notificacao', 'atendimento', 'mensagem', 'conversa', 'contato_telefone', 'contato', 'canal_configuracao', 'canal_conectado', 'outbox']) {
+  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_config', 'notificacao', 'atendimento', 'mensagem', 'aviso_privacidade', 'conversa', 'contato_telefone', 'contato', 'canal_configuracao', 'canal_conectado', 'outbox']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${T}`

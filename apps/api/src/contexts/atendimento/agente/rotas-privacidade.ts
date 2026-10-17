@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { textoAvisoPrivacidade } from '@geracrm/shared'
+import { textoAvisoPrivacidade, verificarNumerosNaResposta } from '@geracrm/shared'
 import { exigirTenant } from '../../../plugins/tenant.js'
 import { exigirPapel } from '../../plataforma/papel.js'
 import { auditar } from '../../plataforma/auditoria.js'
@@ -36,6 +36,11 @@ export function validarPrivacidade(b: CorpoPrivacidade | undefined): Validacao {
   if (versao.length > 40) return { ok: false, campo: 'versao', mensagem: 'A versão tem no máximo 40 caracteres.' }
   const textoPadrao = texto(b?.textoPadrao)
   if (textoPadrao.length > 500) return { ok: false, campo: 'textoPadrao', mensagem: 'O texto do aviso tem no máximo 500 caracteres.' }
+  // ⚠️ O aviso sai na abertura, antes de qualquer ferramenta: valor ou
+  //    percentual ali seria número sem fonte (e a rede descartaria a abertura).
+  if (textoPadrao && (verificarNumerosNaResposta(textoPadrao, new Set()).length > 0 || /\d+(?:[.,]\d+)?\s*%|\bR\$/i.test(textoPadrao))) {
+    return { ok: false, campo: 'textoPadrao', mensagem: 'O aviso de privacidade não pode citar valor em reais nem percentual.' }
+  }
   return { ok: true, url: url || null, versao, textoPadrao: textoPadrao || null }
 }
 
