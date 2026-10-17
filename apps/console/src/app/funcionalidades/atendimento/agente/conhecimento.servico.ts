@@ -69,9 +69,40 @@ export interface TextoExtraido {
 export interface ErroConhecimento extends ErroApi {
   readonly semantica?: string
   readonly codigo?: string
+  /** 404 `versao_anterior_ao_historico`: onde o histórico do documento começa. */
+  readonly primeiraRegistrada?: number
 }
 export type FalhaConhecimento = { readonly ok: false; readonly status: number; readonly erro: ErroConhecimento }
 export type Resultado<T> = ({ readonly ok: true } & T) | FalhaConhecimento
+
+/** Uma versão do histórico (P9) — sem o texto; o texto vem em `lerVersao`. */
+export interface VersaoItem {
+  readonly versao: number
+  readonly titulo: string
+  readonly tipo: string
+  readonly canalId: string | null
+  readonly caracteres: number
+  /** criacao | edicao | restauracao | sincronismo | backfill | automatica (valor novo sai cru). */
+  readonly origem: string
+  readonly restauradaDe: number | null
+  readonly observacao: string | null
+  readonly autor: { readonly id: string; readonly nome: string | null } | null
+  readonly autorStaff: boolean
+  readonly criadoEm: string
+  readonly atual: boolean
+}
+
+export interface VersaoCompleta extends VersaoItem {
+  readonly documentoId: string
+  readonly conteudo: string
+  readonly versaoAtual: number
+}
+
+export interface PaginaVersoes {
+  readonly versaoAtual: number
+  readonly itens: readonly VersaoItem[]
+  readonly proximoCursor: string | null
+}
 
 export interface CorpoDocumento {
   readonly titulo: string
@@ -99,7 +130,29 @@ export class ConhecimentoServico {
     } catch (e) { return falha(e) }
   }
 
-  async editar(id: string, corpo: Partial<CorpoDocumento> & { readonly publicado?: boolean }): Promise<Resultado<{ documento: Documento }>> {
+  /** Histórico do documento, por cursor (número da versão). Lança em falha (403 → sem permissão). */
+  listarVersoes(id: string, cursor: string | null): Promise<PaginaVersoes> {
+    return firstValueFrom(this.http.get<PaginaVersoes>(`/v1/agente/conhecimento/${id}/versoes${queryDeLista({ cursor })}`))
+  }
+
+  /** O texto exato da versão. Falha tipificada: 404 nomeia "anterior ao histórico" × "não existe". */
+  async lerVersao(id: string, versao: number): Promise<Resultado<{ versao: VersaoCompleta }>> {
+    try {
+      const v = await firstValueFrom(this.http.get<VersaoCompleta>(`/v1/agente/conhecimento/${id}/versoes/${versao}`))
+      return { ok: true, versao: v }
+    } catch (e) { return falha(e) }
+  }
+
+  /** Restaurar = versão NOVA com o texto da escolhida; o histórico não muda. */
+  async restaurar(id: string, versao: number, observacao: string): Promise<Resultado<{ documento: Documento }>> {
+    try {
+      const d = await firstValueFrom(this.http.post<Documento>(
+        `/v1/agente/conhecimento/${id}/restaurar`, observacao ? { versao, observacao } : { versao }))
+      return { ok: true, documento: d }
+    } catch (e) { return falha(e) }
+  }
+
+  async editar(id: string, corpo: Partial<CorpoDocumento> & { readonly publicado?: boolean; readonly observacao?: string }): Promise<Resultado<{ documento: Documento }>> {
     try {
       const d = await firstValueFrom(this.http.patch<Documento>(`/v1/agente/conhecimento/${id}`, corpo))
       return { ok: true, documento: d }

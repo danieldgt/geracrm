@@ -264,3 +264,237 @@ export function formularioDe(doc: {
   const tipo = (TIPOS_DOCUMENTO as readonly string[]).includes(doc.tipo) ? (doc.tipo as TipoDocumento) : 'outro'
   return { id: doc.id, titulo: doc.titulo, tipo, alcance: doc.canalId === null ? 'global' : 'canal', conteudo: doc.conteudo }
 }
+
+// ─── Histórico de versões (raia P9) ──────────────────────────────────────────
+
+/** Teto da nota de uma versão — o mesmo da API (`MAX_OBSERVACAO`). */
+export const OBSERVACAO_MAX = 280
+
+export function validarObservacao(texto: string): string | null {
+  return texto.trim().length > OBSERVACAO_MAX ? `Nota com no máximo ${OBSERVACAO_MAX} caracteres.` : null
+}
+
+export const ROTULO_ORIGEM: Readonly<Record<string, string>> = {
+  criacao: 'criada',
+  edicao: 'editada',
+  restauracao: 'restaurada',
+  sincronismo: 'pela Configuração',
+  backfill: 'vigente ao ligar o histórico',
+  automatica: 'registrada pelo banco',
+}
+
+/** Badge da origem da versão. Valor desconhecido sai cru, neutro. */
+export function badgeOrigem(origem: string, restauradaDe: number | null = null): { rotulo: string; tom: Tom } {
+  if (origem === 'restauracao') return { rotulo: restauradaDe ? `restaurada da v${restauradaDe}` : 'restaurada', tom: 'info' }
+  if (origem === 'criacao') return { rotulo: 'criada', tom: 'sucesso' }
+  return { rotulo: ROTULO_ORIGEM[origem] ?? origem, tom: 'neutro' }
+}
+
+/** Quem fez: nome do usuário, "equipe GeraCRM" (staff) ou "sistema". */
+export function rotuloAutor(v: { readonly autor: { readonly nome: string | null } | null; readonly autorStaff: boolean }): string {
+  if (v.autorStaff) return 'equipe GeraCRM'
+  if (v.autor) return v.autor.nome ?? 'usuário'
+  return 'sistema'
+}
+
+/**
+ * A falha de ler/restaurar uma versão, em texto que diz o que fazer.
+ * ⚠️ "Anterior ao histórico" NÃO é erro de sistema: o texto daquela versão foi
+ *    sobrescrito antes de o histórico existir. A tela diz isso — nunca mostra
+ *    o texto de outra versão no lugar.
+ */
+export function mensagemFalhaVersao(erro: string | undefined, primeiraRegistrada?: number): string {
+  switch (erro) {
+    case 'conhecimento.versao_anterior_ao_historico':
+      return `Esta versão foi sobrescrita antes de o histórico existir — o texto dela não foi guardado.${
+        primeiraRegistrada ? ` O histórico deste documento começa na v${primeiraRegistrada}.` : ''}`
+    case 'conhecimento.versao_nao_encontrada': return 'Este documento não tem essa versão.'
+    case 'conhecimento.nao_encontrado': return 'Este documento não existe mais.'
+    case 'conhecimento.restaurar_sem_mudanca': return 'Essa versão tem o mesmo título e texto da atual — não há o que restaurar.'
+    default: return 'Não foi possível abrir a versão agora. Tente de novo.'
+  }
+}
+
+// ─── Diff por linha (puro) ───────────────────────────────────────────────────
+
+export type TipoLinhaDiff = 'igual' | 'removida' | 'adicionada'
+
+export interface LinhaDiff {
+  readonly tipo: TipoLinhaDiff
+  readonly texto: string
+  /** Número da linha (1-based) no texto antigo / novo; `null` quando a linha não existe ali. */
+  readonly antes: number | null
+  readonly depois: number | null
+}
+
+export interface ResultadoDiff {
+  readonly linhas: readonly LinhaDiff[]
+  readonly adicionadas: number
+  readonly removidas: number
+  /**
+   * O miolo diferente era grande demais para o LCS caber no navegador: saiu
+   * como "bloco removido + bloco adicionado". Continua CORRETO, só menos fino.
+   */
+  readonly aproximado: boolean
+}
+
+/** Células da tabela do LCS (n × m). 4 M × 4 bytes = 16 MB — o teto sem travar o navegador. */
+export const DIFF_MAX_CELULAS = 4_000_000
+
+function linhasDe(texto: string): string[] {
+  return texto === '' ? [] : texto.split(/\r?\n/)
+}
+
+/**
+ * Diferença por linha entre dois textos: prefixo e sufixo iguais são cortados
+ * antes (a edição típica mexe num trecho só), e o miolo vai por LCS. Acima de
+ * `maxCelulas`, o miolo sai inteiro como removido + adicionado.
+ */
+export function diffLinhas(antigo: string, novo: string, maxCelulas: number = DIFF_MAX_CELULAS): ResultadoDiff {
+  const a = linhasDe(antigo)
+  const b = linhasDe(novo)
+  let ini = 0
+  while (ini < a.length && ini < b.length && a[ini] === b[ini]) ini++
+  let fimA = a.length, fimB = b.length
+  while (fimA > ini && fimB > ini && a[fimA - 1] === b[fimB - 1]) { fimA--; fimB-- }
+
+  const saida: LinhaDiff[] = []
+  for (let k = 0; k < ini; k++) saida.push({ tipo: 'igual', texto: a[k]!, antes: k + 1, depois: k + 1 })
+
+  const ma = a.slice(ini, fimA)
+  const mb = b.slice(ini, fimB)
+  const n = ma.length, m = mb.length
+  let aproximado = false
+  if (n > 0 && m > 0 && (n + 1) * (m + 1) <= maxCelulas) {
+    // lcs[i][j] = tamanho do LCS de ma[i..] e mb[j..]
+    const w = m + 1
+    const lcs = new Uint32Array((n + 1) * w)
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        lcs[i * w + j] = ma[i] === mb[j] ? lcs[(i + 1) * w + j + 1]! + 1 : Math.max(lcs[(i + 1) * w + j]!, lcs[i * w + j + 1]!)
+      }
+    }
+    let i = 0, j = 0
+    while (i < n || j < m) {
+      if (i < n && j < m && ma[i] === mb[j]) {
+        saida.push({ tipo: 'igual', texto: ma[i]!, antes: ini + i + 1, depois: ini + j + 1 }); i++; j++
+      } else if (i < n && (j === m || lcs[(i + 1) * w + j]! >= lcs[i * w + j + 1]!)) {
+        saida.push({ tipo: 'removida', texto: ma[i]!, antes: ini + i + 1, depois: null }); i++
+      } else {
+        saida.push({ tipo: 'adicionada', texto: mb[j]!, antes: null, depois: ini + j + 1 }); j++
+      }
+    }
+  } else {
+    aproximado = n > 0 && m > 0
+    for (let k = 0; k < n; k++) saida.push({ tipo: 'removida', texto: ma[k]!, antes: ini + k + 1, depois: null })
+    for (let k = 0; k < m; k++) saida.push({ tipo: 'adicionada', texto: mb[k]!, antes: null, depois: ini + k + 1 })
+  }
+
+  for (let k = 0; k < a.length - fimA; k++) {
+    saida.push({ tipo: 'igual', texto: a[fimA + k]!, antes: fimA + k + 1, depois: fimB + k + 1 })
+  }
+  return {
+    linhas: saida,
+    adicionadas: saida.filter((l) => l.tipo === 'adicionada').length,
+    removidas: saida.filter((l) => l.tipo === 'removida').length,
+    aproximado,
+  }
+}
+
+export type BlocoDiff = LinhaDiff | { readonly tipo: 'omitidas'; readonly quantidade: number }
+
+/**
+ * Esconde trechos iguais longos, deixando `contexto` linhas em volta de cada
+ * mudança — num documento de 300 linhas com 2 mudadas, a tela mostra ~10.
+ */
+export function compactarDiff(linhas: readonly LinhaDiff[], contexto = 2): BlocoDiff[] {
+  const mudou = linhas.map((l) => l.tipo !== 'igual')
+  const saida: BlocoDiff[] = []
+  let omitidas = 0
+  for (let i = 0; i < linhas.length; i++) {
+    let perto = false
+    for (let k = Math.max(0, i - contexto); k <= Math.min(linhas.length - 1, i + contexto) && !perto; k++) perto = mudou[k]!
+    if (perto) {
+      if (omitidas > 0) { saida.push({ tipo: 'omitidas', quantidade: omitidas }); omitidas = 0 }
+      saida.push(linhas[i]!)
+    } else omitidas++
+  }
+  if (omitidas > 0) saida.push({ tipo: 'omitidas', quantidade: omitidas })
+  return saida
+}
+
+/** "+3 −1 linhas" / "sem diferença no texto". */
+export function resumoDiff(d: Pick<ResultadoDiff, 'adicionadas' | 'removidas'>): string {
+  if (d.adicionadas === 0 && d.removidas === 0) return 'sem diferença no texto'
+  return `+${d.adicionadas} −${d.removidas} ${d.adicionadas + d.removidas === 1 ? 'linha' : 'linhas'}`
+}
+
+// ─── Citações de conhecimento numa decisão do agente ─────────────────────────
+
+export interface CitacaoDecisao {
+  /** `null` = decisão anterior ao histórico: só título e versão, sem como abrir. */
+  readonly documentoId: string | null
+  readonly versao: number
+  readonly titulo: string
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const CITACAO_NO_TEXTO = /\{"documentoId":"([0-9a-f-]{36})","versao":(\d+),"titulo":("(?:[^"\\]|\\.)*")\}/gi
+const FONTE_TITULO_VERSAO = /^(.*) v(\d+)$/
+
+function ehObjeto(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/**
+ * Quais documentos (e em qual versão) o agente leu neste turno, a partir de
+ * `ferramentas[].saida` de `conhecimento_buscar`:
+ *   1. `saida.citacoes` (P9) — documento + versão: abre o texto exato;
+ *   2. saída cortada em 4.000 caracteres (`{truncado, inicio}`) — as citações
+ *      vêm primeiro no objeto e são lidas do texto;
+ *   3. decisões antigas, só com `trechos[].fonte = "Título vN"` — citação sem
+ *      documento (a tela mostra, mas não tem o que abrir).
+ */
+export function citacoesDaDecisao(
+  ferramentas: readonly { readonly nome: string; readonly saida: unknown; readonly erro?: string | undefined }[],
+): CitacaoDecisao[] {
+  const saida: CitacaoDecisao[] = []
+  const vistas = new Set<string>()
+  const somar = (c: CitacaoDecisao): void => {
+    const k = `${c.documentoId ?? `t:${c.titulo}`}:${c.versao}`
+    if (vistas.has(k)) return
+    vistas.add(k)
+    saida.push(c)
+  }
+  for (const f of ferramentas) {
+    if (f.nome !== 'conhecimento_buscar' || f.erro || !ehObjeto(f.saida)) continue
+    const s = f.saida
+    if (Array.isArray(s['citacoes'])) {
+      for (const c of s['citacoes'] as unknown[]) {
+        if (!ehObjeto(c)) continue
+        const id = c['documentoId'], v = c['versao'], t = c['titulo']
+        if (typeof id === 'string' && UUID_RE.test(id) && typeof v === 'number' && Number.isInteger(v) && v >= 1) {
+          somar({ documentoId: id, versao: v, titulo: typeof t === 'string' ? t : 'Documento' })
+        }
+      }
+      continue
+    }
+    const inicio = s['inicio']
+    if (s['truncado'] === true && typeof inicio === 'string') {
+      for (const m of inicio.matchAll(CITACAO_NO_TEXTO)) {
+        let titulo = 'Documento'
+        try { titulo = JSON.parse(m[3]!) as string } catch { /* título cortado: fica o genérico */ }
+        somar({ documentoId: m[1]!, versao: Number(m[2]), titulo })
+      }
+      continue
+    }
+    if (Array.isArray(s['trechos'])) {
+      for (const t of s['trechos'] as unknown[]) {
+        if (!ehObjeto(t) || typeof t['fonte'] !== 'string') continue
+        const m = FONTE_TITULO_VERSAO.exec(t['fonte'])
+        if (m) somar({ documentoId: null, versao: Number(m[2]), titulo: m[1]! })
+      }
+    }
+  }
+  return saida
+}

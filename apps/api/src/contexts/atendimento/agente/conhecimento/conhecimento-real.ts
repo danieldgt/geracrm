@@ -19,6 +19,33 @@ import { buscarConhecimento } from './busca.js'
 
 const TRECHOS_PARA_O_MODELO = 3
 
+/**
+ * DE QUAL documento e versão vieram os trechos (P9). A saída da ferramenta é
+ * gravada em `agente_decisao.ferramentas[].saida`; é por aqui que "Frete v3"
+ * numa decisão abre o texto exato da v3 (`GET …/conhecimento/:id/versoes/3`) —
+ * o título sozinho não identifica (muda, e dois documentos podem ter o mesmo).
+ *
+ * ⚠️ Vai PRIMEIRO no objeto: a saída gravada é cortada em 4.000 caracteres
+ *    (`resumir` em vendedor.ts) e a citação não pode ser o que se perde.
+ */
+export interface CitacaoConhecimento {
+  readonly documentoId: string
+  readonly versao: number
+  readonly titulo: string
+}
+
+export function citacoesDe(trechos: readonly { documentoId: string; versao: number; titulo: string }[]): CitacaoConhecimento[] {
+  const vistas = new Set<string>()
+  const saida: CitacaoConhecimento[] = []
+  for (const t of trechos) {
+    const k = `${t.documentoId}:${t.versao}`
+    if (vistas.has(k)) continue
+    vistas.add(k)
+    saida.push({ documentoId: t.documentoId, versao: t.versao, titulo: t.titulo })
+  }
+  return saida
+}
+
 export function criarConhecimentoReal(opcoes: { embedding?: PortaEmbedding } = {}): ConhecimentoPorta {
   let porta: PortaEmbedding | null = opcoes.embedding ?? null
   const embedding = (): PortaEmbedding => (porta ??= embeddingDoAmbiente())
@@ -31,7 +58,7 @@ export function criarConhecimentoReal(opcoes: { embedding?: PortaEmbedding } = {
         pergunta, canalId: ctx.canalId, limite: TRECHOS_PARA_O_MODELO,
         ...(emb?.vetor ? { vetorConsulta: emb.vetor, modeloEmbedding: emb.modelo } : {}),
       }))
-      return { trechos: r.trechos.map((t) => ({ texto: t.texto, fonte: `${t.titulo} v${t.versao}` })) }
+      return { citacoes: citacoesDe(r.trechos), trechos: r.trechos.map((t) => ({ texto: t.texto, fonte: `${t.titulo} v${t.versao}` })) }
     },
   }
 }

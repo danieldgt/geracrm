@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Sql } from '../../../../db/index.js'
 import { TITULO_POLITICAS } from './porta.js'
+import { registrarVersao, type SnapshotDocumento } from './versoes.js'
 
 /**
  * INDEXADOR DA BASE DE CONHECIMENTO — mantém `conhecimento_trecho` (0089) em dia.
@@ -178,9 +179,12 @@ export async function sincronizarPoliticas(tx: Sql, canalId: string, politicas: 
 
   if (!existente) {
     const id = randomUUID()
-    await tx`
+    const [snap] = await tx<SnapshotDocumento[]>`
       INSERT INTO conhecimento_documento (tenant_id, id, canal_id, titulo, tipo, conteudo, versao, publicado)
-      VALUES (tenant_atual(), ${id}, ${canalId}, ${TITULO_POLITICAS}, 'politicas', ${texto}, 1, true)`
+      VALUES (tenant_atual(), ${id}, ${canalId}, ${TITULO_POLITICAS}, 'politicas', ${texto}, 1, true)
+      RETURNING id, versao, titulo, tipo, canal_id, conteudo`
+    // Histórico imutável (P9): a versão nasce registrada na mesma transação.
+    await registrarVersao(tx, snap!, { origem: 'sincronismo' })
     await reindexarDocumento(tx, id)
     return { documentoId: id, versao: 1, situacao: 'criado' }
   }
@@ -191,14 +195,15 @@ export async function sincronizarPoliticas(tx: Sql, canalId: string, politicas: 
 
   // Republicar sem mudar o texto não é versão nova; texto novo é.
   const sobeVersao = existente.conteudo !== texto
-  const [atualizado] = await tx<{ versao: number }[]>`
+  const [atualizado] = await tx<SnapshotDocumento[]>`
     UPDATE conhecimento_documento
        SET conteudo = ${texto},
            versao = ${sobeVersao ? tx`versao + 1` : tx`versao`},
            publicado = true,
            atualizado_em = now()
      WHERE tenant_id = tenant_atual() AND id = ${existente.id}
-     RETURNING versao`
+     RETURNING id, versao, titulo, tipo, canal_id, conteudo`
+  if (sobeVersao) await registrarVersao(tx, atualizado!, { origem: 'sincronismo' })
   await reindexarDocumento(tx, existente.id)
   return { documentoId: existente.id, versao: atualizado!.versao, situacao: 'atualizado' }
 }

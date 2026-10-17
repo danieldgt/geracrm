@@ -8,6 +8,8 @@ import { AgenteServico, ehSemPermissao, type Decisao } from './agente.servico.js
 import {
   badgeDesfecho, badgeModo, formatarConfianca, formatarReais, jsonLegivel, resumoDeUso, rotuloHandoff, ROTULO_FASE,
 } from './agente.regras.js'
+import { citacoesDaDecisao, type CitacaoDecisao } from './conhecimento.regras.js'
+import { ConhecimentoVersaoComponente } from './conhecimento-versao.componente.js'
 
 type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
 
@@ -21,7 +23,7 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
 @Component({
   selector: 'app-agente-decisoes',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, BotaoComponente, BadgeComponente, PainelComponente, EsqueletoComponente, EstadoComponente],
+  imports: [DatePipe, BotaoComponente, BadgeComponente, PainelComponente, EsqueletoComponente, EstadoComponente, ConhecimentoVersaoComponente],
   template: `
     @switch (estado()) {
       @case ('carregando') {
@@ -92,6 +94,23 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
                         @for (n of d.numerosBloqueados; track $index) { <span class="txt-dados">{{ reais(n) }}</span> }</dd>
                     }
                     @if (d.erro) { <dt>Erro</dt><dd class="erro">{{ d.erro }}</dd> }
+                    <!-- P9: "Título vN" abre o texto EXATO daquela versão, do histórico imutável. -->
+                    @if (citacoes(d); as cs) {
+                      @if (cs.length > 0) {
+                        <dt>Conhecimento</dt>
+                        <dd class="citacoes">
+                          @for (c of cs; track $index) {
+                            @if (c.documentoId; as docId) {
+                              <button type="button" class="link" [attr.aria-expanded]="citacaoAberta(d.id, c)"
+                                      (click)="alternarCitacao(d.id, c)">{{ c.titulo }} <span class="txt-dados">v{{ c.versao }}</span></button>
+                              @if (citacaoAberta(d.id, c)) { <app-conhecimento-versao [documentoId]="docId" [versao]="c.versao" /> }
+                            } @else {
+                              <span title="Decisão anterior ao histórico de versões: não há como abrir o texto">{{ c.titulo }} <span class="txt-dados">v{{ c.versao }}</span></span>
+                            }
+                          }
+                        </dd>
+                      }
+                    }
                     <dt>Modelo</dt><dd class="txt-dados">{{ d.modelo ?? '—' }}</dd>
                     <dt>Rodadas</dt><dd class="txt-dados">{{ d.rodadas }}</dd>
                     <dt>Tokens</dt><dd class="txt-dados">{{ uso(d) }}</dd>
@@ -158,6 +177,10 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
       background: var(--fundo); border-radius: var(--raio-controle); max-height: 240px; overflow: auto; max-width: 100%; }
     .erro-mais { margin: var(--espacamento-3) 0 0; color: var(--erro); font-size: 13px; }
     .mais { margin-top: var(--espacamento-4); }
+    .citacoes { display: grid; gap: var(--espacamento-1); justify-items: start; }
+    .citacoes app-conhecimento-versao { justify-self: stretch; }
+    .link { border: 0; background: transparent; padding: 0; font: inherit; color: var(--acao); cursor: pointer; text-decoration: underline; }
+    .link:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
     @media (max-width: 640px) { .detalhes { grid-template-columns: 1fr; } .item { padding: var(--espacamento-3); } }
   `,
 })
@@ -192,6 +215,15 @@ export class AgenteDecisoesComponente {
 
   alternar(id: string): void {
     this.abertos.update((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
+
+  citacoes(d: Decisao): readonly CitacaoDecisao[] { return citacoesDaDecisao(d.ferramentas) }
+  private readonly citacoesAbertas = signal<ReadonlySet<string>>(new Set())
+  private chaveCitacao(decisaoId: string, c: CitacaoDecisao): string { return `${decisaoId}:${c.documentoId}:${c.versao}` }
+  citacaoAberta(decisaoId: string, c: CitacaoDecisao): boolean { return this.citacoesAbertas().has(this.chaveCitacao(decisaoId, c)) }
+  alternarCitacao(decisaoId: string, c: CitacaoDecisao): void {
+    const k = this.chaveCitacao(decisaoId, c)
+    this.citacoesAbertas.update((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n })
   }
 
   abrirConversa(conversaId: string): void { void this.inbox.abrir(conversaId) }

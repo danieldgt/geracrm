@@ -10,12 +10,13 @@ import {
   ConhecimentoServico, type Documento, type ResultadoBusca, type TextoExtraido,
 } from './conhecimento.servico.js'
 import {
-  ARQUIVO_MAX_BYTES, DESCRICAO_TIPO, LIMITES_DOCUMENTO, ROTULO_TIPO,
+  ARQUIVO_MAX_BYTES, DESCRICAO_TIPO, LIMITES_DOCUMENTO, OBSERVACAO_MAX, ROTULO_TIPO,
   ajustarTipoAoAlcance, arquivoGrande, badgeAlcance, badgeForca, badgeTipo, corpoDoDocumento, descreverMotivoSemantica,
   ehEspelhoDePoliticas, formularioDe, formularioNovo, motivoSemantica, resumoDaExtracao, rotuloFonte, rotuloSemantica,
-  semanticaLigada, temPendentes, textoPendentes, tipoArquivoDe, tiposDisponiveis, validarDocumento,
+  semanticaLigada, temPendentes, textoPendentes, tipoArquivoDe, tiposDisponiveis, validarDocumento, validarObservacao,
   type Alcance, type CapacidadesBusca, type FormularioDocumento, type TipoDocumento,
 } from './conhecimento.regras.js'
+import { ConhecimentoHistoricoComponente } from './conhecimento-historico.componente.js'
 
 type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
 /** O painel de capacidade carrega à parte: se falhar, a lista segue de pé (parcial). */
@@ -39,7 +40,7 @@ interface Importado extends TextoExtraido { readonly nome: string }
 @Component({
   selector: 'app-agente-conhecimento',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, BadgeComponente, BotaoComponente, CampoComponente, EsqueletoComponente, EstadoComponente, PainelComponente],
+  imports: [DatePipe, BadgeComponente, BotaoComponente, CampoComponente, ConhecimentoHistoricoComponente, EsqueletoComponente, EstadoComponente, PainelComponente],
   template: `
     <div class="conhecimento">
 
@@ -142,6 +143,17 @@ interface Importado extends TextoExtraido { readonly nome: string }
               </div>
             }
 
+            @if (f.id) {
+              <!-- Nota da versão (P9): fica no histórico junto do texto novo. -->
+              <label class="campo">
+                <span>Nota da versão (opcional)</span>
+                <input type="text" [value]="notaVersao()" (input)="notaVersao.set($any($event.target).value)" [attr.maxlength]="observacaoMax"
+                       [attr.aria-invalid]="erroNota() ? 'true' : null" placeholder="Ex.: frete grátis subiu para R$ 300" />
+                @if (erroNota(); as e) { <span class="msg-erro">{{ e }}</span> }
+                <small>Salvar com título ou texto diferente cria a v{{ (versaoEmEdicao() ?? 0) + 1 }}; a atual fica guardada no histórico.</small>
+              </label>
+            }
+
             <div class="acoes">
               <ui-botao tipo="submit" [carregando]="salvando()">{{ salvando() ? 'Salvando…' : 'Salvar' }}</ui-botao>
               <ui-botao variante="fantasma" [desabilitado]="salvando()" (click)="fecharForm()">Cancelar</ui-botao>
@@ -149,6 +161,11 @@ interface Importado extends TextoExtraido { readonly nome: string }
             </div>
           </form>
         </ui-painel>
+      }
+
+      <!-- (b2) Histórico de um documento (P9) — painel que abre acima da lista. -->
+      @if (historico(); as h) {
+        <app-conhecimento-historico [documento]="h" (fechar)="historicoDe.set(null)" (restaurado)="aoRestaurar($event)" />
       }
 
       <!-- (c) Lista por cursor -->
@@ -202,6 +219,7 @@ interface Importado extends TextoExtraido { readonly nome: string }
                     <span class="txt-dados quando">atualizado {{ d.atualizadoEm | date: 'dd/MM HH:mm' }}</span>
                     <div class="acoes-item">
                       <ui-botao variante="fantasma" [desabilitado]="acaoEm() !== null" (click)="editar(d)">Editar</ui-botao>
+                      <ui-botao variante="fantasma" (click)="abrirHistorico(d)">{{ historicoDe() === d.id ? 'Histórico aberto' : 'Histórico' }}</ui-botao>
                       @if (d.publicado) {
                         <ui-botao variante="fantasma" [carregando]="acaoEm() === d.id" [desabilitado]="acaoEm() !== null && acaoEm() !== d.id"
                                   (click)="despublicar(d)">Despublicar</ui-botao>
@@ -359,6 +377,7 @@ export class AgenteConhecimentoComponente {
   readonly rotuloTipo = ROTULO_TIPO
   readonly descricaoTipo = DESCRICAO_TIPO
   readonly limites = LIMITES_DOCUMENTO
+  readonly observacaoMax = OBSERVACAO_MAX
 
   // ─── Lista ───
   readonly estado = signal<Estado>('carregando')
@@ -410,6 +429,19 @@ export class AgenteConhecimentoComponente {
   })
   readonly temErros = computed(() => Object.keys(this.errosLocais()).length > 0 || Object.keys(this.errosServidor()).length > 0)
 
+  /** Nota da versão nova no formulário de edição (P9). */
+  readonly notaVersao = signal('')
+  readonly erroNota = computed(() => validarObservacao(this.notaVersao()))
+  readonly versaoEmEdicao = computed(() => {
+    const f = this.form()
+    return f?.id ? (this.itens().find((x) => x.id === f.id)?.versao ?? null) : null
+  })
+
+  // ─── Histórico (P9) ───
+  /** Id do documento com o histórico aberto; `null` = fechado. */
+  readonly historicoDe = signal<string | null>(null)
+  readonly historico = computed(() => { const id = this.historicoDe(); return id ? (this.itens().find((d) => d.id === id) ?? null) : null })
+
   // ─── Testar a base ───
   readonly pergunta = signal('')
   readonly buscando = signal(false)
@@ -421,7 +453,7 @@ export class AgenteConhecimentoComponente {
     // Trocar de número recarrega a lista e zera o que era daquele número (form, busca).
     effect(() => {
       this.canalId()
-      untracked(() => { this.fecharForm(); this.busca.set(null); this.erroBusca.set(null); void this.carregar() })
+      untracked(() => { this.fecharForm(); this.historicoDe.set(null); this.busca.set(null); this.erroBusca.set(null); void this.carregar() })
     })
     // A capacidade é do servidor/tenant: uma carga por tela.
     void this.carregarCapacidades()
@@ -545,6 +577,16 @@ export class AgenteConhecimentoComponente {
     } finally { this.acaoEm.set(null) }
   }
 
+  abrirHistorico(d: Documento): void {
+    this.historicoDe.set(this.historicoDe() === d.id ? null : d.id)
+  }
+
+  /** Restaurou: a linha troca pela versão nova; um formulário aberto no mesmo documento ficaria velho — fecha. */
+  aoRestaurar(doc: Documento): void {
+    this.substituir(doc)
+    if (this.form()?.id === doc.id) this.fecharForm()
+  }
+
   private substituir(doc: Documento): void {
     this.itens.update((a) => a.map((x) => (x.id === doc.id ? doc : x)))
   }
@@ -572,7 +614,7 @@ export class AgenteConhecimentoComponente {
   private abrirForm(f: FormularioDocumento): void {
     this.form.set(f)
     this.tentou.set(false); this.errosServidor.set({}); this.erroGeral.set(null)
-    this.importado.set(null); this.erroImportar.set(null)
+    this.importado.set(null); this.erroImportar.set(null); this.notaVersao.set('')
   }
 
   fecharForm(): void {
@@ -641,7 +683,7 @@ export class AgenteConhecimentoComponente {
     const f = this.form()
     if (!f || this.salvando()) return
     this.tentou.set(true); this.errosServidor.set({}); this.erroGeral.set(null)
-    if (Object.keys(validarDocumento(f)).length > 0) {
+    if (Object.keys(validarDocumento(f)).length > 0 || this.erroNota()) {
       this.toast.erro('Corrija os campos destacados antes de salvar.')
       return
     }
@@ -649,8 +691,10 @@ export class AgenteConhecimentoComponente {
     try {
       const corpo = corpoDoDocumento(f, this.canalId())
       // O espelho não manda tipo nem canalId: a API recusaria qualquer mudança neles.
+      const nota = this.notaVersao().trim()
+      const extra = nota ? { observacao: nota } : {}
       const r = f.id
-        ? await this.api.editar(f.id, this.espelhoEmEdicao() ? { titulo: corpo.titulo, conteudo: corpo.conteudo } : corpo)
+        ? await this.api.editar(f.id, this.espelhoEmEdicao() ? { titulo: corpo.titulo, conteudo: corpo.conteudo, ...extra } : { ...corpo, ...extra })
         : await this.api.criar(corpo)
       if (r.ok) {
         this.toast.sucesso(f.id ? `"${r.documento.titulo}" salvo — agora na v${r.documento.versao}.` : `"${r.documento.titulo}" criado e publicado.`)

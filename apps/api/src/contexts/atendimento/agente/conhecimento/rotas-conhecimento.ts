@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { exigirTenant } from '../../../../plugins/tenant.js'
-import { sql } from '../../../../db/index.js'
+import { sql, type Sql } from '../../../../db/index.js'
+import { auditar } from '../../../plataforma/auditoria.js'
+import { garantirUsuarioId } from '../../rotas-fila.js'
 import { embutirConsulta } from '../../../catalogo/busca.js'
 import { cacheConsultaPadrao } from '../../../catalogo/cache-consulta.js'
 import { embeddingDoAmbiente } from '../../../catalogo/porta-embedding.js'
@@ -11,6 +13,9 @@ import { capacidadesDeBusca, embutirPendentes } from './embutir-pendentes.js'
 import { extrairTexto, MAX_BYTES_ARQUIVO, MAX_CARACTERES_DOCUMENTO, TIPOS_ARQUIVO } from './extrair-texto.js'
 import { reindexarDocumento } from './indexador.js'
 import { TIPOS_DOCUMENTO, type TipoDocumento } from './porta.js'
+import {
+  MAX_OBSERVACAO, lerVersao, listarVersoes, registrarVersao, type SnapshotDocumento,
+} from './versoes.js'
 
 /**
  * A BASE DE CONHECIMENTO como produto: o dono escreve documentos (FAQ, frete,
@@ -39,6 +44,13 @@ const corpoEditar = z.object({
   conteudo: z.string().trim().min(1).max(MAX_CARACTERES_DOCUMENTO).optional(),
   canalId: z.string().regex(UUID).nullable().optional(),
   publicado: z.boolean().optional(),
+  /** Nota da versão nova (só vale quando título/conteúdo mudam). */
+  observacao: z.string().trim().max(MAX_OBSERVACAO).optional(),
+})
+
+const corpoRestaurar = z.object({
+  versao: z.number().int().min(1),
+  observacao: z.string().trim().max(MAX_OBSERVACAO).optional(),
 })
 
 const corpoBuscar = z.object({
@@ -68,6 +80,20 @@ function paraSaida(l: LinhaDocumento) {
     atualizadoEm: l.atualizado_em, criadoEm: l.criado_em,
   }
 }
+
+/**
+ * Quem age, para o histórico e a auditoria. Sessão de staff (PLT-05) não vira
+ * linha em `usuario` do cliente: fica `autorId` NULL com a marca de staff.
+ */
+async function autoria(tx: Sql, req: FastifyRequest): Promise<{ autorId: string | null; autorStaff: boolean }> {
+  if (req.atorStaff) return { autorId: null, autorStaff: true }
+  return { autorId: await garantirUsuarioId(tx, req), autorStaff: false }
+}
+
+const SELECT_DOCUMENTO_SAIDA = (tx: Sql, id: string) => tx<LinhaDocumento[]>`
+  SELECT d.id, d.canal_id, d.titulo, d.tipo, d.conteudo, d.versao, d.publicado, d.atualizado_em, d.criado_em,
+         (SELECT count(*)::int FROM conhecimento_trecho t WHERE t.tenant_id = d.tenant_id AND t.documento_id = d.id) AS trechos
+    FROM conhecimento_documento d WHERE d.tenant_id = tenant_atual() AND d.id = ${id}`
 
 function campoInvalido(reply: { code: (n: number) => { send: (b: unknown) => unknown } }, erro: z.ZodError) {
   const i = erro.issues[0]!
@@ -128,14 +154,18 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
           if (!canal) return { erro: 'canal_nao_encontrado' as const }
         }
         const id = randomUUID()
-        await tx`
+        const [snap] = await tx<SnapshotDocumento[]>`
           INSERT INTO conhecimento_documento (tenant_id, id, canal_id, titulo, tipo, conteudo, versao, publicado)
-          VALUES (tenant_atual(), ${id}, ${canalId}, ${c.titulo}, ${c.tipo}, ${c.conteudo}, 1, true)`
+          VALUES (tenant_atual(), ${id}, ${canalId}, ${c.titulo}, ${c.tipo}, ${c.conteudo}, 1, true)
+          RETURNING id, versao, titulo, tipo, canal_id, conteudo`
+        const autor = await autoria(tx, req)
+        await registrarVersao(tx, snap!, { origem: 'criacao', ...autor })
         await reindexarDocumento(tx, id)
-        const [linha] = await tx<LinhaDocumento[]>`
-          SELECT d.id, d.canal_id, d.titulo, d.tipo, d.conteudo, d.versao, d.publicado, d.atualizado_em, d.criado_em,
-                 (SELECT count(*)::int FROM conhecimento_trecho t WHERE t.tenant_id = d.tenant_id AND t.documento_id = d.id) AS trechos
-            FROM conhecimento_documento d WHERE d.tenant_id = tenant_atual() AND d.id = ${id}`
+        await auditar(tx, {
+          atorId: autor.autorId, atorStaff: autor.autorStaff, acao: 'conhecimento.criado', entidade: 'conhecimento_documento',
+          entidadeId: id, dados: { versao: 1, titulo: c.titulo, tipo: c.tipo, canalId, caracteres: c.conteudo.length },
+        })
+        const [linha] = await SELECT_DOCUMENTO_SAIDA(tx, id)
         return { doc: linha! }
       })
       if ('erro' in r) {
@@ -154,9 +184,10 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
       if (!parse.success) return campoInvalido(reply, parse.error)
       const c = parse.data
       const r = await req.comTenant(async (tx) => {
-        const [atual] = await tx<{ id: string; canal_id: string | null; tipo: TipoDocumento; titulo: string; conteudo: string }[]>`
-          SELECT id, canal_id, tipo, titulo, conteudo FROM conhecimento_documento
-           WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        // FOR UPDATE: duas edições simultâneas comparam com o texto que vão substituir, uma de cada vez.
+        const [atual] = await tx<{ id: string; canal_id: string | null; tipo: TipoDocumento; titulo: string; conteudo: string; publicado: boolean; versao: number }[]>`
+          SELECT id, canal_id, tipo, titulo, conteudo, publicado, versao FROM conhecimento_documento
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.id} FOR UPDATE`
         if (!atual) return { erro: 'nao_encontrado' as const }
         const ehPoliticasDoCanal = atual.tipo === 'politicas' && atual.canal_id !== null
         // O documento espelho não muda de tipo nem de canal: ele É as políticas daquele canal.
@@ -173,7 +204,7 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
         const titulo = c.titulo ?? atual.titulo
         const conteudo = c.conteudo ?? atual.conteudo
         const sobeVersao = titulo !== atual.titulo || conteudo !== atual.conteudo
-        await tx`
+        const [snap] = await tx<SnapshotDocumento[]>`
           UPDATE conhecimento_documento
              SET titulo = ${titulo},
                  conteudo = ${conteudo},
@@ -182,17 +213,38 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
                  publicado = ${c.publicado === undefined ? tx`publicado` : c.publicado},
                  versao = ${sobeVersao ? tx`versao + 1` : tx`versao`},
                  atualizado_em = now()
-           WHERE tenant_id = tenant_atual() AND id = ${atual.id}`
-        if (sobeVersao) await reindexarDocumento(tx, atual.id)
+           WHERE tenant_id = tenant_atual() AND id = ${atual.id}
+           RETURNING id, versao, titulo, tipo, canal_id, conteudo`
+        const autor = await autoria(tx, req)
+        // ⚠️ Versão nova = linha nova no histórico, nesta mesma transação (P9).
+        if (sobeVersao) {
+          await registrarVersao(tx, snap!, { origem: 'edicao', ...autor, observacao: c.observacao || null })
+          await reindexarDocumento(tx, atual.id)
+        }
         // Espelho de volta: a tela do agente lê a coluna, a base lê o documento.
         if (ehPoliticasDoCanal && conteudo !== atual.conteudo) {
           await tx`UPDATE agente_config SET politicas = ${conteudo}, atualizado_em = now()
                     WHERE tenant_id = tenant_atual() AND canal_id = ${atual.canal_id}`
         }
-        const [linha] = await tx<LinhaDocumento[]>`
-          SELECT d.id, d.canal_id, d.titulo, d.tipo, d.conteudo, d.versao, d.publicado, d.atualizado_em, d.criado_em,
-                 (SELECT count(*)::int FROM conhecimento_trecho t WHERE t.tenant_id = d.tenant_id AND t.documento_id = d.id) AS trechos
-            FROM conhecimento_documento d WHERE d.tenant_id = tenant_atual() AND d.id = ${atual.id}`
+        const campos = [
+          ...(titulo !== atual.titulo ? ['titulo'] : []),
+          ...(conteudo !== atual.conteudo ? ['conteudo'] : []),
+          ...(snap!.tipo !== atual.tipo ? ['tipo'] : []),
+          ...(snap!.canal_id !== atual.canal_id ? ['canalId'] : []),
+          ...(c.publicado !== undefined && c.publicado !== atual.publicado ? ['publicado'] : []),
+        ]
+        if (campos.length > 0) {
+          await auditar(tx, {
+            atorId: autor.autorId, atorStaff: autor.autorStaff, acao: 'conhecimento.editado', entidade: 'conhecimento_documento',
+            entidadeId: atual.id,
+            dados: {
+              campos, versaoAnterior: atual.versao, versao: snap!.versao,
+              ...(c.publicado !== undefined && c.publicado !== atual.publicado ? { publicado: c.publicado } : {}),
+              ...(sobeVersao && c.observacao ? { observacao: c.observacao } : {}),
+            },
+          })
+        }
+        const [linha] = await SELECT_DOCUMENTO_SAIDA(tx, atual.id)
         return { doc: linha! }
       })
       if ('erro' in r) {
@@ -216,13 +268,127 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conhecimento.nao_encontrado' })
       const n = await req.comTenant(async (tx) => {
-        const r = await tx`
-          UPDATE conhecimento_documento SET publicado = false, atualizado_em = now()
-           WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
-        return r.count
+        const r = await tx<{ versao: number; publicado_antes: boolean }[]>`
+          UPDATE conhecimento_documento d SET publicado = false, atualizado_em = now()
+            FROM (SELECT id, publicado FROM conhecimento_documento
+                   WHERE tenant_id = tenant_atual() AND id = ${req.params.id} FOR UPDATE) antes
+           WHERE d.tenant_id = tenant_atual() AND d.id = antes.id
+           RETURNING d.versao, antes.publicado AS publicado_antes`
+        const l = r[0]
+        if (l?.publicado_antes) {
+          const autor = await autoria(tx, req)
+          await auditar(tx, {
+            atorId: autor.autorId, atorStaff: autor.autorStaff, acao: 'conhecimento.despublicado',
+            entidade: 'conhecimento_documento', entidadeId: req.params.id, dados: { versao: l.versao },
+          })
+        }
+        return r.length
       })
       if (n === 0) return reply.code(404).send({ erro: 'conhecimento.nao_encontrado' })
       return reply.send({ ok: true })
+    },
+  )
+
+  /** Histórico do documento — mais nova primeiro, 20 por página, cursor = número da versão (P9). */
+  app.get<{ Params: { id: string }; Querystring: { cursor?: string } }>(
+    '/v1/agente/conhecimento/:id/versoes', { preHandler: exigirTenant },
+    async (req, reply) => {
+      if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conhecimento.nao_encontrado' })
+      let antesDe: number | null = null
+      if (req.query.cursor !== undefined) {
+        if (!/^\d{1,9}$/.test(req.query.cursor)) return reply.code(422).send({ erro: 'cursor.invalido' })
+        antesDe = Number(req.query.cursor)
+      }
+      const r = await req.comTenant((tx) => listarVersoes(tx, req.params.id, antesDe))
+      if (!r.ok) return reply.code(404).send({ erro: 'conhecimento.nao_encontrado' })
+      return reply.send({ versaoAtual: r.versaoAtual, itens: r.itens, proximoCursor: r.proximoCursor })
+    },
+  )
+
+  /**
+   * O TEXTO EXATO da versão N — o que "Título vN" numa decisão do agente abre.
+   * Versão sobrescrita antes do histórico existir é falha nomeada, nunca o texto de outra.
+   */
+  app.get<{ Params: { id: string; versao: string } }>(
+    '/v1/agente/conhecimento/:id/versoes/:versao', { preHandler: exigirTenant },
+    async (req, reply) => {
+      if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conhecimento.nao_encontrado' })
+      if (!/^\d{1,9}$/.test(req.params.versao) || Number(req.params.versao) < 1) {
+        return reply.code(404).send({ erro: 'conhecimento.versao_nao_encontrada', mensagem: 'Versão inválida.' })
+      }
+      const r = await req.comTenant((tx) => lerVersao(tx, req.params.id, Number(req.params.versao)))
+      if (r.ok) return reply.send(r.versao)
+      if (r.erro === 'nao_encontrado') return reply.code(404).send({ erro: 'conhecimento.nao_encontrado' })
+      if (r.erro === 'versao_anterior_ao_historico') {
+        return reply.code(404).send({
+          erro: 'conhecimento.versao_anterior_ao_historico',
+          mensagem: 'Esta versão foi sobrescrita antes de o histórico existir — o texto dela não foi guardado.',
+          ...(r.primeiraRegistrada ? { primeiraRegistrada: r.primeiraRegistrada } : {}),
+        })
+      }
+      return reply.code(404).send({ erro: 'conhecimento.versao_nao_encontrada', mensagem: 'Este documento não tem essa versão.' })
+    },
+  )
+
+  /**
+   * Restaurar = criar uma versão NOVA com o título e o texto da versão escolhida.
+   * O histórico nunca é reescrito; tipo, alcance e publicação ficam como estão.
+   */
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    '/v1/agente/conhecimento/:id/restaurar', { preHandler: exigirTenant },
+    async (req, reply) => {
+      if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conhecimento.nao_encontrado' })
+      const parse = corpoRestaurar.safeParse(req.body ?? {})
+      if (!parse.success) return campoInvalido(reply, parse.error)
+      const c = parse.data
+      const r = await req.comTenant(async (tx) => {
+        const [atual] = await tx<{ id: string; canal_id: string | null; tipo: TipoDocumento; titulo: string; conteudo: string; versao: number }[]>`
+          SELECT id, canal_id, tipo, titulo, conteudo, versao FROM conhecimento_documento
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.id} FOR UPDATE`
+        if (!atual) return { erro: 'nao_encontrado' as const }
+        const alvo = await lerVersao(tx, atual.id, c.versao)
+        if (!alvo.ok) return { erro: alvo.erro }
+        const ehPoliticasDoCanal = atual.tipo === 'politicas' && atual.canal_id !== null
+        // O espelho das políticas mantém o título fixo: só o texto volta.
+        const titulo = ehPoliticasDoCanal ? atual.titulo : alvo.versao.titulo
+        const conteudo = alvo.versao.conteudo
+        if (titulo === atual.titulo && conteudo === atual.conteudo) return { erro: 'igual_a_atual' as const }
+        const [snap] = await tx<SnapshotDocumento[]>`
+          UPDATE conhecimento_documento
+             SET titulo = ${titulo}, conteudo = ${conteudo}, versao = versao + 1, atualizado_em = now()
+           WHERE tenant_id = tenant_atual() AND id = ${atual.id}
+           RETURNING id, versao, titulo, tipo, canal_id, conteudo`
+        const autor = await autoria(tx, req)
+        await registrarVersao(tx, snap!, { origem: 'restauracao', restauradaDe: c.versao, observacao: c.observacao || null, ...autor })
+        await reindexarDocumento(tx, atual.id)
+        if (ehPoliticasDoCanal && conteudo !== atual.conteudo) {
+          await tx`UPDATE agente_config SET politicas = ${conteudo}, atualizado_em = now()
+                    WHERE tenant_id = tenant_atual() AND canal_id = ${atual.canal_id}`
+        }
+        await auditar(tx, {
+          atorId: autor.autorId, atorStaff: autor.autorStaff, acao: 'conhecimento.restaurado', entidade: 'conhecimento_documento',
+          entidadeId: atual.id,
+          dados: { versaoAnterior: atual.versao, versao: snap!.versao, restauradaDe: c.versao, ...(c.observacao ? { observacao: c.observacao } : {}) },
+        })
+        const [linha] = await SELECT_DOCUMENTO_SAIDA(tx, atual.id)
+        return { doc: linha! }
+      })
+      if ('doc' in r) return reply.send({ ...paraSaida(r.doc), restauradaDe: c.versao })
+      switch (r.erro) {
+        case 'nao_encontrado': return reply.code(404).send({ erro: 'conhecimento.nao_encontrado' })
+        case 'versao_anterior_ao_historico':
+          return reply.code(422).send({
+            erro: 'conhecimento.versao_anterior_ao_historico',
+            mensagem: 'Esta versão foi sobrescrita antes de o histórico existir — não há texto para restaurar.', campos: ['versao'],
+          })
+        case 'versao_nao_encontrada':
+          return reply.code(422).send({ erro: 'conhecimento.versao_nao_encontrada', mensagem: 'Este documento não tem essa versão.', campos: ['versao'] })
+        case 'igual_a_atual':
+          return reply.code(422).send({
+            erro: 'conhecimento.restaurar_sem_mudanca',
+            mensagem: 'Essa versão tem o mesmo título e texto da versão atual — não há o que restaurar.', campos: ['versao'],
+          })
+      }
     },
   )
 
