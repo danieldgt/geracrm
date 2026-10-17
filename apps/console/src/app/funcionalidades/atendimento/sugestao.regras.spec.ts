@@ -31,6 +31,7 @@ describe('Painel de sugestão — quem pediu', () => {
     expect(tituloDaSugestao({ origem: 'copiloto', pedidaPor: { nome: 'Ana', porMim: true } })).toBe('Sugestão que você pediu')
     expect(tituloDaSugestao({ origem: 'copiloto', pedidaPor: { nome: 'Bia', porMim: false } })).toBe('Sugestão pedida por Bia')
     expect(tituloDaSugestao({ origem: 'copiloto', pedidaPor: { nome: null, porMim: false } })).toBe('Sugestão pedida por outro vendedor')
+    expect(tituloDaSugestao({ origem: 'copiloto', pedidaPor: null })).toBe('Sugestão do copiloto')
   })
 })
 

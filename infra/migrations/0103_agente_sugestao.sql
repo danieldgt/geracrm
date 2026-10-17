@@ -64,3 +64,25 @@ COMMENT ON COLUMN agente_decisao.sugestao_similaridade IS
     'P13: similaridade sugerido × enviado, Jaccard de palavras significativas (shared similaridadeTextos).';
 COMMENT ON COLUMN agente_decisao.sombra_similaridade IS
     'P13: em sombra, similaridade entre a resposta que o robô daria e a 1ª mensagem humana seguinte.';
+
+-- CONCESSÃO DO COPILOTO: uma geração por conversa, entre INSTÂNCIAS, sem conexão presa.
+-- Quem pega a concessão grava `expira_em` (prazo do turno + folga) e um `token`; a próxima
+-- geração só entra se a linha não existe ou já expirou (INSERT … ON CONFLICT DO UPDATE WHERE
+-- expira_em < now()). Soltar = DELETE pelo token. Processo que morreu: a concessão expira sozinha.
+-- ⚠️ Não é advisory lock de sessão: segurar uma conexão do pool por geração esgotava o pool
+--    com N copilotos simultâneos (revisão P13).
+CREATE TABLE copiloto_geracao (
+    tenant_id   uuid        NOT NULL REFERENCES tenant(id) ON DELETE CASCADE,
+    conversa_id uuid        NOT NULL,
+    token       uuid        NOT NULL,
+    expira_em   timestamptz NOT NULL,
+    criado_em   timestamptz NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (tenant_id, conversa_id),
+    FOREIGN KEY (tenant_id, conversa_id) REFERENCES conversa (tenant_id, id) ON DELETE CASCADE
+);
+
+SELECT aplicar_rls('copiloto_geracao');
+
+COMMENT ON TABLE copiloto_geracao IS
+    'P13: concessão com TTL de uma geração de copiloto por conversa (entre instâncias). Linha some ao terminar.';

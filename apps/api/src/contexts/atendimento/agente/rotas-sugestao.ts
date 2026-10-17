@@ -66,6 +66,10 @@ export async function rotasSugestao(app: FastifyInstance, opcoes: { copiloto?: O
           return reply.code(409).send({ erro: 'agente.desligado', mensagem: 'Agente desligado — sugestão indisponível.' })
         case 'em_andamento':
           return reply.code(409).send({ erro: 'copiloto.em_andamento', mensagem: 'Já estou preparando uma sugestão para esta conversa.' })
+        case 'ocupado':
+          return reply.code(503).header('retry-after', '5').send({
+            erro: 'copiloto.ocupado', mensagem: 'O assistente está atendendo outros pedidos agora. Tente de novo em alguns segundos.',
+          })
         case 'sem_sugestao':
           return reply.code(409).send({
             erro: 'copiloto.sem_sugestao', motivo: r.motivo, resumo: r.resumo,

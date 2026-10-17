@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { contarVariaveis, primeiroNome, templateDeRetornoCompativel } from '@geracrm/shared'
-import { comTenantServico, type Sql } from '../../db/index.js'
+import { comTenantServico, emSavepoint, type Sql } from '../../db/index.js'
 import { decifrar } from '../integracao/cofre.js'
 import { criarCanal } from './canais/fabrica.js'
 import { enviarPeloGateway, type ContextoEnvio } from './canais/gateway.js'
@@ -25,6 +25,12 @@ import { registrarAvisoSeExibido } from './agente/privacidade.js'
 export interface OpcoesEnvioTemplate {
   readonly ehDisparo?: boolean
   readonly marcador?: string
+  /**
+   * Quem está exibindo o aviso de privacidade, se o template o contiver (P4/P13). EXPLÍCITO, não
+   * deduzido do marcador. Padrão 'agente': hoje o único chamador é o retorno do agente (P11);
+   * um envio de template por pessoa passa 'humano'.
+   */
+  readonly origemAviso?: 'agente' | 'humano'
 }
 
 interface Preparo {
@@ -119,11 +125,17 @@ export async function enviarTemplateNaConversa(
       VALUES (tenant_atual(), 'mensagem.status', 'conversa', ${conversaId},
               ${JSON.stringify({ conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
     // P13/P4: template com o aviso de privacidade também é prova de exibição — só com envio ok.
+    // ⚠️ Em savepoint + try/catch: falha do registro (acessório) não pode desfazer o STATUS do
+    //    envio (principal) — a mensagem já saiu, e a tela precisa saber.
     if (r.ok) {
-      await registrarAvisoSeExibido(tx, {
-        envio: { ok: true, mensagemId: preparo.mensagemId }, contatoId: preparo.contatoId, conversaId, canalId: preparo.canalId,
-        texto: preparo.renderizado, origem: opcoes.marcador ? 'agente' : 'humano', agora,
-      })
+      try {
+        await emSavepoint(tx, (sp) => registrarAvisoSeExibido(sp, {
+          envio: { ok: true, mensagemId: preparo.mensagemId }, contatoId: preparo.contatoId, conversaId, canalId: preparo.canalId,
+          texto: preparo.renderizado, origem: opcoes.origemAviso ?? 'agente', agora,
+        }))
+      } catch (erro) {
+        console.warn(JSON.stringify({ nivel: 'warn', contexto: 'envio-template', evento: 'aviso_privacidade_falhou', conversaId, erro: String(erro).slice(0, 200) }))
+      }
     }
   })
 

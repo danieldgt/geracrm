@@ -1,4 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
+
+// ⚠️ POOL PEQUENO DE PROPÓSITO (revisão P13): 5 conexões, teto de copiloto 3. Com o antigo
+//    `sql.reserve()` por geração, N copilotos em paralelo prendiam o pool e a instância travava.
+//    `vi.hoisted` roda antes dos imports, então o pool de db/index.ts nasce com este tamanho.
+vi.hoisted(() => { process.env.DB_POOL_MAX = '5' })
 import postgres from 'postgres'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { PRAZO_COPILOTO_MS } from '@geracrm/shared'
@@ -8,7 +13,7 @@ import { cifrar } from '../../integracao/cofre.js'
 import { pluginTenant } from '../../../plugins/tenant.js'
 import { rotasSugestao } from './rotas-sugestao.js'
 import { conduzirTurnoVendedor } from './vendedor.js'
-import { modoDoCopiloto } from './sugestao.js'
+import { MAX_COPILOTOS_SIMULTANEOS, copilotosEmAndamento, modoDoCopiloto } from './sugestao.js'
 import { despacharParaTeste, assinar } from '../eventos/barramento.js'
 import type { PortaLlmFerramentas, ResultadoLaco } from './porta-llm.js'
 import type { Ligacoes } from './ferramentas/ligacoes-porta.js'
@@ -135,7 +140,7 @@ beforeAll(async () => {
 })
 beforeEach(async () => {
   enviadosAoCanal.length = 0
-  for (const t of ['agente_decisao', 'agente_sessao', 'agente_tarefa', 'atendimento', 'aviso_privacidade', 'cliente_memoria', 'mensagem', 'outbox']) {
+  for (const t of ['agente_decisao', 'agente_sessao', 'agente_tarefa', 'atendimento', 'aviso_privacidade', 'cliente_memoria', 'copiloto_geracao', 'mensagem', 'outbox']) {
     for (const ten of [T, OUTRO]) await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${ten}'`)
   }
   await configurar('assistido')
@@ -494,18 +499,58 @@ describe('Copiloto — concorrência, atraso e autoria', () => {
     await dono`DELETE FROM usuario WHERE tenant_id = ${T} AND cognito_sub = 'sub-p13-bia'`
   })
 
-  it('trava ENTRE instâncias: com o advisory lock da conversa tomado por outra conexão, a geração é recusada', async () => {
-    const outra = postgres(process.env.DATABASE_ADMIN_URL!, { max: 1, onnotice: () => {} })
-    try {
-      await outra`SELECT pg_advisory_lock(hashtext(${`${T}:${CONVERSA}`}))`
-      const a = await appCom(llmQueDiz('x'), 1000)
-      const r = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)
-      expect((r.json() as { erro: string }).erro).toBe('copiloto.em_andamento')
-      await outra`SELECT pg_advisory_unlock(hashtext(${`${T}:${CONVERSA}`}))`
-      expect((await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)).statusCode).toBe(200)
-      await a.close()
-    } finally {
-      await outra.end()
+  it('concessão por conversa ENTRE instâncias: linha viva → em_andamento; linha expirada → assume', async () => {
+    await dono`INSERT INTO copiloto_geracao (tenant_id, conversa_id, token, expira_em)
+               VALUES (${T}, ${CONVERSA}, ${crypto.randomUUID()}, now() + interval '1 minute')`
+    const a = await appCom(llmQueDiz('x'), 1000)
+    expect((await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)).json()).toMatchObject({ erro: 'copiloto.em_andamento' })
+    // Outra instância morreu no meio: a concessão expira e a próxima geração entra.
+    await dono`UPDATE copiloto_geracao SET expira_em = now() - interval '1 second' WHERE tenant_id = ${T} AND conversa_id = ${CONVERSA}`
+    expect((await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)).statusCode).toBe(200)
+    // Terminou: a concessão some (DELETE pelo token).
+    expect(await contar('copiloto_geracao')).toBe(0)
+    await a.close()
+  })
+
+  it('N gerações paralelas com pool pequeno: só o teto do processo entra (503 copiloto.ocupado), nada trava e o inbox segue respondendo', async () => {
+    const N = 7
+    const conversas: string[] = []
+    for (let i = 0; i < N; i++) {
+      const contato = crypto.randomUUID(), conversa = crypto.randomUUID()
+      await dono`INSERT INTO contato (tenant_id, id, nome, ativo) VALUES (${T}, ${contato}, ${`Paralelo ${i}`}, true)`
+      await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${conversa}, ${CANAL}, ${contato}, 1)`
+      conversas.push(conversa)
+    }
+    expect(MAX_COPILOTOS_SIMULTANEOS).toBeLessThan(5) // abaixo do pool
+    const a = await appCom(llmLento(400), 3000)
+    const pedidos = conversas.map((c) => chamar(T, 'POST', `/v1/conversas/${c}/sugestao/gerar`, undefined, a))
+    // Enquanto as gerações rodam, a instância continua atendendo leitura do inbox.
+    await new Promise((res) => setTimeout(res, 100))
+    const inicio = Date.now()
+    const g = await chamar(T, 'GET', `/v1/conversas/${CONVERSA}/sugestao`, undefined, a)
+    expect(g.statusCode).toBe(200)
+    expect(Date.now() - inicio).toBeLessThan(1000)
+    const rs = await Promise.all(pedidos)
+    const ocupados = rs.filter((r) => r.statusCode === 503)
+    expect(ocupados.length).toBe(N - MAX_COPILOTOS_SIMULTANEOS)
+    expect(ocupados[0]!.json()).toMatchObject({ erro: 'copiloto.ocupado' })
+    expect(rs.filter((r) => r.statusCode !== 503).length).toBe(MAX_COPILOTOS_SIMULTANEOS)
+    await new Promise((res) => setTimeout(res, 200))
+    expect(copilotosEmAndamento()).toBe(0)
+    expect(await contar('copiloto_geracao')).toBe(0)
+    await a.close()
+    await dono`DELETE FROM agente_decisao WHERE tenant_id = ${T} AND conversa_id = ANY(${conversas}::uuid[])`
+    await dono`DELETE FROM conversa WHERE tenant_id = ${T} AND id = ANY(${conversas}::uuid[])`
+    await dono`DELETE FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Paralelo %'`
+  })
+
+  it('copiloto ainda sem o carimbo de quem pediu não aparece no GET (ninguém lê "você pediu" por engano)', async () => {
+    const d = await decisao({ modo: 'copiloto', mensagens: ['sugestão sem dono ainda'] })
+    expect(((await chamar(T, 'GET', `/v1/conversas/${CONVERSA}/sugestao`)).json() as { sugestao: unknown }).sugestao).toBeNull()
+    const [u] = await dono<{ id: string }[]>`SELECT id FROM usuario WHERE tenant_id = ${T} LIMIT 1`
+    if (u) {
+      await dono`UPDATE agente_decisao SET sugestao_pedida_por = ${u.id} WHERE tenant_id = ${T} AND id = ${d}`
+      expect(((await chamar(T, 'GET', `/v1/conversas/${CONVERSA}/sugestao`)).json() as { sugestao: { decisaoId: string } }).sugestao.decisaoId).toBe(d)
     }
   })
 

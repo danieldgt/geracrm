@@ -6,7 +6,7 @@ import {
   type ContagensSugestao, type MarcaGuardrail, type MetricasSugestoes, type ModoAgente,
   type OrigemSugestao, type SugestaoVigente,
 } from '@geracrm/shared'
-import { comTenantServico, sql, type Sql } from '../../../db/index.js'
+import { comTenantServico, type Sql } from '../../../db/index.js'
 import { conduzirTurnoVendedor, type DepsTurno, type ResultadoTurnoVendedor } from './vendedor.js'
 import { ligacoesPadrao } from './ferramentas/ligacoes.js'
 import { modoEfetivoSeguro } from './pipeline/modo-efetivo.js'
@@ -94,6 +94,10 @@ export async function lerSugestaoVigente(tx: Sql, conversaId: string, euId: stri
       FROM agente_decisao d
      WHERE d.tenant_id = tenant_atual() AND d.conversa_id = ${conversaId}
        AND d.sugestao_estado IS NULL AND ${ehSugestao(tx)}
+       -- Copiloto só aparece DEPOIS de carimbado com quem pediu: a decisão é gravada pelo turno
+       -- (vendedor.ts, raia P0) e o carimbo vem logo em seguida; sem este filtro, nesse intervalo
+       -- outro vendedor leria "Sugestão que você pediu".
+       AND (d.modo <> 'copiloto' OR d.sugestao_pedida_por IS NOT NULL)
        AND NOT EXISTS (SELECT 1 FROM mensagem m
                         WHERE m.tenant_id = d.tenant_id AND m.conversa_id = d.conversa_id
                           AND m.criado_em > d.criado_em AND ${ehHumana(tx)})
@@ -144,6 +148,7 @@ export type ResultadoCopiloto =
   | { readonly tipo: 'sem_configuracao' }
   | { readonly tipo: 'desligado' }
   | { readonly tipo: 'em_andamento' }
+  | { readonly tipo: 'ocupado' }
   | { readonly tipo: 'indisponivel'; readonly detalhe: string }
   | { readonly tipo: 'sem_sugestao'; readonly motivo: string; readonly resumo: string | null }
 
@@ -156,27 +161,38 @@ export interface OpcoesCopiloto {
 
 const TEMPO_ESGOTADO = Symbol('tempo_esgotado')
 
+/** Folga da concessão além do prazo do copiloto: o turno pode seguir depois do 502. */
+const FOLGA_CONCESSAO_MS = 60_000
+
 /**
- * TRAVA POR CONVERSA ENTRE INSTÂNCIAS: advisory lock de SESSÃO numa conexão reservada, chave
- * `hashtext(tenant:conversa)`. Devolve a função que solta, ou null se outra instância já gera.
- *
- * ⚠️ De sessão, não `pg_try_advisory_xact_lock`: a trava de transação exigiria uma transação
- *    aberta durante a chamada ao modelo (até 20 s ou mais) — proibido (geracrm-arquitetura:
- *    nunca aguardar rede externa com transação aberta). A conexão reservada não segura snapshot
- *    nem lock de linha; só a chave da trava. Se o processo morrer, o Postgres solta junto.
+ * Teto de copilotos rodando ao mesmo tempo NESTE processo (inclusive os que seguem depois do
+ * prazo). Cada turno usa conexões do pool entre as chamadas ao modelo; o teto fica bem abaixo de
+ * `DB_POOL_MAX` (padrão 10) para o inbox nunca ficar sem conexão. Acima dele: 503 `copiloto.ocupado`.
  */
-async function travarConversa(tenantId: string, conversaId: string): Promise<(() => Promise<void>) | null> {
-  const con = await sql.reserve()
-  try {
-    const chave = `${tenantId}:${conversaId}`
-    const [t] = await con<{ ok: boolean }[]>`SELECT pg_try_advisory_lock(hashtext(${chave})) AS ok`
-    if (!t?.ok) { con.release(); return null }
-    return async () => {
-      try { await con`SELECT pg_advisory_unlock(hashtext(${chave}))` } finally { con.release() }
-    }
-  } catch (e) {
-    con.release()
-    throw e
+export const MAX_COPILOTOS_SIMULTANEOS = Math.max(1, Number(process.env.COPILOTO_MAX_SIMULTANEOS ?? 3))
+let copilotosAtivos = 0
+
+/** Quantos copilotos este processo está rodando agora (observabilidade e testes). */
+export function copilotosEmAndamento(): number { return copilotosAtivos }
+
+/**
+ * CONCESSÃO POR CONVERSA ENTRE INSTÂNCIAS (tabela `copiloto_geracao`, 0103): uma linha com TTL, sem
+ * conexão presa e sem transação aberta durante o modelo. Pega se a linha não existe ou expirou;
+ * devolve a função que solta (DELETE pelo token — nunca apaga a concessão de outro), ou null.
+ */
+async function pegarConcessao(tenantId: string, conversaId: string, ttlMs: number): Promise<(() => Promise<void>) | null> {
+  const token = randomUUID()
+  const pegou = await comTenantServico(tenantId, async (tx) => (await tx<{ token: string }[]>`
+    INSERT INTO copiloto_geracao (tenant_id, conversa_id, token, expira_em)
+    VALUES (tenant_atual(), ${conversaId}, ${token}, now() + make_interval(secs => ${ttlMs / 1000}))
+    ON CONFLICT (tenant_id, conversa_id) DO UPDATE
+       SET token = EXCLUDED.token, expira_em = EXCLUDED.expira_em, criado_em = now()
+     WHERE copiloto_geracao.expira_em < now()
+    RETURNING token`).length > 0)
+  if (!pegou) return null
+  return async () => {
+    await comTenantServico(tenantId, (tx) => tx`
+      DELETE FROM copiloto_geracao WHERE tenant_id = tenant_atual() AND conversa_id = ${conversaId} AND token = ${token}`)
   }
 }
 
@@ -204,8 +220,22 @@ export async function gerarCopiloto(
   if (modo === null) return { tipo: 'sem_configuracao' }
   if (modo === 'desligado') return { tipo: 'desligado' }
 
-  const soltar = await travarConversa(tenantId, conversaId)
-  if (!soltar) return { tipo: 'em_andamento' }
+  // Teto do processo ANTES da concessão: recusar aqui não deixa linha para trás.
+  if (copilotosAtivos >= MAX_COPILOTOS_SIMULTANEOS) return { tipo: 'ocupado' }
+  copilotosAtivos++
+  let soltarConcessao: (() => Promise<void>) | null
+  try {
+    soltarConcessao = await pegarConcessao(tenantId, conversaId, (opcoes.prazoMs ?? PRAZO_COPILOTO_MS) + FOLGA_CONCESSAO_MS)
+  } catch (e) {
+    copilotosAtivos--
+    throw e
+  }
+  if (!soltarConcessao) { copilotosAtivos--; return { tipo: 'em_andamento' } }
+  const concessao = soltarConcessao
+  const soltar = async (): Promise<void> => {
+    copilotosAtivos--
+    await concessao()
+  }
 
   let entrantes: string[]
   try {

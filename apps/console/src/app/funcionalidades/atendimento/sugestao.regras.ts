@@ -3,7 +3,9 @@ import type { ModoAgente, RespostaSugestao, SugestaoVigente } from '@geracrm/sha
 /** Título do cartão: quem trouxe a sugestão (o agente, eu, ou outro vendedor pelo nome). */
 export function tituloDaSugestao(s: Pick<SugestaoVigente, 'origem' | 'pedidaPor'>): string {
   if (s.origem !== 'copiloto') return 'Sugestão do agente'
-  if (!s.pedidaPor || s.pedidaPor.porMim) return 'Sugestão que você pediu'
+  // Sem autoria conhecida: neutro — nunca afirmar "você pediu" sem saber.
+  if (!s.pedidaPor) return 'Sugestão do copiloto'
+  if (s.pedidaPor.porMim) return 'Sugestão que você pediu'
   return s.pedidaPor.nome ? `Sugestão pedida por ${s.pedidaPor.nome}` : 'Sugestão pedida por outro vendedor'
 }
 

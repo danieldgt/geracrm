@@ -280,9 +280,10 @@ import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.
                    Só onde dá para responder: ausente ou janela fechada não têm o que fazer
                    com uma sugestão. O texto vem por API (o evento SSE só avisa). -->
               @if (!presenca.ausente() && (!t.exigeJanela24h || janelaAberta(t.janela.estado))) {
-                <!-- aria-live polite: a sugestão que CHEGA é anunciada uma vez, sem interromper;
-                     role=alert fica só para "não envie assim" e opt-out. -->
-                <section class="sug" aria-label="Sugestão do agente" aria-live="polite">
+                <!-- aria-live polite SÓ no cartão: a sugestão que chega é anunciada uma vez, sem
+                     interromper (selo, botões e erros não são relidos); role=alert fica só para
+                     "não envie assim" e opt-out. -->
+                <section class="sug" aria-label="Sugestão do agente">
                   @switch (sugestao.estado()) {
                     @case ('carregando') { <div class="sug-esqueleto" aria-busy="true" aria-label="Carregando sugestão"></div> }
                     @case ('sem_permissao') {
@@ -303,7 +304,7 @@ import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.
                               Confirme com ele e bloqueie em <a routerLink="/bloqueios">Opt-out / Bloqueios</a> — nada foi bloqueado ainda.
                             </div>
                           }
-                          <div class="sug-cartao" [class.critica]="s.naoEnvie">
+                          <div class="sug-cartao" [class.critica]="s.naoEnvie" aria-live="polite">
                             <div class="sug-topo">
                               <span class="sug-titulo">{{ tituloSugestao(s) }}</span>
                               <span class="selo" [title]="dicaModo(r.modoAgente)">{{ rotuloModo(r.modoAgente) }}</span>
