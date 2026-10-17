@@ -2,18 +2,20 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import postgres from 'postgres'
 import { PERSONA_PADRAO } from '@geracrm/shared'
 import { encerrarBanco } from '../../../../db/index.js'
-import { conduzirTurnoVendedor } from '../vendedor.js'
+import { conduzirTurnoVendedor, type DepsTurno } from '../vendedor.js'
 import type { Tarefa } from '../fila.js'
 import type { PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
 import type { Ligacoes } from '../ferramentas/ligacoes-porta.js'
 import { enviarTextoNaConversa, enviarTextoParaContato } from '../../envio-conversa.js'
-import { criarEtapaGatilhosEntrada } from './gatilhos-entrada.js'
-import type { ContextoPipeline } from './tipos.js'
+import { etapaGatilhosEntrada } from './gatilhos-entrada.js'
+import type { ContextoPipeline, EtapaPosResposta } from './tipos.js'
 
 /**
- * GATILHOS DE ENTRADA (raia P4) — no turno de verdade, com banco real e
- * WhatsApp falso: o que não passa pelo modelo, o que é bloqueado e o que é
- * enviado. ⚠️ A prova central: depois do opt-out NENHUM caminho entrega.
+ * GATILHOS DE ENTRADA (raia P4) — no turno de verdade, com o PIPELINE PADRÃO,
+ * banco real e WhatsApp falso. A etapa não envia nada: tudo sai pelo rabo
+ * comum do turno. ⚠️ Provas centrais: falso opt-out não bloqueia; depois do
+ * opt-out NENHUM caminho entrega; a confirmação sai ANTES do bloqueio; o aviso
+ * de privacidade só é registrado com envio aceito.
  */
 const T = 'b4a40000-0000-4000-8000-000000000001'
 const PV = 'b4a40000-1111-4000-8000-000000000001'
@@ -22,23 +24,25 @@ const MODELO = 'b4a40000-4444-4000-8000-000000000001'
 const CANAL = 'b4a40000-5555-4000-8000-000000000001'
 const CONTATO = 'b4a40000-6666-4000-8000-000000000001'
 const CONVERSA = 'b4a40000-7777-4000-8000-000000000001'
+/** Contato SEM telefone (Instagram, estrangeiro sem chave). */
+const CONTATO_SEM_TEL = 'b4a40000-6666-4000-8000-000000000002'
+const CONVERSA_SEM_TEL = 'b4a40000-7777-4000-8000-000000000002'
 const CHAVE = '5585988880401'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
 const SEMPRE_FECHADO = { seg: null, ter: null, qua: null, qui: null, sex: null, sab: null, dom: null }
 
 /** WhatsApp falso: registra o texto e, no momento do envio, se o número JÁ estava bloqueado. */
-const enviados: { texto: string; bloqueadoNaHora: boolean; marcador: string | undefined }[] = []
+const enviados: { texto: string; bloqueadoNaHora: boolean; conversa: string }[] = []
 let envioFalha = false
-const enviarFalso = (async (_t: string, _c: string, texto: string, _n: unknown, _a: unknown, op?: { marcador?: string }) => {
+const enviarFalso = (async (_t: string, conversa: string, texto: string, _n: unknown, _a: unknown, op?: { marcador?: string }) => {
   const [b] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM lista_bloqueio WHERE tenant_id = ${T}`
-  enviados.push({ texto, bloqueadoNaHora: (b?.n ?? 0) > 0, marcador: op?.marcador })
-  if (envioFalha) return { ok: false, classe: 'transporte', motivo: 'provedor_fora', conversaId: CONVERSA }
+  enviados.push({ texto, bloqueadoNaHora: (b?.n ?? 0) > 0, conversa })
+  if (envioFalha) return { ok: false, classe: 'transporte', motivo: 'provedor_fora', conversaId: conversa }
   const id = crypto.randomUUID()
-  // Como o gateway faria: a mensagem existe no histórico com o marcador.
   await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status)
-             VALUES (${T}, ${id}, ${CONVERSA}, 'saliente', 'texto', ${JSON.stringify({ texto, automatica: op?.marcador })}::text::jsonb, 'enviada')`
-  return { ok: true, conversaId: CONVERSA, mensagemId: id }
+             VALUES (${T}, ${id}, ${conversa}, 'saliente', 'texto', ${JSON.stringify({ texto, automatica: op?.marcador })}::text::jsonb, 'enviada')`
+  return { ok: true, conversaId: conversa, mensagemId: id }
 }) as never
 
 let chamadasLlm = 0
@@ -50,7 +54,6 @@ const llm: PortaLlmFerramentas = {
   },
 }
 const ligacoes = async (): Promise<Ligacoes> => ({ conhecimento: { async buscar() { return { trechos: [] } } } })
-const pipeline = { gatilhos: criarEtapaGatilhosEntrada({ enviar: enviarFalso }) }
 
 const configurar = (modo: string) => dono`
   INSERT INTO agente_config (tenant_id, canal_id, ativo, modo, politicas, so_quando_ninguem_disponivel, exigir_ausencia_antes, persona, alcada)
@@ -58,19 +61,34 @@ const configurar = (modo: string) => dono`
           ${JSON.stringify({ nome: 'Lia', loja: 'Loja Gatilho' })}::text::jsonb, '{}'::jsonb)
   ON CONFLICT (tenant_id, canal_id) DO UPDATE SET modo = EXCLUDED.modo, ativo = EXCLUDED.ativo`
 
-const mensagemDoCliente = async (texto: string, tipo = 'texto', extra: Record<string, unknown> = {}): Promise<string> => {
+const mensagemDoCliente = async (texto: string, tipo = 'texto', extra: Record<string, unknown> = {}, conversa = CONVERSA): Promise<string> => {
   const id = crypto.randomUUID()
   await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-             VALUES (${T}, ${id}, ${CONVERSA}, 'entrante', ${tipo}, ${JSON.stringify({ texto, ...extra })}::text::jsonb, now())`
+             VALUES (${T}, ${id}, ${conversa}, 'entrante', ${tipo}, ${JSON.stringify({ texto, ...extra })}::text::jsonb, now())`
   return id
 }
-const turno = async (ids: string[]) => conduzirTurnoVendedor(
-  { tenant_id: T, id: crypto.randomUUID(), conversa_id: CONVERSA, canal_id: CANAL, mensagens_ids: ids, tentativas: 1, executar_em: new Date() } as Tarefa,
-  { llm, ligacoes, enviar: enviarFalso, pipeline },
+const turno = async (ids: string[], extra: Partial<DepsTurno> = {}, conversa = CONVERSA) => conduzirTurnoVendedor(
+  { tenant_id: T, id: crypto.randomUUID(), conversa_id: conversa, canal_id: CANAL, mensagens_ids: ids, tentativas: 1, executar_em: new Date() } as Tarefa,
+  { llm, ligacoes, enviar: enviarFalso, ...extra },
 )
-const ultimaDecisao = async () => (await dono<{ desfecho: string; handoff_motivo: string | null; portao_motivo: string | null; guardrails: { codigo: string; gravidade: string }[] }[]>`
-  SELECT desfecho, handoff_motivo, portao_motivo, guardrails FROM agente_decisao WHERE tenant_id = ${T} ORDER BY criado_em DESC LIMIT 1`)[0]!
-const sessoes = () => dono<{ estado: string; turnos: number }[]>`SELECT estado, turnos FROM agente_sessao WHERE tenant_id = ${T}`
+const diz = async (texto: string, extra: Partial<DepsTurno> = {}) => turno([await mensagemDoCliente(texto)], extra)
+type Decisao = { desfecho: string; enviada: boolean; handoff_motivo: string | null; portao_motivo: string | null; mensagens_saida_ids: string[]; resposta: { mensagens: string[] } | null; guardrails: { codigo: string; gravidade: string; acao: string }[] }
+const ultimaDecisao = async () => (await dono<Decisao[]>`
+  SELECT desfecho, enviada, handoff_motivo, portao_motivo, mensagens_saida_ids, resposta, guardrails FROM agente_decisao WHERE tenant_id = ${T} ORDER BY criado_em DESC LIMIT 1`)[0]!
+const codigos = (d: Decisao) => d.guardrails.map((g) => g.codigo)
+const bloqueios = async () => (await dono`SELECT 1 FROM lista_bloqueio WHERE tenant_id = ${T}`).length
+const avisos = () => dono<{ versao: string; origem: string; texto: string; mensagem_id: string }[]>`
+  SELECT versao, origem, texto, mensagem_id FROM aviso_privacidade WHERE tenant_id = ${T} ORDER BY exibido_em`
+/** Sessão encerrada há 30 dias: a trava de reabertura do portão já venceu, o próximo turno abre sessão nova. */
+const encerrarSessoes = async () => {
+  await dono`UPDATE agente_sessao SET estado = 'encerrada', motivo_saida = 'teste', encerrada_em = now() - interval '30 days'
+              WHERE tenant_id = ${T} AND estado = 'ativa'`
+  await dono`UPDATE agente_sessao SET encerrada_em = now() - interval '30 days' WHERE tenant_id = ${T}`
+}
+/** Contato com aviso VIGENTE: a abertura não aparece (para isolar os outros casos). */
+const avisoVigente = () => dono`
+  INSERT INTO aviso_privacidade (tenant_id, id, contato_id, conversa_id, canal_id, mensagem_id, texto, versao, origem)
+  VALUES (${T}, gen_random_uuid(), ${CONTATO}, ${CONVERSA}, ${CANAL}, gen_random_uuid(), 'Esta conversa fica registrada.', 'padrao', 'agente')`
 
 beforeAll(async () => {
   await dono`INSERT INTO plano (id, codigo, nome) VALUES (${PLANO}, 'plano-gatilhos-entrada', 'Pro') ON CONFLICT DO NOTHING`
@@ -82,21 +100,21 @@ beforeAll(async () => {
   })
   await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado) VALUES (${T}, ${CANAL}, 'whatsapp_nao_oficial', 'Loja', 'conectado') ON CONFLICT DO NOTHING`
   await dono`INSERT INTO canal_configuracao (tenant_id, canal_id, horario_atendimento) VALUES (${T}, ${CANAL}, ${JSON.stringify(SEMPRE_FECHADO)}::text::jsonb) ON CONFLICT DO NOTHING`
-  await dono`INSERT INTO contato (tenant_id, id, nome, ativo) VALUES (${T}, ${CONTATO}, 'Ana Compradora', true) ON CONFLICT DO NOTHING`
+  await dono`INSERT INTO contato (tenant_id, id, nome, ativo) VALUES (${T}, ${CONTATO}, 'Ana Compradora', true), (${T}, ${CONTATO_SEM_TEL}, 'Sem Telefone', true) ON CONFLICT DO NOTHING`
   await dono`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
              VALUES (${T}, ${CONTATO}, 1, ${CHAVE}, ${CHAVE}, true, true, 'teste') ON CONFLICT DO NOTHING`
-  await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${CONVERSA}, ${CANAL}, ${CONTATO}, 1) ON CONFLICT DO NOTHING`
+  await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${CONVERSA}, ${CANAL}, ${CONTATO}, 1), (${T}, ${CONVERSA_SEM_TEL}, ${CANAL}, ${CONTATO_SEM_TEL}, 1) ON CONFLICT DO NOTHING`
 })
 beforeEach(async () => {
   enviados.length = 0; chamadasLlm = 0; envioFalha = false
-  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_retorno', 'agente_sessao', 'notificacao', 'mensagem', 'atendimento', 'aviso_privacidade', 'lista_bloqueio', 'consentimento_contato', 'tenant_privacidade', 'outbox']) {
+  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_retorno', 'agente_sessao', 'notificacao', 'mensagem', 'atendimento', 'aviso_privacidade', 'lista_bloqueio', 'consentimento_contato', 'tenant_privacidade', 'outbox', 'alerta']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`UPDATE contato SET recebe_campanhas = true, recebe_automacoes = true WHERE tenant_id = ${T}`
   await dono`UPDATE conversa SET conduzida_por = 'humano' WHERE tenant_id = ${T}`
 })
 afterAll(async () => {
-  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_retorno', 'agente_sessao', 'agente_config', 'notificacao', 'auditoria', 'aviso_privacidade', 'lista_bloqueio', 'consentimento_contato', 'tenant_privacidade', 'atendimento', 'mensagem', 'conversa', 'contato_telefone', 'contato', 'canal_configuracao', 'canal_conectado', 'outbox']) {
+  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_retorno', 'agente_sessao', 'agente_config', 'notificacao', 'auditoria', 'aviso_privacidade', 'lista_bloqueio', 'consentimento_contato', 'tenant_privacidade', 'atendimento', 'mensagem', 'conversa', 'contato_telefone', 'contato', 'canal_configuracao', 'canal_conectado', 'outbox', 'alerta']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${T}`
@@ -107,162 +125,272 @@ afterAll(async () => {
   await encerrarBanco(); await dono.end()
 })
 
-describe('Opt-out — "pare" bloqueia sem LLM', () => {
-  it('dado "pare" em autônomo, então confirma ANTES de bloquear, bloqueia, cancela retornos, encerra a sessão e não chama o modelo', async () => {
+describe('Opt-out em autônomo — "pare" bloqueia sem LLM, DEPOIS da confirmação', () => {
+  it('confirma pelo rabo do turno, bloqueia, cancela retornos, encerra a sessão SEM fila e deixa nota + alerta', async () => {
     await configurar('autonomo')
+    await avisoVigente()
     await dono`INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, executar_em, estado)
                VALUES (${T}, gen_random_uuid(), ${CONVERSA}, ${CANAL}, 'proposta_sem_resposta', now() + interval '1 hour', 'pendente')`
-    const r = await turno([await mensagemDoCliente('PARE!')])
+    const r = await diz('PARE!')
 
     expect(chamadasLlm).toBe(0)
-    expect(r.desfecho).toBe('handoff')
-    expect(r.handoff?.motivo).toBe('opt_out')
-    expect(enviados).toHaveLength(1)
-    expect(enviados[0]!.texto).toBe('Certo, Ana. Não vamos mais te enviar mensagens por aqui.')
+    expect(r.desfecho).toBe('respondeu')
+    expect(enviados.map((e) => e.texto)).toEqual(['Certo. Não vamos mais te enviar mensagens por aqui.'])
     expect(enviados[0]!.bloqueadoNaHora).toBe(false) // a confirmação saiu ANTES do bloqueio
+    const d = await ultimaDecisao()
+    expect(d.enviada).toBe(true)
+    expect(d.mensagens_saida_ids).toHaveLength(1)
+    expect(codigos(d)).toContain('opt_out')
 
     const [b] = await dono<{ motivo: string; origem: string }[]>`SELECT motivo, origem FROM lista_bloqueio WHERE tenant_id = ${T} AND chave_bloqueio = ${CHAVE}`
     expect(b).toEqual({ motivo: 'opt_out', origem: 'agente' })
     const [c] = await dono<{ recebe_campanhas: boolean; recebe_automacoes: boolean }[]>`SELECT recebe_campanhas, recebe_automacoes FROM contato WHERE id = ${CONTATO}`
     expect(c).toEqual({ recebe_campanhas: false, recebe_automacoes: false })
-    const consent = await dono<{ tipo: string; origem: string }[]>`SELECT tipo, origem FROM consentimento_contato WHERE tenant_id = ${T} ORDER BY tipo`
-    expect(consent.map((x) => x.tipo)).toEqual(['automacoes', 'campanhas', 'whatsapp'])
-    expect(consent.every((x) => x.origem === 'opt_out_mensagem')).toBe(true)
     const [ret] = await dono<{ estado: string; detalhe: string }[]>`SELECT estado, detalhe FROM agente_retorno WHERE tenant_id = ${T}`
     expect(ret).toEqual({ estado: 'cancelado', detalhe: 'opt_out' })
-    expect((await sessoes()).every((s) => s.estado !== 'ativa')).toBe(true)
-    const d = await ultimaDecisao()
-    expect(d.guardrails.map((g) => g.codigo)).toContain('opt_out')
+    const [s] = await dono<{ estado: string }[]>`SELECT estado FROM agente_sessao WHERE tenant_id = ${T}`
+    expect(s!.estado).toBe('encerrada')
+    expect((await dono`SELECT 1 FROM atendimento WHERE tenant_id = ${T}`).length).toBe(0)
+    const [nota] = await dono<{ conteudo: { automatica: string; texto: string } }[]>`SELECT conteudo FROM mensagem WHERE tenant_id = ${T} AND tipo = 'sistema'`
+    expect(nota!.conteudo.automatica).toBe('opt_out')
+    const [al] = await dono<{ tipo: string; mensagem: string }[]>`SELECT tipo, mensagem FROM alerta WHERE tenant_id = ${T}`
+    expect(al!.tipo).toBe('opt_out_cliente')
+    expect(al!.mensagem).not.toContain(CHAVE)
   })
 
-  it('dado o opt-out registrado, então NENHUM caminho entrega: agente, retorno, conversa e campanha são recusados', async () => {
+  it('confirmação recusada pelo gateway: o bloqueio vale assim mesmo e a falha fica marcada', async () => {
     await configurar('autonomo')
-    await turno([await mensagemDoCliente('não quero mais receber mensagens')])
-    enviados.length = 0
-    const saidasAntes = (await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM mensagem WHERE tenant_id = ${T} AND direcao = 'saliente' AND status = 'enviada'`)[0]!.n
+    await avisoVigente()
+    envioFalha = true
+    await diz('pare')
+    expect(await bloqueios()).toBe(1)
+    expect(codigos(await ultimaDecisao())).toContain('opt_out_confirmacao_nao_enviada')
+  })
 
-    // Caminho 1: o próprio agente, num turno novo (com o atendimento já encerrado pela pessoa).
-    await dono`UPDATE atendimento SET estado = 'encerrado', encerrado_em = now() WHERE tenant_id = ${T}`
-    const r = await turno([await mensagemDoCliente('oi, tem camiseta?')])
-    expect(r.desfecho).toBe('silencio')
+  it('depois do opt-out NENHUM caminho entrega: agente, inbox, retorno e campanha são recusados', async () => {
+    await configurar('autonomo')
+    await avisoVigente()
+    await diz('não quero mais receber mensagens')
+    enviados.length = 0
+    const enviadasAntes = (await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM mensagem WHERE tenant_id = ${T} AND direcao = 'saliente' AND status = 'enviada'`)[0]!.n
+
+    // 1. O próprio agente, num turno novo — logo depois (o portão pode calar antes) e em sessão nova.
+    expect((await diz('oi, tem camiseta?')).desfecho).toBe('silencio')
+    await encerrarSessoes()
+    expect(await diz('oi de novo')).toMatchObject({ desfecho: 'silencio', motivo: 'contato_bloqueado' })
     expect(chamadasLlm).toBe(0)
     expect(enviados).toHaveLength(0)
-
-    // Caminho 2: a etapa, isolada, com o contato bloqueado → silêncio sem estado.
+    // 2. A etapa isolada → silêncio SEM estado.
     const ctx: ContextoPipeline = {
       tenantId: T, conversaId: CONVERSA, canalId: CANAL, contatoId: CONTATO, sessaoId: null, modo: 'autonomo', agora: new Date(),
       cfgExtra: {}, persona: PERSONA_PADRAO, estado: {}, historico: [], primeiraResposta: true, foraDoExpediente: false,
       entrantes: [{ id: crypto.randomUUID(), tipo: 'texto', texto: 'é robô?', transcricaoPendente: false, transcricaoFalhou: false }],
     }
-    expect(await pipeline.gatilhos.executar(ctx)).toEqual({ tipo: 'silencio', motivo: 'contato_bloqueado' })
-
-    // Caminho 3: o gateway único (inbox, resumo de pedido, automação) e a campanha.
-    const naConversa = await enviarTextoNaConversa(T, CONVERSA, 'Oi, Ana! Promoção hoje.', 'Vendedora', new Date(), { ehDisparo: false })
-    expect(naConversa).toMatchObject({ ok: false, classe: 'recusa', motivo: 'bloqueado' })
-    const campanha = await enviarTextoParaContato(T, CANAL, CONTATO, 'Campanha de outubro')
-    expect(campanha).toMatchObject({ ok: false, motivo: 'bloqueado' })
-
-    // Caminho 4: o retorno do agente (follow-up) sai pelo MESMO caminho programático — recusado.
-    // (Não roda `processarRetornos` aqui: o advisory lock global dele disputaria com retorno.test.ts.)
-    const retorno = await enviarTextoNaConversa(T, CONVERSA, 'Ainda tem interesse?', null, new Date(), { ehDisparo: true, marcador: 'retorno' })
-    expect(retorno).toMatchObject({ ok: false, motivo: 'bloqueado' })
-
-    const saidasDepois = (await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM mensagem WHERE tenant_id = ${T} AND direcao = 'saliente' AND status = 'enviada'`)[0]!.n
-    expect(saidasDepois).toBe(saidasAntes)
+    expect(await etapaGatilhosEntrada.executar(ctx)).toEqual({ tipo: 'silencio', motivo: 'contato_bloqueado' })
+    // 3. O gateway único (inbox/resumo de pedido/automação), o retorno (mesmo caminho, marcador 'retorno') e a campanha.
+    expect(await enviarTextoNaConversa(T, CONVERSA, 'Promoção hoje.', 'Vendedora', new Date(), { ehDisparo: false }))
+      .toMatchObject({ ok: false, classe: 'recusa', motivo: 'bloqueado' })
+    expect(await enviarTextoNaConversa(T, CONVERSA, 'Ainda tem interesse?', null, new Date(), { ehDisparo: true, marcador: 'retorno' }))
+      .toMatchObject({ ok: false, motivo: 'bloqueado' })
+    expect(await enviarTextoParaContato(T, CANAL, CONTATO, 'Campanha de outubro')).toMatchObject({ ok: false, motivo: 'bloqueado' })
+    const enviadasDepois = (await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM mensagem WHERE tenant_id = ${T} AND direcao = 'saliente' AND status = 'enviada'`)[0]!.n
+    expect(enviadasDepois).toBe(enviadasAntes)
   })
 
-  it('dado "cancelar pedido", então NÃO é opt-out: o modelo responde e nada é bloqueado', async () => {
+  it('contato SEM telefone (Instagram/estrangeiro): o pedido fica no consentimento e o agente cala depois', async () => {
     await configurar('autonomo')
-    const r = await turno([await mensagemDoCliente('quero cancelar o pedido')])
-    expect(chamadasLlm).toBe(1)
-    expect(r.desfecho).toBe('respondeu')
-    expect((await dono`SELECT 1 FROM lista_bloqueio WHERE tenant_id = ${T}`).length).toBe(0)
+    await turno([await mensagemDoCliente('pare', 'texto', {}, CONVERSA_SEM_TEL)], {}, CONVERSA_SEM_TEL)
+    expect(codigos(await ultimaDecisao())).toContain('opt_out_sem_telefone')
+    expect(await bloqueios()).toBe(0)
+    enviados.length = 0
+    await encerrarSessoes()
+    const r = await turno([await mensagemDoCliente('oi de novo', 'texto', {}, CONVERSA_SEM_TEL)], {}, CONVERSA_SEM_TEL)
+    expect(r).toMatchObject({ desfecho: 'silencio', motivo: 'contato_bloqueado' })
+    expect(enviados).toHaveLength(0)
+  })
+})
+
+describe('Falso opt-out — o erro mais caro', () => {
+  it.each(['não quero receber boleto, só pix', 'pare de me mandar boleto errado', 'chega', 'quero cancelar o pedido', 'me tira dessa lista de espera'])(
+    'dado "%s", então o modelo responde e NADA é bloqueado', async (frase) => {
+      await configurar('autonomo')
+      await avisoVigente()
+      await diz(frase)
+      expect(chamadasLlm).toBe(1)
+      expect(await bloqueios()).toBe(0)
+    })
+
+  it('frase ambígua vai para uma pessoa com a marca possivel_opt_out — nunca bloqueia', async () => {
+    await configurar('autonomo')
+    await avisoVigente()
+    const r = await diz('não quero mais receber essas coisas')
+    expect(chamadasLlm).toBe(0)
+    expect(r.handoff?.motivo).toBe('incerteza')
+    expect(await bloqueios()).toBe(0)
+    const d = await ultimaDecisao()
+    expect(d.guardrails).toContainEqual(expect.objectContaining({ codigo: 'possivel_opt_out', gravidade: 'ALTA' }))
+    expect((await dono`SELECT 1 FROM atendimento WHERE tenant_id = ${T}`).length).toBe(1)
+  })
+})
+
+describe('Opt-out fora do autônomo — o modo diz quem age (ADR-028)', () => {
+  it('sombra: só registra a marca; nada enviado, nada bloqueado', async () => {
+    await configurar('sombra')
+    await diz('pare')
+    expect(enviados).toHaveLength(0)
+    expect(await bloqueios()).toBe(0)
+    const d = await ultimaDecisao()
+    expect(d.guardrails).toContainEqual(expect.objectContaining({ codigo: 'opt_out', acao: 'registrado' }))
   })
 
-  it('dado "pare" em sombra, então bloqueia do mesmo jeito mas o robô não envia nada', async () => {
-    await configurar('sombra')
-    const r = await turno([await mensagemDoCliente('pare')])
-    expect(r.handoff?.motivo).toBe('opt_out')
+  it('assistido: sugere a confirmação com o aviso "confirme"; o bloqueio fica com o humano', async () => {
+    await configurar('assistido')
+    const r = await diz('pare')
+    expect(r.desfecho).toBe('sugeriu')
     expect(enviados).toHaveLength(0)
-    expect(chamadasLlm).toBe(0)
-    expect((await dono`SELECT 1 FROM lista_bloqueio WHERE tenant_id = ${T}`).length).toBe(1)
-    expect((await dono`SELECT 1 FROM atendimento WHERE tenant_id = ${T}`).length).toBe(0)
+    expect(await bloqueios()).toBe(0)
+    const d = await ultimaDecisao()
+    expect(d.resposta!.mensagens).toEqual(['Certo. Não vamos mais te enviar mensagens por aqui.'])
+    expect(d.guardrails).toContainEqual(expect.objectContaining({ codigo: 'opt_out_confirmar', gravidade: 'ALTA' }))
+    expect((await dono`SELECT 1 FROM outbox WHERE tenant_id = ${T} AND tipo = 'agente.sugestao'`).length).toBe(1)
   })
 })
 
 describe('Abertura e aviso de privacidade', () => {
-  it('dado a primeira fala do agente em autônomo, então a abertura identifica a assistente, o aviso é registrado e o modelo responde depois', async () => {
+  it('sessão nova: a abertura vai como PREFIXO pelo rabo do turno, e o aviso é registrado com o id da mensagem aceita', async () => {
     await configurar('autonomo')
     await dono`INSERT INTO tenant_privacidade (tenant_id, url, versao) VALUES (${T}, 'https://loja.test/privacidade', 'v2')`
-    const r = await turno([await mensagemDoCliente('oi, tem camiseta?')])
+    const r = await diz('oi, tem camiseta?')
     expect(r.desfecho).toBe('respondeu')
-    expect(enviados.map((e) => e.marcador)).toEqual(['agente_abertura', 'agente'])
+    expect(chamadasLlm).toBe(1)
+    expect(enviados).toHaveLength(2)
     expect(enviados[0]!.texto).toContain('Sou Lia, assistente virtual da Loja Gatilho')
     expect(enviados[0]!.texto).toContain('https://loja.test/privacidade')
-    const avisos = await dono<{ versao: string; origem: string; texto: string; mensagem_id: string }[]>`
-      SELECT versao, origem, texto, mensagem_id FROM aviso_privacidade WHERE tenant_id = ${T}`
-    expect(avisos).toHaveLength(1)
-    expect(avisos[0]).toMatchObject({ versao: 'v2', origem: 'agente', texto: enviados[0]!.texto })
+    expect(enviados[1]!.texto).toBe('Posso te ajudar com os produtos.')
+    const d = await ultimaDecisao()
+    expect(d.enviada).toBe(true)
+    expect(d.resposta!.mensagens[0]).toBe(enviados[0]!.texto)
+    const a = await avisos()
+    expect(a).toHaveLength(1)
+    expect(a[0]).toMatchObject({ versao: 'v2', origem: 'agente', texto: enviados[0]!.texto, mensagem_id: d.mensagens_saida_ids[0] })
 
-    // Segunda mensagem: o agente já falou — sem nova abertura, sem novo aviso.
+    // Mesma sessão: sem nova abertura.
     enviados.length = 0
-    await turno([await mensagemDoCliente('e calça?')])
-    expect(enviados.map((e) => e.marcador)).toEqual(['agente'])
-    expect((await dono`SELECT 1 FROM aviso_privacidade WHERE tenant_id = ${T}`).length).toBe(1)
+    await diz('e calça?')
+    expect(enviados.map((e) => e.texto)).toEqual(['Posso te ajudar com os produtos.'])
+    expect(await avisos()).toHaveLength(1)
   })
 
-  it('dado o envio da abertura recusado, então o aviso NUNCA é registrado e a falha fica marcada', async () => {
+  it('a abertura passa pelo filtro de saída (P2) como qualquer texto que sai', async () => {
+    await configurar('autonomo')
+    const filtro: EtapaPosResposta = { nome: 'filtro', async executar(_c, e) { return { mensagens: e.mensagens.map((m) => `${m} [filtrado]`), guardrails: [] } } }
+    await diz('oi', { pipeline: { filtro } })
+    expect(enviados[0]!.texto).toMatch(/assistente virtual.*\[filtrado\]$/)
+  })
+
+  it('envio recusado: o aviso NUNCA é registrado', async () => {
     await configurar('autonomo')
     envioFalha = true
-    await turno([await mensagemDoCliente('oi')])
-    expect((await dono`SELECT 1 FROM aviso_privacidade WHERE tenant_id = ${T}`).length).toBe(0)
-    const d = await ultimaDecisao()
-    expect(d.guardrails).toContainEqual(expect.objectContaining({ codigo: 'abertura_nao_enviada', gravidade: 'ALTA' }))
+    await diz('oi')
+    expect(await avisos()).toHaveLength(0)
   })
 
-  it('dado modo sombra, então não há abertura (o robô não fala)', async () => {
-    await configurar('sombra')
-    await turno([await mensagemDoCliente('oi')])
+  it('nova sessão: sem abertura com aviso vigente; com abertura se a versão mudou ou o aviso passou de 180 dias', async () => {
+    await configurar('autonomo')
+    await diz('oi')
+    expect(await avisos()).toHaveLength(1)
+
+    await encerrarSessoes(); enviados.length = 0
+    await diz('voltei')
+    expect(enviados).toHaveLength(1) // só a resposta: aviso vigente
+
+    await encerrarSessoes(); enviados.length = 0
+    await dono`INSERT INTO tenant_privacidade (tenant_id, versao) VALUES (${T}, 'v3')`
+    await diz('voltei de novo')
+    expect(enviados).toHaveLength(2)
+    expect((await avisos()).map((x) => x.versao)).toEqual(['padrao', 'v3'])
+
+    await encerrarSessoes(); enviados.length = 0
+    await dono`DELETE FROM aviso_privacidade WHERE tenant_id = ${T}`
+    await dono`INSERT INTO aviso_privacidade (tenant_id, id, contato_id, conversa_id, canal_id, mensagem_id, texto, versao, origem, exibido_em)
+               VALUES (${T}, gen_random_uuid(), ${CONTATO}, ${CONVERSA}, ${CANAL}, gen_random_uuid(), 'antigo', 'v3', 'agente', now() - interval '181 days')`
+    await diz('faz tempo')
+    expect(enviados).toHaveLength(2)
+  })
+
+  it('mensagens antigas do agente (antes da P4) não contam como "já viu o aviso"', async () => {
+    await configurar('autonomo')
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, criado_em)
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', '{"texto":"Oi! Posso ajudar?","automatica":"agente"}'::jsonb, 'enviada', now() - interval '30 days')`
+    await diz('oi')
+    expect(enviados[0]!.texto).toContain('assistente virtual')
+  })
+
+  it('simulação MOSTRA a abertura sem enviar nem registrar; sombra não abre', async () => {
+    await configurar('autonomo')
+    const r = await diz('oi', { simulacao: true })
     expect(enviados).toHaveLength(0)
-    expect((await dono`SELECT 1 FROM aviso_privacidade WHERE tenant_id = ${T}`).length).toBe(0)
+    expect(r.mensagens![0]).toContain('assistente virtual')
+    expect(await avisos()).toHaveLength(0)
+
+    await configurar('sombra')
+    await diz('oi')
+    expect(enviados).toHaveLength(0)
+    expect((await ultimaDecisao()).resposta!.mensagens).toEqual(['Posso te ajudar com os produtos.'])
   })
 })
 
 describe('"É robô?"', () => {
   it('1ª vez resposta fixa honesta sem modelo; 2ª vez transfere por pergunta_robo', async () => {
     await configurar('autonomo')
-    // O agente já se apresentou antes (não é a primeira fala).
-    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status)
-               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', '{"texto":"oi","automatica":"agente_abertura"}'::jsonb, 'enviada')`
-    const r1 = await turno([await mensagemDoCliente('vc é um robô?')])
+    await avisoVigente()
+    const r1 = await diz('vc é um robô?')
     expect(chamadasLlm).toBe(0)
     expect(r1.desfecho).toBe('respondeu')
     expect(enviados.at(-1)!.texto).toContain('inteligência artificial')
-    const r2 = await turno([await mensagemDoCliente('é robô mesmo?')])
+    const r2 = await diz('é robô mesmo?')
     expect(chamadasLlm).toBe(0)
     expect(r2.handoff?.motivo).toBe('pergunta_robo')
     expect(enviados.at(-1)!.texto).toMatch(/pessoa da equipe/)
   })
 
-  it('na primeira fala, a abertura já responde: não repete a identificação e conta a pergunta', async () => {
+  it('na primeira fala, a abertura já responde: não repete a identificação, conta a pergunta e registra o aviso', async () => {
     await configurar('autonomo')
-    await turno([await mensagemDoCliente('isso é um bot?')])
-    expect(enviados.map((e) => e.marcador)).toEqual(['agente_abertura'])
+    await diz('isso é um bot?')
+    expect(enviados).toHaveLength(1)
+    expect(enviados[0]!.texto).toContain('assistente virtual')
+    expect(await avisos()).toHaveLength(1)
     const [s] = await dono<{ estado_agente: { gatilhos?: { perguntouRobo?: boolean } } }[]>`SELECT estado_agente FROM agente_sessao WHERE tenant_id = ${T}`
     expect(s!.estado_agente.gatilhos?.perguntouRobo).toBe(true)
   })
+
+  it('"a máquina de cartão quebrou?" não é pergunta sobre a assistente', async () => {
+    await configurar('autonomo')
+    await avisoVigente()
+    await diz('a máquina de cartão quebrou?')
+    expect(chamadasLlm).toBe(1)
+  })
 })
 
-describe('Pedido de humano e reclamação', () => {
+describe('Pedido de humano e ameaça formal', () => {
   it('dado "vou no Procon", então transfere por reclamação com aviso sem prazo, sem modelo', async () => {
     await configurar('autonomo')
-    const r = await turno([await mensagemDoCliente('isso é um absurdo, vou no Procon')])
+    await avisoVigente()
+    const r = await diz('isso é um absurdo, vou no Procon')
     expect(chamadasLlm).toBe(0)
     expect(r.handoff?.motivo).toBe('reclamacao')
     expect(enviados).toHaveLength(1)
     expect(enviados[0]!.texto).toMatch(/próximo horário de atendimento/) // canal sempre fechado
     const [a] = await dono<{ estado: string }[]>`SELECT estado FROM atendimento WHERE tenant_id = ${T}`
     expect(a!.estado).toBe('na_fila')
+  })
+
+  it('"pode processar o pedido" e "o técnico me liga depois" seguem com o modelo', async () => {
+    await configurar('autonomo')
+    await avisoVigente()
+    await diz('pode processar o pedido')
+    await diz('o técnico me liga depois')
+    expect(chamadasLlm).toBe(2)
   })
 
   it('gatilho extra do número (compliance) transfere por gatilho_playbook', async () => {
@@ -272,7 +400,7 @@ describe('Pedido de humano e reclamação', () => {
       historico: [], primeiraResposta: true, foraDoExpediente: false,
       entrantes: [{ id: crypto.randomUUID(), tipo: 'texto', texto: 'preciso da Nota Fiscal do mês', transcricaoPendente: false, transcricaoFalhou: false }],
     }
-    expect(await pipeline.gatilhos.executar(ctx)).toMatchObject({ tipo: 'resposta_fixa', handoff: { motivo: 'gatilho_playbook' } })
+    expect(await etapaGatilhosEntrada.executar(ctx)).toMatchObject({ tipo: 'resposta_fixa', handoff: { motivo: 'gatilho_playbook' } })
   })
 })
 
@@ -280,17 +408,14 @@ describe('Áudio', () => {
   it('dado áudio ainda transcrevendo, então silêncio SEM abrir sessão', async () => {
     await configurar('autonomo')
     const r = await turno([await mensagemDoCliente('', 'audio', { transcricao_tentativas: 0 })])
-    expect(r.desfecho).toBe('silencio')
-    expect(r.motivo).toBe('audio_transcrevendo')
+    expect(r).toMatchObject({ desfecho: 'silencio', motivo: 'audio_transcrevendo' })
     expect(chamadasLlm).toBe(0)
     expect(enviados).toHaveLength(0)
-    expect(await sessoes()).toHaveLength(0)
+    expect((await dono`SELECT 1 FROM agente_sessao WHERE tenant_id = ${T}`).length).toBe(0)
   })
 
   it('dado áudio perdido, então o 1º pede texto e o 2º transfere por audio_sem_transcricao', async () => {
     await configurar('autonomo')
-    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status)
-               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', '{"texto":"oi","automatica":"agente_abertura"}'::jsonb, 'enviada')`
     const r1 = await turno([await mensagemDoCliente('', 'audio', { transcricao_tentativas: 3 })])
     expect(r1.desfecho).toBe('respondeu')
     expect(enviados.at(-1)!.texto).toMatch(/por escrito/)

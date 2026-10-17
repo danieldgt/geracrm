@@ -24,7 +24,10 @@ import type { Sql } from '../../db/index.js'
  */
 export async function registrarOptOut(
   tx: Sql, p: { contatoId: string; origem: string; agora: Date },
-): Promise<{ chaves: readonly string[] }> {
+): Promise<{ chaves: readonly string[]; temTelefone: boolean }> {
+  // Contato inexistente (ou de outro tenant, invisível pelo RLS): nada a registrar.
+  const [existe] = await tx<{ id: string }[]>`SELECT id FROM contato WHERE tenant_id = tenant_atual() AND id = ${p.contatoId}`
+  if (!existe) return { chaves: [], temTelefone: false }
   const chaves = await tx<{ chave_bloqueio: string }[]>`
     INSERT INTO lista_bloqueio (tenant_id, chave_bloqueio, motivo, origem, bloqueado_em)
     SELECT DISTINCT tenant_atual(), ct.chave_bloqueio, 'opt_out', ${p.origem}, ${p.agora}::timestamptz
@@ -36,22 +39,40 @@ export async function registrarOptOut(
     UPDATE contato SET recebe_campanhas = false, recebe_automacoes = false
      WHERE tenant_id = tenant_atual() AND id = ${p.contatoId} AND (recebe_campanhas OR recebe_automacoes)
     RETURNING id`
-  if (mudou || chaves.length > 0) {
+  const [tel] = await tx<{ tem: boolean }[]>`
+    SELECT EXISTS (SELECT 1 FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${p.contatoId}
+                     AND chave_bloqueio IS NOT NULL) AS tem`
+  const temTelefone = tel?.tem ?? false
+  // ⚠️ Sem telefone (Instagram, número estrangeiro sem chave), o histórico de
+  //    consentimento é o ÚNICO registro do pedido: grava sempre, mesmo repetido
+  //    — é ele que `contatoBloqueado` lê para esses contatos.
+  if (mudou || chaves.length > 0 || !temTelefone) {
     await tx`
       INSERT INTO consentimento_contato (tenant_id, contato_id, tipo, concedido, origem, registrado_em)
       SELECT tenant_atual(), ${p.contatoId}, t, false, 'opt_out_mensagem', ${p.agora}::timestamptz
         FROM unnest(ARRAY['campanhas', 'automacoes', 'whatsapp']) AS t
       ON CONFLICT DO NOTHING`
   }
-  return { chaves: chaves.map((c) => c.chave_bloqueio) }
+  return { chaves: chaves.map((c) => c.chave_bloqueio), temTelefone }
 }
 
-/** Algum telefone do contato está na lista de bloqueio? Sob tenant. */
+/**
+ * O contato pediu para não receber? Sob tenant.
+ *   - com telefone: algum telefone dele está na `lista_bloqueio` (desbloquear
+ *     pela tela de Bloqueios libera de novo — a lista é a fonte da verdade);
+ *   - SEM telefone com chave (Instagram, estrangeiro): o último registro de
+ *     consentimento `whatsapp` é recusa vinda de `opt_out_mensagem`.
+ */
 export async function contatoBloqueado(tx: Sql, contatoId: string): Promise<boolean> {
   const [l] = await tx<{ bloqueado: boolean }[]>`
     SELECT EXISTS (
-      SELECT 1 FROM contato_telefone ct
-        JOIN lista_bloqueio lb ON lb.tenant_id = ct.tenant_id AND lb.chave_bloqueio = ct.chave_bloqueio
-       WHERE ct.tenant_id = tenant_atual() AND ct.contato_id = ${contatoId}) AS bloqueado`
+             SELECT 1 FROM contato_telefone ct
+               JOIN lista_bloqueio lb ON lb.tenant_id = ct.tenant_id AND lb.chave_bloqueio = ct.chave_bloqueio
+              WHERE ct.tenant_id = tenant_atual() AND ct.contato_id = ${contatoId})
+        OR (NOT EXISTS (SELECT 1 FROM contato_telefone ct
+                         WHERE ct.tenant_id = tenant_atual() AND ct.contato_id = ${contatoId} AND ct.chave_bloqueio IS NOT NULL)
+            AND coalesce((SELECT NOT cc.concedido AND cc.origem = 'opt_out_mensagem' FROM consentimento_contato cc
+                           WHERE cc.tenant_id = tenant_atual() AND cc.contato_id = ${contatoId} AND cc.tipo = 'whatsapp'
+                           ORDER BY cc.registrado_em DESC LIMIT 1), false)) AS bloqueado`
   return l?.bloqueado ?? false
 }

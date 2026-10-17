@@ -27,7 +27,7 @@ import { custoDoLaco } from './custo.js'
 import { lerEstado, patchEstado, juntarPatches } from './estado-agente.js'
 import {
   montarPipeline, rodarPreLlm, rodarPosResposta, marca, mascararTexto,
-  type ClasseFalha, type ContextoPipeline, type EntranteDoTurno, type PatchEstado, type PipelineDoTurno,
+  type ClasseFalha, type ContextoPipeline, type EnvioDoTurno, type EntranteDoTurno, type PatchEstado, type PipelineDoTurno,
 } from './pipeline/index.js'
 import { efetivarSeDentroDaAlcada } from '../../pedido/alcada.js'
 import { MAX_TENTATIVAS_TRANSCRICAO } from '../../../workers/transcricao.js'
@@ -322,6 +322,19 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     rastro?: RastroDoLaco | undefined; custo: number; bloqueados: number[]; guardrails: readonly MarcaGuardrail[]; estado: PatchEstado
   }): Promise<ResultadoTurnoVendedor> => {
     const { rastro, custo } = p
+    /** O que o gateway aceitou neste turno — é o que os efeitos pós-envio enxergam. */
+    const enviadas: EnvioDoTurno[] = []
+    /**
+     * Efeitos pós-envio das etapas pré-modelo (P4: bloqueio do opt-out DEPOIS da
+     * confirmação; aviso de privacidade SÓ se a abertura saiu). Rodam em TODA
+     * saída do rabo, na transação que grava a decisão. Nunca sem efeito.
+     */
+    const rodarEfeitos = async (tx: Sql, sid: string | null): Promise<MarcaGuardrail[]> => {
+      if (semEfeito) return []
+      const marcas: MarcaGuardrail[] = []
+      for (const ef of pre.efeitos) marcas.push(...await ef.executar(tx, { enviadas, sessaoId: sid }))
+      return marcas
+    }
     let { resposta, mensagens, handoff } = p
     const guardrails = [...p.guardrails]
     const bloqueados = [...p.bloqueados]
@@ -345,7 +358,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
 
     // ── Sequência: chegou mensagem nova enquanto pensávamos? ──────────────
     if (!semEfeito && await comTenantServico(tenantId, (tx) => chegouMensagemNova(tx, conversaId, tarefa.mensagens_ids))) {
-      const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'superada', rastro, custo, resposta, bloqueados, guardrails, agora, latenciaMs: Date.now() - inicio }))
+      const decisaoId = await comTenantServico(tenantId, async (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'superada', rastro, custo, resposta, bloqueados, guardrails: [...guardrails, ...await rodarEfeitos(tx, reuniao.sessao_id)], agora, latenciaMs: Date.now() - inicio }))
       return { desfecho: 'superada', mensagens: mensagensFinais, decisaoId, rastro }
     }
 
@@ -356,10 +369,11 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       for (const texto of mensagensFinais) {
         const e = await enviar(tenantId, conversaId, texto, null, agora, { ehDisparo: false, marcador: 'agente' })
         if (!e.ok) {
-          const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro, custo, resposta, guardrails, erro: `envio recusado: ${e.motivo}`, agora, latenciaMs: Date.now() - inicio }))
+          const decisaoId = await comTenantServico(tenantId, async (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro, custo, resposta, guardrails: [...guardrails, ...await rodarEfeitos(tx, reuniao.sessao_id)], erro: `envio recusado: ${e.motivo}`, idsSaida: [...idsSaida], enviada: idsSaida.length > 0, agora, latenciaMs: Date.now() - inicio }))
           return { desfecho: 'falha', motivo: 'envio_recusado', detalhe: e.motivo, decisaoId, rastro }
         }
         idsSaida.push(e.mensagemId)
+        enviadas.push({ texto, mensagemId: e.mensagemId })
       }
     }
 
@@ -393,6 +407,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
         const [sessao] = await tx<{ turnos: number }[]>`SELECT turnos FROM agente_sessao WHERE tenant_id = tenant_atual() AND id = ${sessaoId}`
         if (sessao && sessao.turnos % 10 === 0) await resumirSessao(tx, sessaoId).catch(() => undefined)
       }
+      guardrails.push(...await rodarEfeitos(tx, semEfeito ? null : sessaoId))
       const id = await registrarDecisao(tx, { tarefa, sessaoId: semEfeito ? null : sessaoId, modo, desfecho, rastro, custo, resposta, bloqueados, guardrails, enviada: envia, idsSaida, handoff, agora, latenciaMs: Date.now() - inicio })
       if (handoff) {
         if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: handoff.motivo as MotivoHandoff, resumo: handoff.resumo, agora })
@@ -409,13 +424,30 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     return { desfecho, mensagens: mensagensFinais, handoff: handoff ?? undefined, decisaoId, rastro }
   }
 
+  /**
+   * PREFIXO das etapas pré-modelo (P4: a abertura): passa pelo FILTRO de saída
+   * (P2) como qualquer texto que sai; a rede final de R$ vem depois, no rabo,
+   * sobre o prefixo e a resposta juntos. Filtro que barra o prefixo o descarta
+   * (a resposta segue) — o prefixo é cortesia, nunca motivo de handoff.
+   */
+  const prefixoFiltrado = async (handoffAtual: { motivo: string; resumo: string } | null) => {
+    if (pre.prefixo.length === 0) return { mensagens: [] as readonly string[], guardrails: [] as readonly MarcaGuardrail[], estado: {} as PatchEstado }
+    const r = await pipeline.filtro.executar(ctx, {
+      mensagens: pre.prefixo, handoff: handoffAtual, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
+      falasAnterioresDoAgente: historico.filter((h) => h.de === 'nos').map((h) => h.texto),
+    })
+    return { mensagens: r.bloquear ? [] : r.mensagens, guardrails: r.guardrails, estado: r.estado ?? {} }
+  }
+
   // ── 4b. Resposta fixa de uma etapa: sem modelo, mesmo rabo ───────────────
   if (pre.decisao.tipo === 'resposta_fixa') {
     const d = pre.decisao
+    const pf = await prefixoFiltrado(null)
+    const mensagensFixas = [...pf.mensagens, ...d.mensagens]
     return concluir({
-      resposta: { mensagens: d.mensagens, confianca: 1, handoff: d.handoff, origem: 'fixa' },
-      mensagens: d.mensagens,
-      handoff: d.handoff ?? null, custo: 0, bloqueados: [], guardrails: guardrailsPre, estado: pre.estado,
+      resposta: { mensagens: mensagensFixas, confianca: 1, handoff: d.handoff, origem: 'fixa' },
+      mensagens: mensagensFixas,
+      handoff: d.handoff ?? null, custo: 0, bloqueados: [], guardrails: [...guardrailsPre, ...pf.guardrails], estado: juntarPatches([pre.estado, pf.estado]),
     })
   }
 
@@ -520,12 +552,15 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   guardrails.push(...cadeia.guardrails)
   if (cadeia.bloqueio) handoff = { motivo: cadeia.bloqueio.motivo, resumo: cadeia.bloqueio.resumo }
 
+  const pf = await prefixoFiltrado(handoff)
+  guardrails.push(...pf.guardrails)
+  const saida = [...pf.mensagens, ...cadeia.mensagens]
   return concluir({
-    // ⚠️ `resposta.mensagens` é o que SAI (depois do guardrail e da cadeia); o
-    //    que o modelo escreveu fica em `original` — a auditoria mostra os dois.
-    resposta: { ...resposta, mensagens: cadeia.mensagens, handoff: handoff ?? undefined, original: parse.data },
-    mensagens: cadeia.mensagens,
-    handoff, rastro: r.rastro, custo, bloqueados, guardrails, estado: juntarPatches([pre.estado, cadeia.estado]),
+    // ⚠️ `resposta.mensagens` é o que SAI (prefixo + resposta depois do
+    //    guardrail e da cadeia); o que o modelo escreveu fica em `original`.
+    resposta: { ...resposta, mensagens: saida, handoff: handoff ?? undefined, original: parse.data },
+    mensagens: saida,
+    handoff, rastro: r.rastro, custo, bloqueados, guardrails, estado: juntarPatches([pre.estado, cadeia.estado, pf.estado]),
   })
 }
 

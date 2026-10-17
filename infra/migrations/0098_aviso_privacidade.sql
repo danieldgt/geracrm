@@ -66,6 +66,25 @@ CREATE UNIQUE INDEX aviso_privacidade_por_mensagem
 CREATE INDEX aviso_privacidade_por_contato
     ON aviso_privacidade (tenant_id, contato_id, exibido_em DESC, id DESC);
 
+-- ⚠️ IMUTÁVEL DE VERDADE: prova não se edita. O trigger barra UPDATE de
+--    qualquer papel (inclusive o dono); o REVOKE tira UPDATE e DELETE do papel
+--    da aplicação. Apagar só acontece por CASCATA (contato/conversa/canal
+--    excluídos — a ação referencial roda com o dono da tabela) ou pela rotina
+--    de exclusão LGPD do titular (R10d), executada pelo dono.
+CREATE FUNCTION aviso_privacidade_imutavel() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'aviso_privacidade é imutável: registre uma nova exibição em vez de alterar esta'
+        USING ERRCODE = 'restrict_violation';
+END
+$$;
+
+CREATE TRIGGER aviso_privacidade_sem_update
+    BEFORE UPDATE ON aviso_privacidade
+    FOR EACH ROW EXECUTE FUNCTION aviso_privacidade_imutavel();
+
+REVOKE UPDATE, DELETE ON aviso_privacidade FROM geracrm_app;
+
 COMMENT ON TABLE tenant_privacidade IS
     'Aviso de privacidade que o tenant exibe (link, versão, texto padrão). Sem linha = padrão do código.';
 COMMENT ON TABLE aviso_privacidade IS

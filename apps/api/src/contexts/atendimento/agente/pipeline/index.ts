@@ -10,7 +10,7 @@ import { etapaPerguntaRepetida } from './pergunta-repetida.js'
 import { etapaRegrasQualidade } from './regras-qualidade.js'
 import { politicaFalhaLlm } from './falha-llm.js'
 import type {
-  ContextoPipeline, DecisaoPreLlm, EntradaPosResposta, EtapaPosResposta, EtapaPreLlm, PatchEstado, PipelineDoTurno,
+  ContextoPipeline, DecisaoPreLlm, EfeitoPosEnvio, EntradaPosResposta, EtapaPosResposta, EtapaPreLlm, PatchEstado, PipelineDoTurno,
   ResultadoPosResposta,
 } from './tipos.js'
 
@@ -60,6 +60,10 @@ export interface ResultadoPreLlm {
   /** Patch de estado acumulado (inclui o da decisão final, se houver). */
   readonly estado: PatchEstado
   readonly guardrails: readonly MarcaGuardrail[]
+  /** Prefixos das etapas que seguiram, na ordem (o rabo envia antes da resposta). */
+  readonly prefixo: readonly string[]
+  /** Efeitos pós-envio das etapas que seguiram + o da decisão final. */
+  readonly efeitos: readonly EfeitoPosEnvio[]
 }
 
 /**
@@ -70,6 +74,8 @@ export async function rodarPreLlm(p: PipelineDoTurno, ctx: ContextoPipeline): Pr
   const instrucoes: string[] = []
   const patches: PatchEstado[] = []
   const guardrails: MarcaGuardrail[] = []
+  const prefixo: string[] = []
+  const efeitos: EfeitoPosEnvio[] = []
   let atual = ctx
   for (const etapa of etapasPreLlm(p)) {
     const d = await etapa.executar(atual)
@@ -78,10 +84,12 @@ export async function rodarPreLlm(p: PipelineDoTurno, ctx: ContextoPipeline): Pr
       patches.push(d.estado)
       atual = { ...atual, estado: { ...atual.estado, ...d.estado } }
     }
-    if (d.tipo !== 'segue') return { decisao: d, instrucoes, estado: juntarPatches(patches), guardrails }
+    if ('efeitos' in d && d.efeitos) efeitos.push(...d.efeitos)
+    if (d.tipo !== 'segue') return { decisao: d, instrucoes, estado: juntarPatches(patches), guardrails, prefixo, efeitos }
     if (d.instrucoes) instrucoes.push(...d.instrucoes)
+    if (d.prefixo) prefixo.push(...d.prefixo)
   }
-  return { decisao: { tipo: 'segue' }, instrucoes, estado: juntarPatches(patches), guardrails }
+  return { decisao: { tipo: 'segue' }, instrucoes, estado: juntarPatches(patches), guardrails, prefixo, efeitos }
 }
 
 export interface ResultadoCadeiaPos {

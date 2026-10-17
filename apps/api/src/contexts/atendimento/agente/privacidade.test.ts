@@ -98,6 +98,18 @@ describe('registrarAvisoSeExibido — prova, não suposição', () => {
   })
 })
 
+describe('aviso_privacidade é imutável de verdade', () => {
+  it('a aplicação não altera nem apaga; nem o dono altera (trigger)', async () => {
+    const r = await registrar(A, 'Esta conversa fica registrada para te atender melhor.', { ok: true, mensagemId: crypto.randomUUID() })
+    expect(r.registrado).toBe(true)
+    await expect(comTenantServico(A, (tx) => tx`UPDATE aviso_privacidade SET versao = 'forjada'`)).rejects.toThrow(/permission denied|imutável/)
+    await expect(comTenantServico(A, (tx) => tx`DELETE FROM aviso_privacidade`)).rejects.toThrow(/permission denied/)
+    await expect(dono`UPDATE aviso_privacidade SET versao = 'forjada' WHERE tenant_id = ${A}`).rejects.toThrow(/imutável/)
+    const [l] = await dono<{ versao: string }[]>`SELECT versao FROM aviso_privacidade WHERE tenant_id = ${A}`
+    expect(l!.versao).toBe('padrao')
+  })
+})
+
 describe('Rotas de privacidade', () => {
   it('GET devolve o padrão quando o tenant nunca configurou', async () => {
     const r = await pedir(A, 'GET', '/v1/privacidade')

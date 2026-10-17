@@ -3,6 +3,7 @@ import {
   type AcaoGuardrail, type GravidadeGuardrail, type MarcaGuardrail, type ModoAgente, type ModoDoTurno,
   type MotivoHandoff, type PersonaResolvida,
 } from '@geracrm/shared'
+import type { Sql } from '../../../../db/index.js'
 import type { Fala } from '../porta.js'
 import type { EstadoAgente } from '../estado-agente.js'
 
@@ -70,13 +71,40 @@ export type PatchEstado = Readonly<Record<string, unknown>>
 
 export type DecisaoPreLlm =
   /** Segue para a próxima etapa; `instrucoes` vão para a instrução do turno (operador). */
-  | { readonly tipo: 'segue'; readonly instrucoes?: readonly string[] | undefined; readonly estado?: PatchEstado | undefined; readonly guardrails?: readonly MarcaGuardrail[] | undefined }
+  | {
+    readonly tipo: 'segue'; readonly instrucoes?: readonly string[] | undefined; readonly estado?: PatchEstado | undefined; readonly guardrails?: readonly MarcaGuardrail[] | undefined
+    /**
+     * Texto fixo que o RABO COMUM envia ANTES da resposta deste turno (ex.: a
+     * abertura que identifica a assistente). Passa pelo filtro de saída e pela
+     * rede final de R$, e fica registrado na decisão. Só sai se o turno chegar
+     * ao envio (falha do modelo ou handoff sem modelo descartam o prefixo).
+     */
+    readonly prefixo?: readonly string[] | undefined
+    readonly efeitos?: readonly EfeitoPosEnvio[] | undefined
+  }
   /** Responde com texto fixo, SEM chamar o modelo (abertura, "sou uma assistente"…). */
-  | { readonly tipo: 'resposta_fixa'; readonly mensagens: readonly string[]; readonly handoff?: { readonly motivo: MotivoHandoff; readonly resumo: string } | undefined; readonly estado?: PatchEstado | undefined; readonly guardrails?: readonly MarcaGuardrail[] | undefined }
+  | { readonly tipo: 'resposta_fixa'; readonly mensagens: readonly string[]; readonly handoff?: { readonly motivo: MotivoHandoff; readonly resumo: string } | undefined; readonly estado?: PatchEstado | undefined; readonly guardrails?: readonly MarcaGuardrail[] | undefined; readonly efeitos?: readonly EfeitoPosEnvio[] | undefined }
   /** Entrega ao humano sem modelo; `avisoCliente` só sai em autônomo. */
   | { readonly tipo: 'handoff'; readonly motivo: MotivoHandoff; readonly resumo: string; readonly avisoCliente: string | null; readonly guardrails?: readonly MarcaGuardrail[] | undefined }
   /** Não responde (áudio ainda transcrevendo, opt-out já registrado…). */
   | { readonly tipo: 'silencio'; readonly motivo: string }
+
+/** Uma mensagem que o rabo do turno efetivamente entregou ao gateway com sucesso. */
+export interface EnvioDoTurno { readonly texto: string; readonly mensagemId: string }
+
+/**
+ * EFEITO PÓS-ENVIO de uma etapa pré-modelo (ex.: registrar o opt-out DEPOIS da
+ * confirmação; registrar o aviso de privacidade SÓ se a abertura saiu).
+ *
+ * Roda dentro da transação de persistência do rabo comum, DEPOIS da tentativa
+ * de envio, em TODA saída do rabo — enviado, envio recusado, turno superado,
+ * sombra/assistido (nada enviado). Nunca em simulação/copiloto. As marcas que
+ * devolve entram na decisão do turno. `enviadas` só tem o que o gateway aceitou.
+ */
+export interface EfeitoPosEnvio {
+  readonly nome: string
+  executar(tx: Sql, r: { readonly enviadas: readonly EnvioDoTurno[]; readonly sessaoId: string | null }): Promise<readonly MarcaGuardrail[]>
+}
 
 export interface EtapaPreLlm {
   readonly nome: string

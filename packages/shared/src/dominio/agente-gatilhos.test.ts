@@ -5,36 +5,71 @@ import {
   textoAvisoPrivacidade, FRASE_REGISTRO_CONVERSA,
 } from './agente-gatilhos.js'
 
-describe('detectarOptOut', () => {
-  it.each(['pare', 'PARE!', 'Sair', 'stop', 'chega.', 'não quero mais receber mensagens', 'Para de me mandar mensagem',
-    'parem de me enviar isso', 'me tira dessa lista', 'quero me descadastrar', 'nao desejo receber'])(
+/**
+ * ⚠️ Falso opt-out é o erro mais caro: cada frase da revisão adversarial da P4
+ *    virou um caso aqui. Na dúvida a regra devolve `possivel_opt_out` (pessoa),
+ *    nunca `opt_out` (bloqueio).
+ */
+describe('detectarOptOut — o que é opt-out CLARO', () => {
+  it.each(['pare', 'PARE!', 'Sair', 'stop', 'descadastrar', 'quero me descadastrar',
+    'não quero mais receber mensagens', 'Para de me mandar mensagem', 'parem de me enviar isso', 'me tira dessa lista',
+    'nao desejo receber', 'não quero mais receber', 'não quero mais receber essas promoções', 'pare de me mandar mensagem por favor',
+    'não me mande mais nada', 'não quero mais que vocês me mandem mensagem'])(
     'dado "%s", então é opt-out', (t) => expect(detectarOptOut(t)).toBe('opt_out'))
 
-  it('dado pedido de apagar os dados, então é exclusão LGPD', () => {
+  it('dado pedido de apagar os dados junto, então é exclusão LGPD', () => {
     expect(detectarOptOut('apaguem os meus dados, não quero mais receber')).toBe('lgpd_exclusao')
+    expect(detectarOptOut('quero que apaguem meus dados pessoais')).toBe('lgpd_exclusao')
   })
-
-  it.each(['cancelar pedido', 'quero cancelar o pedido', 'cancelar', 'pode parar o pedido', 'desisti da compra',
-    'para quando chega?', 'chega amanhã?', 'para mim está bom', 'quero parar de comprar fiado? não, só perguntando',
-    'quero 2 caixas para revenda'])(
-    'dado "%s", então NÃO é opt-out', (t) => expect(detectarOptOut(t)).toBeNull())
 })
 
-describe('pedido de humano e reclamação', () => {
-  it.each(['quero falar com um atendente', 'posso conversar com o vendedor?', 'me liga', 'prefiro um humano', 'me passa pro gerente'])(
+describe('detectarOptOut — falsos positivos da revisão (mercadoria, pagamento, logística)', () => {
+  it.each([
+    'não quero receber em caixa', 'não quero receber o pedido em caixa', 'não quero receber boleto, só pix',
+    'nao quero mais receber a mercadoria com atraso', 'não desejo receber nota fiscal impressa',
+    'não quero mais receber essa marca', 'pare de me mandar boleto errado', 'parem de me enviar produto vencido',
+    'pare de mandar mensagem errada pro meu financeiro', 'não quero mais que você me mande o boleto por email',
+    'não quero mais receber a entrega na loja 2',
+    // item 5: resposta a "mais algum item?"
+    'chega', 'chega.', 'Chega!',
+    // item 10: LGPD com objeto de negócio
+    'apaga meus dados do cartão antigo', 'pode remover meus dados bancários antigos', 'descadastrar o meu cartão antigo',
+    'me tira dessa lista de espera',
+    // pedido, não canal
+    'cancelar pedido', 'quero cancelar o pedido', 'cancelar', 'para', 'pode parar o pedido', 'desisti da compra',
+    'para quando chega?', 'chega amanhã?', 'para mim está bom', 'quero 2 caixas para revenda',
+  ])('dado "%s", então NÃO é opt-out', (t) => expect(detectarOptOut(t)).toBeNull())
+})
+
+describe('detectarOptOut — ambíguo vai para uma pessoa, nunca para o bloqueio', () => {
+  it.each(['não quero mais receber essas coisas', 'para de me mandar esses links', 'não quero receber ligação'])(
+    'dado "%s", então é possivel_opt_out', (t) => expect(detectarOptOut(t)).toBe('possivel_opt_out'))
+})
+
+describe('pedido de humano', () => {
+  it.each(['quero falar com um atendente', 'posso conversar com o vendedor?', 'me liga', 'prefiro um humano',
+    'me passa pro gerente', 'pode me ligar?', 'preciso falar com alguém', 'quero um atendente'])(
     'dado "%s", então pede humano', (t) => expect(detectarPedidoHumano(t)).toBe(true))
-  it.each(['vou no Procon', 'vou te processar', 'vou abrir reclamação no Reclame Aqui', 'meu advogado vai ligar', 'isso é caso jurídico'])(
-    'dado "%s", então é reclamação', (t) => expect(detectarReclamacao(t)).toBe(true))
-  it('frase comum de compra não aciona nenhum dos dois', () => {
-    expect(detectarPedidoHumano('quero 10 camisetas G')).toBe(false)
-    expect(detectarReclamacao('quero 10 camisetas G')).toBe(false)
-  })
+  it.each(['o técnico me liga depois', 'me liga amanhã quando chegar', 'vou conversar com o vendedor depois',
+    'preciso falar com o gerente da minha loja antes', 'quero 10 camisetas G', 'o vendedor de vocês me ligou ontem'])(
+    'dado "%s", então NÃO pede humano', (t) => expect(detectarPedidoHumano(t)).toBe(false))
+})
+
+describe('ameaça formal (reclamação)', () => {
+  it.each(['vou no Procon', 'vou te processar', 'vou abrir reclamação no Reclame Aqui', 'vou processar vocês',
+    'isso vai acabar num processo judicial', 'vou resolver na justiça', 'vou acionar meu advogado', 'vou processar a loja'])(
+    'dado "%s", então é ameaça formal', (t) => expect(detectarReclamacao(t)).toBe(true))
+  it.each(['pode processar o pedido', 'jurídico precisa da nota', 'meu advogado pediu nota', 'quero 10 camisetas G',
+    'o pedido está em processamento?'])(
+    'dado "%s", então NÃO é', (t) => expect(detectarReclamacao(t)).toBe(false))
 })
 
 describe('detectarPerguntaRobo', () => {
-  it.each(['é robô?', 'Você é um bot?', 'to falando com uma máquina', 'vc é ia', 'você é pessoa de verdade?', 'isso é inteligência artificial?'])(
+  it.each(['é robô?', 'Você é um bot?', 'to falando com uma máquina', 'vc é ia', 'você é pessoa de verdade?',
+    'isso é inteligência artificial?', 'robô?', 'é robô mesmo?', 'aqui é bot?', 'será que é um robô'])(
     'dado "%s", então pergunta se é robô', (t) => expect(detectarPerguntaRobo(t)).toBe(true))
-  it.each(['quero 3 camisetas', 'robótica é legal', 'qual o prazo?'])(
+  it.each(['quero 3 camisetas', 'robótica é legal', 'qual o prazo?', 'a máquina de cartão quebrou?',
+    'o robô de limpeza que comprei chegou?', 'a máquina de costura é bivolt?', 'tem bot de pedido?'])(
     'dado "%s", então não', (t) => expect(detectarPerguntaRobo(t)).toBe(false))
 })
 
@@ -49,8 +84,9 @@ describe('gatilhoExtra', () => {
 })
 
 describe('detectarGatilhoDeEntrada — precedência', () => {
-  it('opt-out vence tudo; reclamação vence pedido de humano; humano vence "é robô?"', () => {
+  it('opt-out vence tudo; ambíguo é possivel_opt_out; ameaça vence humano; humano vence "é robô?"', () => {
     expect(detectarGatilhoDeEntrada('pare')).toBe('opt_out')
+    expect(detectarGatilhoDeEntrada('não quero mais receber essas coisas')).toBe('possivel_opt_out')
     expect(detectarGatilhoDeEntrada('quero falar com um atendente, vou no procon')).toBe('reclamacao')
     expect(detectarGatilhoDeEntrada('é robô? quero falar com um atendente')).toBe('pedido_humano')
     expect(detectarGatilhoDeEntrada('é robô?')).toBe('pergunta_robo')

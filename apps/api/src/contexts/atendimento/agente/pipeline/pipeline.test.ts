@@ -88,11 +88,8 @@ const mensagemDoCliente = async (texto: string): Promise<string> => {
   return id
 }
 const tarefaPara = (ids: string[]): Tarefa => ({ tenant_id: T, id: crypto.randomUUID(), conversa_id: CONVERSA, canal_id: CANAL, mensagens_ids: ids, tentativas: 1, executar_em: new Date() })
-const SEGUE: EtapaPreLlm = { nome: 'gatilhos-entrada', async executar() { return { tipo: 'segue' } } }
 const turno = async (texto: string, extra: Partial<DepsTurno> = {}) =>
-  // ⚠️ Gatilhos de entrada fixados em "segue" (P4 preencheu o stub: a abertura sairia pelo gateway real e
-  //    marcaria a decisão); estes casos testam os OUTROS pontos. A P4 tem a própria suíte (gatilhos-entrada.test.ts).
-  conduzirTurnoVendedor(tarefaPara([await mensagemDoCliente(texto)]), { llm: llmQueDiz(['Temos sim!']), ligacoes, enviar: enviarFalso, ...extra, pipeline: { gatilhos: SEGUE, ...extra.pipeline } })
+  conduzirTurnoVendedor(tarefaPara([await mensagemDoCliente(texto)]), { llm: llmQueDiz(['Temos sim!']), ligacoes, enviar: enviarFalso, ...extra })
 const ultimaDecisao = async () => (await dono<{
   desfecho: string; modo: string; handoff_motivo: string | null; enviada: boolean; guardrails: { etapa: string; codigo: string; gravidade: string; acao: string; trecho?: string }[]
   falha_tipo: string | null; portao_motivo: string | null; sessao_id: string | null; numeros_bloqueados: number[]
@@ -144,13 +141,16 @@ afterAll(async () => {
 })
 
 describe('Pipeline padrão = comportamento anterior', () => {
-  it('com os stubs, autônomo responde o que o modelo disse e não grava marca nenhuma', async () => {
+  it('com o pipeline padrão, autônomo responde o que o modelo disse; só a abertura da P4 (sessão nova) vai antes', async () => {
     await configurar('autonomo')
     const r = await turno('oi')
     expect(r.desfecho).toBe('respondeu')
-    expect(enviados).toEqual(['Temos sim!'])
+    // P4: sessão nova sem aviso de privacidade vigente → a abertura é o prefixo da resposta.
+    expect(enviados).toHaveLength(2)
+    expect(enviados[0]).toMatch(/assistente virtual/)
+    expect(enviados[1]).toBe('Temos sim!')
     const d = await ultimaDecisao()
-    expect(d.guardrails).toEqual([])
+    expect(d.guardrails.map((g) => g.codigo)).toEqual(['abertura'])
     expect(d.falha_tipo).toBeNull()
   })
 })
