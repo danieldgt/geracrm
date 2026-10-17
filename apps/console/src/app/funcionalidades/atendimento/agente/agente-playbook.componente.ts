@@ -331,13 +331,21 @@ export class AgentePlaybookComponente {
   }
 
   async publicar(): Promise<void> {
-    if (this.erroObservacao() || this.ocupado()) return
+    const rascunho = this.dados()?.rascunho
+    if (this.erroObservacao() || this.ocupado() || !rascunho) return
     this.ocupado.set(true); this.erroAcao.set(null)
     try {
-      const r = await this.api.publicar(this.canalEscopo(), this.observacao().trim())
+      // Publica o rascunho que a pessoa revisou: gravado depois por outra pessoa → 409, recarrega.
+      const r = await this.api.publicar(this.canalEscopo(), this.observacao().trim(), rascunho.atualizadoEm)
       if (!r.ok) {
         this.erros.set(errosPorCampo(errosDaFalha(r)))
         this.falhou(r.status, r.erro.mensagem, 'publicar')
+        // 409: o rascunho mudou depois que a pessoa revisou — recarrega para ela rever o diff.
+        if (r.status === 409) {
+          const aviso = this.erroAcao()
+          await this.carregar()
+          this.erroAcao.set(aviso)
+        }
         return
       }
       this.toast.sucesso(`Publicado: v${r.versao.numero}${r.numerosAlcancados > 1 ? ` em ${r.numerosAlcancados} números` : ''}.`)

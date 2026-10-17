@@ -140,6 +140,9 @@ BEGIN
     IF NEW.playbook IS NOT NULL THEN
         RETURN NEW;
     END IF;
+    -- A MESMA trava por tenant da publicação (playbook/repositorio.ts): um número
+    -- nascendo enquanto a conta publica espera e vê a versão final.
+    PERFORM pg_advisory_xact_lock(hashtext('agente_playbook'), hashtext(NEW.tenant_id::text));
     SELECT p.id, p.numero, p.conteudo, p.publicada_em, p.canal_id INTO v
       FROM agente_playbook_versao p
      WHERE p.tenant_id = NEW.tenant_id

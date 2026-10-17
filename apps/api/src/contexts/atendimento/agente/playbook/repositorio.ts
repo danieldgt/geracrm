@@ -30,12 +30,24 @@ interface LinhaVersao {
   id: string; canal_id: string | null; numero: number | null; conteudo: unknown; origem: OrigemPlaybook
   baseada_em: string | null; observacao: string | null; resumo_mudancas: unknown; documento_nome: string | null
   criado_em: Date; criado_por_nome: string | null; publicada_em: Date | null; publicada_por_nome: string | null
-  arquivada_em: Date | null; custo_centavos: number
+  arquivada_em: Date | null; custo_centavos: number; atualizado_em: Date
+}
+
+/**
+ * Conteúdo gravado que não passa no schema de hoje. Não se lê como "padrão" em
+ * silêncio: quem chama devolve erro nomeado (`playbook.conteudo_invalido`).
+ */
+export class ErroConteudoPlaybook extends Error {
+  constructor(readonly versaoId: string, readonly detalhe: string) {
+    super(`agente_playbook_versao ${versaoId}: conteúdo fora do contrato (${detalhe})`)
+    this.name = 'ErroConteudoPlaybook'
+  }
 }
 
 const COLUNAS = (tx: Sql) => tx`
   p.id, p.canal_id, p.numero, p.conteudo, p.origem, p.baseada_em, p.observacao, p.resumo_mudancas, p.documento_nome,
-  p.criado_em, uc.nome AS criado_por_nome, p.publicada_em, up.nome AS publicada_por_nome, p.arquivada_em, least(p.custo_centavos, 2147483647)::int AS custo_centavos`
+  p.criado_em, uc.nome AS criado_por_nome, p.publicada_em, up.nome AS publicada_por_nome, p.arquivada_em, least(p.custo_centavos, 2147483647)::int AS custo_centavos,
+  date_trunc('milliseconds', p.atualizado_em) AS atualizado_em`
 
 const JUNCOES = (tx: Sql) => tx`
   LEFT JOIN usuario uc ON uc.tenant_id = p.tenant_id AND uc.id = p.criado_por
@@ -48,21 +60,27 @@ function estadoDe(l: Pick<LinhaVersao, 'publicada_em' | 'arquivada_em'>): Estado
 /** Linha → versão. Conteúdo gravado que não passa no schema (não deveria existir) cai no padrão de leitura. */
 function versaoDe(l: LinhaVersao): VersaoPlaybook & { readonly custoCentavos: number } {
   const c = conteudoPlaybook.safeParse(l.conteudo)
+  if (!c.success) throw new ErroConteudoPlaybook(l.id, `${c.error.issues[0]?.path.join('.') ?? ''}: ${c.error.issues[0]?.message ?? ''}`)
   return {
     id: l.id, canalId: l.canal_id, numero: l.numero, estado: estadoDe(l), origem: l.origem, baseadaEm: l.baseada_em,
     observacao: l.observacao, resumoMudancas: Array.isArray(l.resumo_mudancas) ? l.resumo_mudancas.filter((x): x is string => typeof x === 'string') : [],
     documentoNome: l.documento_nome, criadoEm: l.criado_em.toISOString(), criadoPor: l.criado_por_nome,
     publicadaEm: l.publicada_em?.toISOString() ?? null, publicadaPor: l.publicada_por_nome,
-    conteudo: c.success ? c.data : playbookDaConfig({}), custoCentavos: l.custo_centavos,
+    conteudo: c.data, custoCentavos: l.custo_centavos, atualizadoEm: l.atualizado_em.toISOString(),
   }
 }
 
 /** Escopo como chave SQL: o número, ou NULL (conta). */
 const doEscopo = (tx: Sql, canalId: string | null) => (canalId ? tx`p.canal_id = ${canalId}` : tx`p.canal_id IS NULL`)
 
-/** Trava o escopo até o fim da transação. */
-async function travarEscopo(tx: Sql, canalId: string | null): Promise<void> {
-  await tx`SELECT pg_advisory_xact_lock(hashtext('agente_playbook'), hashtext(tenant_atual()::text || ':' || coalesce(${canalId}::text, 'conta')))`
+/**
+ * UMA trava por TENANT até o fim da transação — a MESMA do trigger de INSERT em
+ * `agente_config` (0106). Publicar e espelhar a conta e um número ao mesmo tempo
+ * (ou um número nascendo no meio) não se cruzam: quem espelha vê o estado final.
+ * `canalId` fica na assinatura por legibilidade de quem chama.
+ */
+async function travarEscopo(tx: Sql, _canalId: string | null): Promise<void> {
+  await tx`SELECT pg_advisory_xact_lock(hashtext('agente_playbook'), hashtext(tenant_atual()::text))`
 }
 
 export async function canalExiste(tx: Sql, canalId: string): Promise<boolean> {
@@ -158,6 +176,10 @@ export async function importarPlaybookInicial(tx: Sql, p: { canalId: string; aut
   const [ja] = await tx<{ n: number }[]>`
     SELECT count(*)::int AS n FROM agente_playbook_versao p WHERE p.tenant_id = tenant_atual() AND ${doEscopo(tx, p.canalId)}`
   if ((ja?.n ?? 0) > 0) return { importada: false as const, publicada: await lerPublicada(tx, p.canalId) }
+  // Número coberto pelo playbook da CONTA: importar a config criaria uma v1 que
+  // troca o comportamento em silêncio (perde estilo/mensagens da conta). Recusa.
+  const daConta = await lerPublicada(tx, null)
+  if (daConta) return { importada: false as const, publicada: null, cobertoPelaConta: { versaoId: daConta.id, numero: daConta.numero } }
   const [cfg] = await tx<{ persona: unknown; qualificacao: unknown; compliance: unknown }[]>`
     SELECT persona, qualificacao, (to_jsonb(ac.*) -> 'compliance') AS compliance
       FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${p.canalId}`
@@ -254,6 +276,7 @@ export async function descartarRascunho(tx: Sql, canalId: string | null): Promis
 export type ResultadoPublicar =
   | { tipo: 'ok'; versao: NonNullable<Awaited<ReturnType<typeof lerPublicada>>>; numerosAlcancados: number }
   | { tipo: 'sem_rascunho' }
+  | { tipo: 'rascunho_mudou'; atualizadoEm: string }
   | { tipo: 'invalido'; erros: readonly ErroCampoPlaybook[] }
 
 /**
@@ -263,10 +286,15 @@ export type ResultadoPublicar =
  */
 export async function publicarRascunho(tx: Sql, p: {
   canalId: string | null; observacao: string; autorId: string | null; atorStaff?: boolean | undefined; restauradaDe?: { id: string; numero: number | null } | undefined
+  /** O `atualizadoEm` do rascunho que a pessoa revisou; ausente só na restauração (rascunho criado aqui). */
+  rascunhoAtualizadoEm?: string | undefined
 }): Promise<ResultadoPublicar> {
   await travarEscopo(tx, p.canalId)
   const rascunho = await lerRascunho(tx, p.canalId)
   if (!rascunho) return { tipo: 'sem_rascunho' }
+  if (p.rascunhoAtualizadoEm !== undefined && new Date(p.rascunhoAtualizadoEm).getTime() !== new Date(rascunho.atualizadoEm).getTime()) {
+    return { tipo: 'rascunho_mudou', atualizadoEm: rascunho.atualizadoEm }
+  }
   // A base do código pode ter mudado depois do último salvar: valida de novo.
   const v = validarPlaybook(rascunho.conteudo)
   if (!v.ok) return { tipo: 'invalido', erros: v.erros }

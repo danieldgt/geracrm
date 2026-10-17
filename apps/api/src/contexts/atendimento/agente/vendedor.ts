@@ -454,7 +454,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   const prefixoFiltrado = async (handoffAtual: { motivo: string; resumo: string } | null, fixasDoTurno: readonly string[]) => {
     if (pre.prefixo.length === 0) return { mensagens: [] as readonly string[], guardrails: [] as readonly MarcaGuardrail[], estado: {} as PatchEstado }
     const r = await pipeline.filtro.executar(ctx, {
-      mensagens: pre.prefixo, handoff: handoffAtual, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
+      mensagens: pre.prefixo, prefixo: true, handoff: handoffAtual, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
       saldoBaixoVisto: registro.saldoBaixoVisto, mensagensFixas: fixasDoTurno, numerosDoCliente: numerosDaMemoria,
       falasAnterioresDoAgente: historico.filter((h) => h.de === 'nos').map((h) => h.texto),
     })

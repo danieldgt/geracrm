@@ -134,6 +134,9 @@ export interface RelatorioRetornos {
   descartados: number
 }
 
+/** Quanto um retorno pode ser adiado pelo recorte além do horário previsto (decisão q, revisão P17). */
+export const VALIDADE_ADIAMENTO_RECORTE_MS = 24 * 60 * 60 * 1000
+
 interface RetornoVencido {
   readonly tenant_id: string
   readonly id: string
@@ -143,6 +146,8 @@ interface RetornoVencido {
   readonly tentativa: number
   readonly texto: string | null
   readonly criado_em: Date
+  /** Quando o retorno estava previsto (antes de qualquer adiamento desta passada). */
+  readonly executar_em: Date
   readonly falhas_transporte: number
 }
 
@@ -166,7 +171,7 @@ export async function processarRetornos(
   if (!travou) return r
   try {
     const vencidos = await dono<RetornoVencido[]>`
-      SELECT tenant_id, id, conversa_id, canal_id, motivo, tentativa, texto, criado_em, falhas_transporte
+      SELECT tenant_id, id, conversa_id, canal_id, motivo, tentativa, texto, criado_em, executar_em, falhas_transporte
         FROM agente_retorno
        WHERE estado = 'pendente' AND executar_em <= ${agora}
          ${deps.somenteTenant ? dono`AND tenant_id = ${deps.somenteTenant}` : dono``}
@@ -347,6 +352,9 @@ async function avaliar(tx: Sql, v: RetornoVencido, agora: Date): Promise<'envia'
     const ate = await aberturaDoRecorte(tx, v.canal_id, agora)
     if (ate === undefined) return motivoModo
     if (ate === null) return 'fora_do_recorte_sem_abertura'
+    // Validade: no máximo 24 h além do previsto. Uma cutucada de "carrinho parado"
+    // dias depois (feriado prolongado, recorte só no fim de semana) já não é a mesma conversa.
+    if (ate.getTime() - new Date(v.executar_em).getTime() > VALIDADE_ADIAMENTO_RECORTE_MS) return 'fora_do_recorte_prazo_excedido'
     return { adiarAte: ate, motivo: `${motivoModo}: adiado para a abertura do recorte` }
   }
 

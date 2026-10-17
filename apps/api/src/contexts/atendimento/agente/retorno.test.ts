@@ -327,6 +327,18 @@ describe('Processar os vencidos', () => {
     expect(l!.executar_em.getTime()).toBe(instanteLocal(amanha.data, '00:00', 'America/Sao_Paulo').getTime())
   })
 
+  it('(q) abertura do recorte a mais de 24 h do previsto → CANCELADO com motivo (o retorno tem validade)', async () => {
+    await pedido('aguardando_confirmacao')
+    // Recorte só daqui a 3 dias: a abertura cai além da validade de 24 h.
+    const daqui3 = partesLocais(new Date(Date.now() + 3 * 24 * H), 'America/Sao_Paulo')
+    const DIAS = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'] as const
+    await dono`UPDATE agente_config SET recorte = ${JSON.stringify({ horario: { [DIAS[daqui3.diaIso - 1]!]: TODO_DIA } })}::text::jsonb WHERE tenant_id = ${T}`
+    await agendar('proposta_sem_resposta', new Date(Date.now() - 1000))
+    const r = await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T })
+    expect(r).toMatchObject({ adiados: 0, cancelados: 1 })
+    expect((await retornos())[0]).toMatchObject({ estado: 'cancelado', detalhe: 'fora_do_recorte_prazo_excedido' })
+  })
+
   it('(q) contato FORA do segmento do recorte → continua CANCELADO (segmento não é horário)', async () => {
     await pedido('aguardando_confirmacao')
     // O contato de teste não tem compra: é `sem-historico`, fora de 'cliente-fiel'.

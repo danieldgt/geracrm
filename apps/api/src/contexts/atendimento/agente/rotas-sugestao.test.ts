@@ -568,11 +568,8 @@ describe('Copiloto — concorrência, atraso e autoria', () => {
     await a.close()
   })
 
-  // ⚠️ SKIP CONSCIENTE (revisão P13, MÉDIA): hoje `memoria_anotar` GRAVA em cliente_memoria também
-  //    no copiloto. Quem fecha é a raia P17, dona de ferramentas/montar.ts e
-  //    memoria/ferramenta-memoria.ts ("memória não grava em simulação e copiloto"). Quando a P17
-  //    entrar, este teste deixa de ser skip.
-  it.skip('[P17] copiloto não grava memória do cliente mesmo se o modelo chamar memoria_anotar', async () => {
+  // Revisão P13 (MÉDIA), fechada pela P17: `memoria_anotar` não grava em simulação nem no copiloto.
+  it('[P17] copiloto não grava memória do cliente mesmo se o modelo chamar memoria_anotar', async () => {
     await doCliente('prefiro pagar no boleto')
     const anotador: PortaLlmFerramentas = { nome: 'anotador', capacidades: { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false },
       async rodar(e): Promise<ResultadoLaco> {

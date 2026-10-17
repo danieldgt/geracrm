@@ -78,9 +78,9 @@ export class PlaybookServico {
     } catch (e) { return falhaDe(e) }
   }
 
-  async publicar(canalId: string | null, observacao: string): Promise<Resultado<{ versao: VersaoPlaybook; numerosAlcancados: number }>> {
+  async publicar(canalId: string | null, observacao: string, rascunhoAtualizadoEm: string): Promise<Resultado<{ versao: VersaoPlaybook; numerosAlcancados: number }>> {
     try {
-      const r = await firstValueFrom(this.http.post<{ versao: VersaoPlaybook; numerosAlcancados: number }>('/v1/agente/playbook/publicar', { canalId, observacao }))
+      const r = await firstValueFrom(this.http.post<{ versao: VersaoPlaybook; numerosAlcancados: number }>('/v1/agente/playbook/publicar', { canalId, observacao, rascunhoAtualizadoEm }))
       return { ok: true, versao: r.versao, numerosAlcancados: r.numerosAlcancados }
     } catch (e) { return falhaDe(e) }
   }

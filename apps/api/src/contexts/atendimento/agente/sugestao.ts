@@ -257,7 +257,8 @@ export async function gerarCopiloto(
   let relogio: ReturnType<typeof setTimeout> | undefined
   const turno = conduzirTurnoVendedor(
     { tenant_id: tenantId, id: randomUUID(), conversa_id: conversaId, canal_id: conv.canalId, mensagens_ids: entrantes, tentativas: 1, executar_em: agora },
-    { ligacoes: ligacoesPadrao, copiloto: true, agora, ...(opcoes.llm ? { llm: opcoes.llm } : {}) },
+    // O número vai junto: as AÇÕES do playbook publicado valem também para o copiloto (P17).
+    { ligacoes: (cfg) => ligacoesPadrao({ ...cfg, canalId: conv.canalId }), copiloto: true, agora, ...(opcoes.llm ? { llm: opcoes.llm } : {}) },
   )
   // O turno segue sozinho depois do prazo. Quando termina: marca quem pediu; se já tinha
   // estourado o prazo e saiu sugestão, publica para o painel; e só então solta a trava.

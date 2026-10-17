@@ -22,7 +22,7 @@ import { modelosPermitidos } from './modelos.js'
 import { conduzirTurnoVendedor, type DepsTurno } from './vendedor.js'
 import { criarLlmDoCatalogo, llmFerramentasDoAmbiente } from './fabrica-ferramentas.js'
 import { resolverModelo } from './modelos.js'
-import { lerRascunho } from './playbook/repositorio.js'
+import { lerPublicada, lerRascunho } from './playbook/repositorio.js'
 import {
   adquirirTravaSimulacao, espelhoDoConteudo, liberarTravaSimulacao, ligacoesDoSandbox, llmComPlaybook, pipelineComPlaybook,
 } from './playbook/simulacao.js'
@@ -108,6 +108,12 @@ const corpoTenant = z.object({
   confirmacao: z.string().max(40).optional(),
 }).strict()
 
+/** O espelho que o trigger de INSERT daria a um número novo: a publicada da conta (P17). */
+async function espelhoDaConta(tx: Parameters<typeof lerPublicada>[0]): Promise<unknown> {
+  const v = await lerPublicada(tx, null)
+  return v && v.numero !== null ? { versaoId: v.id, numero: v.numero, escopo: 'tenant', publicadaEm: v.publicadaEm, conteudo: v.conteudo } : null
+}
+
 /** O que a tela de configuração precisa saber do playbook publicado (P17). */
 function resumoDoVigente(v: unknown): { numero: number; escopo: 'numero' | 'tenant'; publicadoEm: string } | null {
   const p = lerPlaybookVigente(v)
@@ -135,7 +141,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
     '/v1/canais/:id/agente', { preHandler: exigirTenant },
     async (req, reply) => {
-      const { cfg, temMensagemAusencia, fatos } = await req.comTenant(async (tx) => {
+      const { cfg, daConta, temMensagemAusencia, fatos } = await req.comTenant(async (tx) => {
         const [linha] = await tx<{
           ativo: boolean; modo: ModoAgente; politicas: string | null; persona: unknown; objetivo: string; alcada: unknown
           qualificacao: unknown; modelo: string | null; limiar_confianca: string; max_rodadas: number; prazo_turno_ms: number
@@ -158,7 +164,9 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
             FROM canal_configuracao
            WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
         await garantirUsuarioId(tx, req)
-        return { cfg: linha, temMensagemAusencia: canal?.tem ?? false, fatos: await lerFatosDoModo(tx, new Date(), req.params.id) }
+        // Número ainda sem linha: o que vai valer quando nascer é o playbook da CONTA (trigger de INSERT, 0106).
+        const daConta = linha ? null : await espelhoDaConta(tx)
+        return { cfg: linha, daConta, temMensagemAusencia: canal?.tem ?? false, fatos: await lerFatosDoModo(tx, new Date(), req.params.id) }
       })
       const podeConfigurar = await temPapel(req, 'admin')
       const modoDoNumero: ModoAgente = cfg?.modo ?? 'desligado'
@@ -213,7 +221,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         podeConfigurar,
         reservaLlm: situacaoDaReserva(),
         // P17: persona e roteiro deste número vêm do playbook publicado (a tela os mostra só para leitura).
-        playbookVigente: resumoDoVigente(cfg?.playbook),
+        playbookVigente: resumoDoVigente(cfg ? cfg.playbook : daConta),
       })
     },
   )
@@ -289,7 +297,9 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         }
         // P17: com playbook publicado, persona e roteiro de qualificação são do
         // PLAYBOOK — editar aqui divergiria da versão auditada. Igual ao vigente passa.
-        const doPlaybook = conflitoComPlaybook(antes?.linha['playbook'], corpo, req.body)
+        // Número sem linha: o trigger de INSERT trocaria persona/roteiro pelos da CONTA em
+        // silêncio — o PUT que diverge recebe o 409 já no primeiro salvar.
+        const doPlaybook = conflitoComPlaybook(antes ? antes.linha['playbook'] : await espelhoDaConta(tx), corpo, req.body)
         if (doPlaybook) return { tipo: 'campo_do_playbook' as const, ...doPlaybook }
         await tx`
           INSERT INTO agente_config (

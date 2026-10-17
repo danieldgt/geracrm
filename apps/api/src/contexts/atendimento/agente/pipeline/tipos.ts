@@ -166,6 +166,13 @@ export interface EntradaPosResposta {
    */
   readonly mensagensFixas?: readonly string[] | undefined
   readonly falasAnterioresDoAgente: readonly string[]
+  /**
+   * As mensagens são o PREFIXO fixo do sistema (abertura com identificação e aviso
+   * de privacidade), não a resposta do modelo: o filtro não aplica os limites de
+   * estilo do playbook — cortar o aviso para caber no estilo seria desligar um
+   * guardrail pela tela (revisão P17). Isenção pela ORIGEM, nunca pelo texto.
+   */
+  readonly prefixo?: boolean | undefined
 }
 
 export interface ResultadoPosResposta {

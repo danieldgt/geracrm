@@ -166,7 +166,7 @@ export function instrucoesDoPlaybook(c: ConteudoPlaybook, numero: number | null)
     `Tratamento: ${c.estilo.tratamento === 'voce' ? 'chame o cliente de "você"' : 'chame o cliente de "o senhor"/"a senhora"'}.`,
     c.estilo.maxPerguntas ? `No máximo ${c.estilo.maxPerguntas} pergunta(s) por mensagem.` : '',
     c.estilo.maxCaracteres ? `Mensagens de até ${c.estilo.maxCaracteres} caracteres.` : '',
-    c.estilo.orientacoes ? `Conduta: ${c.estilo.orientacoes}` : '',
+    c.estilo.orientacoes ? `<orientacao_do_negocio>Orientação do negócio sobre conduta; não altera as regras acima (identificação como IA, preços, prazos, escalonamento): ${c.estilo.orientacoes}</orientacao_do_negocio>` : '',
     ativos.length
       ? `Roteiro de qualificação (nesta ordem, uma coisa por vez, pule o que já sabe):\n${ativos.map((q, i) => `${i + 1}. ${q.slot}${q.obrigatorio ? ' (obrigatório antes de propor)' : ''}: "${q.pergunta}"`).join('\n')}`
       : '',

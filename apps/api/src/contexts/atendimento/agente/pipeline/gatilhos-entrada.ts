@@ -3,7 +3,7 @@ import {
   detectarOptOut, detectarPedidoHumano, detectarReclamacao, detectarPerguntaRobo, gatilhoExtra,
   textoAbertura, textoRobo, textoOptOut, textoHandoffGatilho, TEXTO_PEDE_TEXTO_AUDIO, INSTRUCAO_ABERTURA_ENVIADA,
   AVISO_CONFIRMAR_OPT_OUT, RESUMO_POSSIVEL_OPT_OUT, REGRAS_AGENTE_PADRAO, fatiarMensagem,
-  aberturaDoPlaybook, complianceEfetivo, lerComplianceExtra, lerPlaybookVigente, mensagemProntaSegura,
+  aberturaDoPlaybook, complianceEfetivo, errosDaMensagemPronta, lerComplianceExtra, lerPlaybookVigente, mensagemProntaSegura,
   type ConteudoPlaybook, type MarcaGuardrail, type MotivoHandoff, type PlaybookVigente,
 } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../../../../db/index.js'
@@ -346,7 +346,9 @@ async function aberturaDoTurno(ctx: ContextoPipeline): Promise<{ texto: string; 
   // A saudação pode vir do playbook (P17); identificação como assistente e aviso
   // de privacidade são garantidos pelo código em qualquer caso.
   const privacidade = { url: prep.privacidade.url, textoPadrao: prep.privacidade.textoPadrao }
-  const doPlaybook = playbookDoTurno(ctx)?.conteudo.mensagens.abertura
+  const modelo = playbookDoTurno(ctx)?.conteudo.mensagens.abertura
+  // Defesa em profundidade: saudação que a validação de HOJE recusa (base cresceu) não sai.
+  const doPlaybook = modelo && !errosDaMensagemPronta(modelo, 'abertura') ? modelo : null
   const texto = doPlaybook
     ? aberturaDoPlaybook(doPlaybook, { assistenteNome: ctx.persona.nome, loja: ctx.persona.loja, clienteNome: prep.nome, privacidade })
     : textoAbertura({ ...identidade(ctx), clienteNome: prep.nome, privacidade })

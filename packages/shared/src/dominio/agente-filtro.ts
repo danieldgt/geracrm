@@ -503,7 +503,8 @@ function compilarExtras(lista: readonly string[] | undefined): ProibidaExtra[] {
   if (!lista?.length) return []
   return semDuplicatas(lista)
     .filter((t) => t.length >= LIMITES_COMPLIANCE.minCaracteres)
-    .slice(0, LIMITES_COMPLIANCE.maxItens)
+    // Número (P2) + playbook (P17): até duas listas cheias — nenhuma frase extra é perdida.
+    .slice(0, LIMITES_COMPLIANCE.maxItens * 2)
     .map((t) => ({ id: `extra:${chaveLiteral(t).slice(0, 60)}`, re: regexLiteral(t) }))
 }
 
@@ -549,6 +550,18 @@ const temPergunta = (f: string): boolean => /\?/.test(f)
 
 function cortarFrase(f: string, max: number): string {
   if (f.length <= max) return f
+  // ⚠️ Nunca separar o termo da sua nota obrigatória ("frete grátis" sem "(conforme a
+  //    política de frete)"): se o corte cairia dentro da nota, corta ANTES do termo.
+  for (const n of NOTAS_OBRIGATORIAS_B2B) {
+    const iNota = f.indexOf(n.nota)
+    if (iNota < 0 || iNota + n.nota.length <= max - 1) continue
+    n.re.lastIndex = 0
+    const m = n.re.exec(f.slice(0, iNota))
+    const antes = f.slice(0, m?.index ?? 0).replace(/[\s,;:]+$/u, '')
+    // Sem nada antes do termo: a frase fica INTEIRA (estilo cede à nota; nunca o contrário).
+    if (!antes) return f
+    return antes.length + 1 <= max ? `${antes}…` : cortarFrase(antes, max)
+  }
   const corte = f.slice(0, Math.max(1, max - 1))
   const espaco = corte.lastIndexOf(' ')
   return `${(espaco > max * 0.5 ? corte.slice(0, espaco) : corte).replace(/[\s,;:]+$/u, '')}…`

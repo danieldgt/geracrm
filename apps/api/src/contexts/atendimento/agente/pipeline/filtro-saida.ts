@@ -1,6 +1,6 @@
 import {
-  ajustarMensagemHandoff, complianceEfetivo, contemAvisoPrivacidade, filtrarSaida, lerComplianceExtra, lerPlaybookVigente,
-  limitesDoPlaybook, mencionaQuemRetoma, TEXTO_RETOMADA,
+  ajustarMensagemHandoff, complianceEfetivo, filtrarSaida, lerComplianceExtra, lerPlaybookVigente,
+  limitesDoPlaybook, mencionaQuemRetoma, LIMITES_COMPLIANCE, TEXTO_RETOMADA,
 } from '@geracrm/shared'
 import type { EtapaPosResposta, MarcaGuardrail } from './tipos.js'
 import { marca } from './tipos.js'
@@ -34,9 +34,9 @@ export const MENSAGEM_FILTRO_ESVAZIOU =
  * versão publicada): as frases proibidas do playbook SOMAM às do número (só
  * acrescentam), e o estilo vira `limites` de `filtrarSaida` — máximo de
  * caracteres e de perguntas por mensagem são APLICADOS aqui, não só pedidos no
- * prompt. ⚠️ A abertura (identificação como assistente + aviso de privacidade)
- * também passa por aqui como prefixo e NÃO leva limite: cortar o aviso de
- * privacidade para caber no estilo seria desligar um guardrail pela tela.
+ * prompt. ⚠️ O PREFIXO do sistema (abertura: identificação como assistente +
+ * aviso de privacidade) também passa por aqui e NÃO leva limite — isenção pela
+ * origem (`entrada.prefixo`), nunca por reconhecer o texto.
  */
 export const etapaFiltroSaida: EtapaPosResposta = {
   nome: ETAPA,
@@ -45,6 +45,11 @@ export const etapaFiltroSaida: EtapaPosResposta = {
     const compliance = complianceEfetivo(lerComplianceExtra(ctx.cfgExtra['compliance']), playbook)
     const limites = limitesDoPlaybook(playbook)
     const guardrails: MarcaGuardrail[] = []
+    // Número + playbook passam de duas listas cheias (não deveria, a validação limita):
+    // o excedente não vale, e isso fica registrado — nunca cortado em silêncio.
+    if (compliance.frasesProibidas.length > LIMITES_COMPLIANCE.maxItens * 2) {
+      guardrails.push(marca(ETAPA, 'compliance_cortado', 'INFO', 'registrado', `${compliance.frasesProibidas.length} frases extras; valem ${LIMITES_COMPLIANCE.maxItens * 2}`))
+    }
     // Escassez ("poucas unidades") só é verdade com saldo BAIXO de ferramenta
     // de catálogo/estoque NESTE turno (`saldoBaixoVisto`: 0 < saldo ≤
     // LIMIAR_ESCASSEZ, do registro de ferramentas). Saldo 0 ou alto desmente a frase. ⚠️ Um número qualquer de fonte (preço, prazo) não abona:
@@ -52,7 +57,7 @@ export const etapaFiltroSaida: EtapaPosResposta = {
     const estoqueComFonte = entrada.saldoBaixoVisto === true
     let mensagens: string[] = []
     for (const m of entrada.mensagens) {
-      const comLimites = Object.keys(limites).length > 0 && !ehAbertura(m)
+      const comLimites = Object.keys(limites).length > 0 && entrada.prefixo !== true
       const r = filtrarSaida(m, { extras: compliance.frasesProibidas, estoqueComFonte, ...(comLimites ? { limites } : {}) })
       for (const o of r.ocorrencias) guardrails.push(marca(ETAPA, o.id, o.gravidade, o.acao, o.trecho))
       if (!r.esvaziado) mensagens.push(r.texto)
@@ -90,7 +95,3 @@ export const etapaFiltroSaida: EtapaPosResposta = {
   },
 }
 
-/** A abertura do sistema (identificação + aviso de privacidade) — fica fora dos limites de estilo. */
-function ehAbertura(m: string): boolean {
-  return /assistente virtual/i.test(m) && contemAvisoPrivacidade(m)
-}

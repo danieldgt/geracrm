@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { SLOTS_QUALIFICACAO, TONS, verificarNumerosNaResposta, type PersonaResolvida, type SlotQualificacao } from './agente-vendedor.js'
 import {
-  LIMITES_COMPLIANCE, ajustarMensagemHandoff, chaveLiteral, filtrarSaida, semDuplicatas, type ComplianceExtra,
+  LIMITES_COMPLIANCE, PROMESSA_PRAZO_RE, ajustarMensagemHandoff, chaveLiteral, filtrarSaida, semDuplicatas, type ComplianceExtra,
 } from './agente-filtro.js'
 import { textoAvisoPrivacidade } from './agente-gatilhos.js'
 import { PERGUNTA_DO_SLOT } from './agente-perguntas.js'
@@ -197,6 +197,8 @@ export interface VersaoPlaybook {
   readonly documentoNome: string | null
   readonly criadoEm: string
   readonly criadoPor: string | null
+  /** Última gravação do conteúdo (rascunho). Publicar exige o valor que a tela viu. */
+  readonly atualizadoEm: string
   readonly publicadaEm: string | null
   readonly publicadaPor: string | null
   readonly conteudo: ConteudoPlaybook
@@ -216,6 +218,11 @@ export const corpoPublicarPlaybook = z.object({
   observacao: z.string().trim()
     .min(LIMITES_PLAYBOOK.observacaoMin, `Escreva ao menos ${LIMITES_PLAYBOOK.observacaoMin} caracteres explicando o que mudou.`)
     .max(LIMITES_PLAYBOOK.observacaoMax),
+  /**
+   * `atualizadoEm` do rascunho que a pessoa REVISOU no diff. Se alguém gravou
+   * depois, publicar recusa (409) — nunca se publica o que ninguém viu.
+   */
+  rascunhoAtualizadoEm: z.string().datetime({ offset: true }),
 }).strict()
 
 // ── padrão e importação ────────────────────────────────────────────────────
@@ -275,13 +282,52 @@ export type ResultadoValidacaoPlaybook =
 const PLACEHOLDER_RE = /\{[^{}\s]{1,30}\}/g
 const PERCENTUAL_RE = /\d+(?:[.,]\d+)?\s*%/
 
-/** Mensagem pronta: placeholders fixos, sem valor/percentual, sem frase proibida da base, sem promessa de prazo. */
-export function errosDaMensagemPronta(texto: string, chave: ChaveMensagemPlaybook | 'pergunta'): string | null {
+// ── texto do negócio: o que NUNCA passa (revisão P17) ──────────────────────
+
+const NAO = String.raw`(?:n[aã]o|nada\s+de|sem|nenhum[a]?|jamais|nunca)`
+const MAQUINA = String.raw`(?:ia|i\.a\.|rob[oô]s?|bots?|chat\s*bots?|m[aá]quinas?|intelig[eê]ncia\s+artificial|automa[cç][aã]o|atendimento\s+autom[aá]tico|(?:assistente|atendente)\s+virtual)`
+/**
+ * Negar ser IA ou se passar por gente — no texto que o NEGÓCIO escreve (mensagens
+ * prontas, saudação, orientações). Mais largo que a base do filtro de saída de
+ * propósito: aqui não há resposta do modelo a preservar, há uma configuração a
+ * recusar. "atendimento humano" e "pessoa real" também ficam de fora — a
+ * transferência diz "uma pessoa da equipe".
+ */
+const NEGA_IA_RES: readonly RegExp[] = [
+  new RegExp(String.raw`(?:^|[^\p{L}])${NAO}\s+(?:(?:tem|h[aá]|é|e|somos|sou|usamos|existe)\s+)?(?:um\s+|uma\s+|de\s+|nenhum[a]?\s+)?${MAQUINA}(?![\p{L}])`, 'iu'),
+  new RegExp(String.raw`(?:^|[^\p{L}])${MAQUINA}\s*[?!.,:]*\s*(?:aqui\s+)?(?:n[aã]o|nunca|jamais)(?![\p{L}])`, 'iu'),
+  /atendimento\s+(?:100\s*%\s+)?human[oa]|pessoas?\s+(?:real|reais|de\s+verdade|de\s+carne)|gente\s+de\s+verdade|s[oó]\s+gente|human[oa]s?\s+de\s+verdade|equipe\s+humana/iu,
+  /(?:^|[^\p{L}])(?:sou|somos)\s+(?:um\s+|uma\s+)?(?:human[oa]s?|pessoas?|gente|atendente\s+humano)(?![\p{L}])/iu,
+  /(?:diga|fale|responda|afirme|finja|diz|dizer|fingir)\s+(?:que\s+)?(?:é|e|ser|somos|sou|voc[eê]\s+é)\s+(?:um\s+|uma\s+)?(?:human[oa]|pessoa|gente|atendente|vendedor[a]?|funcion[aá]ri[oa])/iu,
+  /ignor\w*\s+(?:as\s+|todas\s+as\s+)?(?:regras|instru[cç][oõ]es|orienta[cç][oõ]es)|desconsider\w*\s+(?:as\s+)?(?:regras|instru[cç][oõ]es)/iu,
+]
+
+/** O texto nega ser IA, se passa por humano ou tenta revogar as regras? */
+export function negaSerIa(texto: string): boolean {
+  return NEGA_IA_RES.some((r) => r.test(texto))
+}
+
+const NUMERO_EXTENSO = String.raw`(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|cento|duzent[oa]s|trezent[oa]s|quinhent[oa]s|mil|meia\s+d[uú]zia|d[uú]zia)`
+/** Número por extenso com unidade de negócio ("dez por cento", "dois dias úteis", "cinco peças"). */
+const NUMERO_EXTENSO_RE = new RegExp(String.raw`(?:^|[^\p{L}])${NUMERO_EXTENSO}(?:\s+e\s+${NUMERO_EXTENSO})*\s+(?:por\s+cento|reais|real|centavos|dias?|horas?|semanas?|meses|m[eê]s|unidades?|pe[cç]as?|caixas?|pares|fardos?|pacotes?|kg|quilos?|metros?)(?![\p{L}])`, 'iu')
+
+/** Mensagem pronta: placeholders fixos, sem valor/percentual/número/desconto/prazo, sem frase proibida, sem negar ser IA. */
+export function errosDaMensagemPronta(texto: string, chave: ChaveMensagemPlaybook | 'pergunta' | 'saudacao'): string | null {
   const desconhecidos = (texto.match(PLACEHOLDER_RE) ?? []).filter((p) => !(PLACEHOLDERS_PLAYBOOK as readonly string[]).includes(p))
   if (desconhecidos.length) return `Marcador desconhecido: ${desconhecidos[0]}. Use só ${PLACEHOLDERS_PLAYBOOK.join(', ')}.`
   const exemplo = renderizarMensagem(texto, { nome: 'Ana', assistente: 'Assistente', empresa: 'Loja' })
-  if (verificarNumerosNaResposta(exemplo, new Set()).length > 0 || /\bR\$/i.test(exemplo) || PERCENTUAL_RE.test(exemplo)) {
-    return 'Mensagem pronta não pode citar valor em reais nem percentual — o que é fato vai para a base de conhecimento.'
+  if (negaSerIa(exemplo)) {
+    return 'O texto não pode negar que é uma assistente virtual (IA) nem se apresentar como atendimento humano — a identificação é regra, não opção.'
+  }
+  if (verificarNumerosNaResposta(exemplo, new Set()).length > 0 || /\bR\$/i.test(exemplo) || PERCENTUAL_RE.test(exemplo)
+    || /por\s+cento/i.test(exemplo) || NUMERO_EXTENSO_RE.test(exemplo)) {
+    return 'Mensagem pronta não pode citar valor, percentual nem número (nem por extenso) — o que é fato vai para a base de conhecimento.'
+  }
+  if (/(?:^|[^\p{L}])descontos?(?![\p{L}])/iu.test(exemplo)) {
+    return 'Mensagem pronta não fala de desconto — desconto é decisão da alçada, nunca texto fixo.'
+  }
+  if (PROMESSA_PRAZO_RE.test(exemplo) || /(?:^|[^\p{L}])(?:chega|entrega\w*|sai|despach\w*|envi\w*)\s+(?:em|até|ate|no\s+m[aá]ximo)\s+/iu.test(exemplo) && /dias?|horas?|semanas?|amanh[aã]|hoje/iu.test(exemplo)) {
+    return 'Mensagem pronta não promete prazo de entrega nem de retorno.'
   }
   const f = filtrarSaida(exemplo)
   const proibida = f.ocorrencias.find((o) => o.gravidade === 'CRITICA' || o.acao === 'removido')
@@ -290,6 +336,21 @@ export function errosDaMensagemPronta(texto: string, chave: ChaveMensagemPlayboo
     const a = ajustarMensagemHandoff(exemplo, { semNumeros: true, anexarRetomada: false })
     if (a.ocorrencias.length > 0) return 'Aviso de transferência ou espera não pode prometer prazo nem citar número.'
   }
+  return null
+}
+
+/** Orientações de conduta: sem valor, sem frase da base, sem negar IA e sem tentar revogar as regras. */
+export function errosDasOrientacoes(texto: string): string | null {
+  if (!texto.trim()) return null
+  if (negaSerIa(texto)) {
+    return 'A orientação não pode mandar negar que é IA, se passar por pessoa nem ignorar as regras — esses guardrails não se desligam pela tela.'
+  }
+  if (/\bR\$/i.test(texto) || verificarNumerosNaResposta(texto, new Set()).length > 0) {
+    return 'Orientação de conduta não cita valor em reais — preço vem do catálogo e condição vem da base de conhecimento.'
+  }
+  const f = filtrarSaida(texto)
+  const proibida = f.ocorrencias.find((o) => o.gravidade === 'CRITICA')
+  if (proibida) return `A orientação contém algo que o filtro de segurança bloqueia (${proibida.id}). Reescreva sem prometer, garantir ou oferecer desconto.`
   return null
 }
 
@@ -323,12 +384,11 @@ export function validarPlaybook(bruto: unknown): ResultadoValidacaoPlaybook {
     if (e) erros.push({ campo: `mensagens.${k}`, mensagem: e })
   }
   if (c.persona.saudacao) {
-    const e = errosDaMensagemPronta(c.persona.saudacao, 'abertura')
+    const e = errosDaMensagemPronta(c.persona.saudacao, 'saudacao')
     if (e) erros.push({ campo: 'persona.saudacao', mensagem: e })
   }
-  if (c.estilo.orientacoes && (/\bR\$/i.test(c.estilo.orientacoes) || verificarNumerosNaResposta(c.estilo.orientacoes, new Set()).length > 0)) {
-    erros.push({ campo: 'estilo.orientacoes', mensagem: 'Orientação de conduta não cita valor em reais — preço vem do catálogo e condição vem da base de conhecimento.' })
-  }
+  const eo = errosDasOrientacoes(c.estilo.orientacoes)
+  if (eo) erros.push({ campo: 'estilo.orientacoes', mensagem: eo })
   if (c.acoes.proposta && !c.acoes.pedido) {
     erros.push({ campo: 'acoes.proposta', mensagem: 'Para enviar proposta o agente precisa montar o pedido: ligue também "Montar pedido".' })
   }
@@ -401,12 +461,13 @@ export function renderizarMensagem(modelo: string, v: ValoresPlaceholder): strin
   return t.replace(/[ \t]{2,}/g, ' ').replace(/\s+([!?.,])/g, '$1').trim()
 }
 
-const IDENTIFICA_RE = /assistente virtual|intelig[eê]ncia artificial|\bIA\b/i
-
 /**
- * Abertura do playbook: a saudação do negócio + o que o código garante — a
- * identificação como assistente virtual (IA) quando a saudação não a fizer, e
- * o aviso de privacidade SEMPRE no fim (ADR-028/029: não é opção da tela).
+ * Abertura do playbook: a saudação do negócio + o que o código garante SEMPRE —
+ * a frase de identificação como assistente virtual (IA) e o aviso de privacidade
+ * (ADR-028/029: não é opção da tela). ⚠️ Não se condiciona a identificação ao
+ * texto do negócio ("Aqui não tem IA" também contém "IA"): ela sempre entra.
+ * Saudação que nega ser IA nem chega aqui (validação), e se chegar o turno usa
+ * a abertura do código.
  */
 export function aberturaDoPlaybook(modelo: string, o: {
   clienteNome?: string | null | undefined; assistenteNome: string; loja?: string | undefined
@@ -414,11 +475,9 @@ export function aberturaDoPlaybook(modelo: string, o: {
 }): string {
   const saudacao = renderizarMensagem(modelo, { nome: o.clienteNome, assistente: o.assistenteNome, empresa: o.loja })
   const loja = o.loja?.trim() ? `da ${o.loja.trim()}` : 'da loja'
-  const identificacao = IDENTIFICA_RE.test(saudacao)
-    ? ''
-    : ` Sou ${o.assistenteNome.trim() || 'Assistente'}, assistente virtual ${loja} (uma inteligência artificial).`
+  const identificacao = `Sou ${o.assistenteNome.trim() || 'Assistente'}, assistente virtual ${loja} (uma inteligência artificial).`
   const fim = /[.!?…]$/u.test(saudacao) ? '' : '.'
-  return `${saudacao}${fim}${identificacao} ${textoAvisoPrivacidade(o.privacidade)}`.replace(/\s{2,}/g, ' ').trim()
+  return `${saudacao}${fim} ${identificacao} ${textoAvisoPrivacidade(o.privacidade)}`.replace(/\s{2,}/g, ' ').trim()
 }
 
 /**

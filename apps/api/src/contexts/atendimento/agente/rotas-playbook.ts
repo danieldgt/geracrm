@@ -14,7 +14,7 @@ import { criarLlmDoCatalogo, llmFerramentasDoAmbiente } from './fabrica-ferramen
 import { resolverModelo } from './modelos.js'
 import { extrairTexto, MAX_BYTES_ARQUIVO, TIPOS_ARQUIVO } from './conhecimento/extrair-texto.js'
 import {
-  canalExiste, criarRascunho, descartarRascunho, importarPlaybookInicial, lerPublicada, lerRascunho, lerVersao,
+  ErroConteudoPlaybook, canalExiste, criarRascunho, descartarRascunho, importarPlaybookInicial, lerPublicada, lerRascunho, lerVersao,
   listarVersoes, publicarRascunho, restaurarVersao, salvarRascunho, vigenteDoCanal,
 } from './playbook/repositorio.js'
 import { sugerirDoDocumento } from './playbook/sugestao.js'
@@ -72,12 +72,25 @@ async function escopoValido(req: FastifyRequest, canalId: string | null | undefi
   return req.comTenant((tx) => canalExiste(tx, canalId))
 }
 
+/** `?canalId=` → o número, null (conta, quando ausente/vazio) ou undefined (inválido: 404, nunca a conta). */
+function escopoDaQuery(v: string | undefined): string | null | undefined {
+  if (v === undefined || v === '') return null
+  return UUID.test(v) ? v : undefined
+}
+
 export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
+  // Versão gravada fora do contrato: erro NOMEADO, nunca "o padrão" em silêncio.
+  app.setErrorHandler((erro, _req, reply) => {
+    if (erro instanceof ErroConteudoPlaybook) {
+      return reply.code(500).send({ erro: 'playbook.conteudo_invalido', versaoId: erro.versaoId, mensagem: 'Uma versão do playbook está gravada fora do formato esperado. Acione o suporte; nada foi alterado.' })
+    }
+    throw erro   // o resto segue para o tratador global (app.ts)
+  })
   app.get<{ Querystring: { canalId?: string } }>(
     '/v1/agente/playbook', { preHandler: [exigirTenant, garantirUsuario] },
     async (req, reply) => {
-      const canalId = req.query.canalId && UUID.test(req.query.canalId) ? req.query.canalId : null
-      if (req.query.canalId && !canalId) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
+      const canalId = escopoDaQuery(req.query.canalId)
+      if (canalId === undefined) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
       const dados = await req.comTenant(async (tx) => {
         if (canalId && !await canalExiste(tx, canalId)) return null
         const [rascunho, publicada, vigente, total, cfg] = [
@@ -99,8 +112,8 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
         publicada: dados.publicada,
         vigente: dados.vigente ? { escopo: dados.vigente.escopo, versaoId: dados.vigente.versao.id, numero: dados.vigente.versao.numero, publicadaEm: dados.vigente.versao.publicadaEm } : null,
         diff: dados.rascunho ? diffPorSecao(referencia, dados.rascunho.conteudo) : null,
-        /** Sem nenhuma versão neste número: a tela oferece importar a v1 da configuração. */
-        importavel: !!canalId && dados.total === 0,
+        /** Sem nenhuma versão neste número E sem playbook da conta cobrindo: a tela oferece importar a v1. Coberto pela conta, "Editar" parte do da conta. */
+        importavel: !!canalId && dados.total === 0 && dados.vigente?.escopo !== 'tenant',
         complianceDoNumero: canalId ? lerComplianceExtra(dados.cfg?.compliance) : null,
         base: {
           frasesBase: BASE_B2B_DESCRITA, sempreLigadas: SEMPRE_LIGADAS_PLAYBOOK,
@@ -119,6 +132,12 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
     const r = await req.comTenant(async (tx) => importarPlaybookInicial(tx, {
       canalId: p.data.canalId, autorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
     }))
+    if ('cobertoPelaConta' in r && r.cobertoPelaConta) {
+      return reply.code(409).send({
+        erro: 'playbook.coberto_pela_conta', vigente: r.cobertoPelaConta,
+        mensagem: `Este número já segue o playbook da conta (v${r.cobertoPelaConta.numero}). Clique em Editar para criar um playbook próprio a partir dele.`,
+      })
+    }
     return reply.code(r.importada ? 201 : 200).send(r)
   })
 
@@ -142,7 +161,9 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
   })
 
   app.delete<{ Querystring: { canalId?: string } }>('/v1/agente/playbook/rascunho', soAdmin, async (req, reply) => {
-    const canalId = req.query.canalId && UUID.test(req.query.canalId) ? req.query.canalId : null
+    // ⚠️ canalId inválido ou de outro tenant NUNCA cai no escopo da conta: 404.
+    const canalId = escopoDaQuery(req.query.canalId)
+    if (canalId === undefined || !await escopoValido(req, canalId)) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
     const apagou = await req.comTenant((tx) => descartarRascunho(tx, canalId))
     if (!apagou) return reply.code(404).send({ erro: 'playbook.sem_rascunho', mensagem: 'Não há rascunho para descartar.' })
     return reply.send({ ok: true })
@@ -162,7 +183,14 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
     if (!await escopoValido(req, canalId)) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
     const r = await req.comTenant(async (tx) => publicarRascunho(tx, {
       canalId, observacao: p.data.observacao, autorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+      rascunhoAtualizadoEm: p.data.rascunhoAtualizadoEm,
     }))
+    if (r.tipo === 'rascunho_mudou') {
+      return reply.code(409).send({
+        erro: 'playbook.rascunho_mudou', atualizadoEm: r.atualizadoEm,
+        mensagem: 'O rascunho foi alterado depois que você o revisou. Reveja as diferenças e publique de novo.',
+      })
+    }
     if (r.tipo === 'sem_rascunho') return reply.code(404).send({ erro: 'playbook.sem_rascunho', mensagem: 'Não há rascunho para publicar. Edite o playbook primeiro.' })
     if (r.tipo === 'invalido') return campoInvalido(reply, r.erros)
     return reply.send({ ok: true, versao: r.versao, numerosAlcancados: r.numerosAlcancados })
@@ -171,7 +199,8 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { canalId?: string; cursor?: string } }>(
     '/v1/agente/playbook/versoes', { preHandler: exigirTenant },
     async (req, reply) => {
-      const canalId = req.query.canalId && UUID.test(req.query.canalId) ? req.query.canalId : null
+      const canalId = escopoDaQuery(req.query.canalId)
+      if (canalId === undefined || !await escopoValido(req, canalId)) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
       const cursor = req.query.cursor ? Number(req.query.cursor) : null
       if (cursor !== null && (!Number.isInteger(cursor) || cursor < 1)) return reply.code(422).send({ erro: 'cursor.invalido' })
       return reply.send(await req.comTenant((tx) => listarVersoes(tx, canalId, cursor)))
@@ -204,6 +233,7 @@ export async function rotasPlaybook(app: FastifyInstance): Promise<void> {
       case 'versao_rascunho': return reply.code(422).send({ erro: 'playbook.restaurar_rascunho', mensagem: 'Só se restaura versão publicada ou arquivada.' })
       case 'rascunho_existente': return reply.code(409).send({ erro: 'playbook.rascunho_existente', mensagem: 'Há um rascunho em andamento neste playbook. Publique ou descarte antes de restaurar.' })
       case 'sem_rascunho': return reply.code(404).send({ erro: 'playbook.sem_rascunho' })
+      case 'rascunho_mudou': return reply.code(409).send({ erro: 'playbook.rascunho_mudou' })
       case 'invalido': return campoInvalido(reply, r.erros, 'playbook.restaurar_invalido')
       case 'ok': return reply.send({ ok: true, versao: r.versao, numerosAlcancados: r.numerosAlcancados })
     }

@@ -332,3 +332,15 @@ describe('ComplianceExtra', () => {
     expect(semDuplicatas([' Frete  Grátis ', 'frete gratis', 'Boleto'])).toEqual(['Frete Grátis', 'Boleto'])
   })
 })
+
+describe('limite de caracteres × nota obrigatória (revisão P17)', () => {
+  it('o corte nunca separa "frete grátis" da nota: corta antes do termo', () => {
+    const r = filtrarSaida('Temos a grade completa da coleção nova com várias cores disponíveis e frete grátis para a sua cidade toda.', { limites: { maxCaracteres: 120 } })
+    expect(r.texto.length).toBeLessThanOrEqual(120)
+    expect(r.texto).not.toMatch(/frete gr[aá]tis(?! \(conforme a política de frete\))/i)
+  })
+  it('sem nada antes do termo, a frase fica inteira (o estilo cede à nota)', () => {
+    const r = filtrarSaida('Frete grátis para todos os pedidos da sua loja nesta semana de lançamento da coleção de verão completa e nova.', { limites: { maxCaracteres: 120 } })
+    expect(r.texto).toContain('(conforme a política de frete)')
+  })
+})
