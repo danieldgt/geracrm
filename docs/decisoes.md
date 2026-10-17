@@ -658,3 +658,266 @@ efetiva (ou degrada visível, ADR-008); fora, nasce um atendimento na fila com r
 
 **Consequências.** Rascunho nunca se perde (ADR-005). Desconto exige humano até existir política
 declarada por tenant. Toda proposta e confirmação é auditável por `agente_decisao` + `pedido_proposta`.
+
+## ADR-028 — Vocabulário de modo: "assistido" sugere; recorte; o mais restritivo vence
+
+**Data:** 2026-10-17. **Complementa** o ADR-023 (três modos por canal). Origem: port dos padrões do
+agente da AM Consórcio (`docs/plano-port-playbook-am.md`, raias P1 e P14).
+
+**Contexto.** O playbook da AM (§4.1) usa os mesmos quatro nomes de modo que o GeraCRM, mas um deles
+com outro significado: lá, `assistido` é **o bot responde sozinho dentro de um recorte** (etapas ×
+unidades × horário); aqui, desde o ADR-023, `assistido` é **o bot sugere e o vendedor aprova**. O
+próprio playbook aponta o risco (§4.1, nota; §13.7): portar código antes de alinhar o vocabulário
+produz uma tela que diz uma coisa e um portão que faz outra. Além disso, a AM resolve "quem manda"
+entre níveis com uma regra simples e testável — **o mais restritivo vence** (§4.2) — que o nosso
+`portao.ts` só aplica ao `ativo`, não ao modo.
+
+**Decisão.**
+1. **O vocabulário do GeraCRM não muda.** `desligado` (grava, não fala, transfere), `sombra` (decide e
+   grava, não envia), `assistido` (**sugere**; o vendedor envia, edita ou descarta), `autonomo` (envia).
+2. **O "assistido" da AM equivale ao nosso `autonomo` com recorte.** Ao ler o playbook, traduzir
+   sempre: "assistido na praça X das 8h às 18h" = `autonomo` restrito por recorte. Nenhum documento,
+   tela ou código do GeraCRM usa `assistido` no sentido da AM.
+3. **Recorte** é configuração do número (`agente_config.recorte`: horário, segmentos de RFV e o que
+   fazer fora dele). Fora do recorte o modo efetivo cai para o configurado em `foraDoRecorte`
+   (padrão `sombra`) — nunca sobe.
+4. **O mais restritivo vence** entre três níveis — tenant (`agente_tenant.modo_maximo`), número
+   (`agente_config.modo`) e recorte — na ordem `desligado < sombra < assistido < autonomo`. O nível de
+   baixo **restringe, nunca afrouxa** o de cima. A decisão é uma função pura (`decidirModoEfetivo`),
+   testada sem I/O, e o modo efetivo de cada turno fica gravado em `agente_decisao`.
+5. Mudança para `autonomo` ou `desligado` exige **confirmação digitada** (o nome do modo, aceito sem
+   acento e sem caixa) e papel de admin; todo PUT de configuração do agente grava auditoria com
+   `{antes, depois}`.
+
+**Consequências.** O kill switch continua sendo `desligado` — nunca "parar o worker", porque o registro
+da mensagem não pode depender do agente (AM §4.3). A tela mostra o modo **efetivo** e de onde veio a
+restrição (tenant, número ou recorte). `identificaComoRobo` deixa de ser opção visível: identificar-se
+como assistente é regra, não preferência (ADR-029).
+
+## ADR-029 — Pipeline determinístico antes e depois do LLM; a tela só acrescenta restrição
+
+**Data:** 2026-10-17.
+
+**Contexto.** Boa parte da conduta do agente está **só no prompt** (`instrucao-vendedor.ts`): opt-out,
+pedido de humano, reclamação, "é robô?", não repetir pergunta. O guardrail numérico
+(`verificarNumerosNaResposta`) é a única regra garantida em código, e só cobre R$. A AM aprendeu com
+incidentes reais que o prompt orienta mas não garante (§3.2: "o prompt existe para o modelo errar
+menos, não para ser a última linha de defesa"): o filtro sem noção de negação cortava "não damos
+garantia" (§12 #11); o modelo repetia a pergunta que o cliente já tinha respondido de outro jeito
+(§3.8, §12 #3); completava a mensagem de handoff prometendo prazo (§12 #5); e, sem gatilho
+determinístico, cada "pare" custava uma chamada de LLM. E fixou um princípio (§12): **o que o negócio
+muda vira configuração versionada; o que protege fica no código.**
+
+**Decisão.**
+1. O turno do agente vira um **pipeline de ordem fixa**, com etapas determinísticas em volta do LLM:
+   `modo efetivo → portão → gatilhos de entrada → slots do cliente → teto (pré) → LLM → guardrail R$ →
+   números ampliados → filtro de saída → pergunta repetida → regras de qualidade → envio → teto (pós)`.
+   Cada etapa registra o que fez como marca em `agente_decisao.guardrails` (etapa, código, gravidade,
+   ação, trecho mascarado).
+2. **Antes do LLM, sem gastar token** (regra pura sobre o texto do cliente): opt-out (com confirmação
+   e cancelamento de retornos; "cancelar pedido" **não** é opt-out), pedido de humano,
+   reclamação/Procon/jurídico, "é robô?" (1ª vez resposta fixa honesta, 2ª handoff), áudio sem
+   transcrição (1º pede texto, 2º handoff), abertura fixa que identifica a assistente na 1ª resposta.
+3. **Depois do LLM, antes do envio**:
+   - **números** — além de R$, percentual, quantidade e prazo só saem com fonte no turno (ferramenta,
+     política, conhecimento ou o próprio cliente); % sem fonte bloqueia (amplia o ADR-023);
+   - **filtro de frases com negação** — lista base B2B (negar ser IA; garantir entrega, prazo, estoque,
+     preço ou crédito; "melhor preço do mercado"; oferecer desconto; urgência falsa; pedir consentimento
+     para atender; hesitações) com a regra de negação da AM: mesma oração, até 2 palavras antes, sem
+     conectivo no meio, "sem" colado ao termo, dupla negação conta como afirmação. O teste que impede o
+     filtro de virar censura vai junto: ≥ 30 respostas aprovadas saem **inalteradas**;
+   - **pergunta repetida** — Jaccard ≥ 0,7 contra as perguntas do turno anterior, com extração
+     determinística do que o cliente já respondeu; a repetida sai e entra a próxima pendente (ou uma
+     neutra), registrada como violação MEDIA corrigida. A última pergunta fica em
+     `agente_sessao.estado_agente` e sobrevive a restart;
+   - **qualidade** — regras em 100% das mensagens (ADR-031).
+4. O pipeline vale **igual** em autônomo, assistido (a sugestão chega filtrada e com avisos), sombra,
+   simulação e copiloto.
+5. **Regra de fronteira**: o que o negócio muda (tom, roteiro, mensagens prontas, frases proibidas
+   **extras**, gatilhos de handoff **extras**, recorte, limites) é **configuração versionada** por
+   tenant/número, com auditoria. O que protege (filtro base, número só com fonte, opt-out, handoff
+   obrigatório, identificação como assistente, `pedido_efetivar` fora do modelo) fica **no código** e
+   **não tem chave de desligar**. **A tela só acrescenta restrição** — nunca afrouxa.
+
+**Consequências.** `vendedor.ts` deixa de crescer: cada regra mora numa etapa própria com teste isolado
+(P0 cria a costura; P2–P7 e P12 preenchem). O prompt continua dizendo as mesmas coisas, mas cada regra
+crítica dele passa a ter contrapartida em código. Os casos mais frequentes que não precisam de modelo
+custam zero. O compliance não depende de alguém lembrar de marcar uma caixa.
+
+## ADR-030 — Resiliência de provedor: classificar a falha, reserva com janela, nunca em silêncio
+
+**Data:** 2026-10-17. **Complementa** o ADR-023 (OpenRouter como reserva de disponibilidade).
+
+**Contexto.** Hoje qualquer falha do LLM vira `handoffSemModelo` imediato e **mudo**: o cliente não
+recebe aviso, e a falha não muda o comportamento dos turnos seguintes (cada turno tenta o principal de
+novo). Um 403 de um modelo sem acesso vira `credencial_invalida`, como se a chave inteira estivesse
+errada. A AM viveu as duas pontas: "LLM fora em silêncio" (§12 #8 — o cliente recebia "já te
+respondo" e ninguém era avisado) e "Haiku bloqueado no Bedrock" (§12 #9 — 403 num modelo só, com o
+resto funcionando). A solução de lá (§8.3, §8.6) é classificar o erro, trocar de provedor por uma
+janela e transformar a falha em handoff **com aviso**.
+
+**Decisão.**
+1. **Classificação** de toda falha da porta LLM: `fatal` (401/402, cota, créditos, chave inválida),
+   `transitoria` (408/429/5xx/529, rede, tempo esgotado), `requisicao` (erro nosso — não conta para a
+   reserva) e `formato` (saída inválida). `acesso_negado` (403 num modelo específico) é classe própria.
+2. **Reserva com janela**: 2 falhas de provedor seguidas **no processo** ligam a reserva
+   (`IA_RESERVA_PROVEDOR` / `IA_RESERVA_MODELO`) por `IA_RESERVA_JANELA_MIN` (30), com alerta
+   `llm_reserva_ativo`; vencida a janela, volta sozinho. Se o turno **já executou ferramentas**, a
+   chamada que falhou **não é repetida** na reserva (efeito colateral duplicado é pior que um handoff);
+   sem ferramentas executadas, refaz já na reserva. Estado em memória: restart volta ao principal.
+3. **403 por modelo**: bloqueia **aquele modelo** por 1 h e usa `IA_MODELO`, com alerta
+   `modelo_bloqueado` — não marca a credencial como inválida.
+4. **Política no turno, em autônomo**: fatal → handoff na hora com aviso ao cliente (sem prometer
+   prazo); transitória na 1ª vez → "tive uma instabilidade" e reagenda o turno em 30 s (uma vez só);
+   2ª seguida → handoff `modelo_indisponivel` com aviso; formato → handoff. Em sombra e assistido, só
+   registra. O resumo do handoff sem modelo é **determinístico** (do estado da sessão).
+5. **Falha nunca em silêncio**: todo caminho gera alerta (`agente_llm_indisponivel`) e, em autônomo, o
+   cliente sempre recebe uma mensagem. Reserva ativa deixa a saúde em `degradado`.
+
+**Consequências.** `agente_decisao.falha_tipo` permite medir por classe. A reserva é de
+**disponibilidade**, não de custo: o prefixo de cache não migra entre provedores (ADR-023), e o turno
+na reserva custa mais. Pré-requisito operacional: as duas credenciais cadastradas em produção, mesmo
+usando uma só.
+
+## ADR-031 — Qualidade em produção: regras em 100%, juiz amostrado, pausa em CRÍTICA, revisão humana
+
+**Data:** 2026-10-17.
+
+**Contexto.** O juiz com rubrica existe só nos evals (`evals/juiz.ts`, sob `IA_E2E=1`). Em produção não
+há medida de qualidade além do guardrail numérico e da leitura manual de `agente_decisao`. Na AM (§7)
+a qualidade é contínua: regras determinísticas em toda mensagem, avaliador LLM numa amostra, pausa da
+conversa em violação crítica e revisão humana semanal que dá credibilidade ao avaliador. O risco que o
+playbook nomeia para multi-tenant (§13.7) é o juiz caro.
+
+**Decisão.**
+1. **Regras em 100%** das mensagens do agente e das sugestões (palavra proibida que escapou do filtro,
+   promessa de prazo, número sem fonte, pergunta repetida, múltiplas perguntas, mensagem longa), com
+   gravidade `CRITICA | ALTA | MEDIA | INFO`. Custo zero; rodam no pipeline (ADR-029).
+2. **Juiz com rubrica, amostrado**: 5 critérios, nota inteira 0–5 + justificativa ≤ 280 caracteres;
+   roda **fora do caminho da resposta** (fim de sessão e a cada 10 turnos). A amostra é **estável por
+   hash** (FNV-1a do id da conversa → [0,1)) contra `agente_config.qualidade_amostra`: a mesma conversa
+   sempre cai, ou nunca cai, e as avaliações dela são comparáveis. Teto mensal próprio do avaliador por
+   número. Padrões: 1,0 em homologação e sombra, 0,2 no assistido, 0,05 em autônomo amplo.
+3. **Pausa em CRÍTICA**: violação crítica detectada antes do envio → a mensagem **não sai**; em
+   autônomo a conversa vai ao humano (`qualidade_violacao_critica`); em assistido a sugestão chega
+   marcada "não envie assim"; sempre com alerta. A pausa é **por conversa** — pausar um modo inteiro
+   continua sendo decisão humana apoiada pelos dados.
+4. Resultado em `agente_avaliacao` (RLS, `origem` agente/sugestão, idempotente por decisão e tipo) e
+   tela de qualidade por tenant, com exportação mascarada da amostra semanal.
+5. **Revisão humana com concordância**: amostra semanal de 20 conversas por número, na ordem todas as
+   CRÍTICA → ALTA e nota ≤ 3 → aleatórias; o revisor dá nota por critério e gravidade. Concorda quando
+   |LLM − humano| ≤ 1 em cada critério e a classe de gravidade é a mesma. **Concordância ≥ 85%** (com
+   ≥ 20 revisadas) é condição para avançar de fase; sem ela, a nota do juiz não vale como critério.
+
+**Consequências.** "0 CRÍTICA" passa a ser medido também na sombra (pelas sugestões). A revisão humana
+precisa de dono no cliente — sem ele não há concordância; vira parte do onboarding.
+
+**Critérios de fase B2B — ⚠️ PROPOSTA** (números da AM, §11.5, adaptados ao funil de recompra; a
+validar com o primeiro cliente antes de virarem regra; painel na raia P19):
+
+| Fase | Duração / volume mínimo | Para avançar (proposta) |
+|---|---|---|
+| Homologação | — | 25 conversas douradas com 0 CRÍTICA; smoke do provedor ok; ≥ 30 conversas no playground com 0 CRÍTICA |
+| Sombra | ≥ 10 dias úteis, ≥ 150 turnos e ≥ 50 conversas | similaridade sombra × humano ≥ 0,6 em ≥ 60% dos turnos; 0 CRÍTICA; nota média ≥ 4; concordância ≥ 85% (≥ 20 revisadas); ≤ R$ 1,50 por conversa; números bloqueados ≤ 2% |
+| Assistido | ≥ 10 dias úteis, ≥ 100 sugestões | uso ≥ 40%; enviadas sem edição ≥ 70% (com ≥ 50 enviadas); 0 CRÍTICA |
+| Autônomo num recorte | 21 dias | 0 CRÍTICA em 14 dias; p95 da 1ª resposta ≤ 6 s; handoff entre 10% e 40%; opt-out ≤ 1%; conversão não-inferior à coorte sem agente (−2 p.p.); 0 pedido confirmado errado |
+| Autônomo amplo | permanente | revisão a cada 30 dias; critério violado → volta uma fase |
+
+## ADR-032 — Custo pelo catálogo `modelo_ia`, teto por sessão e alerta mensal por tenant
+
+**Data:** 2026-10-17.
+
+**Contexto.** O custo do turno é estimado por `custoEstimadoCentavos` (`porta-llm.ts`) com uma tabela
+fixa de três modelos Claude; **qualquer id desconhecido cai no preço do Opus** — Groq e Gemini
+gratuitos, OpenRouter e Maritaca aparecem caros, e o teto dispara por engano. A AM teve o mesmo bug
+com ids de inference profile do Bedrock (§12 #10) e resolveu normalizando o id antes de procurar o
+preço (§8.1). Já existe o catálogo `modelo_ia` (0093) com preço de entrada e saída por modelo, mas sem
+preço de cache e fora do cálculo.
+
+⚠️ **Correção de premissa.** O plano-mestre (§3.7 item 6 e §7, "Custo") e o playbook da AM (§13.1)
+afirmam que o GeraCRM tem "teto diário de custo **por tenant**". O código diz outra coisa: `custoDoDia`
+(`vendedor.ts`) soma `agente_decisao` **por `canal_id`**, e o teto (`orcamento_dia_centavos`) é do
+`agente_config` do número. **O teto diário é por número**, com o dia virando à meia-noite no fuso do
+tenant. Hoje não existe limite nem alerta no nível do tenant, nem por sessão.
+
+**Decisão.**
+1. **Preço vem do catálogo `modelo_ia`**, com cache de 10 min no processo, depois de
+   `normalizarIdModelo` (tira prefixo de provedor, sufixo de versão/data e variações de perfil). O
+   catálogo ganha preço de leitura e de escrita de cache. Modelo `gratuito` custa 0. Id desconhecido →
+   **maior preço do catálogo** + alerta `preco_desconhecido` (errar para cima é seguro; errar em
+   silêncio, não).
+2. **Teto por sessão** (`agente_config.teto_sessao_centavos`, padrão `IA_TETO_SESSAO_CENTAVOS`): pega
+   loop e conversa patológica. Antes do LLM, sessão no teto → em autônomo, handoff
+   `limite_de_custo_conversa` com aviso; em sombra/assistido, silêncio. O turno que passa do teto
+   responde e transfere em silêncio. O acumulado fica na sessão (sobrevive a restart).
+3. **Teto diário continua por número**, como está.
+4. **Orçamento mensal por tenant** (`agente_orcamento`): **só alerta**, a 80% e a 100%, uma vez por mês
+   cada — não corta. Quem corta é o teto do número e o da sessão.
+
+**Consequências.** Custo correto para modelos gratuitos e de terceiros; o painel de custo e o critério
+de fase "≤ R$ 1,50 por conversa" (ADR-031) passam a ser confiáveis. A frase "teto diário por tenant"
+no plano-mestre e nas skills é corrigida para "por número" pela raia de documentação (P20).
+
+## ADR-033 — Playbook versionado × conhecimento × `agente_config`: o que mora onde
+
+**Data:** 2026-10-17.
+
+**Contexto.** Três lugares guardam "como o agente se comporta" e a fronteira entre eles não estava
+escrita: `agente_config` (por número: modo, alçada, persona, regras do portão, tetos),
+`conhecimento_documento` (base de conhecimento com busca híbrida, ADR-026) e — a partir de P17 — um
+**playbook comercial versionado**. A AM tirou o conteúdo comercial de arquivos para versões imutáveis
+com rascunho, sandbox, publicação com observação e restauração (§3.13), e fixou que a tela nunca
+desliga guardrail.
+
+**Decisão.**
+
+| Onde | O que mora | Ciclo de vida | Como o agente usa |
+|---|---|---|---|
+| `agente_config` (por número) | **operação e segurança configurável**: modo, recorte, alçada, tetos (dia, sessão), regras do portão, amostra de qualidade, frases e gatilhos **extras** de compliance, limites de ativas | edição direta, auditada com `{antes, depois}`; troca de modo com confirmação digitada | lido a cada turno; restringe o pipeline |
+| Playbook (`agente_playbook_versao`, por tenant/número) | **como vender**: estilo (tratamento, emoji, máximos de caracteres e de perguntas — aplicados no filtro), persona, roteiro de qualificação, mensagens prontas, compliance extra, ações habilitáveis | um rascunho → sandbox seco → publicação com observação (≥ 10 caracteres, admin) → versão **imutável** + auditoria; diff por seção; restaurar cria versão nova | entra no bloco estável do prompt e nas etapas do pipeline |
+| Conhecimento (`conhecimento_documento` + histórico imutável, P9) | **fatos consultáveis**: políticas, prazos de entrega, condições, FAQ, descrição de catálogo | edição com histórico por versão | **nunca inteiro no prompt**; buscado por ferramenta e citado como fonte (pode ser fonte de número) |
+
+Regras de fronteira:
+1. **Fato** (o que pode virar número ou promessa) vai para o conhecimento, onde é fonte citável.
+   **Conduta** (como falar, o que perguntar) vai para o playbook. **Parâmetro operacional** vai para
+   `agente_config`.
+2. Ferramentas de segurança e registro (transferir, opt-out, propor pedido, memória) **não aparecem**
+   como ação habilitável — ficam sempre ligadas. `pedido_efetivar` continua fora do modelo (ADR-027).
+3. Compliance do playbook e do `agente_config` **só acrescenta** à lista base do código (ADR-029).
+4. "Atualizar a partir de documento" gera **só rascunho**, com resumo das mudanças; nada é publicado
+   sem revisão humana no diff.
+5. O sandbox é o playground existente em modo seco: ferramentas de escrita viram registradores e a
+   memória não grava em simulação; mostra resposta, ações, guardrails acionados e custo.
+
+**Consequências.** A primeira versão do playbook é importada, de forma idempotente, do que hoje está em
+`agente_config.persona` e nas instruções. Uma decisão do agente passa a poder citar exatamente qual
+versão do playbook e de cada documento de conhecimento estava em vigor.
+
+## ADR-034 — SLA do handoff como fatia mínima de INB-22, já
+
+**Data:** 2026-10-17. **Antecipa** parte de INB-22 (`escopo-funcional-geracrm.md`, Onda 4).
+
+**Contexto.** O agente passa a transferir para humano por vários motivos novos (ADR-029 a 032), e todo
+handoff termina num atendimento na fila sem prazo nem cobrança. O SLA de primeira resposta e de
+resolução com escalonamento (INB-22) está planejado para a Onda 4. Na AM (§6.5) é o SLA do handoff que
+impede que "transferir para humano" vire "abandonar o cliente": minutos **úteis**, aviso ao gestor,
+reatribuição liberada e **uma** mensagem de espera ao cliente. Sem isso, o critério de fase "handoff
+entre 10% e 40%" (ADR-031) mede quantos clientes foram transferidos, não quantos foram atendidos.
+
+**Decisão padrão: fazer agora (raia P18), na fatia mínima.** Revertível pelo dono do produto antes da
+onda 3 do plano de port; se revertida, P18 sai do plano e INB-22 segue inteiro na Onda 4.
+
+Fatia mínima:
+1. `atendimento_sla_config` por tenant (RLS): minutos até o SLA e até liberar a reatribuição.
+2. Minutos **úteis** pelo expediente do número (`somarMinutosUteis`, `proximaAbertura`) e roteamento
+   (`rotearHandoff`) como **funções puras**, testadas sem banco.
+3. Worker: no SLA notifica o gestor; no 2º limiar libera a reatribuição; e manda **uma** mensagem de
+   espera fixa ao cliente (sem prometer prazo), só se nenhum humano respondeu e a conversa segue com
+   humano.
+4. Cronômetro visível no inbox e no kanban de atendimento.
+
+**Fica para INB-22 completo (Onda 4):** SLA de resolução, níveis de escalonamento, metas por fila,
+relatórios de SLA e a métrica MO-19.
+
+**Consequências.** O handoff passa a ter medida de resultado. A migration é aditiva (tabela nova e
+colunas novas em `atendimento`) e não muda o fluxo atual de transferência.
