@@ -181,12 +181,21 @@ export async function processarRetornos(
         else r.reagendados += 1
       } catch (erro) {
         // ⚠️ Um retorno quebrado não pode parar os OUTROS (de todos os tenants).
-        //    Fica pendente e volta na próxima passada; o erro vai para o log de
-        //    quem chamou pelo relatório — aqui só não derruba a passada.
-        r.reagendados += 1
-        await dono`UPDATE agente_retorno SET executar_em = ${new Date(agora.getTime() + ATRASO_TRANSPORTE_MS)},
-                          detalhe = ${`erro: ${erro instanceof Error ? erro.message : String(erro)}`.slice(0, 500)}
-                    WHERE tenant_id = ${v.tenant_id} AND id = ${v.id}`
+        //    Fica pendente e volta mais tarde — mas CONTA como falha de
+        //    transporte, com o mesmo teto: um erro que se repete sempre não
+        //    pode virar retorno pendente para sempre, tentando a cada 15 min.
+        const detalhe = `erro: ${erro instanceof Error ? erro.message : String(erro)}`.slice(0, 480)
+        if (v.falhas_transporte + 1 >= MAX_FALHAS_TRANSPORTE) {
+          r.recusados += 1
+          await dono`UPDATE agente_retorno SET falhas_transporte = falhas_transporte + 1, estado = 'recusado',
+                            detalhe = ${`erro_esgotado: ${detalhe}`}, concluido_em = ${agora}
+                      WHERE tenant_id = ${v.tenant_id} AND id = ${v.id} AND estado = 'pendente'`
+        } else {
+          r.reagendados += 1
+          await dono`UPDATE agente_retorno SET executar_em = ${new Date(agora.getTime() + ATRASO_TRANSPORTE_MS)},
+                            falhas_transporte = falhas_transporte + 1, detalhe = ${detalhe}
+                      WHERE tenant_id = ${v.tenant_id} AND id = ${v.id}`
+        }
       }
     }
   } finally {

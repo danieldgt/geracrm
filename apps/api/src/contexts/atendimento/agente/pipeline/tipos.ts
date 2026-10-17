@@ -138,8 +138,25 @@ export interface EntradaPosResposta {
   readonly handoff: { readonly motivo: string; readonly resumo: string } | null
   /** Centavos que vieram de ferramenta neste turno (guardrail R$). */
   readonly centavosVistos: ReadonlySet<number>
-  /** Números de negócio (%, quantidade, prazo) que vieram de fonte (P7). */
+  /**
+   * Números de negócio (%, quantidade, prazo) que vieram de fonte (P7): as
+   * ferramentas do turno e, como fonte GERAL (nunca de %), as quantidades do
+   * pedido aberto e a memória do contato que o modelo recebeu na instrução (P0c-a).
+   */
   readonly numerosVistos: ReadonlySet<number>
+  /**
+   * Uma ferramenta de catálogo/estoque devolveu SALDO apurado neste turno
+   * (registro de ferramentas). Só isso abona escassez ("restam poucas
+   * unidades") no filtro de saída. Ausente = false (fail-closed).
+   */
+  readonly saldoDeEstoqueVisto?: boolean | undefined
+  /**
+   * Texto FIXO do turno, escrito pelo código e não pelo modelo: o prefixo das
+   * etapas pré-modelo (a abertura da P4) e, quando há, as respostas fixas. Vai
+   * junto para que as regras de qualidade (P12) o tratem como isento — avaliar
+   * a abertura como se fosse fala do modelo puniria o texto aprovado. Ausente = [].
+   */
+  readonly mensagensFixas?: readonly string[] | undefined
   readonly falasAnterioresDoAgente: readonly string[]
 }
 

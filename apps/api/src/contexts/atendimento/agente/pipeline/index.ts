@@ -92,6 +92,22 @@ export async function rodarPreLlm(p: PipelineDoTurno, ctx: ContextoPipeline): Pr
   return { decisao: { tipo: 'segue' }, instrucoes, estado: juntarPatches(patches), guardrails, prefixo, efeitos }
 }
 
+/**
+ * SLOTS NA RESPOSTA FIXA (P0c-e). A etapa de slots só devolve estado com sessão
+ * (ver `slots-do-cliente.ts`), e uma resposta fixa de gatilho (robô, humano,
+ * opt-out…) para a cadeia ANTES dela — no 1º turno, o "preciso de 80 caixas"
+ * dito junto se perderia. Mas a resposta fixa segue o rabo comum, que ABRE a
+ * sessão: então a etapa roda de novo aqui, já com o id da sessão que vai nascer
+ * (`sessaoId`) e com o estado acumulado, e o patch dela entra no do turno.
+ * Só leitura do texto; idempotente (slot já gravado não gera patch).
+ */
+export async function slotsNaRespostaFixa(
+  p: PipelineDoTurno, ctx: ContextoPipeline, sessaoId: string, estadoPre: PatchEstado,
+): Promise<PatchEstado> {
+  const d = await p.slots.executar({ ...ctx, sessaoId, estado: { ...ctx.estado, ...estadoPre } })
+  return d.tipo === 'segue' && d.estado ? d.estado : {}
+}
+
 export interface ResultadoCadeiaPos {
   readonly mensagens: readonly string[]
   readonly guardrails: readonly MarcaGuardrail[]

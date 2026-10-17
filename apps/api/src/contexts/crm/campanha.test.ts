@@ -17,6 +17,7 @@ const PV2 = 'ca3f0000-1111-4000-8000-000000000002'
 const PLANO = 'ca3f0000-3333-4000-8000-000000000001'
 const MODELO = 'ca3f0000-4444-4000-8000-000000000001'
 const CONTATO = 'ca3f0000-6666-4000-8000-000000000001'
+const CANAL = 'ca3f0000-5555-4000-8000-000000000001'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
 let app: FastifyInstance
@@ -35,6 +36,7 @@ beforeAll(async () => {
     })
   }
   await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${CONTATO}, 'Cliente', 'teste', true) ON CONFLICT DO NOTHING`
+  await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado) VALUES (${T}, ${CANAL}, 'whatsapp_oficial', 'Loja', 'conectado') ON CONFLICT DO NOTHING`
   app = await criarApp(); await app.ready()
 })
 
@@ -51,6 +53,7 @@ afterAll(async () => {
   await dono`DELETE FROM pedido WHERE tenant_id = ${T}`
   await dono`DELETE FROM venda WHERE tenant_id = ${T}`
   await dono`DELETE FROM contato WHERE tenant_id = ${T}`
+  await dono`DELETE FROM canal_conectado WHERE tenant_id = ${T}`
   for (const t of [T, OUTRO]) {
     await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${t}`
     await dono`DELETE FROM perfil_vertical WHERE tenant_id = ${t}`
@@ -120,6 +123,24 @@ describe('Onda 3: Campanhas com ROI', () => {
     expect(d2.statusCode).toBe(409) // já disparada
     const [c] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM campanha_envio WHERE tenant_id=${T} AND campanha_id=${id}`
     expect(c!.n).toBe(1) // não duplicou
+  })
+
+  it('dado número com ativas suspensas pela Meta, a campanha em curso vem "pausada por qualidade"; rascunho não (P0c-m)', async () => {
+    const emCurso = await criarCampanha(T)
+    const rascunho = await criarCampanha(T)
+    await dono`UPDATE campanha SET canal_id = ${CANAL} WHERE tenant_id = ${T}`
+    await dono`UPDATE campanha SET estado = 'disparando', disparada_em = now() WHERE tenant_id = ${T} AND id = ${emCurso}`
+    const listar = async () => new Map((((await chamar(T, 'GET', '/v1/campanhas')).json()) as { itens: { id: string; pausadaPorQualidade: { desde: string; motivo: string | null } | null }[] })
+      .itens.map((c) => [c.id, c.pausadaPorQualidade]))
+    try {
+      expect([...(await listar()).values()]).toEqual([null, null])
+      await dono`UPDATE canal_conectado SET ativas_suspensas_em = now(), ativas_suspensas_motivo = 'qualidade:FLAGGED:RED' WHERE tenant_id = ${T} AND id = ${CANAL}`
+      const m = await listar()
+      expect(m.get(emCurso)).toEqual({ desde: expect.any(String), motivo: 'qualidade:FLAGGED:RED' })
+      expect(m.get(rascunho)).toBeNull()
+    } finally {
+      await dono`UPDATE canal_conectado SET ativas_suspensas_em = NULL, ativas_suspensas_motivo = NULL WHERE tenant_id = ${T} AND id = ${CANAL}`
+    }
   })
 
   it('⚠️ isolamento: campanha de um tenant não aparece para outro (RLS)', async () => {

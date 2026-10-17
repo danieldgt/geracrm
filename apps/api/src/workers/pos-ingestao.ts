@@ -146,21 +146,37 @@ export async function processarPosIngestao(dono: Sql, deps: DepsPosIngestao = {}
   return { processadas: lote.length, feitas, reagendadas, falharam, descartadas, roteamentoMeta, purgadas }
 }
 
+/** Teto de lotes por passada da purga: 40 × 500 = 20 mil linhas a cada 10 min. */
+const MAX_LOTES_PURGA = 40
+
 /**
  * Retenção: apaga as tarefas CONCLUÍDAS (feita/falhou/descartada) há mais de 30
- * dias, em lote (índice parcial `tarefa_pos_ingestao_concluidas`). Pendente
+ * dias, em lotes (índice parcial `tarefa_pos_ingestao_concluidas`). Pendente
  * nunca é apagada. Devolve quantas saíram.
+ *
+ * ⚠️ Em LAÇO até um lote vir curto: um lote só de 500 a cada 10 min (72 mil/dia)
+ *    perde da entrada de um tenant movimentado, e a tabela cresce sem parar.
+ *    Cada lote é um DELETE curto e próprio (sem transação longa nem lock
+ *    prolongado); o teto por passada impede a purga de monopolizar o worker.
  */
-export async function purgarPosIngestao(dono: Sql, agora: Date, somenteTenant?: string, lote = LOTE_PURGA): Promise<number> {
-  const linhas = await dono<{ id: string }[]>`
-    DELETE FROM tarefa_pos_ingestao t
-     WHERE (t.tenant_id, t.id) IN (
-       SELECT tenant_id, id FROM tarefa_pos_ingestao
-        WHERE estado <> 'pendente' AND concluido_em < ${new Date(agora.getTime() - RETENCAO_POS_INGESTAO_MS)}
-          ${somenteTenant ? dono`AND tenant_id = ${somenteTenant}` : dono``}
-        LIMIT ${lote})
-    RETURNING t.id`
-  return linhas.length
+export async function purgarPosIngestao(
+  dono: Sql, agora: Date, somenteTenant?: string, lote = LOTE_PURGA, maxLotes = MAX_LOTES_PURGA,
+): Promise<number> {
+  const corte = new Date(agora.getTime() - RETENCAO_POS_INGESTAO_MS)
+  let total = 0
+  for (let i = 0; i < maxLotes; i++) {
+    const linhas = await dono<{ id: string }[]>`
+      DELETE FROM tarefa_pos_ingestao t
+       WHERE (t.tenant_id, t.id) IN (
+         SELECT tenant_id, id FROM tarefa_pos_ingestao
+          WHERE estado <> 'pendente' AND concluido_em < ${corte}
+            ${somenteTenant ? dono`AND tenant_id = ${somenteTenant}` : dono``}
+          LIMIT ${lote})
+      RETURNING t.id`
+    total += linhas.length
+    if (linhas.length < lote) break
+  }
+  return total
 }
 
 async function executar(dono: Sql, t: TarefaVencida, deps: DepsPosIngestao, agora: Date): Promise<Desfecho> {

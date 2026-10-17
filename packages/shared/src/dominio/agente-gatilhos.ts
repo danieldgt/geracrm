@@ -320,3 +320,27 @@ export const AVISO_CONFIRMAR_OPT_OUT =
 /** Resumo da transferência quando a frase PARECE opt-out mas não é clara. */
 export const RESUMO_POSSIVEL_OPT_OUT =
   'Possível pedido para não receber mais mensagens (frase ambígua). Confirme com o cliente; se for o caso, bloqueie em Opt-out / Bloqueios. Nada foi bloqueado.'
+
+// ── prova de aviso de privacidade por contato (API e console) ────────────────
+
+/** Quem exibiu o aviso: a abertura do agente ou um humano. */
+export type OrigemAvisoPrivacidade = 'agente' | 'humano'
+
+/** Uma exibição do aviso de privacidade a um contato — imutável (prova LGPD). */
+export interface AvisoPrivacidadeExibido {
+  readonly id: string
+  readonly conversaId: string
+  readonly canalId: string
+  readonly mensagemId: string
+  readonly texto: string
+  readonly versao: string
+  readonly origem: OrigemAvisoPrivacidade
+  /** ISO 8601. */
+  readonly exibidoEm: string
+}
+
+/** `GET /v1/contatos/:id/avisos-privacidade` — paginado por cursor (mais recente primeiro). */
+export interface PaginaAvisosPrivacidade {
+  readonly itens: readonly AvisoPrivacidadeExibido[]
+  readonly proximoCursor: string | null
+}

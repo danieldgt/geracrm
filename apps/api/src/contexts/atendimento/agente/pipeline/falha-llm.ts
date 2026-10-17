@@ -108,6 +108,21 @@ export async function registrarAlertaLlm(
   })
 }
 
+/**
+ * Fecha o alerta `agente_llm_indisponivel` do tenant (P0c-h): o vendedor chama
+ * no turno em que o modelo RESPONDEU. Idempotente e barato (índice parcial de
+ * alertas abertos): sem alerta aberto, não faz nada. Devolve se fechou algum.
+ * ⚠️ Sem isto, uma falha de madrugada deixa o painel vermelho para sempre —
+ *    alerta que não fecha ensina a ignorar alerta.
+ */
+export async function resolverAlertaLlm(tenantId: string, agora: Date = new Date()): Promise<boolean> {
+  const fechados = await comTenantServico(tenantId, (tx) => tx<{ id: string }[]>`
+    UPDATE alerta SET resolvido_em = ${agora}
+     WHERE tenant_id = tenant_atual() AND tipo = ${TIPO_ALERTA_LLM} AND resolvido_em IS NULL
+    RETURNING id`)
+  return fechados.length > 0
+}
+
 export const politicaFalhaLlm: PoliticaFalha = {
   nome: 'falha-llm',
   async decidir(ctx, entrada) {

@@ -17,6 +17,10 @@ import type { PortaTranscricao } from '../contexts/atendimento/midia/transcricao
  * ⚠️ Falha conta tentativa (teto 3, com espera entre elas): provedor fora não
  * pode virar laço de 5 s batendo na mesma mensagem. Formato que o provedor não
  * entende desiste na hora — tentar de novo não conserta.
+ * ⚠️ Falha DEFINITIVA (teto atingido ou formato) também reagenda o turno: o
+ * turno da ingestão silenciou com "áudio transcrevendo", e sem isto o "1º pede
+ * texto" (P4) só sairia quando o cliente mandasse outra mensagem — o vácuo
+ * que o gatilho existe para evitar.
  */
 export const INTERVALO_TRANSCRICAO_MS = 5_000
 export const MAX_TENTATIVAS_TRANSCRICAO = 3
@@ -79,12 +83,9 @@ export async function processarTranscricoes(
 
     for (const m of candidatas) {
       const desfecho = await transcreverUma(m, deps, agora)
-      if (desfecho.ok) {
-        r.transcritas += 1
-        if (desfecho.reagendouAgente) r.reagendouAgente += 1
-      } else {
-        r.falhas += 1
-      }
+      if (desfecho.ok) r.transcritas += 1
+      else r.falhas += 1
+      if (desfecho.reagendouAgente) r.reagendouAgente += 1
     }
   } finally {
     await dono`SELECT pg_advisory_unlock(hashtext('transcricao_audio'))`
@@ -94,7 +95,7 @@ export async function processarTranscricoes(
 
 async function transcreverUma(
   m: Candidata, deps: DepsTranscricao, agora: Date,
-): Promise<{ ok: true; reagendouAgente: boolean } | { ok: false }> {
+): Promise<{ ok: boolean; reagendouAgente: boolean }> {
   const ref = typeof m.conteudo['audio'] === 'string' ? (m.conteudo['audio'] as string) : ''
   const mime = typeof m.conteudo['mime'] === 'string' ? (m.conteudo['mime'] as string) : null
   const tentativas = Number(m.conteudo['transcricao_tentativas'] ?? 0)
@@ -102,16 +103,14 @@ async function transcreverUma(
   // 1. Bytes — rede, fora de transação.
   const audio = ref ? await (deps.baixar ?? baixarMidiaDeEntrada)(m.tenant_id, m.canal_id, ref, mime) : null
   if (!audio) {
-    await registrarFalha(m, 'download', tentativas, false, agora)
-    return { ok: false }
+    return { ok: false, reagendouAgente: await registrarFalha(m, 'download', tentativas, false, agora) }
   }
 
   // 2. Transcrição — rede, fora de transação.
   const t = await deps.porta.transcrever({ bytes: audio.bytes, mime: audio.mime, idioma: deps.idioma ?? 'pt' })
   if (!t.ok) {
     // Formato/tamanho não melhoram com retentativa: gasta as tentativas de uma vez.
-    await registrarFalha(m, t.motivo, tentativas, t.motivo === 'formato' || t.motivo === 'muito_longo', agora)
-    return { ok: false }
+    return { ok: false, reagendouAgente: await registrarFalha(m, t.motivo, tentativas, t.motivo === 'formato' || t.motivo === 'muito_longo', agora) }
   }
 
   // 3. Grava + avisa a tela + reagenda o agente, no MESMO commit.
@@ -136,26 +135,35 @@ async function transcreverUma(
     // ⚠️ O cliente "falou": o agente precisa responder ao que foi dito. O turno
     //    agendado na ingestão já pode ter rodado (e respondido "[áudio sem
     //    transcrição]"); este reagenda com o texto na mão. Só com agente ligado.
-    const [cfg] = await tx<{ modo: string }[]>`
-      SELECT modo FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${m.canal_id}`
-    let reagendouAgente = false
-    if (cfg && cfg.modo !== 'desligado') {
-      await agendarTurno(tx, { conversaId: m.conversa_id, canalId: m.canal_id, mensagemId: m.id, agora })
-      reagendouAgente = true
-    }
-    return { ok: true, reagendouAgente }
+    return { ok: true, reagendouAgente: await reagendarAgente(tx, m, agora) }
   })
 }
 
-async function registrarFalha(m: Candidata, motivo: string, tentativas: number, definitiva: boolean, agora: Date): Promise<void> {
+/** Agenda o turno do agente para esta mensagem — só com agente ligado. Chamar sob o tenant. */
+async function reagendarAgente(tx: Sql, m: Candidata, agora: Date): Promise<boolean> {
+  const [cfg] = await tx<{ modo: string }[]>`
+    SELECT modo FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${m.canal_id}`
+  if (!cfg || cfg.modo === 'desligado') return false
+  await agendarTurno(tx, { conversaId: m.conversa_id, canalId: m.canal_id, mensagemId: m.id, agora })
+  return true
+}
+
+/**
+ * Conta a tentativa. Na DEFINITIVA (formato ou teto atingido) o áudio vira
+ * `transcricaoFalhou` para o turno — e o turno é reagendado no mesmo commit.
+ * Devolve se reagendou.
+ */
+async function registrarFalha(m: Candidata, motivo: string, tentativas: number, definitiva: boolean, agora: Date): Promise<boolean> {
   const novo = {
     transcricao_tentativas: definitiva ? MAX_TENTATIVAS_TRANSCRICAO : tentativas + 1,
     transcricao_tentada_em: agora.toISOString(),
     transcricao_erro: motivo,
   }
-  await comTenantServico(m.tenant_id, async (tx) => {
+  const desistiu = novo.transcricao_tentativas >= MAX_TENTATIVAS_TRANSCRICAO
+  return comTenantServico(m.tenant_id, async (tx) => {
     await tx`
       UPDATE mensagem SET conteudo = conteudo || ${JSON.stringify(novo)}::text::jsonb
        WHERE tenant_id = tenant_atual() AND id = ${m.id} AND criado_em = ${m.criado_em}`
+    return desistiu ? reagendarAgente(tx, m, agora) : false
   })
 }

@@ -192,17 +192,25 @@ describe('Extras do número (agente_config.compliance) — só acrescentam', () 
 
 describe('Etapa — casos da revisão adversarial', () => {
   const ctx = { cfgExtra: {} } as unknown as ContextoPipeline
-  const rodar = (mensagens: string[], numerosVistos: ReadonlySet<number> = new Set()) =>
-    etapaFiltroSaida.executar(ctx, { mensagens, handoff: null, centavosVistos: new Set(), numerosVistos, falasAnterioresDoAgente: [] })
+  const rodar = (mensagens: string[], numerosVistos: ReadonlySet<number> = new Set(), saldoDeEstoqueVisto?: boolean) =>
+    etapaFiltroSaida.executar(ctx, { mensagens, handoff: null, centavosVistos: new Set(), numerosVistos, saldoDeEstoqueVisto, falasAnterioresDoAgente: [] })
 
-  it('escassez é FAIL-CLOSED: sem sinal de saldo de ferramenta no contrato, sai mesmo com números de fonte no turno', async () => {
-    // Pendência P0c: EntradaPosResposta.saldoDeEstoqueVisto. Até lá, qualquer número
-    // (preço, prazo) não pode abonar "poucas unidades".
-    for (const numeros of [new Set<number>(), new Set([4])]) {
-      const r = await rodar(['Restam poucas unidades em estoque segundo o sistema. Quer que eu reserve?'], numeros)
-      expect(r.mensagens).toEqual(['Quer que eu reserve?'])
-      expect(r.guardrails.map((g) => g.codigo)).toEqual(['escassez_sem_fonte'])
+  it('escassez é FAIL-CLOSED: sem saldo de ferramenta de estoque no turno, sai mesmo com números de fonte', async () => {
+    // Qualquer número de fonte (preço, prazo) não abona "poucas unidades"; só `saldoDeEstoqueVisto`.
+    for (const saldo of [undefined, false]) {
+      for (const numeros of [new Set<number>(), new Set([4])]) {
+        const r = await rodar(['Restam poucas unidades em estoque segundo o sistema. Quer que eu reserve?'], numeros, saldo)
+        expect(r.mensagens).toEqual(['Quer que eu reserve?'])
+        expect(r.guardrails.map((g) => g.codigo)).toEqual(['escassez_sem_fonte'])
+      }
     }
+  })
+
+  it('com saldo de estoque consultado no turno (P0c-j), "Restam poucas unidades" passa intacta', async () => {
+    const texto = 'Restam poucas unidades em estoque segundo o sistema. Quer que eu reserve?'
+    const r = await rodar([texto], new Set([3]), true)
+    expect(r.mensagens).toEqual([texto])
+    expect(r.guardrails.map((g) => g.codigo)).not.toContain('escassez_sem_fonte')
   })
 
   it('hesitação sobre prazo não vira promessa: a frase sai com marca ALTA', async () => {

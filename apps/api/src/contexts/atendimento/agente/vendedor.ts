@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   ALCADA_PADRAO, PERFIL_PRECO_PADRAO, REGRAS_AGENTE_PADRAO, alcadaAgente, persona as personaSchema,
-  perfilDeCotacao, respostaDoAgente, verificarNumerosNaResposta, fatiarMensagem,
+  perfilDeCotacao, respostaDoAgente, verificarNumerosNaResposta, fatiarMensagem, numerosDoTexto,
   type AlcadaAgente, type ModoAgente, type ModoDoTurno, type PersonaResolvida, type RegrasDoAgente, type RespostaDoAgente,
   type SlotQualificacao, type MotivoHandoff, type MarcaGuardrail,
 } from '@geracrm/shared'
@@ -26,9 +26,11 @@ import { resolverModelo } from './modelos.js'
 import { custoDoLaco } from './custo.js'
 import { lerEstado, patchEstado, juntarPatches } from './estado-agente.js'
 import {
-  montarPipeline, rodarPreLlm, rodarPosResposta, marca, mascararTexto,
+  montarPipeline, rodarPreLlm, rodarPosResposta, slotsNaRespostaFixa, marca, mascararTexto,
   type ClasseFalha, type ContextoPipeline, type EnvioDoTurno, type EntranteDoTurno, type PatchEstado, type PipelineDoTurno,
 } from './pipeline/index.js'
+import { resolverAlertaLlm } from './pipeline/falha-llm.js'
+import { fusoSeguro } from '../../plataforma/fuso.js'
 import { efetivarSeDentroDaAlcada } from '../../pedido/alcada.js'
 import { MAX_TENTATIVAS_TRANSCRICAO } from '../../../workers/transcricao.js'
 
@@ -160,14 +162,17 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
                                           WHERE m.tenant_id = tenant_atual() AND m.conversa_id = ${conversaId}
                                             AND m.id = ANY(${[...tarefa.mensagens_ids]}::uuid[])), ${agora}::timestamptz)) AS recem`
     const [fusoLinha] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
+    // ⚠️ `tenant.fuso` é texto livre: inválido no `AT TIME ZONE` do custo do dia
+    //    derrubaria o turno inteiro. Inválido/ausente → padrão (P0c-p).
+    const fuso = fusoSeguro(fusoLinha?.fuso)
     // O modelo escolhido na tela é um código do catálogo; fora do catálogo/permissão, vale o padrão do ambiente.
     const modeloEscolhido = await resolverModelo(tx, cfg.modelo)
     const equipe = deps.equipe ?? await quemAtende(tx, canalId, agora)
-    const custoHoje = cfg.orcamentoDiaCentavos === null ? 0 : await custoDoDia(tx, canalId, agora, fusoLinha?.fuso ?? 'America/Sao_Paulo')
+    const custoHoje = cfg.orcamentoDiaCentavos === null ? 0 : await custoDoDia(tx, canalId, agora, fuso)
     return {
       tipo: 'ok' as const, cfg, conv, reuniao, equipe, custoHoje,
       perfil: perfilDeCotacao(perfilLinha?.perfil_preco ?? PERFIL_PRECO_PADRAO),
-      ausenciaRecemEnviada: ausenciaAgora?.recem ?? false, fuso: fusoLinha?.fuso ?? 'America/Sao_Paulo',
+      ausenciaRecemEnviada: ausenciaAgora?.recem ?? false, fuso,
       modeloEscolhido,
     }
   })
@@ -311,6 +316,17 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   const pedidoAberto = ligacoes.pedido ? await ligacoes.pedido.ver(ctxFerr).catch(() => null) : null
   if (pedidoAberto) for (const c of [pedidoAberto.totalCentavos, ...pedidoAberto.itens.flatMap((i) => [i.valorUnitarioCentavos, i.subtotalCentavos])]) registro.centavosVistos.add(c)
   for (const c of centavosDoPedidoConfirmado) registro.centavosVistos.add(c)
+  // Fontes de NÚMERO de fora do laço (P0c-a), como fonte GERAL do guardrail
+  // ampliado (P7) — nunca de %: `numerosDoTexto` e `add` vão para o conjunto
+  // geral; `percentuais` só recebe o que uma ferramenta marcou como percentual.
+  //   - o pedido aberto, carregado aqui e não por ferramenta: nº de itens e
+  //     quantidade de cada um;
+  //   - a memória do contato que o modelo recebe na instrução do turno.
+  if (pedidoAberto) {
+    registro.numerosVistos.add(pedidoAberto.itens.length)
+    for (const i of pedidoAberto.itens) registro.numerosVistos.add(i.quantidade)
+  }
+  for (const m of memoria) numerosDoTexto(m, registro.numerosVistos)
 
   /**
    * O RABO DO TURNO, comum à resposta do modelo e à resposta fixa:
@@ -408,7 +424,10 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
         if (sessao && sessao.turnos % 10 === 0) await resumirSessao(tx, sessaoId).catch(() => undefined)
       }
       guardrails.push(...await rodarEfeitos(tx, semEfeito ? null : sessaoId))
-      const id = await registrarDecisao(tx, { tarefa, sessaoId: semEfeito ? null : sessaoId, modo, desfecho, rastro, custo, resposta, bloqueados, guardrails, enviada: envia, idsSaida, handoff, agora, latenciaMs: Date.now() - inicio })
+      const id = await registrarDecisao(tx, { tarefa, sessaoId: semEfeito ? null : sessaoId, modo, desfecho, rastro, custo, resposta, bloqueados, guardrails,
+        // ⚠️ "Enviada" é o que o gateway ACEITOU: turno autônomo que conclui sem
+        //    mensagem (ex.: confirmação de opt-out já enviada, pausa) não enviou nada (P0c-t).
+        enviada: envia && idsSaida.length > 0, idsSaida, handoff, agora, latenciaMs: Date.now() - inicio })
       if (handoff) {
         if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: handoff.motivo as MotivoHandoff, resumo: handoff.resumo, agora })
         else if (!semEfeito) await encerrarSessaoSemEntrega(tx, sessaoId, `${handoff.motivo}: ${handoff.resumo}`, agora)
@@ -430,10 +449,11 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
    * sem fonte descartam SÓ o prefixo (a resposta segue): o prefixo é cortesia,
    * nunca motivo de handoff. A rede final do rabo ainda passa sobre tudo.
    */
-  const prefixoFiltrado = async (handoffAtual: { motivo: string; resumo: string } | null) => {
+  const prefixoFiltrado = async (handoffAtual: { motivo: string; resumo: string } | null, fixasDoTurno: readonly string[]) => {
     if (pre.prefixo.length === 0) return { mensagens: [] as readonly string[], guardrails: [] as readonly MarcaGuardrail[], estado: {} as PatchEstado }
     const r = await pipeline.filtro.executar(ctx, {
       mensagens: pre.prefixo, handoff: handoffAtual, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
+      saldoDeEstoqueVisto: registro.saldoDeEstoqueVisto, mensagensFixas: fixasDoTurno,
       falasAnterioresDoAgente: historico.filter((h) => h.de === 'nos').map((h) => h.texto),
     })
     if (r.bloquear) return { mensagens: [] as readonly string[], guardrails: r.guardrails, estado: r.estado ?? {} }
@@ -447,12 +467,15 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   // ── 4b. Resposta fixa de uma etapa: sem modelo, mesmo rabo ───────────────
   if (pre.decisao.tipo === 'resposta_fixa') {
     const d = pre.decisao
-    const pf = await prefixoFiltrado(null)
+    const pf = await prefixoFiltrado(null, [...pre.prefixo, ...d.mensagens])
     const mensagensFixas = [...pf.mensagens, ...d.mensagens]
+    // O rabo ABRE a sessão (se ainda não há): os slots ditos neste turno entram
+    // nela em vez de se perderem (P0c-e). Sem efeito, não há sessão a gravar.
+    const estadoSlots = semEfeito ? {} : await slotsNaRespostaFixa(pipeline, ctx, sessaoId, pre.estado)
     return concluir({
       resposta: { mensagens: mensagensFixas, confianca: 1, handoff: d.handoff, origem: 'fixa' },
       mensagens: mensagensFixas,
-      handoff: d.handoff ?? null, custo: 0, bloqueados: [], guardrails: [...guardrailsPre, ...pf.guardrails], estado: juntarPatches([pre.estado, pf.estado]),
+      handoff: d.handoff ?? null, custo: 0, bloqueados: [], guardrails: [...guardrailsPre, ...pf.guardrails], estado: juntarPatches([pre.estado, estadoSlots, pf.estado]),
     })
   }
 
@@ -477,7 +500,8 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     limites: { maxRodadas: cfg.maxRodadas, maxTokensSaida: 1500, prazoMs: cfg.prazoTurnoMs },
     esforco: 'low',
   })
-  const custo = r.rastro ? await custoDoLaco({ provedor: r.rastro.provedor ?? llm.nome, modelo: r.rastro.modelo, uso: r.rastro.uso }) : 0
+  // Com o tenant, modelo sem preço no catálogo abre o alerta `preco_desconhecido` já (P0c-c).
+  const custo = r.rastro ? await custoDoLaco({ provedor: r.rastro.provedor ?? llm.nome, modelo: r.rastro.modelo, uso: r.rastro.uso, tenantId }) : 0
 
   if (!r.ok) {
     const recado = recadoDaFalha(r.motivo, r.detalhe)
@@ -502,6 +526,15 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       desfecho: entrega ? 'handoff' : 'falha', motivo: 'modelo_indisponivel', detalhe: recado, decisaoId, rastro: r.rastro,
       ...(falha.acao === 'aviso_e_reagendar' && falha.reagendarEmMs !== undefined ? { reagendarEmMs: falha.reagendarEmMs } : {}),
     }
+  }
+
+  // O modelo respondeu: fecha o alerta `agente_llm_indisponivel` (P0c-h). Mesma
+  // regra de quem abre (falha-llm): simulação e copiloto não mexem no painel.
+  // ⚠️ Best-effort: o painel nunca impede a resposta ao cliente.
+  if (!semEfeito) {
+    await resolverAlertaLlm(tenantId, agora).catch((e: unknown) => {
+      process.stderr.write(`${JSON.stringify({ nivel: 'warn', contexto: 'agente.llm', tenantId, conversaId, msg: 'alerta agente_llm_indisponivel não fechou', erro: e instanceof Error ? e.message : String(e) })}\n`)
+    })
   }
 
   // ── 6. Validação ────────────────────────────────────────────────────────
@@ -552,12 +585,13 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   // ── 8. Depois do modelo: números → filtro → pergunta → qualidade ────────
   const cadeia = await rodarPosResposta(pipeline, ctx, {
     mensagens: resposta.mensagens, handoff, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
+    saldoDeEstoqueVisto: registro.saldoDeEstoqueVisto, mensagensFixas: pre.prefixo,
     falasAnterioresDoAgente: historico.filter((h) => h.de === 'nos').map((h) => h.texto),
   })
   guardrails.push(...cadeia.guardrails)
   if (cadeia.bloqueio) handoff = { motivo: cadeia.bloqueio.motivo, resumo: cadeia.bloqueio.resumo }
 
-  const pf = await prefixoFiltrado(handoff)
+  const pf = await prefixoFiltrado(handoff, pre.prefixo)
   guardrails.push(...pf.guardrails)
   const saida = [...pf.mensagens, ...cadeia.mensagens]
   return concluir({
@@ -808,6 +842,8 @@ export function textoDaMensagem(tipo: string, c: Record<string, unknown>): strin
 
 async function custoDoDia(tx: Sql, canalId: string, agora: Date, fuso: string): Promise<number> {
   // "Hoje" no fuso do TENANT: o teto diário vira à meia-noite da loja, não do servidor.
+  // ⚠️ O fuso entra num `AT TIME ZONE`: sempre saneado (inválido derruba a consulta).
+  fuso = fusoSeguro(fuso)
   const [r] = await tx<{ total: string }[]>`
     SELECT coalesce(sum(custo_centavos), 0)::text AS total FROM agente_decisao
      WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}

@@ -341,6 +341,24 @@ describe('Retenção da tarefa_pos_ingestao', () => {
     await dono`UPDATE tarefa_pos_ingestao SET estado = 'falhou', concluido_em = now() - interval '29 days' WHERE tenant_id = ${T}`
     expect(await purgarPosIngestao(dono as never, new Date(), T)).toBe(0)
   })
+
+  it('⚠️ purga em LAÇO até o lote vir curto, com teto de lotes por passada (P0c-n)', async () => {
+    await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: imagemPlugZapi('P11-PURGA-LACO') })
+    const [base] = await dono<{ conversa_id: string; canal_id: string; mensagem_criado_em: Date }[]>`
+      SELECT conversa_id, canal_id, mensagem_criado_em FROM tarefa_pos_ingestao WHERE tenant_id = ${T} LIMIT 1`
+    await dono`DELETE FROM tarefa_pos_ingestao WHERE tenant_id = ${T}`
+    // 7 concluídas velhas (mensagem_id distinto: a unicidade é por mensagem e tipo).
+    for (let i = 0; i < 7; i++) {
+      await dono`INSERT INTO tarefa_pos_ingestao (tenant_id, id, tipo, conversa_id, canal_id, mensagem_id, mensagem_criado_em, estado, concluido_em)
+                 VALUES (${T}, gen_random_uuid(), 'automatica', ${base!.conversa_id}, ${base!.canal_id}, gen_random_uuid(), ${base!.mensagem_criado_em},
+                         'feita', now() - interval '40 days')`
+    }
+    // Lote de 2, teto de 3 lotes: 6 saem nesta passada (antes, só 2).
+    expect(await purgarPosIngestao(dono as never, new Date(), T, 2, 3)).toBe(6)
+    // A seguinte pega o resto e para no lote curto.
+    expect(await purgarPosIngestao(dono as never, new Date(), T, 2, 3)).toBe(1)
+    expect(await tarefas()).toEqual([])
+  })
 })
 
 describe('⚠️ Isolamento da tarefa_pos_ingestao (papel da aplicação, RLS)', () => {

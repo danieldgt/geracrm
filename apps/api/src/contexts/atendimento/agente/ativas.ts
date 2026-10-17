@@ -1,5 +1,6 @@
 import { calcularJanela, templateDeRetornoCompativel, lerConfigAtivas, normalizarFeriados, permiteTextoLivre, type ConfigAtivas } from '@geracrm/shared'
 import type { Sql } from '../../../db/index.js'
+import { fusoSeguro } from '../../plataforma/fuso.js'
 import { proximaAbertura, situacaoDoExpediente, type HorarioAtendimento } from '../expediente.js'
 
 /**
@@ -116,7 +117,8 @@ export async function lerContextoAtiva(
     suspensaDesde: l.suspensa_desde,
     horario: l.horario,
     feriados: normalizarFeriados(l.feriados),
-    fuso: l.fuso ?? 'America/Sao_Paulo',
+    // ⚠️ Texto livre na tabela: inválido quebraria o cálculo do expediente (P0c-p).
+    fuso: fusoSeguro(l.fuso),
     config,
     ultimaEntranteEm: l.ultima_entrante_em,
     enviadasDia: l.dia,

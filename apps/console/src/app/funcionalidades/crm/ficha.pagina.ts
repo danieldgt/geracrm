@@ -5,6 +5,7 @@ import { rotuloSegmento } from '@geracrm/shared'
 import { FichaServico, type FichaContato } from './ficha.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
+import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
 
 /**
  * Ficha do Contato — o cliente 360°.
@@ -18,7 +19,7 @@ import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.j
 @Component({
   selector: 'app-ficha-contato',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, DatePipe],
+  imports: [RouterLink, DatePipe, AvisosPrivacidadeComponente],
   template: `
     <!-- Volta para ONDE a pessoa veio (lista, chat, funil, pedidos) — e para a
          lista de contatos quando a ficha foi aberta por link direto. -->
@@ -205,6 +206,10 @@ import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.j
                   <button class="btn btn--secundario btn--pequeno" type="submit" [disabled]="!novoComent().trim()">Anotar</button>
                 </form>
               </div>
+
+              <!-- Prova LGPD (P4): quando e com que texto o aviso de privacidade foi exibido.
+                   Bloco com estado próprio; sem permissão, some. -->
+              <app-avisos-privacidade [contatoId]="f.id" />
             </section>
           </div>
         }

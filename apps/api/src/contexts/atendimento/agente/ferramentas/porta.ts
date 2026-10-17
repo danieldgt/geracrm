@@ -50,6 +50,12 @@ export type SaidaFerramenta =
        * percentual (`percentuaisDe`). Fonte tipada: um número qualquer nunca abona "%".
        */
       readonly percentuais?: readonly number[] | undefined
+      /**
+       * Esta chamada mostrou ao modelo um SALDO de estoque apurado (número, não
+       * `null`/'desconhecido'). É o que abona escassez ("restam poucas unidades")
+       * no filtro de saída (P2) — use `saldoApuradoEm`.
+       */
+      readonly saldoVisto?: boolean | undefined
       /** Efeito colateral que o turno precisa saber (handoff pedido, proposta enviada). */
       readonly efeito?: 'handoff' | 'proposta_enviada' | 'pedido_alterado' | undefined
       readonly handoff?: { motivo: string; resumo: string } | undefined
@@ -100,6 +106,8 @@ export interface RegistroDeFerramentas {
    * a fonte do guardrail ampliado (raia P7 preenche; P0 só abre o campo).
    */
   readonly numerosVistos: NumerosVistos
+  /** Alguma ferramenta de catálogo/estoque devolveu saldo apurado neste turno (P0c-j). */
+  readonly saldoDeEstoqueVisto: boolean
   readonly efeitos: { handoff: { motivo: string; resumo: string } | null; propostaEnviada: boolean; pedidoAlterado: boolean }
   executar(nome: string, entradaBruta: unknown): Promise<ResultadoExecucaoFerramenta>
 }
@@ -116,11 +124,13 @@ export function registroDeFerramentas(
   const centavosVistos = new Set<number>()
   const numerosVistos = new NumerosVistos()
   const efeitos = { handoff: null as { motivo: string; resumo: string } | null, propostaEnviada: false, pedidoAlterado: false }
+  let saldoVisto = false
   return {
     lista: ferramentas,
     definicoes: ferramentas.map(definicaoParaLlm),
     centavosVistos,
     numerosVistos,
+    get saldoDeEstoqueVisto() { return saldoVisto },
     efeitos,
     async executar(nome, entradaBruta) {
       const f = porNome.get(nome)
@@ -133,6 +143,7 @@ export function registroDeFerramentas(
         for (const c of r.centavos ?? []) centavosVistos.add(c)
         for (const n of r.numeros ?? []) numerosVistos.add(n)
         for (const n of r.percentuais ?? []) numerosVistos.percentuais.add(n)
+        if (r.saldoVisto) saldoVisto = true
         if (r.efeito === 'handoff' && r.handoff) efeitos.handoff = r.handoff
         if (r.efeito === 'proposta_enviada') efeitos.propostaEnviada = true
         if (r.efeito === 'pedido_alterado') efeitos.pedidoAlterado = true
@@ -152,6 +163,20 @@ export function numerosDe(saida: unknown): number[] {
 /** Percentuais de uma saída: campo percentual ou "N%" escrito num texto. */
 export function percentuaisDe(saida: unknown): number[] {
   return [...percentuaisDeSaida(saida)]
+}
+
+/**
+ * A saída mostra algum saldo APURADO (campo `saldo` numérico)? `null` (não
+ * controla estoque) e 'desconhecido' (ERP não informou) não contam: não dão
+ * base para dizer "restam poucas unidades".
+ */
+export function saldoApuradoEm(saida: unknown): boolean {
+  if (Array.isArray(saida)) return saida.some(saldoApuradoEm)
+  if (saida && typeof saida === 'object') {
+    return Object.entries(saida as Record<string, unknown>).some(([k, v]) =>
+      (k === 'saldo' && typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'object' && saldoApuradoEm(v)))
+  }
+  return false
 }
 
 /** Coleta recursivamente todos os campos `*Centavos` de uma saída. */

@@ -23,11 +23,18 @@ export async function rotasCampanha(app: FastifyInstance): Promise<void> {
       const linhas = await req.comTenant((tx) => tx<{
         id: string; nome: string; segmento_alvo: string; estado: string
         janela_atribuicao_dias: number; disparada_em: Date | null; criado_em: Date
+        suspensa_desde: Date | null; suspensa_motivo: string | null
       }[]>`
-        SELECT id, nome, segmento_alvo, estado, janela_atribuicao_dias, disparada_em, criado_em
-          FROM campanha WHERE tenant_id = tenant_atual()
-           AND ${curEm === null ? tx`true` : tx`(criado_em, id) < (${curEm}::timestamptz, ${curId}::uuid)`}
-         ORDER BY criado_em DESC, id DESC LIMIT ${PAGINA + 1}`)
+        SELECT k.id, k.nome, k.segmento_alvo, k.estado, k.janela_atribuicao_dias, k.disparada_em, k.criado_em,
+               -- Número com ATIVAS suspensas pela Meta (P11): o despachante segura a
+               -- campanha em curso; a tela precisa dizer por quê (P0c-m).
+               CASE WHEN k.estado = 'disparando' THEN cc.ativas_suspensas_em END AS suspensa_desde,
+               CASE WHEN k.estado = 'disparando' THEN cc.ativas_suspensas_motivo END AS suspensa_motivo
+          FROM campanha k
+          LEFT JOIN canal_conectado cc ON cc.tenant_id = k.tenant_id AND cc.id = k.canal_id
+         WHERE k.tenant_id = tenant_atual()
+           AND ${curEm === null ? tx`true` : tx`(k.criado_em, k.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+         ORDER BY k.criado_em DESC, k.id DESC LIMIT ${PAGINA + 1}`)
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
       const ultimo = pagina[pagina.length - 1]
@@ -35,6 +42,7 @@ export async function rotasCampanha(app: FastifyInstance): Promise<void> {
         itens: pagina.map((l) => ({
           id: l.id, nome: l.nome, segmentoAlvo: l.segmento_alvo, estado: l.estado,
           janelaDias: l.janela_atribuicao_dias, disparadaEm: l.disparada_em, criadoEm: l.criado_em,
+          pausadaPorQualidade: l.suspensa_desde ? { desde: l.suspensa_desde, motivo: l.suspensa_motivo } : null,
         })),
         proximoCursor: temMais && ultimo
           ? Buffer.from(`${ultimo.criado_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,

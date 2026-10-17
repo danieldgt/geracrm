@@ -234,6 +234,24 @@ describe('Processar os vencidos', () => {
     expect(enviados).toHaveLength(MAX_FALHAS_TRANSPORTE)
   })
 
+  it('⚠️ erro inesperado (o envio LANÇA) conta falha com o mesmo teto — não fica pendente para sempre (P0c-o)', async () => {
+    await pedido('aguardando_confirmacao')
+    respostaDoEnvio = () => { throw new Error('provedor explodiu') }
+    let agora = new Date()
+    await agendar('proposta_sem_resposta', new Date(agora.getTime() - 1000))
+    for (let i = 1; i <= MAX_FALHAS_TRANSPORTE; i++) {
+      const r = await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T }, agora)
+      expect(r).toMatchObject(i < MAX_FALHAS_TRANSPORTE ? { reagendados: 1, recusados: 0 } : { recusados: 1, reagendados: 0 })
+      const [f] = await dono<{ falhas_transporte: number }[]>`SELECT falhas_transporte FROM agente_retorno WHERE tenant_id = ${T}`
+      expect(f!.falhas_transporte).toBe(i)
+      agora = new Date(agora.getTime() + H)
+    }
+    const [l] = await retornos()
+    expect(l).toMatchObject({ estado: 'recusado', detalhe: 'erro_esgotado: erro: provedor explodiu' })
+    // Encerrado: a passada seguinte não pega de novo.
+    expect(await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T }, agora)).toMatchObject({ vencidos: 0 })
+  })
+
   it('cliente escreveu depois de agendado → cancelado sem enviar (cinto e suspensório da ingestão)', async () => {
     await pedido('aguardando_confirmacao')
     await agendar('proposta_sem_resposta', new Date(Date.now() - 1000))

@@ -220,8 +220,9 @@ const turno = async (llm: PortaLlmFerramentas, extra: Partial<DepsTurno> & { ten
 const decisoes = async () => dono<{ desfecho: string; falha_tipo: string | null; enviada: boolean; erro: string | null }[]>`
   SELECT desfecho, falha_tipo, enviada, erro FROM agente_decisao WHERE tenant_id = ${T} ORDER BY criado_em`
 const atendimentos = async () => (await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM atendimento WHERE tenant_id = ${T} AND estado <> 'encerrado'`)[0]!.n
+/** Só o alerta desta raia: o modelo falso não tem preço no catálogo e o turno abre também `preco_desconhecido` (P0c-c). */
 const alertasAbertos = async () => dono<{ tipo: string; severidade: string; mensagem: string }[]>`
-  SELECT tipo, severidade, mensagem FROM alerta WHERE tenant_id = ${T} AND resolvido_em IS NULL`
+  SELECT tipo, severidade, mensagem FROM alerta WHERE tenant_id = ${T} AND tipo = ${TIPO_ALERTA_LLM} AND resolvido_em IS NULL`
 
 beforeAll(async () => {
   await dono`INSERT INTO plano (id, codigo, nome) VALUES (${PLANO}, 'plano-falha-llm', 'Pro') ON CONFLICT DO NOTHING`

@@ -16,6 +16,8 @@ import type { ContextoPipeline, EtapaPreLlm } from './tipos.js'
  *    abre sessão `ativa` com 0 turnos se uma etapa seguinte (teto) silenciar — e essa sessão conta
  *    como `sessaoAtiva` no portão seguinte (plano §4). Sem sessão, quem grava é a etapa
  *    `pergunta-repetida`, depois do modelo, no rabo do turno que abre a sessão de qualquer jeito.
+ *    Resposta FIXA (gatilho) não passa pelo modelo: o vendedor roda esta etapa de novo com o id
+ *    da sessão que o rabo vai abrir (`slotsNaRespostaFixa`, P0c-e).
  * ⚠️ CNPJ vira 'informado'; orçamento também (valor em R$ na instrução viraria número sem fonte).
  */
 

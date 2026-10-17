@@ -2,6 +2,7 @@ import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@ang
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { ConfirmacaoServico, ToastServico, mensagemDeErro, mesclarPagina } from '../../compartilhado/ui/index.js'
+import { avisoDePausa, type PausaPorQualidade } from './campanhas.regras.js'
 
 interface Campanha {
   readonly id: string
@@ -10,6 +11,8 @@ interface Campanha {
   readonly estado: string
   readonly janelaDias: number
   readonly disparadaEm: string | null
+  /** Número com ativas suspensas pela Meta (P11): a campanha em curso está segurada. */
+  readonly pausadaPorQualidade?: PausaPorQualidade | null
 }
 interface Roi {
   readonly janelaDias: number
@@ -80,6 +83,7 @@ const SEGMENTOS = [
                   <div class="encolhe">
                     <strong class="camp-nome">{{ c.nome }}</strong>
                     <span class="camp-meta">{{ rotuloSegmento(c.segmentoAlvo) }} · {{ rotuloEstado(c.estado) }}</span>
+                    @if (pausa(c); as p) { <span class="selo-pausa">⏸️ {{ p.titulo }}</span> }
                   </div>
                   <div class="camp-acoes">
                     @if (c.estado === 'rascunho') {
@@ -92,6 +96,13 @@ const SEGMENTOS = [
                     }
                   </div>
                 </div>
+                <!-- Ativas suspensas (P11): sem isto a campanha parece disparada e
+                     parada sem motivo; antes só o alerta do sino contava. -->
+                @if (pausa(c); as p) {
+                  <p class="pausa" role="status">
+                    <strong>{{ p.titulo }}</strong> desde {{ dataHora(c.pausadaPorQualidade!.desde) }}. {{ p.detalhe }}
+                  </p>
+                }
                 @if (audiencia()[c.id] !== undefined) {
                   <p class="camp-info">Audiência: <b>{{ audiencia()[c.id] }}</b> contatos.</p>
                 }
@@ -143,6 +154,9 @@ const SEGMENTOS = [
     .camp-topo { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-3); }
     .camp-nome { display: block; color: var(--texto); font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .camp-meta { font-size: 12px; color: var(--texto-suave); }
+    .selo-pausa { display: block; font-size: 12px; font-weight: 600; color: var(--atencao); }
+    .pausa { margin: var(--espacamento-3) 0 0; padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle);
+      background: var(--atencao-suave); color: var(--texto); font-size: 13px; }
     .camp-acoes { display: flex; gap: var(--espacamento-2); flex: none; }
     .camp-info { margin: var(--espacamento-3) 0 0; font-size: 13px; color: var(--texto-secundario); }
     .roi { display: grid; grid-template-columns: 1fr 1fr; gap: var(--espacamento-3); margin-top: var(--espacamento-4); }
@@ -176,6 +190,8 @@ export class CampanhasPagina implements OnInit {
   ngOnInit(): void { void this.carregar() }
   reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
   rotuloSegmento(cod: string): string { return this.segmentos.find((s) => s.codigo === cod)?.rotulo ?? cod }
+  pausa(c: Campanha): { titulo: string; detalhe: string } | null { return avisoDePausa(c.pausadaPorQualidade) }
+  dataHora(iso: string): string { return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) }
   rotuloEstado(e: string): string {
     return { rascunho: 'Rascunho', disparando: 'Disparada', concluida: 'Concluída', cancelada: 'Cancelada' }[e] ?? e
   }

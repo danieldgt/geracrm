@@ -140,6 +140,37 @@ describe('Worker de transcrição', () => {
     expect(await conteudo(id)).toMatchObject({ transcricao_tentativas: MAX_TENTATIVAS_TRANSCRICAO, transcricao_erro: 'formato' })
   })
 
+  it('⚠️ falha DEFINITIVA reagenda o turno (P0c-f): o "1º pede texto" sai sem esperar outra mensagem', async () => {
+    const id = await audio()
+    const agora = new Date()
+    const fora = portaQue({ ok: false, motivo: 'indisponivel' })
+    // Tentativas que ainda vão se repetir NÃO reagendam: o áudio continua "transcrevendo".
+    for (let i = 1; i < MAX_TENTATIVAS_TRANSCRICAO; i++) {
+      const r = await passada({ porta: fora, baixar: baixarFalso }, new Date(agora.getTime() + i * 10 * 60_000))
+      expect(r).toMatchObject({ falhas: 1, reagendouAgente: 0 })
+    }
+    expect(await dono`SELECT 1 FROM agente_tarefa WHERE tenant_id = ${T}`).toHaveLength(0)
+    // A última desiste — e agenda o turno para esta mensagem, no mesmo commit.
+    const rFim = await passada({ porta: fora, baixar: baixarFalso }, new Date(agora.getTime() + MAX_TENTATIVAS_TRANSCRICAO * 10 * 60_000))
+    expect(rFim).toMatchObject({ falhas: 1, transcritas: 0, reagendouAgente: 1 })
+    expect((await conteudo(id))['transcricao_tentativas']).toBe(MAX_TENTATIVAS_TRANSCRICAO)
+    const [t] = await dono<{ estado: string; mensagens_ids: string[] }[]>`SELECT estado, mensagens_ids FROM agente_tarefa WHERE tenant_id = ${T}`
+    expect(t).toMatchObject({ estado: 'pendente', mensagens_ids: [id] })
+  })
+
+  it('formato que desiste na hora também reagenda; com agente desligado, não', async () => {
+    await audio()
+    const r = await passada({ porta: portaQue({ ok: false, motivo: 'formato' }), baixar: baixarFalso })
+    expect(r).toMatchObject({ falhas: 1, reagendouAgente: 1 })
+    await dono`DELETE FROM agente_tarefa WHERE tenant_id = ${T}`
+    await dono`DELETE FROM mensagem WHERE tenant_id = ${T}`
+    await configurar('desligado')
+    await audio()
+    const r2 = await passada({ porta: portaQue({ ok: false, motivo: 'formato' }), baixar: baixarFalso })
+    expect(r2).toMatchObject({ falhas: 1, reagendouAgente: 0 })
+    expect(await dono`SELECT 1 FROM agente_tarefa WHERE tenant_id = ${T}`).toHaveLength(0)
+  })
+
   it('download que falha conta como tentativa — a mensagem continua tocável', async () => {
     const id = await audio()
     const r = await passada({ porta: portaQue({ ok: true, texto: 'x' }), baixar: baixarQueFalha })
