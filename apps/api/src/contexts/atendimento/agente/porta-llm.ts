@@ -110,21 +110,3 @@ export class LlmFerramentasNaoImplementado implements PortaLlmFerramentas {
     return { ok: false, motivo: 'credencial_invalida', detalhe: `Sem adaptador para ${this.nome}.` }
   }
 }
-
-/**
- * Custo ESTIMADO de um laço, em centavos de real — para o teto diário e o
- * painel. Tabela de preço por modelo (US$ por milhão de tokens) e câmbio do
- * ambiente. Estimativa, não fatura: a fatura é a do fornecedor.
- */
-const PRECO_USD_POR_MILHAO: Record<string, { entrada: number; saida: number; cacheLeitura: number; cacheEscrita: number }> = {
-  'claude-opus-5-5': { entrada: 4, saida: 20, cacheLeitura: 0.2, cacheEscrita: 5 },
-  'claude-sonnet-5-5': { entrada: 2, saida: 10, cacheLeitura: 0.2, cacheEscrita: 2.5 },
-  'claude-haiku-4-5': { entrada: 1, saida: 5, cacheLeitura: 0.1, cacheEscrita: 1.25 },
-}
-
-export function custoEstimadoCentavos(modelo: string, uso: UsoDoLaco, cambioBrl = Number(process.env.IA_CAMBIO_BRL) || 5.5): number {
-  const chave = Object.keys(PRECO_USD_POR_MILHAO).find((k) => modelo.startsWith(k))
-  const p = chave ? PRECO_USD_POR_MILHAO[chave]! : PRECO_USD_POR_MILHAO['claude-opus-5-5']!
-  const usd = (uso.entrada * p.entrada + uso.saida * p.saida + uso.cacheLeitura * p.cacheLeitura + uso.cacheEscrita * p.cacheEscrita) / 1_000_000
-  return Math.round(usd * cambioBrl * 100)
-}
