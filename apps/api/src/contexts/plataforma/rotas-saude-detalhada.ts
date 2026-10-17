@@ -1,15 +1,90 @@
 import type { FastifyInstance } from 'fastify'
+import postgres from 'postgres'
+import { httpDaSaude } from '@geracrm/shared'
+import { sql, type Sql } from '../../db/index.js'
+import { estadoDoLlm } from '../atendimento/agente/llm-estado.js'
+import { transcricaoDoAmbiente } from '../atendimento/midia/transcricao/fabrica.js'
+import { embeddingDoAmbiente } from '../catalogo/porta-embedding.js'
+import { idadeDoBatimentoSeg } from './batimento.js'
+import {
+  CACHE_MEDICAO_MS, lerFilasComo, medirSaude, memorizar, pingPeloPool,
+  type ConfiguracaoSaude, type DepsSaude, type LeituraFilas,
+} from './saude-detalhada.js'
 
 /**
- * SAÚDE DETALHADA EM TRÊS ESTADOS — STUB da raia P8 (docs/plano-port-playbook-am.md).
+ * GET /saude/detalhada — SAÚDE EM TRÊS ESTADOS (raia P8; playbook da AM §11.1).
  *
- * Já registrado em `app.ts` pela raia P0: a raia P8 declara as rotas AQUI,
- * sem tocar no `app.ts`.
+ *   {"status":"ok"|"degradado"|"erro","motivos":[...],"componentes":{processo, banco,
+ *    workerAgente, filaAgente, llm, transcricao, embeddings, retornos}}
  *
- * Contrato: GET /saude/detalhada — PÚBLICO e sem dado de tenant → {status, motivos[], componentes{...}}; 503 só encerrando, degradado (200) para dependências. Lê `batimentos()` (plataforma/batimento.ts) e `estadoDoLlm()` (agente/llm-estado.ts). O /saude e o /pronto do app.ts ficam como estão (healthcheck do Railway).
+ * | status    | HTTP | quando                                                              |
+ * |-----------|------|---------------------------------------------------------------------|
+ * | ok        | 200  | tudo respondendo                                                    |
+ * | degradado | 200  | banco fora/lento, worker sem passada, fila atrasada, LLM na reserva… |
+ * | erro      | 503  | SÓ o próprio processo encerrando (SIGTERM → `app.close()`)          |
  *
- * ⚠️ Enquanto stub: não registra rota nenhuma.
+ * ⚠️ Banco fora é `degradado` com 200, não 503: dependência fora nunca derruba
+ *    o processo pelo healthcheck. O `/saude` (liveness) e o `/pronto` (readiness
+ *    com banco) de `app.ts` NÃO mudam — o healthcheck do Railway segue neles.
+ *
+ * ⚠️ PÚBLICA e sem token, como o `/saude`: o corpo leva só códigos, contagens e
+ *    idades em segundos — nenhum id de tenant, nome de modelo, URL, mensagem de
+ *    erro ou segredo. A medição do banco é cacheada (`CACHE_MEDICAO_MS`).
+ *
+ * MONITOR EXTERNO (UptimeRobot ou equivalente) — por PALAVRA-CHAVE, não só por código HTTP:
+ *   URL:      https://<api>/saude/detalhada   (intervalo 5 min)
+ *   Tipo:     Keyword — alerta quando a palavra-chave NÃO existe
+ *   Palavra:  "status":"ok"
+ * Só o topo da resposta tem `status`; os componentes usam `estado`, para que um
+ * componente `ok` dentro de uma resposta degradada não engane o monitor. O
+ * alerta carrega `motivos` (códigos de `MOTIVOS_SAUDE`); o que fazer em cada um
+ * é do runbook (raia P20).
+ *
+ * Opções do plugin: só para teste (dependências falsas). `app.ts` registra sem
+ * opção nenhuma e tudo vem do ambiente.
  */
-export async function rotasSaudeDetalhada(_app: FastifyInstance): Promise<void> {
-  // stub — preenchido pela raia P8
+export async function rotasSaudeDetalhada(app: FastifyInstance, opts: Partial<DepsSaude> = {}): Promise<void> {
+  let encerrando = false
+  // preClose roda no início de `app.close()` — que o SIGTERM de `server.ts` chama.
+  app.addHook('preClose', async () => { encerrando = true })
+
+  const adminUrl = process.env.DATABASE_ADMIN_URL
+  const configuracao: ConfiguracaoSaude = opts.configuracao ?? {
+    // Em `server.ts`, os workers só são agendados com DATABASE_ADMIN_URL.
+    workers: Boolean(adminUrl),
+    transcricao: transcricaoDoAmbiente().capacidades.transcreve,
+    embeddingModelo: (() => {
+      const porta = embeddingDoAmbiente()
+      return porta.capacidades.buscaSemantica ? porta.nome : null
+    })(),
+  }
+
+  // Conexão de serviço PRÓPRIA, preguiçosa e de uma conexão só: a saúde nunca
+  // disputa o pool da API nem as conexões com advisory lock dos workers.
+  let dono: Sql | undefined
+  const lerFilasPadrao = (): Promise<LeituraFilas> => {
+    if (!adminUrl) return Promise.reject(new Error('sem_conexao_de_servico'))
+    dono ??= postgres(adminUrl, { max: 1, idle_timeout: 20, connect_timeout: 3, onnotice: () => {} }) as unknown as Sql
+    return lerFilasComo(dono, configuracao, () => new Date())()
+  }
+  app.addHook('onClose', async () => {
+    if (dono) await (dono as unknown as { end: (o: { timeout: number }) => Promise<void> }).end({ timeout: 2 })
+  })
+
+  const deps: DepsSaude = {
+    encerrando: opts.encerrando ?? (() => encerrando),
+    agora: opts.agora ?? (() => new Date()),
+    uptimeSeg: opts.uptimeSeg ?? (() => process.uptime()),
+    pingBanco: memorizar(opts.pingBanco ?? pingPeloPool(sql), CACHE_MEDICAO_MS),
+    lerFilas: memorizar(opts.lerFilas ?? lerFilasPadrao, CACHE_MEDICAO_MS),
+    idadeBatimento: opts.idadeBatimento ?? ((nome, agora) => idadeDoBatimentoSeg(nome, agora)),
+    estadoDoLlm: opts.estadoDoLlm ?? estadoDoLlm,
+    configuracao,
+    ...(opts.limites ? { limites: opts.limites } : {}),
+  }
+
+  app.get('/saude/detalhada', async (_req, reply) => {
+    const saude = await medirSaude(deps)
+    return reply.code(httpDaSaude(saude.status)).header('cache-control', 'no-store').send(saude)
+  })
 }
