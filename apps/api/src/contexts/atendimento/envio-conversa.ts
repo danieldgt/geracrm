@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { comTenantServico, type Sql } from '../../db/index.js'
+import { marcarPrimeiraRespostaHumana } from './primeira-resposta.js'
 import { decifrar } from '../integracao/cofre.js'
 import { criarCanal } from './canais/fabrica.js'
 import { enviarPeloGateway, type ContextoEnvio } from './canais/gateway.js'
@@ -52,6 +53,12 @@ export type ResultadoEnvioTexto =
 export interface OpcoesEnvio {
   readonly ehDisparo?: boolean
   readonly marcador?: string
+  /**
+   * Quem ENVIOU, quando é uma pessoa (ex.: o vendedor que manda o resumo da proposta).
+   * Vai em `enviada_por_id` — a régua de "resposta de gente" do SLA (P18) e da 1ª resposta
+   * humana. Ausente = envio do sistema (agente, ausência, automação, campanha).
+   */
+  readonly enviadaPorId?: string | null | undefined
 }
 
 export async function enviarTextoNaConversa(
@@ -80,10 +87,10 @@ export async function enviarTextoNaConversa(
     if (!ctx) return null
     const mensagemId = randomUUID()
     await tx`
-      INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem)
+      INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem, enviada_por_id)
       VALUES (tenant_atual(), ${mensagemId}, ${conversaId}, 'saliente', 'texto',
               ${JSON.stringify({ texto, ...(opcoes.marcador ? { automatica: opcoes.marcador } : {}) })}::text::jsonb,
-              'pendente', 0)`
+              'pendente', 0, ${opcoes.enviadaPorId ?? null})`
     const [conv] = await tx<{ versao: string }[]>`
       UPDATE conversa SET ultima_mensagem_em = now(), ultima_direcao = 'saliente', versao = versao + 1
        WHERE tenant_id = tenant_atual() AND id = ${conversaId} RETURNING versao`
@@ -123,6 +130,8 @@ export async function enviarTextoNaConversa(
       INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
       VALUES (tenant_atual(), 'mensagem.status', 'conversa', ${conversaId},
               ${JSON.stringify({ conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
+    // Envio de uma PESSOA que saiu (ex.: resumo da proposta): marca a 1ª resposta humana.
+    if (r.ok && opcoes.enviadaPorId) await marcarPrimeiraRespostaHumana(tx, { conversaId, mensagemId: preparo.mensagemId })
   })
 
   return r.ok

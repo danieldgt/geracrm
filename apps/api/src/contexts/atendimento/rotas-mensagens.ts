@@ -61,8 +61,6 @@ interface Preparo {
   ultimaEntranteEm: Date | null
   destinoBloqueado: boolean
   remetenteNome: string | null
-  /** Quem envia (usuário do token) — autor da 1ª resposta humana do atendimento. */
-  remetenteId: string
   contatoId: string
   canalId: string
 }
@@ -183,10 +181,13 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
         const { tipo: _tipo, ...conteudoBase } = entrada
         if ('sugestaoDecisaoId' in conteudoBase) delete (conteudoBase as { sugestaoDecisaoId?: string }).sugestaoDecisaoId
         const conteudo = midiaChave ? { ...conteudoBase, [entrada.tipo]: midiaChave } : conteudoBase
+        // ⚠️ O AUTOR vai na mensagem (`enviada_por_id`): é a régua de "resposta de gente" do SLA
+        //    (P18), da presença e da 1ª resposta humana. Sem ele, nenhuma resposta digitada contava.
+        const eu = await garantirUsuarioId(tx, req)
         await tx`
-          INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem)
+          INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem, enviada_por_id)
           VALUES (tenant_atual(), ${mensagemId}, ${conversaId}, 'saliente', ${entrada.tipo},
-                  ${JSON.stringify(conteudo)}::text::jsonb, 'pendente', 0)`
+                  ${JSON.stringify(conteudo)}::text::jsonb, 'pendente', 0, ${eu})`
         const [conv] = await tx<{ versao: string }[]>`
           UPDATE conversa SET ultima_mensagem_em = now(), ultima_direcao = 'saliente', versao = versao + 1
            WHERE tenant_id = tenant_atual() AND id = ${conversaId} RETURNING versao`
@@ -195,10 +196,9 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
           VALUES (tenant_atual(), 'mensagem.enviada', 'conversa', ${conversaId},
                   ${JSON.stringify({ conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
         // Nome de quem está atendendo, para o cabeçalho do WhatsApp.
-        const eu = await garantirUsuarioId(tx, req)
         const [rem] = await tx<{ nome: string }[]>`
           SELECT nome FROM usuario WHERE tenant_id = tenant_atual() AND id = ${eu}`
-        return { ...ctx, mensagemId, remetenteNome: rem?.nome ?? null, remetenteId: eu }
+        return { ...ctx, mensagemId, remetenteNome: rem?.nome ?? null }
       })
 
       if (!preparo) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
@@ -419,7 +419,7 @@ async function posEnvioHumano(
   // Marco da 1ª resposta HUMANA (métrica fixa de performance). Transação própria: a parte de
   // sugestão/sombra abaixo falhar não pode apagar o marco, nem o marco falhar derrubar a dela.
   try {
-    await comTenantServico(tenantId, (tx) => marcarPrimeiraRespostaHumana(tx, { conversaId, usuarioId: p.remetenteId, agora }))
+    await comTenantServico(tenantId, (tx) => marcarPrimeiraRespostaHumana(tx, { conversaId, mensagemId: p.mensagemId }))
   } catch (erro) {
     log.warn({ erro, conversaId }, 'pos-envio humano (primeira resposta) falhou')
   }

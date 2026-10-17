@@ -33,6 +33,15 @@ export interface ResumoVigiaCanal {
  * `suspenso`: suspensão é decisão humana ou da Meta, e sobrescrever apagaria a
  * razão pela qual alguém desligou aquele número.
  */
+/** Prazo de uma verificação de conexão no fornecedor. */
+export const PRAZO_VERIFICACAO_MS = 10_000
+
+function comPrazo<T>(p: Promise<T>, ms: number): Promise<T> {
+  let relogio: ReturnType<typeof setTimeout> | undefined
+  const estouro = new Promise<never>((_, rej) => { relogio = setTimeout(() => rej(new Error('verificacao_sem_resposta')), ms) })
+  return Promise.race([p, estouro]).finally(() => clearTimeout(relogio))
+}
+
 export async function vigiarConexaoCanais(
   sql: Sql, agora: Date,
   // ⚠️ Costura para o teste, no mesmo estilo do `{ buscar }` dos adaptadores: o
@@ -41,9 +50,11 @@ export async function vigiarConexaoCanais(
   //    sem teste — justamente o que estava quebrado.
   //    `somenteTenant` restricts the pass to one tenant (tests against the shared database:
   //    without it the pass walks every tenant's channels and calls each provider).
-  deps: { readonly criar?: typeof criarCanal; readonly somenteTenant?: string | undefined } = {},
+  //    `prazoMs`: tempo máximo por canal (padrão 10 s) — um fornecedor pendurado não segura a passada.
+  deps: { readonly criar?: typeof criarCanal; readonly somenteTenant?: string | undefined; readonly prazoMs?: number | undefined } = {},
 ): Promise<ResumoVigiaCanal> {
   const criar = deps.criar ?? criarCanal
+  const prazoMs = deps.prazoMs ?? PRAZO_VERIFICACAO_MS
   const chaveTrava = `vigia_conexao_canal${deps.somenteTenant ? `:${deps.somenteTenant}` : ''}`
   const [trava] = await sql<{ ok: boolean }[]>`
     SELECT pg_try_advisory_lock(hashtext(${chaveTrava})) AS ok`
@@ -78,7 +89,9 @@ export async function vigiarConexaoCanais(
         if (!canal.capacidades.sessaoPodeCair) continue
 
         verificados++
-        const r = await canal.verificarConexao()
+        // ⚠️ Com prazo: sem ele, um fornecedor que não responde segurava a passada (e a trava)
+        //    para todos os canais. Estourou = sem resposta: vai para o `catch` (não carimba).
+        const r = await comPrazo(canal.verificarConexao(), prazoMs)
 
         if (r.conectado) {
           if (c.estado === 'desconectado') {

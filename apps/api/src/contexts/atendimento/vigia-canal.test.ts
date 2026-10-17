@@ -238,6 +238,23 @@ async function alertaAberto(): Promise<number> {
   return r!.n
 }
 
+describe('Prazo da verificação (P0d)', () => {
+  it('fornecedor que não responde: a passada termina no prazo, não carimba e não muda o estado', async () => {
+    await canalPlugZapi('conectado')
+    const pendurado = {
+      somenteTenant: TV, prazoMs: 50,
+      criar: () => ({ capacidades: { sessaoPodeCair: true }, verificarConexao: () => new Promise(() => undefined) }),
+    } as unknown as Parameters<typeof vigiarConexaoCanais>[2]
+    const inicio = Date.now()
+    const r = await vigiarConexaoCanais(sqlV, AGORA_V, pendurado)
+    expect(Date.now() - inicio).toBeLessThan(5_000)
+    expect(r).toMatchObject({ verificados: 1, caiu: 0, voltou: 0 })
+    const [c] = await donoV<{ estado: string; verificado_em: Date | null }[]>`
+      SELECT estado, verificado_em FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
+    expect(c).toMatchObject({ estado: 'conectado', verificado_em: null })
+  })
+})
+
 describe('Alerta de canal caído', () => {
   it('⚠️ fecha o alerta com o canal JÁ conectado — sem depender da transição', async () => {
     // O estado do incidente real: canal marcado conectado (voltou pela tela) e

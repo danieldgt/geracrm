@@ -399,6 +399,25 @@ describe('worker de qualidade', () => {
     }
   })
 
+  it('[P0d] erro numa sessão conta como falha e a passada segue; nenhuma concessão fica para trás', async () => {
+    await dono`UPDATE agente_config SET qualidade_amostra = 1 WHERE tenant_id = ${A}`
+    // O lote sai por turnos DESC: a de 2 turnos é julgada primeiro e quebra; a de 1 turno segue.
+    const quebra = await conversaCom(A, CANAL_A, { turnos: 2 })
+    await conversaCom(A, CANAL_A, { turnos: 1 })
+    let primeira = true
+    const quebradico: PortaLlmFerramentas = { ...juizFalso, async rodar(p) {
+      if (primeira) {
+        primeira = false
+        // A decisão some enquanto o juiz pensa: a gravação da avaliação viola a FK e LANÇA.
+        await dono`DELETE FROM agente_decisao WHERE tenant_id = ${A} AND sessao_id = ${quebra.sessao}`
+      }
+      return juizFalso.rodar(p)
+    } }
+    const r = await rodar(A, { juiz: quebradico })
+    expect(r).toMatchObject({ julgadas: 1, falhas: 1 })
+    expect((await dono`SELECT 1 FROM qualidade_juiz_concessao WHERE tenant_id = ${A}`).length).toBe(0)
+  })
+
   it('[P0d] concessão viva de outra instância: a sessão fica de fora; expirada, volta ao lote', async () => {
     await dono`UPDATE agente_config SET qualidade_amostra = 1 WHERE tenant_id = ${A}`
     const { sessao } = await conversaCom(A, CANAL_A, { turnos: 1 })

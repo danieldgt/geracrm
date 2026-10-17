@@ -4,6 +4,7 @@ import { comTenantServico, type Sql } from '../db/index.js'
 import type { PortaLlmFerramentas } from '../contexts/atendimento/agente/porta-llm.js'
 import { registrarRegrasPendentes, julgarSessao, tetoJuizEfetivo, type DesfechoJuiz } from '../contexts/atendimento/agente/qualidade/avaliacao.js'
 import { juizDoAmbiente } from '../contexts/atendimento/agente/qualidade/juiz.js'
+import { logQualidade } from '../contexts/atendimento/agente/qualidade/alerta.js'
 
 /**
  * WORKER DE QUALIDADE EM PRODUÇÃO (ADR-031, raia P12) — fora do caminho da
@@ -98,20 +99,29 @@ export async function processarQualidade(dono: Sql, deps: DepsQualidade = {}, ag
 
   const reservadas = await reservarLote(dono, agora, deps)
   let julgadas = 0, falhas = 0, noTeto = 0
-  for (const c of reservadas) {
-    try {
-      const gatilho: GatilhoAvaliacao = c.estado === 'ativa' ? 'turnos' : 'fim_sessao'
-      const d: DesfechoJuiz = await julgarSessao((fn) => comTenantServico(c.tenant_id, fn), {
-        tenantId: c.tenant_id, sessaoId: c.sessao_id, decisaoId: c.decisao_id!, conversaId: c.conversa_id, canalId: c.canal_id,
-        canalNome: c.canal_nome, modo: c.modo ?? 'sombra', turnos: c.turnos, gatilho, politicas: c.politicas,
-        tetoMesCentavos: tetoJuizEfetivo(c.teto, deps.env),
-      }, { porta, modelo })
-      if (d === 'avaliada') julgadas++
-      else if (d === 'falhou') falhas++
-      else if (d === 'teto') noTeto++
-    } finally {
-      await dono`DELETE FROM qualidade_juiz_concessao WHERE tenant_id = ${c.tenant_id} AND sessao_id = ${c.sessao_id} AND token = ${c.token}`
+  try {
+    for (const c of reservadas) {
+      // ⚠️ Erro de UMA sessão (banco, bug no preparo) conta como falha e a passada segue: o
+      //    resto do lote não pode ficar sem juiz por causa dela.
+      try {
+        const gatilho: GatilhoAvaliacao = c.estado === 'ativa' ? 'turnos' : 'fim_sessao'
+        const d: DesfechoJuiz = await julgarSessao((fn) => comTenantServico(c.tenant_id, fn), {
+          tenantId: c.tenant_id, sessaoId: c.sessao_id, decisaoId: c.decisao_id!, conversaId: c.conversa_id, canalId: c.canal_id,
+          canalNome: c.canal_nome, modo: c.modo ?? 'sombra', turnos: c.turnos, gatilho, politicas: c.politicas,
+          tetoMesCentavos: tetoJuizEfetivo(c.teto, deps.env),
+        }, { porta, modelo })
+        if (d === 'avaliada') julgadas++
+        else if (d === 'falhou') falhas++
+        else if (d === 'teto') noTeto++
+      } catch (erro) {
+        falhas++
+        logQualidade('error', 'juiz_sessao_falhou', { tenantId: c.tenant_id, sessaoId: c.sessao_id, erro: String(erro).slice(0, 200) })
+      }
     }
+  } finally {
+    // Solta TODAS as concessões deste lote (um token por passada), mesmo se algo acima escapar.
+    const token = reservadas[0]?.token
+    if (token) await dono`DELETE FROM qualidade_juiz_concessao WHERE token = ${token}`
   }
   return { processadas: regras + julgadas + falhas, regras, julgadas, falhas, noTeto, juizIndisponivel: null }
 }

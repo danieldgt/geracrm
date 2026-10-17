@@ -32,7 +32,7 @@ const PROPONIVEIS: readonly string[] = ['rascunho', 'aguardando_confirmacao']
 
 export type FuncaoEnvio = (
   tenantId: string, conversaId: string, texto: string, remetenteNome: string | null,
-  agora: Date, opcoes: { readonly marcador?: string },
+  agora: Date, opcoes: { readonly marcador?: string; readonly enviadaPorId?: string | null | undefined },
 ) => Promise<ResultadoEnvioTexto>
 
 export interface DepsProposta {
@@ -40,6 +40,8 @@ export interface DepsProposta {
   readonly enviar?: FuncaoEnvio
   /** Cabeçalho de quem envia (vendedor). O agente não assina: `null`. */
   readonly remetenteNome?: string | null
+  /** Quem envia, quando é uma pessoa (o vendedor pela tela): autor da mensagem (`enviada_por_id`). */
+  readonly enviadaPorId?: string | null
 }
 
 export type ResultadoProposta =
@@ -75,7 +77,8 @@ export async function proporPedido(
   // Fase 2: enviar pelo gateway único — FORA de transação.
   const enviar = deps.enviar ?? enviarTextoNaConversa
   const envio = await enviar(
-    tenantId, preparo.conversaId, preparo.texto, deps.remetenteNome ?? null, agora, { marcador: MARCADOR_PROPOSTA },
+    tenantId, preparo.conversaId, preparo.texto, deps.remetenteNome ?? null, agora,
+    { marcador: MARCADOR_PROPOSTA, enviadaPorId: deps.enviadaPorId ?? null },
   )
   if (!envio.ok) {
     return { tipo: 'envio_recusado', motivo: envio.motivo, classe: envio.classe, conversaId: preparo.conversaId }

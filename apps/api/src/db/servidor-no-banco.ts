@@ -1,3 +1,4 @@
+import postgres from 'postgres'
 import type { Sql } from './index.js'
 
 /**
@@ -28,4 +29,24 @@ export function mensagemServidorNoBanco(n: number, banco: string): string {
   return `Há ${n} conexão(ões) de workers de um servidor GeraCRM (application_name=${APLICACAO_WORKERS}) no banco "${banco}". `
     + 'Os workers dele consomem as filas dos testes (agente_tarefa, tarefa_pos_ingestao…) e a suíte falha ao acaso. '
     + 'Pare o servidor (pnpm dev / tsx watch) ou rode os testes num banco próprio (DATABASE_URL/DATABASE_ADMIN_URL).'
+}
+
+/**
+ * A guarda do globalSetup do vitest. Lança (com o motivo) se houver workers de servidor no banco;
+ * banco inacessível NÃO derruba a suíte: avisa e segue (os testes de banco dirão o porquê).
+ */
+export async function guardaServidorNoBanco(url: string, avisar: (m: string) => void = console.warn): Promise<void> {
+  const dono = postgres(url, { max: 1, onnotice: () => {}, connect_timeout: 5 })
+  let n = 0
+  let banco = '?'
+  try {
+    n = await conexoesDeWorkersNoBanco(dono as never)
+    if (n > 0) banco = (await dono<{ banco: string }[]>`SELECT current_database() AS banco`)[0]?.banco ?? '?'
+  } catch (erro) {
+    avisar(`[globalSetup] não consegui conferir servidores no banco (${String(erro).slice(0, 160)}); seguindo sem a guarda.`)
+    return
+  } finally {
+    await dono.end({ timeout: 1 }).catch(() => undefined)
+  }
+  if (n > 0) throw new Error(mensagemServidorNoBanco(n, banco))
 }

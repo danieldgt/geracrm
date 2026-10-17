@@ -572,12 +572,13 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>(
     '/v1/pedidos/:id/enviar-resumo', { preHandler: exigirTenant },
     async (req, reply) => {
-      const nome = await req.comTenant(async (tx) => {
+      const quem = await req.comTenant(async (tx) => {
         const eu = await garantirUsuarioId(tx, req)
         const [u] = await tx<{ nome: string }[]>`SELECT nome FROM usuario WHERE tenant_id = tenant_atual() AND id = ${eu}`
-        return u?.nome ?? null
+        return { id: eu, nome: u?.nome ?? null }
       })
-      const r = await proporPedido(req.tenantId!, req.params.id, new Date(), { remetenteNome: nome })
+      // O vendedor é o AUTOR da mensagem: conta como resposta de gente (SLA e 1ª resposta humana).
+      const r = await proporPedido(req.tenantId!, req.params.id, new Date(), { remetenteNome: quem.nome, enviadaPorId: quem.id })
       switch (r.tipo) {
         case 'nao_encontrado': return reply.code(404).send({ erro: 'pedido.nao_encontrado' })
         case 'sem_conversa': return reply.code(422).send({ erro: 'pedido.sem_conversa', mensagem: 'Este pedido não nasceu numa conversa; não há para quem enviar.' })

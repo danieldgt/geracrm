@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { contarVariaveis, primeiroNome, templateDeRetornoCompativel } from '@geracrm/shared'
 import { comTenantServico, emSavepoint, type Sql } from '../../db/index.js'
+import { marcarPrimeiraRespostaHumana } from './primeira-resposta.js'
 import { decifrar } from '../integracao/cofre.js'
 import { criarCanal } from './canais/fabrica.js'
 import { enviarPeloGateway, type ContextoEnvio } from './canais/gateway.js'
@@ -31,6 +32,8 @@ export interface OpcoesEnvioTemplate {
    * um envio de template por pessoa passa 'humano'.
    */
   readonly origemAviso?: 'agente' | 'humano'
+  /** Quem enviou, quando é uma pessoa: autor da mensagem (`enviada_por_id`) e 1ª resposta humana. */
+  readonly enviadaPorId?: string | null | undefined
 }
 
 interface Preparo {
@@ -79,14 +82,14 @@ export async function enviarTemplateNaConversa(
 
     const mensagemId = randomUUID()
     await tx`
-      INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem)
+      INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem, enviada_por_id)
       VALUES (tenant_atual(), ${mensagemId}, ${conversaId}, 'saliente', 'texto',
               ${JSON.stringify({
                 texto: renderizado,
                 template: { id: templateId, nome: tpl.nome, idioma: tpl.idioma, versao: tpl.versao },
                 ...(opcoes.marcador ? { automatica: opcoes.marcador } : {}),
               })}::text::jsonb,
-              'pendente', 0)`
+              'pendente', 0, ${opcoes.enviadaPorId ?? null})`
     const [conv] = await tx<{ versao: string }[]>`
       UPDATE conversa SET ultima_mensagem_em = now(), ultima_direcao = 'saliente', versao = versao + 1
        WHERE tenant_id = tenant_atual() AND id = ${conversaId} RETURNING versao`
@@ -127,6 +130,7 @@ export async function enviarTemplateNaConversa(
     // P13/P4: template com o aviso de privacidade também é prova de exibição — só com envio ok.
     // ⚠️ Em savepoint + try/catch: falha do registro (acessório) não pode desfazer o STATUS do
     //    envio (principal) — a mensagem já saiu, e a tela precisa saber.
+    if (r.ok && opcoes.enviadaPorId) await marcarPrimeiraRespostaHumana(tx, { conversaId, mensagemId: preparo.mensagemId })
     if (r.ok) {
       try {
         await emSavepoint(tx, (sp) => registrarAvisoSeExibido(sp, {

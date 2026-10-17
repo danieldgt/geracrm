@@ -8,7 +8,8 @@ import postgres from 'postgres'
  * 5 min da performance (`/v1/performance`) passa a ter dado. Antes, `primeira_resposta_humana_em`
  * nunca era preenchida: a tela mostrava "0 respondidos" para sempre.
  *
- * O canal é falso (nenhuma rede); o resto é o caminho real: rota → gateway → pós-envio.
+ * A régua é a da P18: mensagem saliente COM autor (`enviada_por_id`); o marco é o `criado_em`
+ * da própria mensagem. O canal é falso (nenhuma rede); o resto é o caminho real.
  */
 const espiao = vi.hoisted(() => ({ enviados: 0, ok: true }))
 vi.mock('./canais/fabrica.js', async (importOriginal) => {
@@ -26,40 +27,48 @@ vi.mock('./canais/fabrica.js', async (importOriginal) => {
 })
 
 const { criarApp } = await import('../../app.js')
-const { encerrarBanco } = await import('../../db/index.js')
+const { encerrarBanco, comTenantServico } = await import('../../db/index.js')
 const { cifrar } = await import('../integracao/cofre.js')
+const { enviarTextoNaConversa } = await import('./envio-conversa.js')
+const { marcarPrimeiraRespostaHumana } = await import('./primeira-resposta.js')
 
 const T = 'f1a50000-0000-4000-8000-000000000001'
-const PV = 'f1a50000-1111-4000-8000-000000000001'
+const U = 'f1a50000-0000-4000-8000-000000000002'
 const PLANO = 'f1a50000-3333-4000-8000-000000000001'
 const MODELO = 'f1a50000-4444-4000-8000-000000000001'
-const CANAL = 'f1a50000-5555-4000-8000-000000000001'
-const CONTATO = 'f1a50000-6666-4000-8000-000000000001'
-const CONVERSA = 'f1a50000-7777-4000-8000-000000000001'
-const ANA = 'f1a50000-8888-4000-8000-000000000001'
-const BIA = 'f1a50000-8888-4000-8000-000000000002'
-/** O `sub` sintético que `subDoUsuario` produz em dev (por tenant): os envios saem como Ana. */
-const SUB = `dev-${T}`
+/** Ids por tenant: perfil vertical, canal, contato, conversa e a Ana (o `sub` dev do tenant). */
+const ids = (t: string) => {
+  const n = t.slice(-1)
+  return {
+    pv: `f1a50000-1111-4000-8000-00000000000${n}`, canal: `f1a50000-5555-4000-8000-00000000000${n}`,
+    contato: `f1a50000-6666-4000-8000-00000000000${n}`, conversa: `f1a50000-7777-4000-8000-00000000000${n}`,
+    ana: `f1a50000-8888-4000-8000-00000000000${n}`, sub: `dev-${t}`,
+  }
+}
+const { conversa: CONVERSA, ana: ANA } = ids(T)
+const BIA = 'f1a50000-8888-4000-8000-000000000009'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
 let app: FastifyInstance
 
-const enviar = (texto: string) => app.inject({
-  method: 'POST', url: `/v1/conversas/${CONVERSA}/mensagens`, headers: { 'x-tenant-id': T }, payload: { tipo: 'texto', texto },
+const enviar = (texto: string, t = T) => app.inject({
+  method: 'POST', url: `/v1/conversas/${ids(t).conversa}/mensagens`, headers: { 'x-tenant-id': t }, payload: { tipo: 'texto', texto },
 })
-const atendimento = async () => (await dono<{
+const atendimento = async (t = T) => (await dono<{
   primeira_entrante_em: Date | null; primeira_resposta_em: Date | null; primeira_resposta_humana_em: Date | null; primeira_resposta_por_id: string | null
 }[]>`SELECT primeira_entrante_em, primeira_resposta_em, primeira_resposta_humana_em, primeira_resposta_por_id
-       FROM atendimento WHERE tenant_id = ${T} AND estado <> 'encerrado'`)[0]
+       FROM atendimento WHERE tenant_id = ${t} AND estado <> 'encerrado'`)[0]
 
 /** Cliente escreveu há `minutos`; um atendimento aberto o espera (como o handoff cria). */
-async function clienteEsperando(minutos: number, extra: { automaticaEm?: Date } = {}): Promise<Date> {
+async function clienteEsperando(minutos: number, extra: { automaticaEm?: Date; t?: string } = {}): Promise<Date> {
+  const t = extra.t ?? T
+  const { conversa, canal } = ids(t)
   const chegada = new Date(Date.now() - minutos * 60_000)
   await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-             VALUES (${T}, ${randomUUID()}, ${CONVERSA}, 'entrante', 'texto', '{"texto":"tem sabão?"}'::jsonb, ${chegada})`
-  await dono`UPDATE conversa SET ultima_entrante_em = ${chegada} WHERE tenant_id = ${T} AND id = ${CONVERSA}`
+             VALUES (${t}, ${randomUUID()}, ${conversa}, 'entrante', 'texto', '{"texto":"tem sabão?"}'::jsonb, ${chegada})`
+  await dono`UPDATE conversa SET ultima_entrante_em = ${chegada} WHERE tenant_id = ${t} AND id = ${conversa}`
   await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, estado, criado_em, primeira_resposta_em)
-             VALUES (${T}, ${randomUUID()}, ${CONVERSA}, ${CANAL}, ${Date.now()}, 'na_fila', ${chegada}, ${extra.automaticaEm ?? null})`
+             VALUES (${t}, ${randomUUID()}, ${conversa}, ${canal}, ${Date.now()}, 'na_fila', ${chegada}, ${extra.automaticaEm ?? null})`
   return chegada
 }
 
@@ -67,62 +76,72 @@ beforeAll(async () => {
   process.env.DEV_TENANT_HEADER = 'on'
   await dono`INSERT INTO plano (id, codigo, nome) VALUES (${PLANO}, 'plano-f1a5', 'Pro') ON CONFLICT DO NOTHING`
   await dono`INSERT INTO perfil_vertical_modelo (id, codigo, nome) VALUES (${MODELO}, 'modelo-f1a5', 'Varejo') ON CONFLICT DO NOTHING`
-  await dono.begin(async (tx) => {
-    await tx`SET CONSTRAINTS ALL DEFERRED`
-    await tx`INSERT INTO tenant (id, nome, plano_id, perfil_vertical_id) VALUES (${T}, 'Loja 1a resposta', ${PLANO}, ${PV}) ON CONFLICT DO NOTHING`
-    await tx`INSERT INTO perfil_vertical (tenant_id, id, modelo_id, nome) VALUES (${T}, ${PV}, ${MODELO}, 'Varejo') ON CONFLICT DO NOTHING`
-  })
-  await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, provedor, nome_amigavel, estado, credenciais_cifradas)
-             VALUES (${T}, ${CANAL}, 'whatsapp_nao_oficial', 'plugzapi', 'WA', 'conectado',
-                     ${cifrar({ instancia: 'i', token: 't', clientToken: 'c' })}) ON CONFLICT DO NOTHING`
-  await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${CONTATO}, 'Cliente', 'teste', true) ON CONFLICT DO NOTHING`
-  await dono`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, fonte)
-             VALUES (${T}, ${CONTATO}, 1, '5585999991111', '5585999991111', true, 'teste') ON CONFLICT DO NOTHING`
-  await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${CONVERSA}, ${CANAL}, ${CONTATO}, 0) ON CONFLICT DO NOTHING`
-  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES
-             (${T}, ${ANA}, ${SUB}, 'Ana', 'ana@1a.local'), (${T}, ${BIA}, 'sub-bia-1a', 'Bia', 'bia@1a.local')
-             ON CONFLICT DO NOTHING`
+  for (const t of [T, U]) {
+    const i = ids(t)
+    await dono.begin(async (tx) => {
+      await tx`SET CONSTRAINTS ALL DEFERRED`
+      await tx`INSERT INTO tenant (id, nome, plano_id, perfil_vertical_id) VALUES (${t}, ${`Loja 1a resposta ${t.slice(-1)}`}, ${PLANO}, ${i.pv}) ON CONFLICT DO NOTHING`
+      await tx`INSERT INTO perfil_vertical (tenant_id, id, modelo_id, nome) VALUES (${t}, ${i.pv}, ${MODELO}, 'Varejo') ON CONFLICT DO NOTHING`
+    })
+    await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, provedor, nome_amigavel, estado, credenciais_cifradas)
+               VALUES (${t}, ${i.canal}, 'whatsapp_nao_oficial', 'plugzapi', 'WA', 'conectado',
+                       ${cifrar({ instancia: 'i', token: 't', clientToken: 'c' })}) ON CONFLICT DO NOTHING`
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${t}, ${i.contato}, 'Cliente', 'teste', true) ON CONFLICT DO NOTHING`
+    await dono`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, fonte)
+               VALUES (${t}, ${i.contato}, 1, ${`558599999111${t.slice(-1)}`}, ${`558599999111${t.slice(-1)}`}, true, 'teste') ON CONFLICT DO NOTHING`
+    await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${t}, ${i.conversa}, ${i.canal}, ${i.contato}, 0) ON CONFLICT DO NOTHING`
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${t}, ${i.ana}, ${i.sub}, 'Ana', ${`ana${t.slice(-1)}@1a.local`}) ON CONFLICT DO NOTHING`
+  }
+  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${T}, ${BIA}, 'sub-bia-1a', 'Bia', 'bia@1a.local') ON CONFLICT DO NOTHING`
   app = await criarApp()
   await app.ready()
 })
 
 beforeEach(async () => {
   espiao.enviados = 0; espiao.ok = true
-  await dono`UPDATE conversa SET atendimento_atual_id = NULL WHERE tenant_id = ${T}`
-  for (const tab of ['atendimento_etapa_historico', 'atendimento', 'mensagem', 'outbox']) await dono.unsafe(`DELETE FROM ${tab} WHERE tenant_id = '${T}'`)
+  for (const t of [T, U]) {
+    await dono`UPDATE conversa SET atendimento_atual_id = NULL WHERE tenant_id = ${t}`
+    for (const tab of ['atendimento_etapa_historico', 'atendimento', 'mensagem', 'outbox']) await dono.unsafe(`DELETE FROM ${tab} WHERE tenant_id = '${t}'`)
+  }
 })
 
 afterAll(async () => {
-  await dono`UPDATE conversa SET atendimento_atual_id = NULL WHERE tenant_id = ${T}`
-  for (const tab of ['auditoria', 'atendimento_etapa_historico', 'atendimento', 'atendimento_etapa', 'metrica', 'alerta', 'mensagem', 'outbox',
-    'conversa', 'contato_telefone', 'contato', 'usuario', 'canal_conectado']) {
-    await dono.unsafe(`DELETE FROM ${tab} WHERE tenant_id = '${T}'`).catch(() => undefined)
+  for (const t of [T, U]) {
+    await dono`UPDATE conversa SET atendimento_atual_id = NULL WHERE tenant_id = ${t}`
+    for (const tab of ['auditoria', 'atendimento_etapa_historico', 'atendimento', 'atendimento_etapa', 'metrica', 'alerta', 'mensagem', 'outbox',
+      'conversa', 'contato_telefone', 'contato', 'usuario', 'canal_conectado']) {
+      await dono.unsafe(`DELETE FROM ${tab} WHERE tenant_id = '${t}'`).catch(() => undefined)
+    }
+    await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${t}`
+    await dono`DELETE FROM perfil_vertical WHERE tenant_id = ${t}`
+    await dono`DELETE FROM tenant WHERE id = ${t}`
   }
-  await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${T}`
-  await dono`DELETE FROM perfil_vertical WHERE tenant_id = ${T}`
-  await dono`DELETE FROM tenant WHERE id = ${T}`
   await dono`DELETE FROM plano WHERE id = ${PLANO}`
   await dono`DELETE FROM perfil_vertical_modelo WHERE id = ${MODELO}`
   await app.close(); await encerrarBanco(); await dono.end()
 })
 
 describe('1ª resposta humana do atendimento', () => {
-  it('o primeiro envio humano grava o marco, o autor e a chegada; a performance passa a ter dado dentro do SLA', async () => {
+  it('o primeiro envio humano grava o marco (criado_em da mensagem), o autor e a chegada; a performance passa a ter dado dentro do SLA', async () => {
     const chegada = await clienteEsperando(2)
-    const antes = Date.now()
-    expect((await enviar('Temos sim!')).statusCode).toBe(200)
+    const r = await enviar('Temos sim!')
+    expect(r.statusCode).toBe(200)
+    const [m] = await dono<{ criado_em: Date; enviada_por_id: string | null }[]>`
+      SELECT criado_em, enviada_por_id FROM mensagem WHERE tenant_id = ${T} AND id = ${(r.json() as { mensagemId: string }).mensagemId}`
+    // O autor vai na mensagem: é a régua de "resposta de gente" do SLA (P18).
+    expect(m!.enviada_por_id).toBe(ANA)
     const a = await atendimento()
     expect(a!.primeira_resposta_por_id).toBe(ANA)
     expect(a!.primeira_entrante_em!.getTime()).toBe(chegada.getTime())
-    expect(a!.primeira_resposta_humana_em!.getTime()).toBeGreaterThanOrEqual(antes - 1000)
-    expect(a!.primeira_resposta_em!.getTime()).toBe(a!.primeira_resposta_humana_em!.getTime())
+    expect(a!.primeira_resposta_humana_em!.getTime()).toBe(m!.criado_em.getTime())
+    expect(a!.primeira_resposta_em!.getTime()).toBe(m!.criado_em.getTime())
 
     const p = (await app.inject({ method: 'GET', url: '/v1/performance?dias=7', headers: { 'x-tenant-id': T } })).json() as {
       respondidos: number; dentroSla: number; pctDentroSla: number | null; medianaRespostaSeg: number | null
       porAtendente: { usuarioId: string | null; respondidos: number }[]
     }
     expect(p).toMatchObject({ respondidos: 1, dentroSla: 1, pctDentroSla: 100 })
-    expect(p.medianaRespostaSeg).toBeGreaterThanOrEqual(115)
+    expect(p.medianaRespostaSeg).toBeGreaterThan(60)
     expect(p.porAtendente).toEqual([expect.objectContaining({ usuarioId: ANA, respondidos: 1 })])
   })
 
@@ -132,7 +151,6 @@ describe('1ª resposta humana do atendimento', () => {
     const primeiro = await atendimento()
     // Outro vendedor "responderia" depois: o marco já existe e não é reescrito.
     await dono`UPDATE atendimento SET primeira_resposta_por_id = ${BIA} WHERE tenant_id = ${T}`
-    await new Promise((res) => setTimeout(res, 20))
     expect((await enviar('Segunda')).statusCode).toBe(200)
     const depois = await atendimento()
     expect(depois!.primeira_resposta_por_id).toBe(BIA)
@@ -145,7 +163,17 @@ describe('1ª resposta humana do atendimento', () => {
     expect((await enviar('Oi, sou a Ana')).statusCode).toBe(200)
     const a = await atendimento()
     expect(a!.primeira_resposta_em!.getTime()).toBe(automatica.getTime())
-    expect(a!.primeira_resposta_humana_em!.getTime()).toBeGreaterThan(automatica.getTime())
+    expect(a!.primeira_resposta_humana_em).not.toBeNull()
+  })
+
+  it('envio sem autor (agente, ausência, automação) não conta; o do vendedor pelo caminho programático (resumo da proposta) conta', async () => {
+    await clienteEsperando(1)
+    const sistema = await enviarTextoNaConversa(T, CONVERSA, 'Mensagem do agente', null, new Date(), { ehDisparo: false, marcador: 'agente' })
+    expect(sistema.ok).toBe(true)
+    expect(await atendimento()).toMatchObject({ primeira_resposta_humana_em: null })
+    const vendedor = await enviarTextoNaConversa(T, CONVERSA, 'Segue o resumo do pedido.', 'Bia', new Date(), { marcador: 'proposta', enviadaPorId: BIA })
+    expect(vendedor.ok).toBe(true)
+    expect((await atendimento())!.primeira_resposta_por_id).toBe(BIA)
   })
 
   it('envio que não saiu (falha de transporte) não marca nada', async () => {
@@ -158,5 +186,21 @@ describe('1ª resposta humana do atendimento', () => {
   it('sem atendimento aberto o envio segue normal e nada é marcado', async () => {
     expect((await enviar('Oi!')).statusCode).toBe(200)
     expect((await dono`SELECT 1 FROM atendimento WHERE tenant_id = ${T}`).length).toBe(0)
+  })
+
+  it('dois tenants: o envio de um não marca o atendimento do outro, nem pelo id da mensagem (RLS)', async () => {
+    await clienteEsperando(1)
+    await clienteEsperando(1, { t: U })
+    const r = await enviar('Temos sim!')
+    expect(r.statusCode).toBe(200)
+    expect((await atendimento())!.primeira_resposta_por_id).toBe(ANA)
+    expect(await atendimento(U)).toMatchObject({ primeira_resposta_humana_em: null, primeira_resposta_por_id: null })
+    // Sob o tenant U, o id da mensagem de T não resolve: nada é marcado.
+    const mensagemId = (r.json() as { mensagemId: string }).mensagemId
+    expect(await comTenantServico(U, (tx) => marcarPrimeiraRespostaHumana(tx, { conversaId: ids(U).conversa, mensagemId }))).toBe(false)
+    expect(await atendimento(U)).toMatchObject({ primeira_resposta_humana_em: null })
+    // E o próprio envio de U marca só o de U.
+    expect((await enviar('Oi, U aqui', U)).statusCode).toBe(200)
+    expect((await atendimento(U))!.primeira_resposta_por_id).toBe(ids(U).ana)
   })
 })

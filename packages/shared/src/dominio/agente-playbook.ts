@@ -328,23 +328,33 @@ const NEGA_IA_RES: readonly RegExp[] = [
   // gente de verdade
   /\batendimento (?:\w+ )?human[oa]\b|\bpessoas? (?:real|reais|de verdade|de carne)\b|\bde carne e osso\b|\bgente de verdade\b|\bso gente\b|\bhuman[oa]s? (?:de verdade|mesmo)\b|\bequipe humana\b|\bem pessoa\b|\bsou de verdade\b/,
   /\b(?:sou|somos) (?:um |uma )?(?:human[oa]s?|pessoas?|gente|atendente humano)\b/,
-  // "Aqui quem fala é uma pessoa.", "quem responde é gente" — sem ser a pessoa DA EQUIPE que assume (handoff legítimo).
-  /\b(?:aqui|quem (?:fala|esta falando|atende|responde|escreve)|com quem voce (?:fala|esta falando))\b(?:\s+\w+){0,3}\s+(?:e|sou|somos)\s+(?:um |uma )?(?:pessoa|human[oa]|gente)\b(?!\s+(?:da|do|de|das|dos)\s+(?:equipe|time|loja|atendimento|empresa|nossa|nosso))/,
   // inglês
   /\breal (?:person|people|human)\b|\bhumans? here\b|\bi ?a?m (?:a )?human\b|\bnot (?:a |an )?(?:bot|robot|ai|machine)\b/,
   // mandar mentir, esconder ou revogar
   /\b(?:diga|fale|responda|afirme|finja|diz|dizer|fingir|say|tell)\s+(?:que\s+|that\s+)?(?:e|ser|somos|sou|voce e|you are|youre|we are|i am)\s+(?:um\s+|uma\s+|a\s+)?(?:human[oa]?|pessoa|person|gente|atendente|vendedor[a]?|funcionari[oa])\b/,
   /\b(?:fing\w*|finj\w*|pretend\w*|desconvers\w*|como se fosse)\b/,
   new RegExp(String.raw`\b(?:nao revel\w*|nao conte|escond\w*|ocult\w*|disfarc\w*)${PERTO.replace('{0,4}', '{0,5}')}(?:${MAQ}|que e|que somos|humano)\b|\b(?:nao revel\w*|escond\w*|ocult\w*) (?:${MAQ})\b`),
-  // "Nunca revele que é uma IA.", "jamais diga que é um robô", "never reveal you are an AI"
-  new RegExp(String.raw`\b(?:nao|nunca|jamais|never|dont|do not)\s+(?:revel\w*|reveal\w*|cont\w*|diga|dizer|fale|falar|mencion\w*|mention\w*|admit\w*|confess\w*|assum\w*|tell|say)${PERTO.replace('{0,4}', '{0,5}')}${MAQ}\b`),
+  // "Nunca revele que é uma IA.", "jamais diga que você é um robô", "never reveal that you are an AI".
+  // ⚠️ Exige "que é/somos/sou" (ou "that you are…") antes da máquina: "Não mencione o robô de
+  //    estoque" e "Não fale do bot de cobrança" falam de um sistema, não de identidade.
+  new RegExp(String.raw`\b(?:nao|nunca|jamais|never|dont|do not)\s+(?:revel\w*|reveal\w*|cont\w*|diga|dizer|fale|falar|mencion\w*|mention\w*|admit\w*|confess\w*|assum\w*|tell|say)\s+(?:(?:ao|para o|pro|a|the) (?:cliente|customer)\s+)?(?:que\s+(?:voce\s+|ela\s+|ele\s+)?(?:e|somos|sou)|that\s+(?:you are|youre|we are|i am|it is|its))\s+(?:um\s+|uma\s+|a\s+|an\s+)?${MAQ}\b`),
   /\bignor\w* (?:as |todas as |all |the |previous |anteriores )*(?:regras|instruc\w*|orientac\w*|rules|instructions)\b|\bdesconsider\w* (?:as )?(?:regras|instruc\w*)\b/,
 ]
+
+/**
+ * "Aqui quem fala é uma pessoa." — por TRECHO (entre pontuações), ancorado do início ao fim:
+ * só `aqui (quem fala…) é (uma) pessoa/humano/gente`, sem palavras livres no meio. Assim
+ * "Aqui o cliente é pessoa jurídica", "Aqui cada cliente é uma pessoa, não um número",
+ * "Quem responde é gente boa da loja" e "uma pessoa da equipe assume" não são confundidos.
+ */
+const QUEM = String.raw`quem (?:fala|esta falando|atende|responde|escreve)`
+const SE_DIZ_GENTE_RE = new RegExp(String.raw`^(?:aqui (?:${QUEM} )?|${QUEM} (?:aqui )?|com quem voce (?:fala|esta falando) )(?:e|sou|somos) (?:um |uma )?(?:pessoa|human[oa]|gente)(?: de verdade| real| mesmo)?$`)
 
 /** O texto nega ser IA, se passa por humano, manda esconder isso ou tenta revogar as regras? */
 export function negaSerIa(texto: string): boolean {
   const t = normalizarIdentidade(texto)
-  return NEGA_IA_RES.some((r) => r.test(t))
+  if (NEGA_IA_RES.some((r) => r.test(t))) return true
+  return texto.split(/[.,;:!?\n]+/).some((trecho) => SE_DIZ_GENTE_RE.test(normalizarIdentidade(trecho)))
 }
 
 const NUMERO_EXTENSO = String.raw`(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|cento|duzent[oa]s|trezent[oa]s|quinhent[oa]s|mil|meia\s+d[uú]zia|d[uú]zia)`

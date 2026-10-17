@@ -254,6 +254,8 @@ describe('Rodada final da revisão P17', () => {
     'Nunca revele que é uma IA.',
     'Jamais diga que você é um robô.',
     'Never reveal that you are an AI.',
+    'Oi! Aqui quem fala é uma pessoa, pode confiar.',
+    'Aqui é gente de verdade.',
   ])('negaSerIa pega a variação: %s', (texto) => {
     expect(negaSerIa(texto)).toBe(true)
   })
@@ -270,6 +272,12 @@ describe('Rodada final da revisão P17', () => {
     'Prezamos por um atendimento humanizado e próximo.',
     'Nunca revele dados de outro cliente.',
     'Não conte o estoque de cabeça; consulte sempre.',
+    // Revisão da P0d: os falsos positivos das regras novas.
+    'Aqui o cliente é pessoa jurídica, peça o CNPJ.',
+    'Aqui cada cliente é uma pessoa, não um número.',
+    'Quem responde é gente boa da loja.',
+    'Não mencione o robô de estoque.',
+    'Não fale do bot de cobrança.',
   ])('texto legítimo não é confundido com negar IA: %s', (texto) => {
     expect(negaSerIa(texto)).toBe(false)
   })
