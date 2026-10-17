@@ -11,7 +11,7 @@
 | P0 costura do pipeline | 0 | 0096 | integrada (ac8d3a7, revisão aprovada na 2ª) | | dona de vendedor.ts / app.ts / server.ts / index.ts |
 | P1 ADRs 028–034 | 0 | — | integrada (d155c22) | worktree-agent-a2ffbdfdac6113d71 | |
 | P2 filtro de saída | 1 | 0097 | em andamento | | |
-| P3 pergunta repetida | 1 | — | em andamento | | |
+| P3 pergunta repetida | 1 | — | integrada (5237e45; 3 revisões; main verde 1525 api) | | |
 | P4 gatilhos + privacidade | 1 | 0098 | em andamento | | |
 | P5 resiliência LLM | 1 | — | integrada (api 1509 verde; removida tabela fixa de preço) | | |
 | P6 custo e tetos | 1 | 0099 | integrada (af264b2) | | |
