@@ -9,7 +9,8 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { PresencaServico } from '../../nucleo/presenca.servico.js'
 import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.componente.js'
 import { SugestaoServico } from './sugestao.servico.js'
-import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo } from './sugestao.regras.js'
+import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo, tituloDaSugestao } from './sugestao.regras.js'
+import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.js'
 
 /**
  * Inbox — visual inspirado no WhatsApp (tema escuro, bolhas, avatares).
@@ -279,10 +280,14 @@ import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo } from './suge
                    Só onde dá para responder: ausente ou janela fechada não têm o que fazer
                    com uma sugestão. O texto vem por API (o evento SSE só avisa). -->
               @if (!presenca.ausente() && (!t.exigeJanela24h || janelaAberta(t.janela.estado))) {
-                <section class="sug" aria-label="Sugestão do agente">
+                <!-- aria-live polite: a sugestão que CHEGA é anunciada uma vez, sem interromper;
+                     role=alert fica só para "não envie assim" e opt-out. -->
+                <section class="sug" aria-label="Sugestão do agente" aria-live="polite">
                   @switch (sugestao.estado()) {
                     @case ('carregando') { <div class="sug-esqueleto" aria-busy="true" aria-label="Carregando sugestão"></div> }
-                    @case ('sem_permissao') { }
+                    @case ('sem_permissao') {
+                      <p class="sug-indisponivel sug-linha">Você não tem acesso às sugestões do agente nesta conversa.</p>
+                    }
                     @case ('erro') {
                       <div class="sug-linha">
                         <span class="sug-falha">Não foi possível carregar a sugestão do agente.</span>
@@ -300,7 +305,7 @@ import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo } from './suge
                           }
                           <div class="sug-cartao" [class.critica]="s.naoEnvie">
                             <div class="sug-topo">
-                              <span class="sug-titulo">{{ s.origem === 'copiloto' ? 'Sugestão que você pediu' : 'Sugestão do agente' }}</span>
+                              <span class="sug-titulo">{{ tituloSugestao(s) }}</span>
                               <span class="selo" [title]="dicaModo(r.modoAgente)">{{ rotuloModo(r.modoAgente) }}</span>
                               <span class="sug-idade">{{ idade(s.criadaEm) }}</span>
                             </div>
@@ -398,7 +403,7 @@ import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo } from './suge
                        WhatsApp: inverter isso faria a vendedora mandar a
                        mensagem pela metade o dia inteiro. -->
                   <textarea class="entrada" rows="1" placeholder="Digite uma mensagem" #entrada
-                            [ngModel]="servico.rascunho()" (ngModelChange)="servico.rascunho.set($event)"
+                            [ngModel]="servico.rascunho()" (ngModelChange)="aoEditarRascunho($event)"
                             (input)="ajustarAltura(entrada)"
                             (keydown.enter)="aoApertarEnter($event, entrada)"
                             [disabled]="servico.enviando()"></textarea>
@@ -863,6 +868,15 @@ export class InboxPagina implements OnDestroy {
   protocoloFmt(n: number | null): string { return n ? formatarProtocolo(n) : '' }
 
   // ── Sugestão do agente (P13) ────────────────────────────────────────────
+  readonly #confirmacao = inject(ConfirmacaoServico)
+
+  /** Campo de envio esvaziado → o texto já não vem da sugestão; o próximo envio não conta como uso. */
+  aoEditarRascunho(v: string): void {
+    this.servico.rascunho.set(v)
+    if (!v.trim()) this.servico.sugestaoEmUso.set(null)
+  }
+
+  tituloSugestao(s: SugestaoVigente): string { return tituloDaSugestao(s) }
   idade(iso: string): string { return idadeDaSugestao(iso) }
   rotuloGravidade(g: string): string { return g === 'CRITICA' ? 'Crítico' : g === 'ALTA' ? 'Alto' : 'Atenção' }
 
@@ -871,9 +885,15 @@ export class InboxPagina implements OnDestroy {
    * no envio e o servidor mede se houve edição.
    * ⚠️ Nunca apaga o que a pessoa já digitou sem perguntar.
    */
-  usarSugestao(s: SugestaoVigente): void {
+  async usarSugestao(s: SugestaoVigente): Promise<void> {
     const atual = this.servico.rascunho().trim()
-    if (atual && atual !== s.texto.trim() && !confirm('Substituir o que você digitou pela sugestão?')) return
+    if (atual && atual !== s.texto.trim()) {
+      const ok = await this.#confirmacao.confirmar({
+        titulo: 'Substituir o que você digitou?', mensagem: 'O texto do campo de envio vai dar lugar à sugestão do agente.',
+        acao: 'Substituir', cancelar: 'Manter meu texto',
+      })
+      if (!ok) return
+    }
     this.servico.rascunho.set(s.texto)
     this.servico.sugestaoEmUso.set(s.decisaoId)
     setTimeout(() => {

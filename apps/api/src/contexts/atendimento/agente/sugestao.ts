@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import {
   PRAZO_COPILOTO_MS, LIMIAR_SIMILARIDADE_SOMBRA, marcaGuardrail,
-  avisosDaSugestao, bloqueadaPelaQualidade, motivoDoBloqueio, foiEditada, naoEnvieAssim, pedeConfirmarOptOut, similaridadeTextos, taxaSombra, taxasDaSugestao, textoDaSugestao,
-  type ContagensSugestao, type DesfechoSugestao, type MarcaGuardrail, type MetricasSugestoes, type ModoAgente,
+  avisosDaSugestao, bloqueadaPelaQualidade, classificarUso, envioIgualAoBloqueado, motivoDoBloqueio, naoEnvieAssim,
+  pedeConfirmarOptOut, similaridadeTextos, taxaSombra, taxasDaSugestao, textoDaSugestao,
+  type ContagensSugestao, type MarcaGuardrail, type MetricasSugestoes, type ModoAgente,
   type OrigemSugestao, type SugestaoVigente,
 } from '@geracrm/shared'
-import { comTenantServico, type Sql } from '../../../db/index.js'
+import { comTenantServico, sql, type Sql } from '../../../db/index.js'
 import { conduzirTurnoVendedor, type DepsTurno, type ResultadoTurnoVendedor } from './vendedor.js'
 import { ligacoesPadrao } from './ferramentas/ligacoes.js'
 import { modoEfetivoSeguro } from './pipeline/modo-efetivo.js'
@@ -17,21 +18,25 @@ import { modoEfetivoSeguro } from './pipeline/modo-efetivo.js'
  *   - modo `assistido`: o turno do agente decidiu e NÃO enviou (vendedor.ts grava e publica
  *     `agente.sugestao` pelo outbox, payload só com ids);
  *   - modo `copiloto`: o vendedor clicou "Sugerir resposta" — o MESMO turno, com `copiloto: true`
- *     (sem portão, sem envio, sem sessão, sem atendimento; só a decisão de auditoria).
+ *     (sem portão, sem envio, sem sessão, sem atendimento).
  *
  * O texto já passou pelo pipeline inteiro (filtro P2, números P7, pergunta P3, rede de R$); as
  * MARCAS de guardrail viram avisos por gravidade (CRÍTICA = "não envie assim", ADR-031).
  *
  * Métrica (fonte da verdade = banco, 0103): o envio com `sugestaoDecisaoId` grava enviada × editada
- * + similaridade; descartar grava `descartada`; responder sem usar marca `superada`. Em SOMBRA, a
- * primeira mensagem humana depois de uma decisão grava `sombra_similaridade`.
+ * (ou superada, se reescrita por cima) + similaridade; descartar grava `descartada`; responder sem
+ * usar marca `superada`. Em SOMBRA, as mensagens humanas que respondem à entrante de uma decisão
+ * gravam `sombra_similaridade`.
  */
 
-/** Predicado SQL de "esta decisão (alias d) é uma sugestão mostrável" — o MESMO no GET e nas métricas. */
+/** Predicado SQL de "esta decisão (alias d) é uma sugestão mostrável" — o MESMO no GET, no uso e nas métricas. */
 const ehSugestao = (tx: Sql) => tx`d.modo IN ('assistido', 'copiloto') AND d.desfecho IN ('sugeriu', 'handoff')
   AND jsonb_typeof(d.resposta->'mensagens') = 'array' AND jsonb_array_length(d.resposta->'mensagens') > 0`
 
-/** Mensagem (alias m) saliente escrita por uma PESSOA: não sistema, não automática do agente/ausência. */
+/**
+ * Mensagem (alias m) saliente escrita por uma PESSOA: não sistema e sem marcador de automação
+ * (`automatica`: agente, ausência, automação do CRM, retorno…).
+ */
 const ehHumana = (tx: Sql) => tx`m.direcao = 'saliente' AND m.tipo <> 'sistema' AND NOT (m.conteudo ? 'automatica')`
 
 interface LinhaSugestao {
@@ -41,6 +46,8 @@ interface LinhaSugestao {
   guardrails: unknown
   handoff_motivo: string | null
   criado_em: Date
+  pedida_por: string | null
+  pedida_por_nome: string | null
 }
 
 function marcasDe(v: unknown): MarcaGuardrail[] {
@@ -53,7 +60,7 @@ function mensagensDe(resposta: LinhaSugestao['resposta']): string[] {
   return Array.isArray(ms) ? ms.filter((m): m is string => typeof m === 'string') : []
 }
 
-function paraVigente(l: LinhaSugestao): SugestaoVigente {
+function paraVigente(l: LinhaSugestao, euId: string | null): SugestaoVigente {
   const marcas = marcasDe(l.guardrails)
   const h = l.resposta?.handoff
   return {
@@ -66,19 +73,24 @@ function paraVigente(l: LinhaSugestao): SugestaoVigente {
     bloqueada: bloqueadaPelaQualidade(marcas),
     motivoBloqueio: motivoDoBloqueio(marcas),
     optOutAConfirmar: pedeConfirmarOptOut(marcas),
+    pedidaPor: l.pedida_por ? { nome: l.pedida_por_nome, porMim: l.pedida_por === euId } : null,
     handoff: h && typeof h.motivo === 'string'
       ? { motivo: h.motivo, resumo: typeof h.resumo === 'string' ? h.resumo : '' }
       : l.handoff_motivo ? { motivo: l.handoff_motivo, resumo: '' } : null,
   }
 }
 
+const COLUNAS = (tx: Sql) => tx`d.id, d.modo, d.resposta, d.guardrails, d.handoff_motivo, d.criado_em,
+  d.sugestao_pedida_por AS pedida_por,
+  (SELECT u.nome FROM usuario u WHERE u.tenant_id = d.tenant_id AND u.id = d.sugestao_pedida_por) AS pedida_por_nome`
+
 /**
  * A sugestão VIGENTE da conversa (sob tenant): a mais nova ainda pendente, desde que nenhuma
  * pessoa tenha respondido depois dela (inclusive por outro caminho — app, celular).
  */
-export async function lerSugestaoVigente(tx: Sql, conversaId: string): Promise<SugestaoVigente | null> {
+export async function lerSugestaoVigente(tx: Sql, conversaId: string, euId: string | null = null): Promise<SugestaoVigente | null> {
   const [l] = await tx<LinhaSugestao[]>`
-    SELECT d.id, d.modo, d.resposta, d.guardrails, d.handoff_motivo, d.criado_em
+    SELECT ${COLUNAS(tx)}
       FROM agente_decisao d
      WHERE d.tenant_id = tenant_atual() AND d.conversa_id = ${conversaId}
        AND d.sugestao_estado IS NULL AND ${ehSugestao(tx)}
@@ -87,15 +99,15 @@ export async function lerSugestaoVigente(tx: Sql, conversaId: string): Promise<S
                           AND m.criado_em > d.criado_em AND ${ehHumana(tx)})
      ORDER BY d.criado_em DESC, d.id DESC
      LIMIT 1`
-  return l ? paraVigente(l) : null
+  return l ? paraVigente(l, euId) : null
 }
 
-export async function lerSugestaoPorId(tx: Sql, decisaoId: string): Promise<SugestaoVigente | null> {
+export async function lerSugestaoPorId(tx: Sql, decisaoId: string, euId: string | null = null): Promise<SugestaoVigente | null> {
   const [l] = await tx<LinhaSugestao[]>`
-    SELECT d.id, d.modo, d.resposta, d.guardrails, d.handoff_motivo, d.criado_em
+    SELECT ${COLUNAS(tx)}
       FROM agente_decisao d
      WHERE d.tenant_id = tenant_atual() AND d.id = ${decisaoId} AND ${ehSugestao(tx)}`
-  return l ? paraVigente(l) : null
+  return l ? paraVigente(l, euId) : null
 }
 
 // ── modo para o copiloto ────────────────────────────────────────────────────
@@ -142,21 +154,48 @@ export interface OpcoesCopiloto {
   readonly agora?: Date
 }
 
-/** Uma geração por conversa por vez neste processo (custo; playbook §6.2). */
-const emAndamento = new Set<string>()
-
 const TEMPO_ESGOTADO = Symbol('tempo_esgotado')
 
 /**
- * Gera uma sugestão sob demanda. SÓ LEITURA: o turno roda com `copiloto: true` — nada vai ao
- * cliente, nenhuma sessão abre ou muda, nenhum atendimento nasce; fica só a `agente_decisao`
- * (modo `copiloto`) que é a própria sugestão e a sua auditoria.
+ * TRAVA POR CONVERSA ENTRE INSTÂNCIAS: advisory lock de SESSÃO numa conexão reservada, chave
+ * `hashtext(tenant:conversa)`. Devolve a função que solta, ou null se outra instância já gera.
  *
- * ⚠️ Kill switch: agente `desligado` no número (ou teto do tenant) → não chama o modelo.
- * ⚠️ Prazo de 20 s (PRAZO_COPILOTO_MS): passou, a tela recebe "indisponível" e o turno, se ainda
- *    terminar, só grava a decisão — nunca envia nada (copiloto não envia por construção).
+ * ⚠️ De sessão, não `pg_try_advisory_xact_lock`: a trava de transação exigiria uma transação
+ *    aberta durante a chamada ao modelo (até 20 s ou mais) — proibido (geracrm-arquitetura:
+ *    nunca aguardar rede externa com transação aberta). A conexão reservada não segura snapshot
+ *    nem lock de linha; só a chave da trava. Se o processo morrer, o Postgres solta junto.
  */
-export async function gerarCopiloto(tenantId: string, conversaId: string, opcoes: OpcoesCopiloto = {}): Promise<ResultadoCopiloto> {
+async function travarConversa(tenantId: string, conversaId: string): Promise<(() => Promise<void>) | null> {
+  const con = await sql.reserve()
+  try {
+    const chave = `${tenantId}:${conversaId}`
+    const [t] = await con<{ ok: boolean }[]>`SELECT pg_try_advisory_lock(hashtext(${chave})) AS ok`
+    if (!t?.ok) { con.release(); return null }
+    return async () => {
+      try { await con`SELECT pg_advisory_unlock(hashtext(${chave}))` } finally { con.release() }
+    }
+  } catch (e) {
+    con.release()
+    throw e
+  }
+}
+
+/**
+ * Gera uma sugestão sob demanda. O turno roda com `copiloto: true` — nada vai ao cliente, nenhuma
+ * sessão abre ou muda, nenhum atendimento nasce; grava a `agente_decisao` (modo `copiloto`), que é
+ * a própria sugestão e a sua auditoria, e marca quem pediu.
+ *
+ * ⚠️ NÃO é 100% só leitura HOJE: a ferramenta `memoria_anotar` (P0c/P3) ainda grava em
+ *    `cliente_memoria` quando o modelo a chama no copiloto. A raia P17 (dona de
+ *    `ferramentas/montar.ts` e `memoria/ferramenta-memoria.ts`) fecha isso para simulação e
+ *    copiloto — o teste está em `rotas-sugestao.test.ts` como `skip` apontando a P17.
+ * ⚠️ Kill switch: agente `desligado` no número (ou teto do tenant) → não chama o modelo.
+ * ⚠️ Prazo de 20 s (PRAZO_COPILOTO_MS): passou, a tela recebe "indisponível"; se o turno ainda
+ *    terminar com sugestão, ela é publicada (`agente.sugestao`) e aparece no painel.
+ */
+export async function gerarCopiloto(
+  tenantId: string, conversaId: string, opcoes: OpcoesCopiloto = {}, pedidoPor: string | null = null,
+): Promise<ResultadoCopiloto> {
   const agora = opcoes.agora ?? new Date()
   const conv = await comTenantServico(tenantId, (tx) => lerConversaParaSugestao(tx, conversaId))
   if (!conv) return { tipo: 'conversa_inexistente' }
@@ -164,34 +203,49 @@ export async function gerarCopiloto(tenantId: string, conversaId: string, opcoes
   const modo = await modoDoCopiloto(tenantId, { ...conv, agora })
   if (modo === null) return { tipo: 'sem_configuracao' }
   if (modo === 'desligado') return { tipo: 'desligado' }
-  const preparo = await comTenantServico(tenantId, async (tx) => {
-    const c = { canal_id: conv.canalId }
+
+  const soltar = await travarConversa(tenantId, conversaId)
+  if (!soltar) return { tipo: 'em_andamento' }
+
+  let entrantes: string[]
+  try {
     // As entrantes ainda sem resposta são "o que o cliente disse agora"; sem nenhuma, o turno
     // sugere a retomada a partir do histórico.
-    const entrantes = await tx<{ id: string }[]>`
+    entrantes = await comTenantServico(tenantId, async (tx) => (await tx<{ id: string }[]>`
       SELECT m.id FROM mensagem m
        WHERE m.tenant_id = tenant_atual() AND m.conversa_id = ${conversaId} AND m.direcao = 'entrante'
          AND m.criado_em > coalesce((SELECT max(s.criado_em) FROM mensagem s
                                       WHERE s.tenant_id = tenant_atual() AND s.conversa_id = ${conversaId}
                                         AND s.direcao = 'saliente' AND s.tipo <> 'sistema'), '-infinity'::timestamptz)
-       ORDER BY m.criado_em DESC LIMIT 10`
-    return { canalId: c.canal_id, ids: entrantes.map((e) => e.id).reverse() }
-  })
-  const chave = `${tenantId}:${conversaId}`
-  if (emAndamento.has(chave)) return { tipo: 'em_andamento' }
-  emAndamento.add(chave)
-  let r: ResultadoTurnoVendedor | typeof TEMPO_ESGOTADO
+       ORDER BY m.criado_em DESC LIMIT 10`).map((e) => e.id).reverse())
+  } catch (e) {
+    await soltar()
+    throw e
+  }
+
+  let esgotou = false
   let relogio: ReturnType<typeof setTimeout> | undefined
   const turno = conduzirTurnoVendedor(
-    { tenant_id: tenantId, id: randomUUID(), conversa_id: conversaId, canal_id: preparo.canalId, mensagens_ids: preparo.ids, tentativas: 1, executar_em: agora },
+    { tenant_id: tenantId, id: randomUUID(), conversa_id: conversaId, canal_id: conv.canalId, mensagens_ids: entrantes, tentativas: 1, executar_em: agora },
     { ligacoes: ligacoesPadrao, copiloto: true, agora, ...(opcoes.llm ? { llm: opcoes.llm } : {}) },
   )
-  // O turno segue sozinho depois do prazo; a trava por conversa só sai quando ele termina.
-  void turno.catch(() => undefined).finally(() => emAndamento.delete(chave))
+  // O turno segue sozinho depois do prazo. Quando termina: marca quem pediu; se já tinha
+  // estourado o prazo e saiu sugestão, publica para o painel; e só então solta a trava.
+  const fim = turno.then(async (r) => {
+    if (!r.decisaoId || (r.desfecho !== 'sugeriu' && r.desfecho !== 'handoff')) return r
+    await comTenantServico(tenantId, async (tx) => {
+      if (pedidoPor) await tx`UPDATE agente_decisao SET sugestao_pedida_por = ${pedidoPor} WHERE tenant_id = tenant_atual() AND id = ${r.decisaoId!}`
+      if (esgotou && await lerSugestaoPorId(tx, r.decisaoId!)) await publicarSugestaoMudou(tx, conversaId, r.decisaoId!)
+    })
+    return r
+  })
+  void fim.catch(() => undefined).finally(() => void soltar().catch(() => undefined))
+
+  let r: ResultadoTurnoVendedor | typeof TEMPO_ESGOTADO
   try {
     r = await Promise.race([
-      turno,
-      new Promise<typeof TEMPO_ESGOTADO>((res) => { relogio = setTimeout(() => res(TEMPO_ESGOTADO), opcoes.prazoMs ?? PRAZO_COPILOTO_MS) }),
+      fim,
+      new Promise<typeof TEMPO_ESGOTADO>((res) => { relogio = setTimeout(() => { esgotou = true; res(TEMPO_ESGOTADO) }, opcoes.prazoMs ?? PRAZO_COPILOTO_MS) }),
     ])
   } catch (e) {
     return { tipo: 'indisponivel', detalhe: e instanceof Error ? e.message.slice(0, 200) : 'erro' }
@@ -201,7 +255,7 @@ export async function gerarCopiloto(tenantId: string, conversaId: string, opcoes
   if (r === TEMPO_ESGOTADO) return { tipo: 'indisponivel', detalhe: 'tempo_esgotado' }
   if (r.desfecho === 'falha') return { tipo: 'indisponivel', detalhe: r.motivo ?? 'falha' }
   if (r.decisaoId && (r.desfecho === 'sugeriu' || r.desfecho === 'handoff')) {
-    const s = await comTenantServico(tenantId, (tx) => lerSugestaoPorId(tx, r.decisaoId!))
+    const s = await comTenantServico(tenantId, (tx) => lerSugestaoPorId(tx, r.decisaoId!, pedidoPor))
     if (s) return { tipo: 'ok', sugestao: s }
   }
   return { tipo: 'sem_sugestao', motivo: r.handoff?.motivo ?? String(r.motivo ?? r.desfecho), resumo: r.handoff?.resumo ?? null }
@@ -210,12 +264,14 @@ export async function gerarCopiloto(tenantId: string, conversaId: string, opcoes
 // ── desfecho da sugestão ────────────────────────────────────────────────────
 
 export type ResultadoUso =
-  | { readonly registrada: true; readonly estado: Extract<DesfechoSugestao, 'enviada' | 'editada'>; readonly similaridade: number }
+  | { readonly registrada: true; readonly estado: 'enviada' | 'editada' | 'superada'; readonly similaridade: number }
   | { readonly registrada: false; readonly motivo: 'nao_encontrada' | 'ja_decidida' }
 
 /**
  * O vendedor ENVIOU a partir da sugestão (sob tenant, depois do envio ok). Compara com o texto
- * sugerido no servidor — a tela não decide se editou. Idempotente: decidir de novo não muda nada.
+ * sugerido no servidor — a tela não decide se editou (`classificarUso`): igual → enviada; editada
+ * com similaridade < 0,2 → `superada` (ele escreveu outra coisa por cima; não conta como uso).
+ * Idempotente: decidir de novo não muda nada.
  */
 export async function registrarUsoDaSugestao(tx: Sql, p: {
   conversaId: string; decisaoId: string; textoEnviado: string; mensagemId: string; agora: Date
@@ -227,21 +283,20 @@ export async function registrarUsoDaSugestao(tx: Sql, p: {
      FOR UPDATE`
   if (!d) return { registrada: false, motivo: 'nao_encontrada' }
   if (d.sugestao_estado !== null) return { registrada: false, motivo: 'ja_decidida' }
-  const sugerido = textoDaSugestao(mensagensDe(d.resposta))
-  const estado = foiEditada(sugerido, p.textoEnviado) ? 'editada' as const : 'enviada' as const
-  const similaridade = similaridadeTextos(sugerido, p.textoEnviado)
+  const { estado, similaridade } = classificarUso(textoDaSugestao(mensagensDe(d.resposta)), p.textoEnviado)
   await tx`
     UPDATE agente_decisao
-       SET sugestao_estado = ${estado}, sugestao_mensagem_id = ${p.mensagemId},
+       SET sugestao_estado = ${estado}, sugestao_mensagem_id = ${estado === 'superada' ? null : p.mensagemId},
            sugestao_usada_em = ${p.agora}, sugestao_similaridade = ${similaridade}
      WHERE tenant_id = tenant_atual() AND id = ${p.decisaoId} AND sugestao_estado IS NULL`
   return { registrada: true, estado, similaridade }
 }
 
 /**
- * P12 × P13: a sugestão `regras-qualidade/nao_envie` NÃO sai inalterada (sob tenant, ANTES de
- * gravar ou despachar qualquer coisa). Texto editado passa — a responsabilidade é de quem reescreveu.
- * Id inexistente, de outra conversa ou de outro tenant → não bloqueia (o envio nunca depende disso).
+ * P12 × P13: a sugestão `regras-qualidade/nao_envie` NÃO sai igual (sob tenant, ANTES de gravar ou
+ * despachar qualquer coisa) — nem idêntica, nem com as mesmas palavras (`envioIgualAoBloqueado`).
+ * Reescrita passa: a responsabilidade é de quem reescreveu. Id inexistente, de outra conversa ou
+ * de outro tenant → não bloqueia (o envio nunca depende disso).
  */
 export async function envioBloqueadoPelaQualidade(tx: Sql, p: { conversaId: string; decisaoId: string; texto: string }): Promise<boolean> {
   const [d] = await tx<{ resposta: LinhaSugestao['resposta']; guardrails: unknown }[]>`
@@ -249,16 +304,17 @@ export async function envioBloqueadoPelaQualidade(tx: Sql, p: { conversaId: stri
      WHERE d.tenant_id = tenant_atual() AND d.id = ${p.decisaoId} AND d.conversa_id = ${p.conversaId}
        AND ${ehSugestao(tx)}`
   if (!d || !bloqueadaPelaQualidade(marcasDe(d.guardrails))) return false
-  return !foiEditada(textoDaSugestao(mensagensDe(d.resposta)), p.texto)
+  return envioIgualAoBloqueado(textoDaSugestao(mensagensDe(d.resposta)), p.texto)
 }
 
-/** O vendedor respondeu a conversa: toda sugestão ainda pendente nela vira `superada`. */
-export async function superarPendentes(tx: Sql, conversaId: string, agora: Date): Promise<number> {
-  const r = await tx`
+/** O vendedor respondeu a conversa: toda SUGESTÃO ainda pendente nela vira `superada`. Devolve os ids. */
+export async function superarPendentes(tx: Sql, conversaId: string, agora: Date): Promise<string[]> {
+  const r = await tx<{ id: string }[]>`
     UPDATE agente_decisao d SET sugestao_estado = 'superada', sugestao_usada_em = ${agora}
      WHERE d.tenant_id = tenant_atual() AND d.conversa_id = ${conversaId}
-       AND d.modo IN ('assistido', 'copiloto') AND d.sugestao_estado IS NULL`
-  return r.count
+       AND d.sugestao_estado IS NULL AND ${ehSugestao(tx)}
+    RETURNING d.id`
+  return r.map((x) => x.id)
 }
 
 export type ResultadoDescarte =
@@ -278,7 +334,10 @@ export async function descartarSugestao(tx: Sql, decisaoId: string, agora: Date)
   return { ok: true, conversaId: d.conversa_id }
 }
 
-/** Evento de tempo real: a sugestão da conversa mudou. Payload SÓ com ids (ADR-007). */
+/**
+ * Evento de tempo real: a sugestão da conversa mudou. Payload SÓ com ids (ADR-007) — e o
+ * `decisaoId` é sempre um id já RESOLVIDO no banco (sob RLS), nunca o que veio no corpo da requisição.
+ */
 export async function publicarSugestaoMudou(tx: Sql, conversaId: string, decisaoId: string): Promise<void> {
   await tx`
     INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
@@ -290,32 +349,43 @@ export async function publicarSugestaoMudou(tx: Sql, conversaId: string, decisao
 const JANELA_SOMBRA_HORAS = 24
 
 /**
- * SOMBRA × HUMANO: a 1ª mensagem que uma pessoa manda depois de uma decisão de sombra é comparada
- * com o que o robô teria dito (sob tenant). Só a decisão mais nova, só se nenhuma outra mensagem
- * humana veio entre ela e esta, e só uma vez por decisão.
+ * SOMBRA × HUMANO (sob tenant), chamada a cada mensagem humana enviada.
+ *
+ * Pareamento pela ENTRANTE, não pela hora: a última mensagem do cliente (E) define a "pergunta";
+ * a decisão de sombra comparável é a mais nova cujo `mensagens_ids` contém E; a "resposta humana" é
+ * a JUNÇÃO de todas as mensagens humanas depois de E (até a próxima entrante — por construção,
+ * ainda não há nenhuma). A cada nova mensagem humana a similaridade é RECALCULADA sobre o conjunto.
+ * Sem decisão para E (o turno de sombra ainda não rodou, ou o cliente já mandou outra coisa) → nada.
+ *
+ * ⚠️ SINAL A CALIBRAR: Jaccard de palavras entre textos escritos de forma independente é proxy de
+ *    "o robô diria o mesmo", não prova. O limiar 0,6 do critério de fase (ADR-031) é PROPOSTA; o
+ *    registro e a calibração com dados reais ficam no ADR-031 (P20).
  */
-export async function registrarSimilaridadeSombra(tx: Sql, p: {
-  conversaId: string; mensagemId: string; textoHumano: string; agora: Date
-}): Promise<{ decisaoId: string; similaridade: number } | null> {
+export async function registrarSimilaridadeSombra(tx: Sql, p: { conversaId: string; agora: Date }): Promise<{ decisaoId: string; similaridade: number } | null> {
+  const [e] = await tx<{ id: string; criado_em: Date }[]>`
+    SELECT m.id, m.criado_em FROM mensagem m
+     WHERE m.tenant_id = tenant_atual() AND m.conversa_id = ${p.conversaId} AND m.direcao = 'entrante'
+     ORDER BY m.criado_em DESC, m.id DESC LIMIT 1`
+  if (!e || new Date(e.criado_em).getTime() < p.agora.getTime() - JANELA_SOMBRA_HORAS * 3_600_000) return null
   const [d] = await tx<{ id: string; resposta: LinhaSugestao['resposta'] }[]>`
     SELECT d.id, d.resposta FROM agente_decisao d
      WHERE d.tenant_id = tenant_atual() AND d.conversa_id = ${p.conversaId}
-       AND d.modo = 'sombra' AND d.desfecho = 'sugeriu' AND d.sombra_similaridade IS NULL
+       AND d.modo = 'sombra' AND d.desfecho = 'sugeriu' AND ${e.id}::uuid = ANY(d.mensagens_ids)
        AND jsonb_typeof(d.resposta->'mensagens') = 'array' AND jsonb_array_length(d.resposta->'mensagens') > 0
-       AND d.criado_em > ${p.agora}::timestamptz - make_interval(hours => ${JANELA_SOMBRA_HORAS})
-       AND NOT EXISTS (SELECT 1 FROM mensagem m
-                        WHERE m.tenant_id = d.tenant_id AND m.conversa_id = d.conversa_id
-                          AND m.criado_em > d.criado_em AND m.id <> ${p.mensagemId} AND ${ehHumana(tx)})
      ORDER BY d.criado_em DESC, d.id DESC
      LIMIT 1
      FOR UPDATE OF d`
   if (!d) return null
-  const robo = textoDaSugestao(mensagensDe(d.resposta))
-  const similaridade = similaridadeTextos(robo, p.textoHumano)
-  const r = await tx`
-    UPDATE agente_decisao SET sombra_similaridade = ${similaridade}
-     WHERE tenant_id = tenant_atual() AND id = ${d.id} AND sombra_similaridade IS NULL`
-  return r.count ? { decisaoId: d.id, similaridade } : null
+  const humanas = await tx<{ texto: string | null }[]>`
+    SELECT coalesce(m.conteudo->>'texto', m.conteudo->>'legenda') AS texto FROM mensagem m
+     WHERE m.tenant_id = tenant_atual() AND m.conversa_id = ${p.conversaId}
+       AND m.criado_em > ${e.criado_em} AND ${ehHumana(tx)} AND m.apagada_em IS NULL
+     ORDER BY m.criado_em, m.id`
+  const textoHumano = humanas.map((h) => h.texto?.trim() ?? '').filter(Boolean).join('\n\n')
+  if (!textoHumano) return null
+  const similaridade = similaridadeTextos(textoDaSugestao(mensagensDe(d.resposta)), textoHumano)
+  await tx`UPDATE agente_decisao SET sombra_similaridade = ${similaridade} WHERE tenant_id = tenant_atual() AND id = ${d.id}`
+  return { decisaoId: d.id, similaridade }
 }
 
 // ── métricas (do banco) ─────────────────────────────────────────────────────

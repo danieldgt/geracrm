@@ -1,4 +1,11 @@
-import type { ModoAgente, RespostaSugestao } from '@geracrm/shared'
+import type { ModoAgente, RespostaSugestao, SugestaoVigente } from '@geracrm/shared'
+
+/** Título do cartão: quem trouxe a sugestão (o agente, eu, ou outro vendedor pelo nome). */
+export function tituloDaSugestao(s: Pick<SugestaoVigente, 'origem' | 'pedidaPor'>): string {
+  if (s.origem !== 'copiloto') return 'Sugestão do agente'
+  if (!s.pedidaPor || s.pedidaPor.porMim) return 'Sugestão que você pediu'
+  return s.pedidaPor.nome ? `Sugestão pedida por ${s.pedidaPor.nome}` : 'Sugestão pedida por outro vendedor'
+}
 
 /**
  * Regras PURAS do painel de sugestão do inbox (raia P13) — testadas em sugestao.regras.spec.ts.

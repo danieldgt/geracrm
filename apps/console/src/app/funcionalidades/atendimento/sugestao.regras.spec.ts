@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { dicaModo, idadeDaSugestao, mensagemErroGerar, motivoSemCopiloto, rotuloModo } from './sugestao.regras.js'
+import { dicaModo, idadeDaSugestao, mensagemErroGerar, motivoSemCopiloto, rotuloModo, tituloDaSugestao } from './sugestao.regras.js'
 
 describe('Painel de sugestão — selo do modo', () => {
   it('nomeia cada modo e o caso sem configuração', () => {
@@ -22,6 +22,15 @@ describe('Painel de sugestão — copiloto indisponível', () => {
     expect(mensagemErroGerar(409, { erro: 'copiloto.sem_sugestao', motivo: 'orcamento_do_dia', mensagem: 'x' })).toBe('Limite diário de IA deste número atingido.')
     expect(mensagemErroGerar(0, null)).toMatch(/Sem conexão/)
     expect(mensagemErroGerar(500, { erro: 'erro.interno' })).toMatch(/Tente de novo/)
+  })
+})
+
+describe('Painel de sugestão — quem pediu', () => {
+  it('assistido = do agente; copiloto meu = "você pediu"; de outro vendedor = pelo nome', () => {
+    expect(tituloDaSugestao({ origem: 'assistido', pedidaPor: null })).toBe('Sugestão do agente')
+    expect(tituloDaSugestao({ origem: 'copiloto', pedidaPor: { nome: 'Ana', porMim: true } })).toBe('Sugestão que você pediu')
+    expect(tituloDaSugestao({ origem: 'copiloto', pedidaPor: { nome: 'Bia', porMim: false } })).toBe('Sugestão pedida por Bia')
+    expect(tituloDaSugestao({ origem: 'copiloto', pedidaPor: { nome: null, porMim: false } })).toBe('Sugestão pedida por outro vendedor')
   })
 })
 

@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { jaccard, tokensPergunta, normalizarPergunta } from './agente-perguntas.js'
 import { GRAVIDADES_GUARDRAIL, type GravidadeGuardrail, type MarcaGuardrail, type ModoAgente } from './agente-vendedor.js'
+// A marca `regras-qualidade/nao_envie` é da P12 (agente-qualidade.ts): uma fonte só.
+import { CODIGO_NAO_ENVIE, ETAPA_REGRAS_QUALIDADE } from './agente-qualidade.js'
 
 /**
  * SUGESTÃO DO ASSISTIDO, COPILOTO E MÉTRICA DE EDIÇÃO (raia P13, docs/plano-port-playbook-am.md;
@@ -84,6 +86,28 @@ export function similaridadeTextos(a: string, b: string): number {
   return Math.round(jaccard(ta, tb) * 1000) / 1000
 }
 
+/**
+ * Abaixo disto o vendedor NÃO usou a sugestão — ele apertou "Usar" e escreveu outra coisa por cima.
+ * Contar isso como "editada" inflaria a taxa de uso (critério de fase "uso ≥ 40%", ADR-031).
+ * ⚠️ Sinal a calibrar com dados reais (registro no ADR-031 via P20).
+ */
+export const LIMIAR_SIMILARIDADE_USO = 0.2
+
+/** Como o envio a partir de uma sugestão conta na métrica: igual, editada ou (reescrita) superada. */
+export function classificarUso(sugerido: string, enviado: string): { estado: 'enviada' | 'editada' | 'superada'; similaridade: number } {
+  const similaridade = similaridadeTextos(sugerido, enviado)
+  if (!foiEditada(sugerido, enviado)) return { estado: 'enviada', similaridade }
+  return { estado: similaridade < LIMIAR_SIMILARIDADE_USO ? 'superada' : 'editada', similaridade }
+}
+
+/**
+ * P12 × P13: o texto de uma sugestão `nao_envie` só sai se foi REESCRITO — idêntico (só espaços)
+ * ou com as mesmas palavras significativas (similaridade 1: mudar só pontuação/ordem não conta).
+ */
+export function envioIgualAoBloqueado(sugerido: string, enviado: string): boolean {
+  return !foiEditada(sugerido, enviado) || similaridadeTextos(sugerido, enviado) === 1
+}
+
 // ── avisos (marcas de guardrail → o que o vendedor lê) ─────────────────────
 
 export interface AvisoSugestao {
@@ -148,9 +172,6 @@ export function naoEnvieAssim(marcas: readonly MarcaGuardrail[]): boolean {
   return marcas.some((m) => m.gravidade === 'CRITICA')
 }
 
-/** A marca que a P12 (regras de qualidade) grava quando a sugestão não pode sair como está. */
-export const ETAPA_QUALIDADE = 'regras-qualidade'
-export const CODIGO_NAO_ENVIE = 'nao_envie'
 
 /**
  * BLOQUEADA PELA QUALIDADE (P12, ADR-031 §3): a decisão tem a marca `regras-qualidade/nao_envie`.
@@ -159,12 +180,12 @@ export const CODIGO_NAO_ENVIE = 'nao_envie'
  * Editar libera: a responsabilidade passa a ser de quem reescreveu.
  */
 export function bloqueadaPelaQualidade(marcas: readonly MarcaGuardrail[]): boolean {
-  return marcas.some((m) => m.etapa === ETAPA_QUALIDADE && m.codigo === CODIGO_NAO_ENVIE)
+  return marcas.some((m) => m.etapa === ETAPA_REGRAS_QUALIDADE && m.codigo === CODIGO_NAO_ENVIE)
 }
 
 /** O motivo do bloqueio, para o selo: o trecho da marca (já mascarado por quem a criou), se houver. */
 export function motivoDoBloqueio(marcas: readonly MarcaGuardrail[]): string | null {
-  const m = marcas.find((x) => x.etapa === ETAPA_QUALIDADE && x.codigo === CODIGO_NAO_ENVIE)
+  const m = marcas.find((x) => x.etapa === ETAPA_REGRAS_QUALIDADE && x.codigo === CODIGO_NAO_ENVIE)
   if (!m) return null
   return m.trecho?.trim() || 'Violação crítica de qualidade neste texto.'
 }
@@ -190,6 +211,8 @@ export interface SugestaoVigente {
   /** Motivo do bloqueio para o selo "Não envie assim" (null quando não bloqueada). */
   readonly motivoBloqueio: string | null
   readonly optOutAConfirmar: boolean
+  /** Copiloto: quem pediu (null no assistido). `porMim` = quem está lendo pediu. */
+  readonly pedidaPor: { readonly nome: string | null; readonly porMim: boolean } | null
   /** O turno também pediria transferência ao humano (motivo e resumo). */
   readonly handoff: { readonly motivo: string; readonly resumo: string } | null
 }

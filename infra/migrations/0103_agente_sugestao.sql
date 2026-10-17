@@ -27,7 +27,10 @@ ALTER TABLE agente_decisao
     ADD COLUMN sugestao_mensagem_id  uuid          NULL,
     ADD COLUMN sugestao_usada_em     timestamptz   NULL,
     ADD COLUMN sugestao_similaridade numeric(4,3)  NULL,
-    ADD COLUMN sombra_similaridade   numeric(4,3)  NULL;
+    ADD COLUMN sombra_similaridade   numeric(4,3)  NULL,
+    -- Copiloto: quem pediu ("Sugestão pedida por Ana"). usuario.id; sem FK — `usuario` tem chave
+    -- composta e ON DELETE SET NULL anularia também o tenant_id da linha.
+    ADD COLUMN sugestao_pedida_por   uuid          NULL;
 
 ALTER TABLE agente_decisao ADD CONSTRAINT agente_decisao_sugestao_estado_valido
     CHECK (sugestao_estado IN ('enviada', 'editada', 'descartada', 'superada')) NOT VALID;

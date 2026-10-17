@@ -46,7 +46,8 @@ export const enviarMensagemEntrada = z.discriminatedUnion('tipo', [
   // `sugestaoDecisaoId` (P13): o texto nasceu de uma sugestão do agente (assistido ou copiloto).
   // A API compara o enviado com o sugerido e grava enviada/editada + similaridade. Opcional e
   // nunca bloqueia o envio — id inválido, de outra conversa ou já decidido é só ignorado.
-  z.object({ tipo: z.literal('texto'), texto: z.string().min(1).max(4096), sugestaoDecisaoId: z.string().uuid().optional() }),
+  // ⚠️ Id malformado é DESCARTADO (`.catch`), não recusa a mensagem: métrica nunca bloqueia envio.
+  z.object({ tipo: z.literal('texto'), texto: z.string().min(1).max(4096), sugestaoDecisaoId: z.string().uuid().optional().catch(undefined) }),
   // imagem: `imagem` é URL ou data URL base64 (o adaptador aceita os dois).
   z.object({ tipo: z.literal('imagem'), imagem: z.string().min(1), legenda: z.string().max(1024).optional() }),
   // audio: `audio` é URL ou data URL base64 — vira mensagem de voz.

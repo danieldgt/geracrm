@@ -21,6 +21,7 @@ const enviadosAoCanal: string[] = []
 vi.mock('../canais/fabrica.js', () => ({
   criarCanal: () => ({
     enviarTexto: async (_para: string, texto: string) => { enviadosAoCanal.push(texto); return { ok: true, idExterno: `ext-${enviadosAoCanal.length}` } },
+    enviarImagem: async (_para: string, _img: string, legenda?: string) => { enviadosAoCanal.push(legenda ?? '[imagem]'); return { ok: true, idExterno: `ext-${enviadosAoCanal.length}` } },
   }),
 }))
 
@@ -64,13 +65,15 @@ const doCliente = async (texto: string, conversa = CONVERSA, tenant = T): Promis
 /** Uma decisão-sugestão gravada direto (o turno real é exercitado no primeiro teste). */
 const decisao = async (p: {
   modo: string; mensagens: string[]; desfecho?: string; guardrails?: unknown[]; tenant?: string; conversa?: string; canal?: string
+  /** As entrantes que o turno respondeu (pareamento da sombra). */
+  mensagensIds?: string[]
 }): Promise<string> => {
   const id = crypto.randomUUID()
   await dono`
-    INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, modo, desfecho, resposta, confianca, guardrails, criado_em)
+    INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, modo, desfecho, resposta, confianca, guardrails, mensagens_ids, criado_em)
     VALUES (${p.tenant ?? T}, ${id}, ${p.conversa ?? CONVERSA}, ${p.canal ?? CANAL}, ${p.modo}, ${p.desfecho ?? 'sugeriu'},
             ${JSON.stringify({ mensagens: p.mensagens, confianca: 0.9 })}::text::jsonb, 0.9,
-            ${JSON.stringify(p.guardrails ?? [])}::text::jsonb, clock_timestamp())`
+            ${JSON.stringify(p.guardrails ?? [])}::text::jsonb, ${p.mensagensIds ?? []}::uuid[], clock_timestamp())`
   return id
 }
 const linha = async (id: string) => (await dono<{
@@ -132,7 +135,7 @@ beforeAll(async () => {
 })
 beforeEach(async () => {
   enviadosAoCanal.length = 0
-  for (const t of ['agente_decisao', 'agente_sessao', 'agente_tarefa', 'atendimento', 'aviso_privacidade', 'mensagem', 'outbox']) {
+  for (const t of ['agente_decisao', 'agente_sessao', 'agente_tarefa', 'atendimento', 'aviso_privacidade', 'cliente_memoria', 'mensagem', 'outbox']) {
     for (const ten of [T, OUTRO]) await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${ten}'`)
   }
   await configurar('assistido')
@@ -239,6 +242,11 @@ describe('Envio a partir da sugestão — enviada × editada + similaridade', ()
     expect(enviadosAoCanal).toEqual([]) // nada despachado
     expect((await linha(d)).sugestao_estado).toBeNull()
 
+    // Mesmas palavras, só pontuação/caixa/ordem (similaridade 1): continua barrado.
+    const quase = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'garantimos a entrega AMANHÃ, sem falta!!', sugestaoDecisaoId: d })
+    expect(quase.statusCode).toBe(422)
+    expect(await contar('mensagem')).toBe(antes)
+
     const ok = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'A entrega está prevista para amanhã; confirmo com a transportadora.', sugestaoDecisaoId: d })
     expect(ok.statusCode).toBe(200)
     expect((await linha(d)).sugestao_estado).toBe('editada')
@@ -255,6 +263,34 @@ describe('Envio a partir da sugestão — enviada × editada + similaridade', ()
     const r = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'oi', sugestaoDecisaoId: crypto.randomUUID() })
     expect(r.statusCode).toBe(200)
     expect((r.json() as { sugestao: unknown }).sugestao).toEqual({ registrada: false, motivo: 'nao_encontrada' })
+    // E o id cru do corpo não vai para o outbox (nada foi decidido).
+    expect((await dono`SELECT 1 FROM outbox WHERE tenant_id = ${T} AND tipo = 'agente.sugestao'`).length).toBe(0)
+  })
+
+  it('sugestaoDecisaoId malformado é descartado: a mensagem sai (200) e nada é decidido', async () => {
+    const d = await decisao({ modo: 'assistido', mensagens: ['texto'] })
+    const r = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'texto', sugestaoDecisaoId: 'nao-e-uuid' })
+    expect(r.statusCode).toBe(200)
+    expect((r.json() as { sugestao?: unknown }).sugestao).toBeUndefined()
+    expect((await linha(d)).sugestao_estado).toBe('superada') // respondeu sem usar
+  })
+
+  it('"Usar" e reescrever por cima (similaridade < 0,2) conta como superada, não editada', async () => {
+    const d = await decisao({ modo: 'assistido', mensagens: ['Temos o sabão neutro em caixa com 12 unidades, entrega amanhã.'] })
+    const r = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'Bom dia! Vou ver com o gerente e te chamo.', sugestaoDecisaoId: d })
+    expect((r.json() as { sugestao: { estado: string } }).sugestao.estado).toBe('superada')
+    const l = await linha(d)
+    expect(l.sugestao_estado).toBe('superada')
+    expect(l.sugestao_mensagem_id).toBeNull()
+    expect(Number(l.sugestao_similaridade)).toBeLessThan(0.2)
+  })
+
+  it('superar pendentes não toca decisões que não são sugestão (sombra, silêncio)', async () => {
+    const sombra = await decisao({ modo: 'sombra', mensagens: ['x'] })
+    const silencio = await decisao({ modo: 'assistido', mensagens: ['y'], desfecho: 'silencio' })
+    await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'oi' })
+    expect((await linha(sombra)).sugestao_estado).toBeNull()
+    expect((await linha(silencio)).sugestao_estado).toBeNull()
   })
 })
 
@@ -278,19 +314,30 @@ describe('Descartar', () => {
 })
 
 describe('Sombra × humano', () => {
-  it('a 1ª mensagem humana depois de uma decisão de sombra grava sombra_similaridade, uma vez só', async () => {
-    const d = await decisao({ modo: 'sombra', mensagens: ['Entregamos em 3 dias úteis pela transportadora.'] })
-    await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'Entregamos em 3 dias úteis, pela transportadora!' })
-    expect((await linha(d)).sombra_similaridade).toBe('1.000')
-    await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'Mais alguma coisa?' })
+  it('pareia pela ENTRANTE que gerou a decisão e junta as mensagens humanas até a próxima entrante', async () => {
+    const e = await doCliente('qual o prazo de entrega?')
+    const d = await decisao({ modo: 'sombra', mensagens: ['Entregamos em 3 dias úteis pela transportadora.'], mensagensIds: [e] })
+    await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'Entregamos em 3 dias úteis' })
+    const parcial = Number((await linha(d)).sombra_similaridade)
+    expect(parcial).toBeLessThan(1)
+    // A 2ª mensagem humana COMPLETA a resposta: a similaridade é recalculada sobre o conjunto.
+    await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'pela transportadora!' })
     expect((await linha(d)).sombra_similaridade).toBe('1.000')
   })
-  it('decisão de sombra já respondida por um humano não é comparada com a mensagem seguinte', async () => {
-    const d = await decisao({ modo: 'sombra', mensagens: ['Entregamos em 3 dias.'] })
-    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-               VALUES (${T}, ${crypto.randomUUID()}, ${CONVERSA}, 'saliente', 'texto', '{"texto":"pelo celular"}'::jsonb, clock_timestamp())`
+  it('chegou outra entrante sem decisão de sombra: a resposta humana NÃO é pareada com a decisão antiga', async () => {
+    const e1 = await doCliente('qual o prazo?')
+    const d = await decisao({ modo: 'sombra', mensagens: ['Entregamos em 3 dias.'], mensagensIds: [e1] })
+    await doCliente('e o frete?') // o turno de sombra desta ainda não rodou
     await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'Entregamos em 3 dias.' })
     expect((await linha(d)).sombra_similaridade).toBeNull()
+  })
+  it('mensagem de automação (marcador) não conta como resposta humana', async () => {
+    const e = await doCliente('oi')
+    const d = await decisao({ modo: 'sombra', mensagens: ['Olá! Como posso ajudar?'], mensagensIds: [e] })
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+               VALUES (${T}, ${crypto.randomUUID()}, ${CONVERSA}, 'saliente', 'texto', '{"texto":"Promoção da semana!","automatica":"automacao"}'::jsonb, clock_timestamp())`
+    await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'Olá! Como posso ajudar?' })
+    expect((await linha(d)).sombra_similaridade).toBe('1.000')
   })
 })
 
@@ -429,6 +476,81 @@ describe('Copiloto sob demanda — só leitura', () => {
   })
 })
 
+describe('Copiloto — concorrência, atraso e autoria', () => {
+  it('quem pediu fica gravado: o pedinte vê "por mim"; outro vendedor vê o nome', async () => {
+    await doCliente('tem sabão neutro?')
+    await dono`INSERT INTO usuario (tenant_id, id, nome, email, cognito_sub) VALUES (${T}, ${crypto.randomUUID()}, 'Bia Vendas', 'bia@p13.test', 'sub-p13-bia') ON CONFLICT DO NOTHING`
+    const a = await appCom(llmQueDiz('Temos sim!'), 2000)
+    const r = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)
+    expect((r.json() as { sugestao: { pedidaPor: { porMim: boolean } } }).sugestao.pedidaPor).toMatchObject({ porMim: true })
+    // Outro vendedor (outro sub) abre a conversa.
+    const [bia] = await dono<{ id: string }[]>`SELECT id FROM usuario WHERE tenant_id = ${T} AND cognito_sub = 'sub-p13-bia'`
+    const [d] = await dono<{ id: string; pedida_por: string }[]>`SELECT id, sugestao_pedida_por AS pedida_por FROM agente_decisao WHERE tenant_id = ${T} AND modo = 'copiloto'`
+    await dono`UPDATE agente_decisao SET sugestao_pedida_por = ${bia!.id} WHERE tenant_id = ${T} AND id = ${d!.id}`
+    const g = (await chamar(T, 'GET', `/v1/conversas/${CONVERSA}/sugestao`)).json() as { sugestao: { pedidaPor: unknown } }
+    expect(g.sugestao.pedidaPor).toEqual({ nome: 'Bia Vendas', porMim: false })
+    expect(d!.pedida_por).toBeTruthy()
+    await a.close()
+    await dono`DELETE FROM usuario WHERE tenant_id = ${T} AND cognito_sub = 'sub-p13-bia'`
+  })
+
+  it('trava ENTRE instâncias: com o advisory lock da conversa tomado por outra conexão, a geração é recusada', async () => {
+    const outra = postgres(process.env.DATABASE_ADMIN_URL!, { max: 1, onnotice: () => {} })
+    try {
+      await outra`SELECT pg_advisory_lock(hashtext(${`${T}:${CONVERSA}`}))`
+      const a = await appCom(llmQueDiz('x'), 1000)
+      const r = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)
+      expect((r.json() as { erro: string }).erro).toBe('copiloto.em_andamento')
+      await outra`SELECT pg_advisory_unlock(hashtext(${`${T}:${CONVERSA}`}))`
+      expect((await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)).statusCode).toBe(200)
+      await a.close()
+    } finally {
+      await outra.end()
+    }
+  })
+
+  it('turno que termina DEPOIS do prazo publica agente.sugestao (só ids) e a sugestão aparece no GET', async () => {
+    await doCliente('tem pronta entrega?')
+    const a = await appCom(llmLento(200), 30)
+    expect((await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)).statusCode).toBe(502)
+    expect((await dono`SELECT 1 FROM outbox WHERE tenant_id = ${T} AND tipo = 'agente.sugestao'`).length).toBe(0)
+    await new Promise((res) => setTimeout(res, 600))
+    const evs = await dono<{ payload: Record<string, unknown> }[]>`SELECT payload FROM outbox WHERE tenant_id = ${T} AND tipo = 'agente.sugestao'`
+    expect(evs.length).toBe(1)
+    expect(Object.keys(evs[0]!.payload).sort()).toEqual(['conversaId', 'decisaoId'])
+    const g = (await chamar(T, 'GET', `/v1/conversas/${CONVERSA}/sugestao`)).json() as { sugestao: { origem: string; texto: string } }
+    expect(g.sugestao).toMatchObject({ origem: 'copiloto', texto: 'tarde demais' })
+    await a.close()
+  })
+
+  // ⚠️ SKIP CONSCIENTE (revisão P13, MÉDIA): hoje `memoria_anotar` GRAVA em cliente_memoria também
+  //    no copiloto. Quem fecha é a raia P17, dona de ferramentas/montar.ts e
+  //    memoria/ferramenta-memoria.ts ("memória não grava em simulação e copiloto"). Quando a P17
+  //    entrar, este teste deixa de ser skip.
+  it.skip('[P17] copiloto não grava memória do cliente mesmo se o modelo chamar memoria_anotar', async () => {
+    await doCliente('prefiro pagar no boleto')
+    const anotador: PortaLlmFerramentas = { nome: 'anotador', capacidades: { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false },
+      async rodar(e): Promise<ResultadoLaco> {
+        await e.executar('memoria_anotar', { tipo: 'preferencia', fato: 'prefere boleto' })
+        return llmQueDiz('Anotado! Posso montar o pedido?').rodar(e)
+      } }
+    const antes = await contar('cliente_memoria')
+    const a = await appCom(anotador, 2000)
+    expect((await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/sugestao/gerar`, undefined, a)).statusCode).toBe(200)
+    expect(await contar('cliente_memoria')).toBe(antes)
+    await a.close()
+  })
+})
+
+describe('Aviso de privacidade na legenda de imagem (P4)', () => {
+  it('imagem com legenda contendo o link do tenant grava a prova com origem humano', async () => {
+    const r = await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'imagem', imagem: 'https://exemplo.test/catalogo.png', legenda: `Catálogo e privacidade: ${URL_PRIVACIDADE}` })
+    expect(r.statusCode).toBe(200)
+    const mid = (r.json() as { mensagemId: string }).mensagemId
+    expect(await dono`SELECT origem FROM aviso_privacidade WHERE tenant_id = ${T} AND mensagem_id = ${mid}`).toEqual([{ origem: 'humano' }])
+  })
+})
+
 describe('Métricas vêm do banco', () => {
   it('conta geradas, enviadas, editadas, descartadas, superadas, CRÍTICA e sombra × humano', async () => {
     const enviada = await decisao({ modo: 'assistido', mensagens: ['a b c palavra'] })
@@ -439,7 +561,7 @@ describe('Métricas vêm do banco', () => {
     await chamar(T, 'POST', `/v1/agente/sugestoes/${descartada}/descartar`)
     await decisao({ modo: 'assistido', mensagens: ['pendente'] })
     await decisao({ modo: 'copiloto', mensagens: ['do copiloto'] })
-    await decisao({ modo: 'sombra', mensagens: ['Entrega em três dias úteis'] })
+    await decisao({ modo: 'sombra', mensagens: ['Entrega em três dias úteis'], mensagensIds: [await doCliente('qual o prazo?')] })
     await chamar(T, 'POST', `/v1/conversas/${CONVERSA}/mensagens`, { tipo: 'texto', texto: 'Entrega em três dias úteis' })
     await decisao({ modo: 'assistido', mensagens: ['ainda pendente'] })
 

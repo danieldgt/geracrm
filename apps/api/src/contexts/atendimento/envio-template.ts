@@ -5,6 +5,7 @@ import { decifrar } from '../integracao/cofre.js'
 import { criarCanal } from './canais/fabrica.js'
 import { enviarPeloGateway, type ContextoEnvio } from './canais/gateway.js'
 import type { ResultadoEnvioTexto } from './envio-conversa.js'
+import { registrarAvisoSeExibido } from './agente/privacidade.js'
 
 /**
  * Envio de TEMPLATE (HSM) numa conversa — o irmão de `enviarTextoNaConversa`
@@ -30,6 +31,7 @@ interface Preparo {
   mensagemId: string; destino: string; provedor: string | null; cred: Uint8Array | null
   tipoCanal: string; estadoCanal: string; ultimaEntranteEm: Date | null; destinoBloqueado: boolean
   disparoPausado: boolean; canalArquivado: boolean; nome: string; idioma: string; variaveis: string[]
+  contatoId: string; canalId: string; renderizado: string
 }
 
 type Falha = { ok: false; classe: 'recusa' | 'alvo'; motivo: string }
@@ -43,8 +45,8 @@ export async function enviarTemplateNaConversa(
   deps: { criar?: typeof criarCanal | undefined } = {},
 ): Promise<ResultadoEnvioTexto> {
   const preparo = await comTenantServico(tenantId, async (tx: Sql): Promise<Preparo | Falha> => {
-    const [ctx] = await tx<(Omit<Preparo, 'mensagemId' | 'nome' | 'idioma' | 'variaveis'> & { contato: string | null })[]>`
-      SELECT cc.provedor, cc.credenciais_cifradas AS cred, cc.tipo AS "tipoCanal", cc.estado AS "estadoCanal",
+    const [ctx] = await tx<(Omit<Preparo, 'mensagemId' | 'nome' | 'idioma' | 'variaveis' | 'renderizado'> & { contato: string | null })[]>`
+      SELECT c.contato_id AS "contatoId", c.canal_id AS "canalId", cc.provedor, cc.credenciais_cifradas AS cred, cc.tipo AS "tipoCanal", cc.estado AS "estadoCanal",
              (cc.arquivado_em IS NOT NULL) AS "canalArquivado",
              ct.e164 AS destino, c.ultima_entrante_em AS "ultimaEntranteEm", co.nome AS contato,
              coalesce(cfg.disparo_pausado, false) AS "disparoPausado",
@@ -87,7 +89,7 @@ export async function enviarTemplateNaConversa(
       VALUES (tenant_atual(), 'mensagem.enviada', 'conversa', ${conversaId},
               ${JSON.stringify({ conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
     const { contato: _contato, ...resto } = ctx
-    return { ...resto, mensagemId, nome: tpl.nome, idioma: tpl.idioma, variaveis }
+    return { ...resto, mensagemId, nome: tpl.nome, idioma: tpl.idioma, variaveis, renderizado }
   })
   if ('ok' in preparo) return preparo
 
@@ -116,6 +118,13 @@ export async function enviarTemplateNaConversa(
       INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
       VALUES (tenant_atual(), 'mensagem.status', 'conversa', ${conversaId},
               ${JSON.stringify({ conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
+    // P13/P4: template com o aviso de privacidade também é prova de exibição — só com envio ok.
+    if (r.ok) {
+      await registrarAvisoSeExibido(tx, {
+        envio: { ok: true, mensagemId: preparo.mensagemId }, contatoId: preparo.contatoId, conversaId, canalId: preparo.canalId,
+        texto: preparo.renderizado, origem: opcoes.marcador ? 'agente' : 'humano', agora,
+      })
+    }
   })
 
   return r.ok

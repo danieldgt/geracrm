@@ -1,8 +1,39 @@
 import { describe, expect, it } from 'vitest'
 import {
   avisosDaSugestao, bloqueadaPelaQualidade, estadoDaSugestao, foiEditada, motivoDoBloqueio, naoEnvieAssim, pedeConfirmarOptOut, similaridadeTextos,
-  taxaSombra, taxasDaSugestao, textoComparavel, textoDaSugestao,
+  taxaSombra, taxasDaSugestao, textoComparavel, textoDaSugestao, classificarUso, envioIgualAoBloqueado, LIMIAR_SIMILARIDADE_USO,
 } from './agente-sugestao.js'
+import * as indice from '../index.js'
+
+describe('Uso da sugestão: enviada, editada ou superada (reescrita por cima)', () => {
+  it('igual → enviada; edição pequena → editada; texto outro (< 0,2) → superada', () => {
+    const s = 'Temos o sabão neutro em caixa com 12 unidades, entrega amanhã.'
+    expect(classificarUso(s, ` ${s} `).estado).toBe('enviada')
+    expect(classificarUso(s, 'Temos o sabão neutro em caixa com 24 unidades, entrega amanhã.').estado).toBe('editada')
+    const outro = classificarUso(s, 'Bom dia! Vou ver com o gerente e te chamo.')
+    expect(outro.similaridade).toBeLessThan(LIMIAR_SIMILARIDADE_USO)
+    expect(outro.estado).toBe('superada')
+  })
+})
+
+describe('Envio igual ao bloqueado (P12 nao_envie)', () => {
+  it('idêntico ou mesmas palavras (só pontuação/ordem) conta como igual; reescrito não', () => {
+    const s = 'Garantimos a entrega amanhã sem falta.'
+    expect(envioIgualAoBloqueado(s, s)).toBe(true)
+    expect(envioIgualAoBloqueado(s, 'garantimos a entrega amanhã, sem falta!')).toBe(true)
+    expect(envioIgualAoBloqueado(s, 'A entrega está prevista para amanhã, confirmo com a transportadora.')).toBe(false)
+  })
+})
+
+describe('Índice do pacote', () => {
+  it('a marca nao_envie tem UMA fonte (P12): a P13 não reexporta constantes próprias', () => {
+    expect(indice.ETAPA_REGRAS_QUALIDADE).toBe('regras-qualidade')
+    expect(indice.CODIGO_NAO_ENVIE).toBe('nao_envie')
+    expect('ETAPA_QUALIDADE' in indice).toBe(false)
+    expect('SUGESTAO_CODIGO_NAO_ENVIE' in indice).toBe(false)
+    expect(bloqueadaPelaQualidade([{ etapa: indice.ETAPA_REGRAS_QUALIDADE, codigo: indice.CODIGO_NAO_ENVIE, gravidade: 'CRITICA', acao: 'bloqueado' }])).toBe(true)
+  })
+})
 import { enviarMensagemEntrada } from './mensagem.js'
 import type { MarcaGuardrail } from './agente-vendedor.js'
 
@@ -116,9 +147,12 @@ describe('Taxas e estados', () => {
 })
 
 describe('Entrada de envio', () => {
-  it('aceita sugestaoDecisaoId uuid opcional e recusa lixo', () => {
+  it('aceita sugestaoDecisaoId uuid opcional; malformado é DESCARTADO sem recusar a mensagem', () => {
     expect(enviarMensagemEntrada.safeParse({ tipo: 'texto', texto: 'oi' }).success).toBe(true)
-    expect(enviarMensagemEntrada.safeParse({ tipo: 'texto', texto: 'oi', sugestaoDecisaoId: '0190a3b0-0000-7000-8000-000000000001' }).success).toBe(true)
-    expect(enviarMensagemEntrada.safeParse({ tipo: 'texto', texto: 'oi', sugestaoDecisaoId: 'x' }).success).toBe(false)
+    const ok = enviarMensagemEntrada.parse({ tipo: 'texto', texto: 'oi', sugestaoDecisaoId: '0190a3b0-0000-7000-8000-000000000001' })
+    expect(ok).toMatchObject({ sugestaoDecisaoId: '0190a3b0-0000-7000-8000-000000000001' })
+    const lixo = enviarMensagemEntrada.safeParse({ tipo: 'texto', texto: 'oi', sugestaoDecisaoId: 'x' })
+    expect(lixo.success).toBe(true)
+    expect(lixo.data).toEqual({ tipo: 'texto', texto: 'oi', sugestaoDecisaoId: undefined })
   })
 })

@@ -34,7 +34,9 @@ export async function rotasSugestao(app: FastifyInstance, opcoes: { copiloto?: O
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       const lido = await req.comTenant(async (tx) => {
         const conv = await lerConversaParaSugestao(tx, req.params.id)
-        return conv ? { conv, sugestao: await lerSugestaoVigente(tx, req.params.id) } : null
+        if (!conv) return null
+        // "Sugestão pedida por <nome>" só quando quem pediu foi OUTRO vendedor.
+        return { conv, sugestao: await lerSugestaoVigente(tx, req.params.id, await garantirUsuarioId(tx, req)) }
       })
       if (!lido) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       // Selo = modo EFETIVO (P14: teto do tenant, número, recorte), o mesmo que decide o copiloto.
@@ -53,7 +55,8 @@ export async function rotasSugestao(app: FastifyInstance, opcoes: { copiloto?: O
     '/v1/conversas/:id/sugestao/gerar', { preHandler: exigirTenant },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
-      const r = await gerarCopiloto(req.tenantId!, req.params.id, opcoes.copiloto)
+      const eu = await req.comTenant((tx) => garantirUsuarioId(tx, req))
+      const r = await gerarCopiloto(req.tenantId!, req.params.id, opcoes.copiloto, eu)
       switch (r.tipo) {
         case 'ok': return reply.send({ sugestao: r.sugestao })
         case 'conversa_inexistente': return reply.code(404).send({ erro: 'conversa.nao_encontrada' })

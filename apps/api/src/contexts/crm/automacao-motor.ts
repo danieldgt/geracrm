@@ -228,7 +228,8 @@ async function enviarDaAutomacao(
   if (conv) {
     // ⚠️ Sem cabeçalho de atendente: a mensagem é da EMPRESA, não de uma pessoa.
     //    Assinar com o nome de alguém que não escreveu seria mentir na assinatura.
-    const r = await enviarTextoNaConversa(tid, conv.id, envio.texto, null)
+    // Marcador 'automacao': o inbox e as métricas da P13 não contam isto como resposta humana.
+    const r = await enviarTextoNaConversa(tid, conv.id, envio.texto, null, new Date(), { marcador: 'automacao' })
     if (r.ok) return 'enviada'
     motivo = `o envio foi recusado (${r.motivo})`
   }

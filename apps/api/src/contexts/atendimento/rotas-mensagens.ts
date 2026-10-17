@@ -245,9 +245,10 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
       }
 
       if (r.ok) {
-        const sugestao = entrada.tipo === 'texto'
-          ? await posEnvioHumano(tenantId, conversaId, preparo, entrada.texto, entrada.sugestaoDecisaoId, req.log)
-          : null
+        // Texto, legenda de imagem ou nada (áudio): todo envio humano ok responde a conversa.
+        const textoHumano = entrada.tipo === 'texto' ? entrada.texto : entrada.tipo === 'imagem' ? (entrada.legenda ?? null) : null
+        const sugestao = await posEnvioHumano(
+          tenantId, conversaId, preparo, textoHumano, entrada.tipo === 'texto' ? entrada.sugestaoDecisaoId : undefined, req.log)
         return reply.send({ ok: true, mensagemId: preparo.mensagemId, status: 'enviada', ...(sugestao ? { sugestao } : {}) })
       }
 
@@ -408,22 +409,26 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
  *    segue 200 — métrica perdida é ruim, envio "falhado" que chegou ao cliente é pior.
  */
 async function posEnvioHumano(
-  tenantId: string, conversaId: string, p: Preparo, texto: string, sugestaoDecisaoId: string | undefined,
+  tenantId: string, conversaId: string, p: Preparo, texto: string | null, sugestaoDecisaoId: string | undefined,
   log: { warn: (o: object, m: string) => void },
 ): Promise<ResultadoUso | null> {
   const agora = new Date()
   try {
     return await comTenantServico(tenantId, async (tx) => {
-      const uso = sugestaoDecisaoId
+      const uso = sugestaoDecisaoId && texto
         ? await registrarUsoDaSugestao(tx, { conversaId, decisaoId: sugestaoDecisaoId, textoEnviado: texto, mensagemId: p.mensagemId, agora })
         : null
       const superadas = await superarPendentes(tx, conversaId, agora)
-      if ((uso?.registrada || superadas > 0)) await publicarSugestaoMudou(tx, conversaId, sugestaoDecisaoId ?? conversaId)
-      await registrarSimilaridadeSombra(tx, { conversaId, mensagemId: p.mensagemId, textoHumano: texto, agora })
-      await registrarAvisoSeExibido(tx, {
-        envio: { ok: true, mensagemId: p.mensagemId }, contatoId: p.contatoId, conversaId, canalId: p.canalId,
-        texto, origem: 'humano', agora,
-      })
+      // ⚠️ O evento leva um id RESOLVIDO no banco (a decisão usada ou uma superada), nunca o cru do corpo.
+      const decidida = uso?.registrada ? sugestaoDecisaoId! : superadas[0]
+      if (decidida) await publicarSugestaoMudou(tx, conversaId, decidida)
+      await registrarSimilaridadeSombra(tx, { conversaId, agora })
+      if (texto) {
+        await registrarAvisoSeExibido(tx, {
+          envio: { ok: true, mensagemId: p.mensagemId }, contatoId: p.contatoId, conversaId, canalId: p.canalId,
+          texto, origem: 'humano', agora,
+        })
+      }
       return uso
     })
   } catch (erro) {
