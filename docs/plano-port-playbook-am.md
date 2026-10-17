@@ -404,3 +404,5 @@ PRONTO     skills descrevem o pipeline e onde estender
   (h) fechar o alerta `agente_llm_indisponivel` no turno bem-sucedido (`resolverAlertaLlm(tenantId)` em vendedor.ts — P5);
   (i) mostrar reserva/`faltaParaReserva` na tela do agente (P14/P17).
   Nota: a P5 isolou o worker dos testes por tenant (`workerDoTenant`), o que deve resolver o item (b).
+  (j) `EntradaPosResposta.saldoDeEstoqueVisto` preenchido em vendedor.ts a partir do registro de ferramentas;
+      filtro P2 passa `estoqueComFonte` (hoje fail-closed: escassez sempre vetada).
