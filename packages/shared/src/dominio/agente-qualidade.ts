@@ -491,6 +491,12 @@ export interface AvaliacaoQualidadeDto {
   readonly custoCentavos: number
   readonly erro: string | null
   readonly criadoEm: string
+  /**
+   * P16: a conversa está na amostra de revisão de uma semana aberta e quem pede
+   * ainda não a revisou — notas, justificativas, gravidade, violações e ação vêm
+   * omitidas (revisão cega). Ausente/false = item completo.
+   */
+  readonly cego?: boolean | undefined
 }
 
 /** GET /v1/agente/qualidade/resumo. */

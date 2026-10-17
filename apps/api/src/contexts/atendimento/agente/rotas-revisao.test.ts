@@ -139,12 +139,17 @@ describe('GET /v1/agente/revisao/amostra — 20 por número na ordem da P12', ()
     expect(b).toMatchObject({ semana: SEMANA, canalId: CANAL_A, proximoCursor: null })
     expect(b.itens).toHaveLength(20)
     expect(b.itens.map((i: { ordem: number }) => i.ordem)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
-    // A MESMA amostra (e ordem) do CSV semanal da P12 — que diz o motivo de cada uma.
+    // A ordem é o protocolo: CRÍTICAs, depois ALTA/nota ≤ 3 (até 8), depois aleatórias.
+    const ids = b.itens.map((i: { conversaId: string }) => i.conversaId) as string[]
+    expect(ids.slice(0, 2).every((x) => criticas.has(x))).toBe(true)
+    expect(ids.slice(2, 10).every((x) => baixas.has(x))).toBe(true)
+    // Das 10 ALTA/nota ≤ 3, só 8 entram como tal; as 2 que sobram concorrem com as aleatórias.
+    expect(ids.slice(10).some((x) => criticas.has(x))).toBe(false)
+    expect(ids.slice(10).filter((x) => baixas.has(x)).length).toBeLessThanOrEqual(2)
+    // A MESMA amostra (e ordem) do CSV semanal da P12 — que também fica cego (sem motivo) para quem não revisou.
     const csv = (await get(A, `/v1/agente/qualidade/amostra-semanal.csv?canalId=${CANAL_A}`)).body.replace(/^\uFEFF/, '').trim().split('\r\n').slice(1).map((l) => l.split(';'))
-    expect(csv.map((l) => l[4])).toEqual(b.itens.map((i: { conversaId: string }) => i.conversaId))
-    expect(csv.slice(0, 2).every((l) => l[3] === 'critica' && criticas.has(l[4]!))).toBe(true)
-    expect(csv.slice(2, 10).every((l) => l[3] === 'alta_ou_nota_baixa' && baixas.has(l[4]!))).toBe(true)
-    expect(csv.slice(10).every((l) => l[3] === 'aleatoria')).toBe(true)
+    expect(csv.map((l) => l[4])).toEqual(ids)
+    expect(csv.every((l) => l[3] === '' && l[5] === '' && l[6] === '')).toBe(true)
     // CEGO antes da 1ª revisão: nada do que o sistema achou sai do servidor (só se há juiz).
     for (const i of b.itens) expect(i).toMatchObject({ cego: true, motivo: null, piorGravidade: null, menorNota: null, notasJuiz: null, revisao: null })
     expect(b.itens[0]).toMatchObject({ comJuiz: true, revisoes: 0, origem: 'sugestao' })
@@ -203,13 +208,14 @@ describe('GET /v1/agente/revisao/avaliacoes/:id — o que o revisor lê', () => 
       cego: true, comJuiz: true, notasJuiz: null, justificativas: null, gravidadeSistema: null })
     expect(d.transcricao.map((f: { autor: string }) => f.autor)).toEqual(['cliente', 'sugestao', 'humano'])
     expect(d.transcricao[1].texto).toBe('Temos sim, quantas caixas?')
-    expect(d.violacoes).toEqual([{ regra: 'palavra_proibida', gravidade: null, trecho: 'ligue [telefone]', corrigida: false }])
+    // Cego: só o trecho — nem regra, nem detalhe, nem gravidade.
+    expect(d.violacoes).toEqual([{ trecho: 'ligue [telefone]', regra: null, detalhe: null, gravidade: null }])
     // Valores exatos semeados (com espaço/@): "99999" solto poderia casar com UUID aleatório.
     expect(JSON.stringify(d)).not.toMatch(/85 99999-1234|x@y\.com|ALTA/)
     expect((await get(B, `/v1/agente/revisao/avaliacoes/${c.juiz}`)).statusCode).toBe(404)
     await post(A, { avaliacaoId: c.juiz, notas: todas(3), gravidade: 'ALTA', veredito: 'ajustar' })
     const depois = (await get(A, `/v1/agente/revisao/avaliacoes/${c.juiz}`)).json()
-    expect(depois).toMatchObject({ cego: false, notasJuiz: todas(3), gravidadeSistema: 'ALTA', violacoes: [{ gravidade: 'ALTA' }] })
+    expect(depois).toMatchObject({ cego: false, notasJuiz: todas(3), gravidadeSistema: 'ALTA', violacoes: [{ regra: 'palavra_proibida', gravidade: 'ALTA' }] })
     expect(depois.justificativas.clareza).toBe('cliente [e-mail] ok')
     // Outro revisor continua cego.
     expect((await get(A, `/v1/agente/revisao/avaliacoes/${c.juiz}`, SUB_ADMIN)).json()).toMatchObject({ cego: true, notasJuiz: null })
@@ -290,6 +296,23 @@ describe('POST /v1/agente/revisao — idempotente por revisor', () => {
     const [fora] = await dono<{ id: string }[]>`
       SELECT id FROM agente_avaliacao WHERE tenant_id = ${A} AND tipo = 'juiz' AND NOT (id = ANY(${[...naAmostra] as string[]}::uuid[])) LIMIT 1`
     expect((await post(A, { avaliacaoId: fora!.id, notas: todas(5), gravidade: null, veredito: 'ok' })).json()).toMatchObject({ erro: 'revisao.fora_da_amostra' })
+  })
+
+  it('regravar vale mesmo se a conversa saiu das 20 depois; o motivo da 1ª gravação continua', async () => {
+    await limpar(A)
+    const c = await conversa(A, CANAL_A, { pior: null, nota: 5 })
+    const r1 = await post(A, { avaliacaoId: c.juiz, notas: todas(5), gravidade: null, veredito: 'ok' })
+    expect(r1.statusCode).toBe(201)
+    expect(r1.json().motivo).toBe('aleatoria')
+    // 20 conversas CRÍTICAS chegam depois: a revisada sai da amostra.
+    for (let i = 0; i < 20; i++) await conversa(A, CANAL_A, { pior: 'CRITICA', nota: 1 })
+    const ids = (await get(A, `/v1/agente/revisao/amostra?canalId=${CANAL_A}`)).json().itens.map((i: { conversaId: string }) => i.conversaId)
+    expect(ids).not.toContain(c.conversa)
+    const r2 = await post(A, { avaliacaoId: c.juiz, notas: todas(5), gravidade: null, veredito: 'ajustar', observacao: 'revisto' })
+    expect(r2.statusCode).toBe(200)
+    expect(r2.json()).toMatchObject({ id: r1.json().id, motivo: 'aleatoria', veredito: 'ajustar', observacao: 'revisto', concorda: true })
+    // Quem nunca revisou não entra por essa porta.
+    expect((await post(A, { avaliacaoId: c.juiz, notas: todas(5), gravidade: null, veredito: 'ok' }, SUB_ADMIN)).json()).toMatchObject({ erro: 'revisao.fora_da_amostra' })
   })
 
   it('juiz com erro não põe a conversa na amostra (aqui e no CSV da P12)', async () => {

@@ -14,6 +14,7 @@ import type { PortaLlmFerramentas } from './porta-llm.js'
 import { gastoJuizNoMes, inicioDoMesDoTenant, julgarSessao, tetoJuizDoAmbiente, tetoJuizEfetivo } from './qualidade/avaliacao.js'
 import { fusoSeguro } from '../../plataforma/fuso.js'
 import { juizDoAmbiente } from './qualidade/juiz.js'
+import { cegasParaQuem } from './revisao-humana.js'
 
 /**
  * QUALIDADE EM PRODUÇÃO (ADR-031, raia P12).
@@ -25,6 +26,9 @@ import { juizDoAmbiente } from './qualidade/juiz.js'
  *   GET/PUT /v1/canais/:id/agente/qualidade        — amostra e teto mensal do juiz do número (admin grava; auditoria)
  *
  * ⚠️ Tudo sob RLS (`req.comTenant`); `tenant_id` nunca vem de parâmetro.
+ * ⚠️ Revisão CEGA (P16): a lista e o CSV escondem o que o sistema achou de uma
+ *    conversa que está na amostra de revisão de uma semana aberta e que quem pede
+ *    ainda não revisou (`cegasParaQuem`). O `/resumo` agregado fica como está.
  * ⚠️ O CSV não leva telefone, nome nem texto cru: id da conversa, regras e
  *    trechos já mascarados (gravados mascarados e mascarados de novo aqui).
  */
@@ -90,6 +94,11 @@ function dto(l: LinhaAvaliacao): AvaliacaoQualidadeDto {
   }
 }
 
+/** O item CEGO (P16): sem notas, justificativas, gravidade, violações nem ação. */
+function dtoCego(l: LinhaAvaliacao): AvaliacaoQualidadeDto {
+  return { ...dto(l), violacoes: [], piorGravidade: null, notas: null, notaMedia: null, acao: null, cego: true }
+}
+
 /** Uma célula de CSV: aspas dobradas e proteção contra fórmula (=, +, -, @ no início). */
 export function celulaCsv(v: unknown): string {
   let s = v === null || v === undefined ? '' : String(v)
@@ -100,12 +109,15 @@ export function celulaCsv(v: unknown): string {
 export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQualidade = {}): Promise<void> {
   const juiz = () => opts.juiz ? { porta: opts.juiz, modelo: undefined, motivoIndisponivel: null } : juizDoAmbiente()
 
-  app.get<{ Querystring: Record<string, string> }>('/v1/agente/qualidade', { preHandler: exigirTenant }, async (req, reply) => {
+  app.get<{ Querystring: Record<string, string> }>('/v1/agente/qualidade', {
+    preHandler: [exigirTenant, garantirUsuario, exigirPapel('admin', 'gestor', 'supervisor')],
+  }, async (req, reply) => {
     const f = filtros.safeParse(req.query ?? {})
     if (!f.success) return invalido(reply, f.error)
     const c = lerCursor(f.data.cursor)
     if (c === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
-    const linhas = await req.comTenant((tx) => tx<LinhaAvaliacao[]>`
+    const r = await req.comTenant(async (tx) => {
+      const linhas = await tx<LinhaAvaliacao[]>`
       SELECT a.id, a.decisao_id, a.conversa_id, a.canal_id, a.sessao_id, a.origem, a.tipo, a.gatilho, a.violacoes, a.pior_gravidade,
              a.notas, a.justificativas, a.nota_media::text AS nota_media, a.acao, a.modelo, a.custo_centavos::text AS custo_centavos,
              a.erro, a.criado_em, a.criado_em::text AS criado_em_txt
@@ -118,9 +130,16 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
          ${f.data.comAchado ? tx`AND (a.pior_gravidade IS NOT NULL OR a.tipo = 'juiz')` : tx``}
          ${c ? tx`AND (a.criado_em, a.id) < (${c.em}::text::timestamptz, ${c.id})` : tx``}
        ORDER BY a.criado_em DESC, a.id DESC
-       LIMIT 21`)
-    const { pagina, proximoCursor } = paginar(linhas)
-    return reply.send({ itens: pagina.map(dto), proximoCursor })
+       LIMIT 21`
+      const { pagina, proximoCursor } = paginar(linhas)
+      const cegas = await cegasParaQuem(tx, await garantirUsuarioId(tx, req),
+        pagina.map((l) => ({ id: l.id, conversaId: l.conversa_id, canalId: l.canal_id, criadoEm: l.criado_em })))
+      return { pagina, proximoCursor, cegas }
+    })
+    const itens = r.pagina.map((l) => (r.cegas.has(l.id) ? dtoCego(l) : dto(l)))
+      // Filtrar por gravidade revelaria a gravidade de quem está cego: o item sai da página (o cursor segue).
+      .filter((x) => !(f.data.gravidade && x.cego))
+    return reply.send({ itens, proximoCursor: r.proximoCursor })
   })
 
   app.get<{ Querystring: { canalId?: string; dias?: string } }>('/v1/agente/qualidade/resumo', { preHandler: exigirTenant }, async (req, reply) => {
@@ -208,6 +227,7 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
       if (canalId !== undefined && !UUID.test(canalId)) return reply.code(422).send({ erro: 'qualidade.campo_invalido', campos: ['canalId'] })
       if (inicio !== undefined && !DATA.test(inicio)) return reply.code(422).send({ erro: 'qualidade.campo_invalido', campos: ['inicio'] })
       const dados = await req.comTenant(async (tx) => {
+        const revisorId = await garantirUsuarioId(tx, req)
         // A semana: segunda 00:00 no fuso da loja (ou a segunda do `inicio`), 7 dias.
         const [t] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
         const fuso = fusoSeguro(t?.fuso)
@@ -239,7 +259,10 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
            ORDER BY max(CASE a.pior_gravidade WHEN 'CRITICA' THEN 3 WHEN 'ALTA' THEN 2 WHEN 'MEDIA' THEN 1 ELSE 0 END) DESC,
                     min(a.nota_media) ASC NULLS LAST, a.conversa_id
            LIMIT 5000`
-        return { sem: sem!, conversas }
+        // Revisão CEGA (P16): conversa de semana aberta que quem exporta ainda não revisou sai sem o que o sistema achou.
+        const cegas = await cegasParaQuem(tx, revisorId,
+          conversas.map((c) => ({ id: `${c.canal_id}|${c.conversa_id}`, conversaId: c.conversa_id, canalId: c.canal_id, criadoEm: sem!.ini })))
+        return { sem: sem!, conversas, cegas }
       })
       const porCanal = new Map<string, Array<(typeof dados.conversas)[number]>>()
       for (const c of dados.conversas) porCanal.set(c.canal_id, [...(porCanal.get(c.canal_id) ?? []), c])
@@ -259,7 +282,10 @@ export async function rotasQualidade(app: FastifyInstance, opts: OpcoesRotasQual
           const just = (i.justificativas ?? []).flatMap((t) => {
             try { return Object.entries(JSON.parse(t) as Record<string, string>).map(([k, v]) => `${k}: ${mascararTextoQualidade(v)}`) } catch { return [] }
           }).join(' | ')
-          linhas.push([dados.sem.rotulo, mascararTextoQualidade(i.canal_nome), idx + 1, i.motivo, i.conversa_id, i.piorGravidade ?? '', i.menorNota ?? '', i.avaliacoes, viol, just]
+          const cega = dados.cegas.has(`${i.canal_id}|${i.conversa_id}`)
+          linhas.push((cega
+            ? [dados.sem.rotulo, mascararTextoQualidade(i.canal_nome), idx + 1, '', i.conversa_id, '', '', i.avaliacoes, '', '']
+            : [dados.sem.rotulo, mascararTextoQualidade(i.canal_nome), idx + 1, i.motivo, i.conversa_id, i.piorGravidade ?? '', i.menorNota ?? '', i.avaliacoes, viol, just])
             .map(celulaCsv).join(';'))
         })
       }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import {
-  CRITERIOS_RUBRICA, calcularConcordancia, mascararTextoQualidade, ordenarAmostraSemanal, segundaDaSemana, semanaDaData,
+  CRITERIOS_RUBRICA, calcularConcordancia, deslocarSemana, mascararTextoQualidade, ordenarAmostraSemanal, segundaDaSemana, semanaDaData,
   somarConcordancia,
   type ConcordanciaNumeroDto, type RevisaoValidada, type CriterioRubrica, type DecisaoRevisao, type DetalheRevisaoDto,
   type FalaRevisao, type GravidadeQualidade, type ItemAmostraRevisaoDto, type MotivoAmostra, type NotasDoJuiz,
@@ -22,15 +22,21 @@ import { transcricaoDaSessao } from './qualidade/avaliacao.js'
  *   gravarRevisao      — upsert por (avaliação, revisor) com a concordância congelada
  *   concordancia       — a soma por número de uma ou mais semanas (a P19 consome)
  *
- * RISCOS ACEITOS (decisão do coordenador na revisão adversarial da P16; a P20 leva
- * ao guia de revisão semanal):
- *   1. A ORDEM da amostra revela a gravidade: as CRÍTICAs vêm primeiro, depois ALTA
- *      ou nota ≤ 3. É o protocolo da revisão (ADR-031 §5) — o revisor deve
- *      começar pelo que é grave. A cegueira cobre motivo, gravidade e notas, não
- *      a posição na lista.
- *   2. O CSV da aba Qualidade (P12, gestor/supervisor) traz motivo, gravidade e
- *      justificativas do juiz da mesma semana. Ele não é a ferramenta de revisão;
- *      o guia orienta revisar pela aba Revisão antes de abrir o CSV.
+ *   cegasParaQuem      — quais avaliações a aba Qualidade (lista e CSV) esconde de quem pede
+ *
+ * CEGUEIRA (revisão adversarial da P16): enquanto quem pede não revisou uma
+ * conversa da amostra de uma semana ABERTA (a atual e a anterior — a revisão é
+ * feita na segunda sobre a semana que passou), nenhuma tela mostra o que o
+ * sistema achou dela: aba Revisão (amostra, detalhe, planilha) e aba Qualidade
+ * (lista `GET /v1/agente/qualidade` e CSV da amostra semanal). O `/resumo`
+ * agregado fica visível (contagens, sem conversa).
+ *
+ * RISCO ACEITO (decisão do coordenador; a P20 leva ao guia de revisão semanal):
+ *   - A ORDEM da amostra revela a gravidade: as CRÍTICAs vêm primeiro, depois ALTA
+ *     ou nota ≤ 3. É o protocolo da revisão (ADR-031 §5) — o revisor deve
+ *     começar pelo que é grave. A cegueira cobre motivo, gravidade, regras e
+ *     notas, não a posição na lista.
+ *   (A aba Qualidade deixou de ser risco: a lista e o CSV agora são cegos também.)
  */
 
 const peso = (col: string): string => `CASE ${col} WHEN 'CRITICA' THEN 3 WHEN 'ALTA' THEN 2 WHEN 'MEDIA' THEN 1 ELSE 0 END`
@@ -256,7 +262,10 @@ export async function detalheParaRevisar(tx: Sql, avaliacaoId: string, revisorId
       ? Object.fromEntries(Object.entries(a.justificativas).map(([k, v]) => [k, mascararTextoQualidade(String(v))]))
       : null,
     gravidadeSistema: cego ? null : await gravidadeDoSistema(tx, a),
-    violacoes: violacoes.map(({ v }) => ({ ...v, gravidade: cego ? null : v.gravidade, trecho: mascararTextoQualidade(v.trecho ?? '') })),
+    // Cego: só o trecho — regra e detalhe já dizem o que o sistema achou.
+    violacoes: violacoes.map(({ v }) => cego
+      ? { trecho: mascararTextoQualidade(v.trecho ?? ''), regra: null, detalhe: null, gravidade: null }
+      : { regra: v.regra, detalhe: v.detalhe ?? null, gravidade: v.gravidade, trecho: mascararTextoQualidade(v.trecho ?? '') }),
     revisao: minha ? revisaoDto(minha) : null,
   }
 }
@@ -286,8 +295,10 @@ export async function gravarRevisao(tx: Sql, corpo: RevisaoValidada, revisorId: 
   const item = (await amostraDaSemana(tx, a.canal_id, semana)).find((i) => i.conversaId === a.conversa_id)
   const [ja] = await tx<{ id: string }[]>`
     SELECT id FROM agente_revisao WHERE tenant_id = tenant_atual() AND avaliacao_id = ${a.id} AND revisor_id = ${revisorId}`
-  if (!item || (!ja && (item.juiz_id ?? item.regras_id) !== a.id)) return { tipo: 'fora_da_amostra' }
-  const motivo = item.motivo
+  // Regravar vale mesmo que a conversa tenha saído das 20 depois (chegou CRÍTICA nova): a 1ª gravação
+  // já passou pela checagem, e o que ela mede (inclusive o motivo) não muda.
+  if (!ja && (!item || (item.juiz_id ?? item.regras_id) !== a.id)) return { tipo: 'fora_da_amostra' }
+  const motivo = item?.motivo ?? null
   const notasLlm = a.tipo === 'juiz' ? notasDoJuiz(a.notas) : null
   const gravidadeSistema = await gravidadeDoSistema(tx, a)
   const r = calcularConcordancia({
@@ -409,4 +420,46 @@ export async function planilhaDaSemana(tx: Sql, canalId: string, s: SemanaDaLoja
     }
   })
   return { cabecalho, linhas }
+}
+
+/** Quantas semanas seguem "abertas" para a cegueira: a atual e a anterior. */
+export const SEMANAS_ABERTAS_REVISAO = 2
+
+/**
+ * Das avaliações pedidas, quais ficam CEGAS para quem pede: a conversa está na
+ * amostra de uma semana aberta do número e quem pede ainda não a revisou nessa
+ * semana. Devolve os ids das avaliações a esconder. Sob RLS.
+ */
+export async function cegasParaQuem(
+  tx: Sql, revisorId: string,
+  itens: ReadonlyArray<{ readonly id: string; readonly conversaId: string; readonly canalId: string; readonly criadoEm: Date }>,
+  agora = new Date(),
+): Promise<Set<string>> {
+  const cegas = new Set<string>()
+  if (itens.length === 0) return cegas
+  const [t] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
+  const fuso = fusoSeguro(t?.fuso)
+  const atual = semanaDaData(momentoNoFuso(agora, fuso).data)!
+  const abertas = new Set<string>([atual])
+  let s = atual
+  for (let i = 1; i < SEMANAS_ABERTAS_REVISAO; i++) { s = deslocarSemana(s, -1)!; abertas.add(s) }
+  const comSemana = itens
+    .map((i) => ({ ...i, semana: semanaDaData(momentoNoFuso(i.criadoEm, fuso).data) }))
+    .filter((i): i is typeof i & { semana: string } => i.semana !== null && abertas.has(i.semana))
+  if (comSemana.length === 0) return cegas
+  const revisadas = new Set((await tx<{ conversa_id: string; semana: string }[]>`
+    SELECT DISTINCT conversa_id, semana FROM agente_revisao
+     WHERE tenant_id = tenant_atual() AND revisor_id = ${revisorId} AND semana = ANY(${[...abertas]}::text[])`)
+    .map((r) => `${r.conversa_id}|${r.semana}`))
+  const amostras = new Map<string, Set<string>>()
+  for (const i of comSemana) {
+    if (revisadas.has(`${i.conversaId}|${i.semana}`)) continue
+    const k = `${i.canalId}|${i.semana}`
+    if (!amostras.has(k)) {
+      const sem = await semanaDaLoja(tx, i.semana)
+      amostras.set(k, new Set(sem ? (await amostraDaSemana(tx, i.canalId, sem)).map((x) => x.conversaId) : []))
+    }
+    if (amostras.get(k)!.has(i.conversaId)) cegas.add(i.id)
+  }
+  return cegas
 }

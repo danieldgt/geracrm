@@ -220,7 +220,7 @@ const NOTAS = [0, 1, 2, 3, 4, 5] as const
                                 <ul class="violacoes">
                                   @for (v of d.violacoes; track $index) {
                                     <li>@if (v.gravidade; as g) { <ui-badge [tom]="badgeG(g).tom">{{ badgeG(g).rotulo }}</ui-badge> }
-                                      <span>{{ violacao(v) }}</span>
+                                      @if (v.regra) { <span>{{ violacao(v) }}</span> }
                                       @if (v.trecho) { <q class="trecho">{{ v.trecho }}</q> }</li>
                                   }
                                 </ul>
@@ -493,7 +493,9 @@ export class AgenteRevisaoComponente {
   descricao(c: CriterioRubrica): string { return DESCRICAO_CRITERIO[c] }
   rotuloVeredito(v: VereditoRevisao): string { return ROTULO_VEREDITO[v] }
   rotuloDecisao(d: DecisaoRevisao): string { return ROTULO_DECISAO[d] }
-  violacao(v: DetalheRevisaoDto['violacoes'][number]): string { return linhaDaViolacao({ ...v, gravidade: v.gravidade ?? 'MEDIA' }) }
+  violacao(v: DetalheRevisaoDto['violacoes'][number]): string {
+    return v.regra ? linhaDaViolacao({ regra: v.regra, detalhe: v.detalhe ?? undefined, gravidade: v.gravidade ?? 'MEDIA', trecho: v.trecho }) : ''
+  }
   resultado(r: NonNullable<ItemAmostraRevisaoDto['revisao']>) { return resultadoDaRevisao(r) }
   autor(f: FalaRevisao): string {
     return { cliente: 'Cliente', agente: 'Agente (enviou)', sugestao: 'Sugestão do agente', humano: 'Vendedor (contexto)' }[f.autor]

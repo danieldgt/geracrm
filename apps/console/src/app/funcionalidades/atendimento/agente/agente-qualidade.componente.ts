@@ -148,7 +148,10 @@ const FILTROS: ReadonlyArray<{ id: FiltroQualidade; rotulo: string }> = [
                       <div class="linha">
                         <span class="txt-dados quando">{{ a.criadoEm | date: 'dd/MM HH:mm' }}</span>
                         <span class="gatilho encolhe">{{ gatilho(a) }}</span>
-                        @if (a.tipo === 'juiz') {
+                        @if (a.cego) {
+                          <!-- Revisão cega (P16): o servidor omitiu notas e gravidade desta conversa. -->
+                          <ui-badge tom="neutro">Oculto até você revisar</ui-badge>
+                        } @else if (a.tipo === 'juiz') {
                           @if (a.erro) { <ui-badge tom="atencao">Juiz não avaliou</ui-badge> }
                           @else { <ui-badge [tom]="tomNota(a.notaMedia)">Nota {{ nota(a.notaMedia) }}</ui-badge> }
                         } @else {
@@ -157,6 +160,9 @@ const FILTROS: ReadonlyArray<{ id: FiltroQualidade; rotulo: string }> = [
                         @if (acao(a); as ac) { <ui-badge [tom]="ac.tom">{{ ac.rotulo }}</ui-badge> }
                         <ui-badge tom="neutro">{{ origem(a) }}</ui-badge>
                       </div>
+                      @if (a.cego) {
+                        <p class="suave">Esta conversa está na amostra de revisão da semana. Revise-a na aba Revisão para ver o que o juiz e as regras acharam.</p>
+                      }
                       @if (escapou(a).length > 0) {
                         <ul class="violacoes">
                           @for (v of escapou(a); track $index) {

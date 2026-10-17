@@ -6,6 +6,7 @@ import { encerrarBanco } from '../../../db/index.js'
 import { pluginTenant } from '../../../plugins/tenant.js'
 import type { PortaLlmFerramentas, ResultadoLaco } from './porta-llm.js'
 import { celulaCsv, rotasQualidade } from './rotas-qualidade.js'
+import { rotasRevisao } from './rotas-revisao.js'
 
 /**
  * ROTAS DE QUALIDADE (ADR-031, raia P12) — dois tenants no banco real.
@@ -36,6 +37,12 @@ const juizFalso: PortaLlmFerramentas = {
 }
 
 const h = (t: string) => ({ 'x-tenant-id': t })
+/**
+ * Uma data de 4 semanas atrás (meio-dia no Brasil): fora das semanas ABERTAS da
+ * revisão cega (P16), para a lista e o CSV mostrarem tudo sem revisão.
+ */
+const VELHO = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate() - 28, 15)).toISOString()
+const INICIO_VELHO = VELHO.slice(0, 10)
 const get = (t: string, url: string) => app.inject({ method: 'GET', url, headers: h(t) })
 
 /** Uma conversa com sessão encerrada e UMA decisão; opcionalmente a avaliação de regras e/ou de juiz. */
@@ -91,6 +98,7 @@ beforeAll(async () => {
   app = Fastify()
   await app.register(pluginTenant)
   await app.register(rotasQualidade, { juiz: juizFalso })
+  await app.register(rotasRevisao)
   await app.ready()
 })
 
@@ -110,8 +118,8 @@ afterAll(async () => {
 describe('GET /v1/agente/qualidade — lista por cursor', () => {
   it('pagina de 20 em 20 sem repetir, filtra, e não mostra o outro tenant', async () => {
     await limpar(A); await limpar(B)
-    for (let i = 0; i < 23; i++) await conversa(A, CANAL_A, { pior: i < 2 ? 'CRITICA' : null })
-    await conversa(B, CANAL_B, { pior: 'CRITICA' })
+    for (let i = 0; i < 23; i++) await conversa(A, CANAL_A, { pior: i < 2 ? 'CRITICA' : null, criado: VELHO })
+    await conversa(B, CANAL_B, { pior: 'CRITICA', criado: VELHO })
     const p1 = (await get(A, '/v1/agente/qualidade')).json()
     expect(p1.itens).toHaveLength(20)
     expect(p1.proximoCursor).toBeTruthy()
@@ -150,16 +158,16 @@ describe('GET /v1/agente/qualidade/amostra-semanal.csv', () => {
   it('ordem CRÍTICA → ALTA/nota ≤ 3 (até 8) → aleatórias até 20, mascarado e só do tenant', async () => {
     await limpar(A); await limpar(B)
     const criticas = new Set<string>()
-    for (let i = 0; i < 3; i++) criticas.add((await conversa(A, CANAL_A, { pior: 'CRITICA', trecho: 'liga 85 99999-1234 ou x@y.com' })).conversa)
+    for (let i = 0; i < 3; i++) criticas.add((await conversa(A, CANAL_A, { pior: 'CRITICA', trecho: 'liga 85 99999-1234 ou x@y.com', criado: VELHO })).conversa)
     const baixas = new Set<string>()
-    for (let i = 0; i < 6; i++) baixas.add((await conversa(A, CANAL_A, { pior: 'ALTA' })).conversa)
-    for (let i = 0; i < 5; i++) baixas.add((await conversa(A, CANAL_A, { pior: null, nota: 2 })).conversa)
-    for (let i = 0; i < 15; i++) await conversa(A, CANAL_A, { pior: null, nota: 5 })
-    await conversa(B, CANAL_B, { pior: 'CRITICA' })
+    for (let i = 0; i < 6; i++) baixas.add((await conversa(A, CANAL_A, { pior: 'ALTA', criado: VELHO })).conversa)
+    for (let i = 0; i < 5; i++) baixas.add((await conversa(A, CANAL_A, { pior: null, nota: 2, criado: VELHO })).conversa)
+    for (let i = 0; i < 15; i++) await conversa(A, CANAL_A, { pior: null, nota: 5, criado: VELHO })
+    await conversa(B, CANAL_B, { pior: 'CRITICA', criado: VELHO })
     // Nome do número com telefone: sai mascarado no CSV também.
     await dono`UPDATE canal_conectado SET nome_amigavel = 'Loja 85 99999-1234' WHERE tenant_id = ${A} AND id = ${CANAL_A}`
 
-    const r = await get(A, '/v1/agente/qualidade/amostra-semanal.csv')
+    const r = await get(A, `/v1/agente/qualidade/amostra-semanal.csv?inicio=${INICIO_VELHO}`)
     expect(r.statusCode).toBe(200)
     expect(r.headers['content-type']).toMatch(/text\/csv/)
     expect(r.headers['content-disposition']).toMatch(/qualidade-amostra-\d{4}-W\d{2}\.csv/)
@@ -178,7 +186,7 @@ describe('GET /v1/agente/qualidade/amostra-semanal.csv', () => {
     expect(r.body).toMatch(/\[telefone\]/)
     expect(r.body).not.toContain(CANAL_B)
     // Estável: exportar de novo dá o mesmo arquivo.
-    expect((await get(A, '/v1/agente/qualidade/amostra-semanal.csv')).body).toBe(r.body)
+    expect((await get(A, `/v1/agente/qualidade/amostra-semanal.csv?inicio=${INICIO_VELHO}`)).body).toBe(r.body)
     expect((await get(A, '/v1/agente/qualidade/amostra-semanal.csv?inicio=ontem')).statusCode).toBe(422)
     expect(dados[0]![1]).toBe('Loja [telefone]')
     await dono`UPDATE canal_conectado SET nome_amigavel = 'Loja A' WHERE tenant_id = ${A} AND id = ${CANAL_A}`
@@ -226,6 +234,49 @@ describe('POST /v1/agente/qualidade/avaliar — a sessão do item', () => {
   })
 })
 
+describe('Revisão cega (P16) na lista e no CSV da qualidade', () => {
+  it('gestor não vê notas, justificativas nem gravidade de conversa da amostra aberta que não revisou; depois de revisar, vê', async () => {
+    await limpar(A)
+    await dono`DELETE FROM agente_revisao WHERE tenant_id = ${A}`
+    await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${U_A_ADMIN}, NULL, 'admin')`
+    await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${U_A}, NULL, 'gestor')`
+    try {
+      const c = await conversa(A, CANAL_A, { pior: 'CRITICA', nota: 2 })
+      const velha = await conversa(A, CANAL_A, { pior: 'ALTA', nota: 3, criado: VELHO })
+      const itens = (await get(A, `/v1/agente/qualidade?canalId=${CANAL_A}`)).json().itens as Array<Record<string, unknown>>
+      const daAberta = itens.filter((x) => x['conversaId'] === c.conversa)
+      expect(daAberta).toHaveLength(2)
+      for (const x of daAberta) expect(x).toMatchObject({ cego: true, notas: null, notaMedia: null, piorGravidade: null, violacoes: [], acao: null })
+      expect(JSON.stringify(daAberta)).not.toContain('pediu prazo')
+      // Semana já fechada: aparece completa.
+      expect(itens.find((x) => x['conversaId'] === velha.conversa && x['tipo'] === 'juiz')).toMatchObject({ notaMedia: 3 })
+      expect(itens.some((x) => x['conversaId'] === velha.conversa && x['piorGravidade'] === 'ALTA')).toBe(true)
+      // Filtrar por gravidade não revela quem está cego.
+      expect((await get(A, '/v1/agente/qualidade?gravidade=CRITICA')).json().itens).toEqual([])
+      // CSV da semana aberta: a linha sai sem motivo, gravidade, nota, violações e justificativas.
+      const csv = (await get(A, `/v1/agente/qualidade/amostra-semanal.csv?canalId=${CANAL_A}`)).body.replace(/^\uFEFF/, '').trim().split('\r\n')
+      expect(csv[1]!.split(';').slice(3)).toEqual(['', c.conversa, '', '', '2', '', ''])
+
+      // Revisa (pela avaliação da amostra: a do juiz) e passa a ver.
+      const [aval] = await dono<{ id: string }[]>`SELECT id FROM agente_avaliacao WHERE tenant_id = ${A} AND conversa_id = ${c.conversa} AND tipo = 'juiz'`
+      const rev = await app.inject({ method: 'POST', url: '/v1/agente/revisao', headers: h(A),
+        payload: { avaliacaoId: aval!.id, notas: Object.fromEntries(CRITERIOS_RUBRICA.map((k) => [k, 2])), gravidade: 'CRITICA', veredito: 'grave' } })
+      expect(rev.statusCode).toBe(201)
+      const depois = (await get(A, `/v1/agente/qualidade?canalId=${CANAL_A}`)).json().itens.filter((x: { conversaId: string }) => x.conversaId === c.conversa)
+      expect(depois.find((x: { tipo: string }) => x.tipo === 'juiz')).toMatchObject({ notaMedia: 2 })
+      expect(depois.find((x: { tipo: string }) => x.tipo === 'regras')).toMatchObject({ piorGravidade: 'CRITICA' })
+      expect(depois.every((x: { cego?: boolean }) => !x.cego)).toBe(true)
+      const csv2 = (await get(A, `/v1/agente/qualidade/amostra-semanal.csv?canalId=${CANAL_A}`)).body
+      expect(csv2).toContain(';critica;')
+      // O resumo agregado não muda com a cegueira.
+      expect((await get(A, `/v1/agente/qualidade/resumo?canalId=${CANAL_A}`)).json().porGravidade.CRITICA).toBe(1)
+    } finally {
+      await dono`DELETE FROM agente_revisao WHERE tenant_id = ${A}`
+      await dono`DELETE FROM usuario_filial WHERE tenant_id = ${A}`
+    }
+  })
+})
+
 describe('GET/PUT /v1/canais/:id/agente/qualidade', () => {
   it('admin grava amostra e teto com auditoria; valida; outro tenant 404', async () => {
     const r = await app.inject({ method: 'PUT', url: `/v1/canais/${CANAL_A}/agente/qualidade`, headers: h(A), payload: { amostra: 0.25, tetoMesCentavos: 500 } })
@@ -245,7 +296,7 @@ describe('GET/PUT /v1/canais/:id/agente/qualidade', () => {
     expect((await app.inject({ method: 'PUT', url: `/v1/canais/${CANAL_A}/agente/qualidade`, headers: h(A), payload: { amostra: 1, tetoMesCentavos: null } })).statusCode).toBe(403)
     expect((await get(A, '/v1/agente/qualidade/amostra-semanal.csv')).statusCode).toBe(403)
     expect((await app.inject({ method: 'POST', url: '/v1/agente/qualidade/avaliar', headers: h(A), payload: { conversaId: crypto.randomUUID() } })).statusCode).toBe(403)
-    // Leitura continua aberta a quem é do tenant.
-    expect((await get(A, '/v1/agente/qualidade')).statusCode).toBe(200)
+    // A lista também exige gestor/supervisor/admin (P16: ela mostra notas e gravidades por conversa).
+    expect((await get(A, '/v1/agente/qualidade')).statusCode).toBe(403)
   })
 })

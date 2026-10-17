@@ -344,6 +344,17 @@ export interface FalaRevisao {
   readonly texto: string
 }
 
+/**
+ * Uma violação como o revisor a vê. Enquanto CEGO, só o trecho: `regra`,
+ * `detalhe` e `gravidade` vêm null (já diriam o que o sistema achou).
+ */
+export interface ViolacaoRevisao {
+  readonly trecho: string
+  readonly regra: ViolacaoQualidade['regra'] | null
+  readonly detalhe: string | null
+  readonly gravidade: GravidadeQualidade | null
+}
+
 /** GET /v1/agente/revisao/avaliacoes/:id — o que a tela mostra ao lado do formulário. */
 export interface DetalheRevisaoDto {
   readonly avaliacaoId: string
@@ -362,7 +373,7 @@ export interface DetalheRevisaoDto {
   /** Pior gravidade das regras na MESMA sessão da transcrição; null enquanto cego. */
   readonly gravidadeSistema: GravidadeQualidade | null
   /** O que escapou das regras na sessão (mascarado); `gravidade` null enquanto cego. */
-  readonly violacoes: ReadonlyArray<Omit<ViolacaoQualidade, 'gravidade'> & { readonly gravidade: GravidadeQualidade | null }>
+  readonly violacoes: readonly ViolacaoRevisao[]
   readonly revisao: RevisaoDto | null
 }
 
