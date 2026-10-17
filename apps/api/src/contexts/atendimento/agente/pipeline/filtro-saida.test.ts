@@ -160,19 +160,21 @@ describe('Filtro de saída no turno — vale em todo modo', () => {
 describe('Extras do número (agente_config.compliance) — só acrescentam', () => {
   it('a extra gravada vale no turno seguinte; a base continua valendo', async () => {
     await configurar('autonomo')
+    // ⚠️ Uma pergunta DIFERENTE por turno: a etapa de pergunta repetida (P3)
+    //    troca a que já foi feita, e o assunto aqui é o filtro.
     const consig = 'Trabalhamos com consignação sim. Quantas caixas?'
     await turno([consig])
     expect(enviados).toEqual([consig])
 
     await dono`UPDATE agente_config SET compliance = ${JSON.stringify({ frasesProibidas: ['consignação'], gatilhosHandoff: [] })}::text::jsonb WHERE tenant_id = ${T}`
     enviados.length = 0
-    await turno([consig])
-    expect(enviados).toEqual(['Quantas caixas?'])
+    await turno(['Trabalhamos com consignação sim. Qual a cor que você prefere?'])
+    expect(enviados).toEqual(['Qual a cor que você prefere?'])
     expect((await ultimaDecisao()).guardrails).toEqual([expect.objectContaining({ codigo: 'extra:consignacao', gravidade: 'CRITICA', acao: 'removido' })])
 
     enviados.length = 0
-    await turno([PROMESSA])
-    expect(enviados).toEqual([FILTRADA])
+    await turno(['Temos o item. Garantimos entrega amanhã. Para qual cidade é a entrega?'])
+    expect(enviados).toEqual(['Temos o item. Para qual cidade é a entrega?'])
   })
 
   it('compliance corrompido no banco não derruba o turno e não desliga a base', async () => {
