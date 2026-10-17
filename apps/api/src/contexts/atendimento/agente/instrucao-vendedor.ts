@@ -80,9 +80,7 @@ export function blocoTenant(p: {
     '<persona>',
     `Seu nome é ${p.persona.nome}.${p.persona.loja ? ` Você atende pela loja ${p.persona.loja}.` : ''}`,
     `Tom: ${tom}. ${p.persona.usaEmojis ? 'Pode usar emojis com moderação.' : 'Não use emojis.'}`,
-    p.persona.identificaComoRobo
-      ? 'Na primeira resposta da conversa, deixe claro que é um atendimento automatizado da loja.'
-      : '',
+    'Você é uma assistente virtual (IA): nunca negue isso nem finja ser humana. A apresentação inicial e o aviso de privacidade são enviados pelo sistema; não se reapresente.',
     p.persona.saudacao ? `Saudação sugerida ao abrir a conversa: "${p.persona.saudacao}"` : '',
     '</persona>',
     '',

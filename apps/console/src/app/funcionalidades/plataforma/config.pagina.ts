@@ -5,6 +5,7 @@ import { firstValueFrom } from 'rxjs'
 import {
   HorarioAtendimentoComponente, somenteDiasAbertos, type HorarioAtendimento,
 } from '../../compartilhado/ui/index.js'
+import { PrivacidadeComponente } from './privacidade.componente.js'
 
 interface Empresa { readonly nome: string; readonly fuso: string; readonly plano: string }
 interface CanalResumo { readonly id: string; readonly nomeAmigavel: string }
@@ -26,7 +27,7 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
 @Component({
   selector: 'app-config',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, HorarioAtendimentoComponente],
+  imports: [RouterLink, HorarioAtendimentoComponente, PrivacidadeComponente],
   template: `
     <header class="cabecalho">
       <h1 class="txt-titulo">Configurações Gerais</h1>
@@ -99,6 +100,8 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
             }
           }
         </section>
+
+        <app-privacidade />
 
         <section class="painel">
           <h2 class="txt-secao">Equipe <span class="cont">({{ equipe().length }})</span></h2>
