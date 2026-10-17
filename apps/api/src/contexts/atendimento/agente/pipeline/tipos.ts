@@ -142,7 +142,11 @@ export interface EtapaTetoConversa {
   readonly nome: string
   /** Pré-LLM: sessão que já passou do teto nem chama o modelo. */
   antes(ctx: ContextoPipeline): Promise<DecisaoPreLlm>
-  /** Pós-turno, com o custo DESTE turno já somado na sessão. */
+  /**
+   * Pós-envio e ANTES da persistência: a decisão gravada já sai com o handoff.
+   * ⚠️ `custoCentavos` é o custo DESTE turno; o `custo_centavos` da sessão
+   *    ainda NÃO o inclui — some os dois.
+   */
   depois(ctx: ContextoPipeline, turno: { readonly custoCentavos: number }): Promise<DecisaoPosTurno>
 }
 
@@ -157,6 +161,12 @@ export interface EntradaFalha {
   readonly detalhe: string
   readonly executouFerramentas: boolean
   readonly estado: EstadoAgente
+  /**
+   * Quantas vezes ESTA tarefa já foi pega pelo worker (1 na primeira). A fila
+   * desiste em `MAX_TENTATIVAS` (fila.ts): `aviso_e_reagendar` na última
+   * tentativa não reagenda — o worker conclui a tarefa.
+   */
+  readonly tentativas: number
 }
 
 export interface DecisaoFalha {
@@ -165,6 +175,8 @@ export interface DecisaoFalha {
   /** Texto ao cliente — só sai em autônomo. null = nenhum aviso. */
   readonly avisoCliente: string | null
   readonly reagendarEmMs?: number | undefined
+  /** Patch em `estado_agente` (ex.: contagem de falhas), gravado depois de garantir a sessão. */
+  readonly estado?: PatchEstado | undefined
 }
 
 export interface PoliticaFalha {

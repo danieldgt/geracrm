@@ -27,11 +27,19 @@ import { subDoUsuario } from '../../plugins/tenant.js'
  *      de nível de TENANT; recorte por filial/número/carteira é outra pergunta
  *      (skill geracrm-identidade-acesso) e não mora aqui.
  *   3. Usuário inativo (`usuario.ativo = false`) não tem papel.
- *   4. ⚠️ MODO FUNDADOR: tenant SEM NENHUMA linha em `usuario_filial` → todo
- *      usuário autenticado vale `admin`. Exigir papel antes de existir quem o
- *      atribua trancaria todos os clientes fora da própria configuração (e
- *      mudaria o comportamento de hoje, em que todos configuram). Na PRIMEIRA
- *      atribuição de papel no tenant a regra fica estrita para todos.
+ *   4. ⚠️ MODO FUNDADOR: enquanto o tenant não tiver NENHUM ADMIN ATIVO em
+ *      `usuario_filial`, todo usuário EXISTENTE e ATIVO do tenant vale `admin`.
+ *      Exigir papel antes de existir quem o atribua trancaria todos os clientes
+ *      fora da própria configuração (e mudaria o comportamento de hoje, em que
+ *      todos configuram).
+ *        - Só um ADMIN ativo encerra o modo fundador — não qualquer papel:
+ *          atribuir "atendente" a alguém não pode deixar o tenant sem ninguém
+ *          capaz de configurar (e de atribuir o próprio admin).
+ *        - "Existente e ativo" = linha em `usuario` com o sub do token e
+ *          `ativo`. A linha nasce em `garantirUsuarioId` (rotas-fila.ts), que o
+ *          console chama no batimento de presença; token válido de alguém que
+ *          o tenant desativou NÃO vira admin.
+ *      Quando o primeiro admin ativo existe, a regra fica estrita para todos.
  *   5. Sessão de staff (PLT-05) age como `admin` do cliente: já é auditada e é
  *      o caminho de implantação.
  *   6. `admin` satisfaz qualquer exigência; os demais papéis valem só quando
@@ -53,13 +61,18 @@ export interface AcessoDoUsuario {
 /** Papéis de quem chama, no tenant da transação (`tenant_atual()`). */
 export async function papeisDoUsuario(tx: Sql, quem: { sub: string; atorStaff?: boolean | undefined }): Promise<AcessoDoUsuario> {
   if (quem.atorStaff) return { papeis: ['admin'], origem: 'staff' }
-  const [l] = await tx<{ papeis: string[] | null; tenant_tem_papeis: boolean }[]>`
+  const [l] = await tx<{ papeis: string[] | null; usuario_ativo: boolean; tenant_tem_admin: boolean }[]>`
     SELECT (SELECT array_agg(DISTINCT uf.papel ORDER BY uf.papel)
               FROM usuario u
               JOIN usuario_filial uf ON uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id
              WHERE u.tenant_id = tenant_atual() AND u.cognito_sub = ${quem.sub} AND u.ativo) AS papeis,
-           EXISTS (SELECT 1 FROM usuario_filial WHERE tenant_id = tenant_atual()) AS tenant_tem_papeis`
-  if (!l?.tenant_tem_papeis) return { papeis: ['admin'], origem: 'fundador' }
+           EXISTS (SELECT 1 FROM usuario u
+                    WHERE u.tenant_id = tenant_atual() AND u.cognito_sub = ${quem.sub} AND u.ativo) AS usuario_ativo,
+           EXISTS (SELECT 1 FROM usuario_filial uf
+                     JOIN usuario u ON u.tenant_id = uf.tenant_id AND u.id = uf.usuario_id
+                    WHERE uf.tenant_id = tenant_atual() AND uf.papel = 'admin' AND u.ativo) AS tenant_tem_admin`
+  if (!l?.usuario_ativo) return { papeis: [], origem: 'nenhum' }
+  if (!l.tenant_tem_admin) return { papeis: ['admin'], origem: 'fundador' }
   const papeis = (l.papeis ?? []).filter((p): p is Papel => (PAPEIS as readonly string[]).includes(p))
   return { papeis, origem: papeis.length > 0 ? 'atribuido' : 'nenhum' }
 }

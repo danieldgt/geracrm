@@ -19,22 +19,34 @@
 --                                  contagem de "é robô?"…). Merge raso por chave.
 --
 -- ⚠️ Aditiva: roda com a versão anterior servindo. Colunas novas com DEFAULT
---    (a versão anterior não as conhece e continua inserindo sem elas); o CHECK
---    de modo só AMPLIA o conjunto (todo valor válido antes continua válido).
+--    constante (no PG ≥ 11 não reescreve a tabela; a versão anterior não as
+--    conhece e continua inserindo sem elas); o CHECK de modo só AMPLIA o
+--    conjunto (todo valor válido antes continua válido).
+-- ⚠️ CHECK em duas etapas: `ADD CONSTRAINT … NOT VALID` não varre a tabela;
+--    `VALIDATE CONSTRAINT` varre com lock mais fraco (SHARE UPDATE EXCLUSIVE).
+--    O runner aplica o arquivo numa transação só, então o ACCESS EXCLUSIVE do
+--    ADD ainda segura até o commit — o ganho aqui é não escrever a varredura
+--    junto do ALTER, e o padrão fica pronto para quando `agente_decisao` (uma
+--    linha por turno, cresce rápido) pedir as duas etapas em migrations
+--    separadas. A coluna nova nasce toda NULL, então a validação é trivial; a
+--    do modo varre a tabela uma vez.
 -- ⚠️ RLS: as duas tabelas já têm policy por tenant (0071, 0086); coluna nova
 --    herda a policy da linha — nada a fazer aqui além de não recriar a tabela.
 
 ALTER TABLE agente_decisao
     ADD COLUMN guardrails jsonb NOT NULL DEFAULT '[]'::jsonb,
-    ADD COLUMN falha_tipo text NULL
-        CONSTRAINT agente_decisao_falha_tipo_valida
-        CHECK (falha_tipo IN ('fatal', 'transitoria', 'requisicao', 'formato'));
+    ADD COLUMN falha_tipo text NULL;
+
+ALTER TABLE agente_decisao ADD CONSTRAINT agente_decisao_falha_tipo_valida
+    CHECK (falha_tipo IN ('fatal', 'transitoria', 'requisicao', 'formato')) NOT VALID;
+ALTER TABLE agente_decisao VALIDATE CONSTRAINT agente_decisao_falha_tipo_valida;
 
 -- 'copiloto': o vendedor HUMANO pede uma sugestão sob demanda (raia P13). Só
 -- leitura — nunca envia, nunca abre sessão —, mas a decisão fica auditada.
 ALTER TABLE agente_decisao DROP CONSTRAINT agente_decisao_modo_valido;
 ALTER TABLE agente_decisao ADD CONSTRAINT agente_decisao_modo_valido
-    CHECK (modo IN ('desligado', 'sombra', 'assistido', 'autonomo', 'simulacao', 'copiloto'));
+    CHECK (modo IN ('desligado', 'sombra', 'assistido', 'autonomo', 'simulacao', 'copiloto')) NOT VALID;
+ALTER TABLE agente_decisao VALIDATE CONSTRAINT agente_decisao_modo_valido;
 
 ALTER TABLE agente_sessao
     ADD COLUMN estado_agente jsonb NOT NULL DEFAULT '{}'::jsonb;

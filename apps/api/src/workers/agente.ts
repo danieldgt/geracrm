@@ -1,6 +1,6 @@
 import type { Sql } from '../db/index.js'
 import {
-  pegarProximaTarefa, concluirTarefa, falharTarefa, reagendarTarefa, recuperarTravadas, type Tarefa,
+  pegarProximaTarefa, concluirTarefa, falharTarefa, reagendarTarefa, recuperarTravadas, MAX_TENTATIVAS, type Tarefa,
 } from '../contexts/atendimento/agente/fila.js'
 import { conduzirTurnoVendedor, type DepsTurno, type ResultadoTurnoVendedor } from '../contexts/atendimento/agente/vendedor.js'
 import { indicarDigitacaoDaTarefa } from '../contexts/atendimento/agente/digitacao.js'
@@ -73,9 +73,11 @@ async function executarUma(dono: Sql, tarefa: Tarefa, deps: DepsTurno, agora: Da
   try {
     if (resultado.desfecho === 'superada') await reagendarTarefa(dono, tarefa, agora)
     // A política de falha (P5) pediu nova tentativa: a tarefa volta à fila com o
-    // atraso pedido, cobrindo as MESMAS mensagens.
-    else if (resultado.reagendarEmMs !== undefined) await reagendarTarefa(dono, tarefa, agora, resultado.reagendarEmMs)
-    else await concluirTarefa(dono, tarefa, agora)
+    // atraso pedido, cobrindo as MESMAS mensagens. ⚠️ Com teto: na última
+    // tentativa conclui — sem isso uma política errada viraria laço eterno.
+    else if (resultado.reagendarEmMs !== undefined && tarefa.tentativas < MAX_TENTATIVAS) {
+      await reagendarTarefa(dono, tarefa, agora, resultado.reagendarEmMs)
+    } else await concluirTarefa(dono, tarefa, agora)
   } catch (e) {
     await falharTarefa(dono, tarefa, e instanceof Error ? e.message : String(e), agora).catch(() => undefined)
   }

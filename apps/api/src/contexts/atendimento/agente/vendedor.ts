@@ -118,7 +118,12 @@ type RespostaRegistrada = Pick<RespostaDoAgente, 'confianca'> & {
   readonly slots?: RespostaDoAgente['slots']
   /** 'fixa' = texto de uma etapa do pipeline, sem modelo. */
   readonly origem?: 'fixa' | undefined
+  /** A saída do modelo como veio, quando `mensagens` foi alterado depois dele. */
+  readonly original?: RespostaDoAgente | undefined
 }
+
+/** O texto que substitui uma resposta com valor sem origem em ferramenta. */
+const AVISO_VALOR_BLOQUEADO = 'Vou confirmar os valores certinhos com a equipe e já te retorno.'
 
 export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Promise<ResultadoTurnoVendedor> {
   const agora = deps.agora ?? new Date()
@@ -171,18 +176,21 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   const { cfg, conv, reuniao, equipe, custoHoje, perfil, ausenciaRecemEnviada, fuso, modeloEscolhido } = dados
 
   // ── 1.5 Modo efetivo: o mais restritivo entre tenant, número e recorte (P14) ─
-  const modoDoNumero: ModoAgente = semEfeito ? cfg.modo : (await pipeline.modoEfetivo.decidir({
+  const efetivo = semEfeito ? { modo: cfg.modo, motivo: null } : await pipeline.modoEfetivo.decidir({
     tenantId, canalId, contatoId: conv.contato_id, modoDoNumero: cfg.modo, cfgExtra: cfg.extra, agora,
-  })).modo
+  })
+  const modoDoNumero: ModoAgente = efetivo.modo
   const modo: ModoDoTurno = deps.simulacao ? 'simulacao' : deps.copiloto ? 'copiloto' : modoDoNumero
+  // Rebaixou o modo do número? Fica na auditoria de TODA decisão deste turno.
+  const marcasDoModo: readonly MarcaGuardrail[] = efetivo.motivo ? [marca('modo-efetivo', efetivo.motivo, 'INFO', 'registrado')] : []
 
   // ── 2. Portão ───────────────────────────────────────────────────────────
   if (!semEfeito) {
-    if (conv.humano_assumiu) return silencio(tenantId, tarefa, 'humano_assumiu', modo, agora)
+    if (conv.humano_assumiu) return silencio(tenantId, tarefa, 'humano_assumiu', modo, agora, { guardrails: marcasDoModo })
     // ⚠️ A ausência acabou de responder ESTAS mensagens: com "esperar o cliente
     //    insistir" ligado, o agente fica para a próxima — duas automáticas
     //    seguidas, a primeira dizendo "não há ninguém", é a contradição do §4.3.1.
-    if (cfg.regras.exigirAusenciaAntes && ausenciaRecemEnviada) return silencio(tenantId, tarefa, 'ausencia_recem_enviada', modo, agora)
+    if (cfg.regras.exigirAusenciaAntes && ausenciaRecemEnviada) return silencio(tenantId, tarefa, 'ausencia_recem_enviada', modo, agora, { guardrails: marcasDoModo })
     const decisao = portaoDoAgente({
       agenteAtivo: modoDoNumero !== 'desligado',
       ninguemDisponivel: ninguemDisponivel(equipe),
@@ -198,13 +206,19 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     if (!decisao.entra) {
       if (decisao.motivo === 'teto_de_turnos' && reuniao.sessao_id) {
         return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'limite_de_turnos',
-          reuniao.resumo ?? 'Teto de idas e vindas atingido sem fechar.', modo, agora)
+          reuniao.resumo ?? 'Teto de idas e vindas atingido sem fechar.', modo, agora, undefined, { guardrails: marcasDoModo })
       }
-      return silencio(tenantId, tarefa, decisao.motivo, modo, agora)
+      return silencio(tenantId, tarefa, decisao.motivo, modo, agora, { guardrails: marcasDoModo })
     }
     if (cfg.orcamentoDiaCentavos !== null && custoHoje >= cfg.orcamentoDiaCentavos) {
-      return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'limite_de_custo', 'Teto diário de custo do agente atingido.', modo, agora)
+      return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'limite_de_custo', 'Teto diário de custo do agente atingido.', modo, agora, undefined, { guardrails: marcasDoModo })
     }
+  }
+
+  // Copiloto pula o portão (há humano na conversa), mas NÃO o teto diário: é
+  // o mesmo orçamento do número, e sugestão sob demanda não pode furá-lo.
+  if (deps.copiloto && cfg.orcamentoDiaCentavos !== null && custoHoje >= cfg.orcamentoDiaCentavos) {
+    return silencio(tenantId, tarefa, 'orcamento_do_dia', modo, agora, { guardrails: marcasDoModo })
   }
 
   // ── 2.5 Pedido CONFIRMADO pelo cliente nesta conversa → alçada (ADR-027) ──
@@ -231,7 +245,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
             null, agora, { ehDisparo: false, marcador: 'agente' })
         }
         return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'acima_da_alcada',
-          `Pedido confirmado pelo cliente (total ${total}) aguarda um vendedor para faturar: ${r.decisao.motivo}.`, modo, agora)
+          `Pedido confirmado pelo cliente (total ${total}) aguarda um vendedor para faturar: ${r.decisao.motivo}.`, modo, agora, undefined, { guardrails: marcasDoModo })
       }
       if (r.decisao.acao === 'efetivar' && r.efetivacao) {
         const e = r.efetivacao
@@ -247,10 +261,10 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
               null, agora, { ehDisparo: false, marcador: 'agente' })
           }
           return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'acima_da_alcada',
-            `Pedido confirmado pelo cliente (total ${total}) aguarda faturamento manual: o sistema da loja não recebe pedido automático.`, modo, agora)
+            `Pedido confirmado pelo cliente (total ${total}) aguarda faturamento manual: o sistema da loja não recebe pedido automático.`, modo, agora, undefined, { guardrails: marcasDoModo })
         } else {
           return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'acima_da_alcada',
-            `Pedido confirmado pelo cliente (total ${total}) não pôde ser efetivado: ${e.tipo}${e.tipo === 'falha' ? ` (${e.falha.tipo})` : ''}.`, modo, agora)
+            `Pedido confirmado pelo cliente (total ${total}) não pôde ser efetivado: ${e.tipo}${e.tipo === 'falha' ? ` (${e.falha.tipo})` : ''}.`, modo, agora, undefined, { guardrails: marcasDoModo })
         }
       }
     }
@@ -276,12 +290,15 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
 
   // ── 4. Antes do modelo: gatilhos → slots → teto(pré) ────────────────────
   const pre = await rodarPreLlm(pipeline, ctx)
+  const guardrailsPre: readonly MarcaGuardrail[] = [...marcasDoModo, ...pre.guardrails]
+  /** Se uma etapa devolveu estado e ainda não há sessão, ela nasce aqui (ver `sessaoParaEstado`). */
+  const abrirSessao = semEfeito ? undefined : { modo: modoDoNumero, porQue: motivoDisponibilidade(equipe) }
   if (pre.decisao.tipo === 'silencio') {
-    return silencio(tenantId, tarefa, pre.decisao.motivo, modo, agora, { guardrails: pre.guardrails, sessaoId: semEfeito ? null : reuniao.sessao_id, estado: pre.estado })
+    return silencio(tenantId, tarefa, pre.decisao.motivo, modo, agora, { guardrails: guardrailsPre, sessaoId: reuniao.sessao_id, estado: pre.estado, abrirSessao })
   }
   if (pre.decisao.tipo === 'handoff') {
     return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, pre.decisao.motivo, pre.decisao.resumo, modo, agora, undefined, {
-      avisoCliente: pre.decisao.avisoCliente, enviar, guardrails: pre.guardrails, estado: pre.estado,
+      avisoCliente: pre.decisao.avisoCliente, enviar, guardrails: guardrailsPre, estado: pre.estado, abrirSessao,
     })
   }
 
@@ -292,16 +309,34 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   const { ferramentas, capacidades } = montarFerramentas(ligacoes)
   const registro = registroDeFerramentas(ctxFerr, ferramentas)
   const pedidoAberto = ligacoes.pedido ? await ligacoes.pedido.ver(ctxFerr).catch(() => null) : null
+  if (pedidoAberto) for (const c of [pedidoAberto.totalCentavos, ...pedidoAberto.itens.flatMap((i) => [i.valorUnitarioCentavos, i.subtotalCentavos])]) registro.centavosVistos.add(c)
+  for (const c of centavosDoPedidoConfirmado) registro.centavosVistos.add(c)
 
   /**
    * O RABO DO TURNO, comum à resposta do modelo e à resposta fixa:
-   * sequência → modo → envio → persistência → teto(pós).
+   * rede final de R$ → sequência → modo → envio → teto(pós) → persistência.
    */
   const concluir = async (p: {
     resposta: RespostaRegistrada; mensagensFinais: readonly string[]; handoff: { motivo: string; resumo: string } | null
     rastro?: RastroDoLaco | undefined; custo: number; bloqueados: number[]; guardrails: readonly MarcaGuardrail[]; estado: PatchEstado
   }): Promise<ResultadoTurnoVendedor> => {
-    const { resposta, mensagensFinais, handoff, rastro, custo, bloqueados, guardrails } = p
+    const { rastro, custo } = p
+    let { resposta, mensagensFinais, handoff } = p
+    const guardrails = [...p.guardrails]
+    const bloqueados = [...p.bloqueados]
+
+    // ── Rede final: R$ sobre o texto que VAI SAIR ─────────────────────────
+    // ⚠️ O guardrail R$ do passo 7 olha a saída do modelo; uma etapa do
+    //    pipeline (ou uma resposta fixa) pode ter reescrito o texto depois.
+    //    Nada sai com valor sem fonte, venha de onde vier.
+    const naRede = mensagensFinais.flatMap((m) => verificarNumerosNaResposta(m, registro.centavosVistos))
+    if (naRede.length > 0) {
+      guardrails.push(marca('rede-final', 'valor_sem_fonte', 'CRITICA', 'substituido', mensagensFinais.join(' ')))
+      bloqueados.push(...naRede.filter((n) => !bloqueados.includes(n)))
+      mensagensFinais = [AVISO_VALOR_BLOQUEADO]
+      handoff = handoff ?? { motivo: 'incerteza', resumo: 'Valor sem origem em ferramenta no texto final; bloqueado pela rede final.' }
+      resposta = { ...resposta, mensagens: mensagensFinais, handoff, confianca: Math.min(resposta.confianca, 0.4) }
+    }
 
     // ── Sequência: chegou mensagem nova enquanto pensávamos? ──────────────
     if (!semEfeito && await comTenantServico(tenantId, (tx) => chegouMensagemNova(tx, conversaId, tarefa.mensagens_ids))) {
@@ -323,8 +358,16 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       }
     }
 
+    // ── Teto(pós): respondeu e estourou o teto da conversa → transfere em silêncio (P6) ─
+    //    ANTES da persistência: a decisão, a fase da sessão e a entrega contam
+    //    a mesma história. O custo deste turno ainda NÃO está somado na sessão.
+    if (!semEfeito && !handoff) {
+      const pos = await pipeline.teto.depois({ ...ctx, sessaoId, estado: { ...ctx.estado, ...p.estado } }, { custoCentavos: custo })
+      if (pos.tipo === 'handoff') handoff = { motivo: pos.motivo, resumo: pos.resumo }
+    }
+
     // ── Persistência: sessão + decisão + handoff ──────────────────────────
-    let desfecho: DesfechoTurno = handoff ? 'handoff' : envia ? 'respondeu' : 'sugeriu'
+    const desfecho: DesfechoTurno = handoff ? 'handoff' : envia ? 'respondeu' : 'sugeriu'
     const uso = rastro?.uso ?? { entrada: 0, saida: 0, cacheLeitura: 0, cacheEscrita: 0 }
     const decisaoId = await comTenantServico(tenantId, async (tx) => {
       if (!semEfeito) {
@@ -358,21 +401,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       return id
     })
 
-    // ── Teto(pós): respondeu e estourou o teto da conversa → transfere em silêncio (P6) ─
-    let handoffFinal = handoff
-    if (!semEfeito && !handoff) {
-      const pos = await pipeline.teto.depois({ ...ctx, sessaoId, estado: { ...ctx.estado, ...p.estado } }, { custoCentavos: custo })
-      if (pos.tipo === 'handoff') {
-        handoffFinal = { motivo: pos.motivo, resumo: pos.resumo }
-        desfecho = 'handoff'
-        await comTenantServico(tenantId, async (tx) => {
-          if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId, canalId, sessaoId, motivo: pos.motivo, resumo: pos.resumo, agora })
-          else await encerrarSessaoSemEntrega(tx, sessaoId, `${pos.motivo}: ${pos.resumo}`, agora)
-        })
-      }
-    }
-
-    return { desfecho, mensagens: mensagensFinais, handoff: handoffFinal ?? undefined, decisaoId, rastro }
+    return { desfecho, mensagens: mensagensFinais, handoff: handoff ?? undefined, decisaoId, rastro }
   }
 
   // ── 4b. Resposta fixa de uma etapa: sem modelo, mesmo rabo ───────────────
@@ -381,7 +410,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     return concluir({
       resposta: { mensagens: d.mensagens, confianca: 1, handoff: d.handoff, origem: 'fixa' },
       mensagensFinais: d.mensagens.flatMap((m) => fatiarMensagem(m, cfg.regras.maxCaracteres * 4)),
-      handoff: d.handoff ?? null, custo: 0, bloqueados: [], guardrails: pre.guardrails, estado: pre.estado,
+      handoff: d.handoff ?? null, custo: 0, bloqueados: [], guardrails: guardrailsPre, estado: pre.estado,
     })
   }
 
@@ -398,8 +427,6 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       }) + (avisoDoPedido ? `\n${avisoDoPedido}` : '') + (pre.instrucoes.length ? `\n${pre.instrucoes.join('\n')}` : ''),
     },
   ]
-  if (pedidoAberto) for (const c of [pedidoAberto.totalCentavos, ...pedidoAberto.itens.flatMap((i) => [i.valorUnitarioCentavos, i.subtotalCentavos])]) registro.centavosVistos.add(c)
-  for (const c of centavosDoPedidoConfirmado) registro.centavosVistos.add(c)
 
   const llm = deps.llm ?? (modeloEscolhido ? criarLlmDoCatalogo(modeloEscolhido) : llmFerramentasDoAmbiente())
   const r = await llm.rodar({
@@ -412,12 +439,15 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
 
   if (!r.ok) {
     const recado = recadoDaFalha(r.motivo, r.detalhe)
-    const falha = await pipeline.falha.decidir(ctx, { motivo: r.motivo, detalhe: recado, executouFerramentas: (r.rastro?.chamadas.length ?? 0) > 0, estado })
+    const falha = await pipeline.falha.decidir(ctx, { motivo: r.motivo, detalhe: recado, executouFerramentas: (r.rastro?.chamadas.length ?? 0) > 0, estado, tentativas: tarefa.tentativas })
     const aviso = await avisarCliente(falha, modo, () => enviar(tenantId, conversaId, falha.avisoCliente ?? '', null, agora, { ehDisparo: false, marcador: 'agente' }))
     const entrega = falha.acao === 'handoff' && modo === 'autonomo'
     const decisaoId = await comTenantServico(tenantId, async (tx) => {
-      const id = await registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, falhaTipo: falha.classe, idsSaida: aviso, enviada: aviso.length > 0, agora, latenciaMs: Date.now() - inicio })
-      if (!semEfeito) await garantirSessao(tx, { sessaoId, existente: !!reuniao.sessao_id, conversaId, canalId, modo: modoDoNumero, agora, porQue: motivoDisponibilidade(equipe) })
+      const id = await registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, falhaTipo: falha.classe, guardrails: guardrailsPre, idsSaida: aviso, enviada: aviso.length > 0, agora, latenciaMs: Date.now() - inicio })
+      if (!semEfeito) {
+        await garantirSessao(tx, { sessaoId, existente: !!reuniao.sessao_id, conversaId, canalId, modo: modoDoNumero, agora, porQue: motivoDisponibilidade(equipe) })
+        await patchEstado(tx, sessaoId, juntarPatches([pre.estado, falha.estado]))
+      }
       // ⚠️ Só em AUTÔNOMO a falha vira entrega real: em sombra/assistido o robô
       //    não estava falando com o cliente, então não há vácuo a cobrir — e
       //    criar atendimento poluiria a fila e calaria a própria coleta.
@@ -436,13 +466,19 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   if (!parse.success) {
     const amostra = JSON.stringify(mascarar(r.saida) ?? null).slice(0, 220)
     const recado = `a IA respondeu fora do formato: ${parse.error.issues[0]?.path.join('.') ?? ''} ${parse.error.issues[0]?.message ?? ''} — recebido: ${amostra}`
-    const falha = await pipeline.falha.decidir(ctx, { motivo: 'formato', detalhe: recado, executouFerramentas: r.rastro.chamadas.length > 0, estado })
-    const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, falhaTipo: falha.classe, agora, latenciaMs: Date.now() - inicio }))
+    const falha = await pipeline.falha.decidir(ctx, { motivo: 'formato', detalhe: recado, executouFerramentas: r.rastro.chamadas.length > 0, estado, tentativas: tarefa.tentativas })
+    const estadoDaFalha = juntarPatches([pre.estado, falha.estado])
+    const decisaoId = await comTenantServico(tenantId, (tx) => registrarDecisao(tx, { tarefa, sessaoId: reuniao.sessao_id, modo, desfecho: 'falha', rastro: r.rastro, custo, erro: recado, falhaTipo: falha.classe, guardrails: guardrailsPre, agora, latenciaMs: Date.now() - inicio }))
     if (falha.acao === 'handoff') {
-      return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'modelo_indisponivel', recado, modo, agora, decisaoId, { avisoCliente: falha.avisoCliente, enviar })
+      return await handoffSemModelo(tenantId, tarefa, reuniao.sessao_id, 'modelo_indisponivel', recado, modo, agora, decisaoId, { avisoCliente: falha.avisoCliente, enviar, estado: estadoDaFalha, abrirSessao })
     }
     await avisarCliente(falha, modo, () => enviar(tenantId, conversaId, falha.avisoCliente ?? '', null, agora, { ehDisparo: false, marcador: 'agente' }))
-    if (falha.acao === 'registrar' && !semEfeito) await comTenantServico(tenantId, (tx) => encerrarSessaoSemEntrega(tx, reuniao.sessao_id, recado, agora))
+    if (!semEfeito) {
+      await comTenantServico(tenantId, async (tx) => {
+        const sid = await sessaoParaEstado(tx, { sessaoId: reuniao.sessao_id, estado: estadoDaFalha, tarefa, abrir: abrirSessao, agora })
+        if (falha.acao === 'registrar') await encerrarSessaoSemEntrega(tx, sid, recado, agora)
+      })
+    }
     return {
       desfecho: 'falha', motivo: 'resposta_inesperada', detalhe: recado, decisaoId, rastro: r.rastro,
       ...(falha.acao === 'aviso_e_reagendar' && falha.reagendarEmMs !== undefined ? { reagendarEmMs: falha.reagendarEmMs } : {}),
@@ -451,7 +487,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
 
   // ── 7. Guardrail R$ (o original, inegociável) ───────────────────────────
   let resposta: RespostaDoAgente = parse.data
-  const guardrails: MarcaGuardrail[] = [...pre.guardrails]
+  const guardrails: MarcaGuardrail[] = [...guardrailsPre]
   const bloqueados = resposta.mensagens.flatMap((m) => verificarNumerosNaResposta(m, registro.centavosVistos))
   if (bloqueados.length > 0) {
     // ⚠️ Número sem origem em ferramenta: a resposta NÃO sai como está. Remove
@@ -459,7 +495,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     guardrails.push(marca('guardrail-reais', 'valor_sem_fonte', 'CRITICA', 'substituido', resposta.mensagens.join(' ')))
     resposta = {
       ...resposta,
-      mensagens: ['Vou confirmar os valores certinhos com a equipe e já te retorno.'],
+      mensagens: [AVISO_VALOR_BLOQUEADO],
       confianca: Math.min(resposta.confianca, 0.4),
       handoff: resposta.handoff ?? { motivo: 'incerteza', resumo: 'A IA citou um valor que não veio do catálogo; valores bloqueados pelo guardrail.' },
     }
@@ -478,7 +514,10 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   if (cadeia.bloqueio) handoff = { motivo: cadeia.bloqueio.motivo, resumo: cadeia.bloqueio.resumo }
 
   return concluir({
-    resposta, mensagensFinais: cadeia.mensagens.flatMap((m) => fatiarMensagem(m, cfg.regras.maxCaracteres * 4)),
+    // ⚠️ `resposta.mensagens` é o que SAI (depois do guardrail e da cadeia); o
+    //    que o modelo escreveu fica em `original` — a auditoria mostra os dois.
+    resposta: { ...resposta, mensagens: cadeia.mensagens, handoff: handoff ?? undefined, original: parse.data },
+    mensagensFinais: cadeia.mensagens.flatMap((m) => fatiarMensagem(m, cfg.regras.maxCaracteres * 4)),
     handoff, rastro: r.rastro, custo, bloqueados, guardrails, estado: juntarPatches([pre.estado, cadeia.estado]),
   })
 }
@@ -498,13 +537,40 @@ async function avisarCliente(
   return e.ok ? [e.mensagemId] : []
 }
 
+/** Como abrir a sessão quando uma etapa devolve estado e ainda não há sessão. */
+interface AbrirSessao { readonly modo: string; readonly porQue: string }
+
+/**
+ * ESTADO SEM SESSÃO — a escolha (P0): se uma etapa do pipeline devolveu estado
+ * e a conversa ainda não tem sessão ativa, a sessão NASCE aqui para guardá-lo.
+ * Só acontece DEPOIS do portão (que já decidiu que o agente entra), então abrir
+ * a sessão é coerente com o que o turno faria de qualquer jeito; descartar o
+ * estado faria a raia perder, por exemplo, o "já avisei" no turno seguinte.
+ * Sem `abrir` (simulação, copiloto, portão) o patch vale só para sessão existente.
+ * Patch vazio não abre nada. Devolve a sessão que recebeu o estado (ou a de entrada).
+ */
+async function sessaoParaEstado(tx: Sql, p: {
+  sessaoId: string | null; estado?: PatchEstado | undefined; tarefa: Tarefa; abrir?: AbrirSessao | undefined; agora: Date
+}): Promise<string | null> {
+  if (!p.estado || Object.keys(p.estado).length === 0) return p.sessaoId
+  let id = p.sessaoId
+  if (!id && p.abrir) {
+    id = randomUUID()
+    await garantirSessao(tx, { sessaoId: id, existente: false, conversaId: p.tarefa.conversa_id, canalId: p.tarefa.canal_id, modo: p.abrir.modo, agora: p.agora, porQue: p.abrir.porQue })
+  }
+  await patchEstado(tx, id, p.estado)
+  return id
+}
+
 async function silencio(
   tenantId: string, tarefa: Tarefa, motivo: string, modo: string, agora: Date,
-  extra: { guardrails?: readonly MarcaGuardrail[]; sessaoId?: string | null; estado?: PatchEstado } = {},
+  extra: { guardrails?: readonly MarcaGuardrail[] | undefined; sessaoId?: string | null | undefined; estado?: PatchEstado | undefined; abrirSessao?: AbrirSessao | undefined } = {},
 ): Promise<ResultadoTurnoVendedor> {
+  const semEfeito = modo === 'simulacao' || modo === 'copiloto'
   const decisaoId = await comTenantServico(tenantId, async (tx) => {
-    if (extra.estado) await patchEstado(tx, extra.sessaoId ?? null, extra.estado)
-    return registrarDecisao(tx, { tarefa, sessaoId: null, modo, desfecho: 'silencio', portaoMotivo: motivo, guardrails: extra.guardrails, agora, latenciaMs: 0 })
+    const comEstado = !semEfeito && !!extra.estado && Object.keys(extra.estado).length > 0
+    const sid = comEstado ? await sessaoParaEstado(tx, { sessaoId: extra.sessaoId ?? null, estado: extra.estado, tarefa, abrir: extra.abrirSessao, agora }) : null
+    return registrarDecisao(tx, { tarefa, sessaoId: sid, modo, desfecho: 'silencio', portaoMotivo: motivo, guardrails: extra.guardrails, agora, latenciaMs: 0 })
   })
   return { desfecho: 'silencio', motivo, decisaoId }
 }
@@ -521,6 +587,7 @@ async function handoffSemModelo(
   extra: {
     avisoCliente?: string | null | undefined; enviar?: typeof enviarTextoNaConversa | undefined
     guardrails?: readonly MarcaGuardrail[] | undefined; estado?: PatchEstado | undefined; falhaTipo?: ClasseFalha | undefined
+    abrirSessao?: AbrirSessao | undefined
   } = {},
 ): Promise<ResultadoTurnoVendedor> {
   const idsAviso: string[] = []
@@ -530,14 +597,14 @@ async function handoffSemModelo(
   }
   const semEfeito = modo === 'simulacao' || modo === 'copiloto'
   const id = await comTenantServico(tenantId, async (tx) => {
+    const sid = semEfeito ? null : await sessaoParaEstado(tx, { sessaoId, estado: extra.estado, tarefa, abrir: extra.abrirSessao, agora })
     const d = decisaoId ?? await registrarDecisao(tx, {
-      tarefa, sessaoId: semEfeito ? null : sessaoId, modo, desfecho: 'handoff', handoff: { motivo, resumo }, guardrails: extra.guardrails, falhaTipo: extra.falhaTipo,
+      tarefa, sessaoId: sid, modo, desfecho: 'handoff', handoff: { motivo, resumo }, guardrails: extra.guardrails, falhaTipo: extra.falhaTipo,
       enviada: idsAviso.length > 0, idsSaida: idsAviso, agora, latenciaMs: 0,
     })
     if (semEfeito) return d
-    if (extra.estado) await patchEstado(tx, sessaoId, extra.estado)
-    if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId: tarefa.conversa_id, canalId: tarefa.canal_id, sessaoId, motivo, resumo, agora })
-    else await encerrarSessaoSemEntrega(tx, sessaoId, `${motivo}: ${resumo}`, agora)
+    if (modo === 'autonomo') await entregarParaHumano(tx, { conversaId: tarefa.conversa_id, canalId: tarefa.canal_id, sessaoId: sid, motivo, resumo, agora })
+    else await encerrarSessaoSemEntrega(tx, sid, `${motivo}: ${resumo}`, agora)
     return d
   })
   return { desfecho: 'handoff', motivo, handoff: { motivo, resumo }, decisaoId: id }

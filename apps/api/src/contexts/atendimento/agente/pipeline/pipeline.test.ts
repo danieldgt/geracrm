@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import postgres from 'postgres'
 import { encerrarBanco, comTenantServico } from '../../../../db/index.js'
 import { conduzirTurnoVendedor, type DepsTurno } from '../vendedor.js'
-import { agendarTurno, type Tarefa } from '../fila.js'
+import { agendarTurno, MAX_TENTATIVAS, type Tarefa } from '../fila.js'
 import { processarTarefasDoAgente } from '../../../../workers/agente.js'
 import type { PedidoDeLaco, PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
 import type { Ligacoes } from '../ferramentas/ligacoes-porta.js'
@@ -61,8 +61,15 @@ const mensagemDoCliente = async (texto: string): Promise<string> => {
 const tarefaPara = (ids: string[]): Tarefa => ({ tenant_id: T, id: crypto.randomUUID(), conversa_id: CONVERSA, canal_id: CANAL, mensagens_ids: ids, tentativas: 1, executar_em: new Date() })
 const turno = async (texto: string, extra: Partial<DepsTurno> = {}) =>
   conduzirTurnoVendedor(tarefaPara([await mensagemDoCliente(texto)]), { llm: llmQueDiz(['Temos sim!']), ligacoes, enviar: enviarFalso, ...extra })
-const ultimaDecisao = async () => (await dono<{ desfecho: string; modo: string; handoff_motivo: string | null; enviada: boolean; guardrails: { etapa: string; codigo: string; trecho?: string }[]; falha_tipo: string | null; portao_motivo: string | null }[]>`
-  SELECT desfecho, modo, handoff_motivo, enviada, guardrails, falha_tipo, portao_motivo FROM agente_decisao WHERE tenant_id = ${T} ORDER BY criado_em DESC LIMIT 1`)[0]!
+const ultimaDecisao = async () => (await dono<{
+  desfecho: string; modo: string; handoff_motivo: string | null; enviada: boolean; guardrails: { etapa: string; codigo: string; gravidade: string; acao: string; trecho?: string }[]
+  falha_tipo: string | null; portao_motivo: string | null; sessao_id: string | null; numeros_bloqueados: number[]
+  resposta: { mensagens: string[]; original?: { mensagens: string[] } } | null
+}[]>`
+  SELECT desfecho, modo, handoff_motivo, enviada, guardrails, falha_tipo, portao_motivo, sessao_id, numeros_bloqueados, resposta
+    FROM agente_decisao WHERE tenant_id = ${T} ORDER BY criado_em DESC LIMIT 1`)[0]!
+const sessao = async () => (await dono<{ id: string; estado: string; fase: string | null; estado_agente: Record<string, unknown> }[]>`
+  SELECT id, estado, fase, estado_agente FROM agente_sessao WHERE tenant_id = ${T} ORDER BY iniciada_em DESC LIMIT 1`)[0]
 const atendimentos = async () => (await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM atendimento WHERE tenant_id = ${T} AND estado <> 'encerrado'`)[0]!.n
 
 const pre = (fn: EtapaPreLlm['executar']): EtapaPreLlm => ({ nome: 'falsa', executar: fn })
@@ -90,6 +97,7 @@ beforeEach(async () => {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`UPDATE conversa SET conduzida_por = 'humano' WHERE tenant_id = ${T}`
+  await dono`UPDATE agente_config SET orcamento_dia_centavos = NULL WHERE tenant_id = ${T}`
 })
 afterAll(async () => {
   for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_config', 'notificacao', 'atendimento', 'mensagem', 'conversa', 'contato_telefone', 'contato', 'canal_configuracao', 'canal_conectado', 'outbox']) {
@@ -121,7 +129,18 @@ describe('Ponto 1 — modo efetivo (P14)', () => {
     const r = await turno('oi', pipeline({ modoEfetivo: { nome: 'falsa', decidir: async () => ({ modo: 'sombra', motivo: 'fora do recorte' }) } }))
     expect(r.desfecho).toBe('sugeriu')
     expect(enviados).toEqual([])
-    expect((await ultimaDecisao()).modo).toBe('sombra')
+    const d = await ultimaDecisao()
+    expect(d.modo).toBe('sombra')
+    expect(d.guardrails).toEqual([{ etapa: 'modo-efetivo', codigo: 'fora do recorte', gravidade: 'INFO', acao: 'registrado' }])
+  })
+
+  it('a marca do rebaixamento vale também quando o portão cala o agente', async () => {
+    await configurar('autonomo')
+    await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, estado)
+               VALUES (${T}, ${crypto.randomUUID()}, ${CONVERSA}, ${CANAL}, 9002, 'na_fila')`
+    const r = await turno('oi', pipeline({ modoEfetivo: { nome: 'falsa', decidir: async () => ({ modo: 'sombra', motivo: 'teto do tenant' }) } }))
+    expect(r).toMatchObject({ desfecho: 'silencio', motivo: 'humano_assumiu' })
+    expect((await ultimaDecisao()).guardrails.map((g) => g.codigo)).toEqual(['teto do tenant'])
   })
 })
 
@@ -130,10 +149,52 @@ describe('Ponto 2 — gatilhos de entrada (P4)', () => {
     await configurar('autonomo')
     const r = await turno('[áudio]', {
       llm: llmProibido,
-      ...pipeline({ gatilhos: pre(async () => ({ tipo: 'silencio', motivo: 'audio_transcrevendo' })) }),
+      ...pipeline({ gatilhos: pre(async () => ({ tipo: 'segue', guardrails: [marca('gatilhos-entrada', 'audio_pendente', 'INFO', 'registrado')] })),
+        slots: pre(async () => ({ tipo: 'silencio', motivo: 'audio_transcrevendo' })) }),
     })
     expect(r).toMatchObject({ desfecho: 'silencio', motivo: 'audio_transcrevendo' })
     expect(enviados).toEqual([])
+    const d = await ultimaDecisao()
+    expect(d.portao_motivo).toBe('audio_transcrevendo')
+    expect(d.guardrails).toEqual([{ etapa: 'gatilhos-entrada', codigo: 'audio_pendente', gravidade: 'INFO', acao: 'registrado' }])
+    // Sem estado devolvido, silêncio não abre sessão.
+    expect(d.sessao_id).toBeNull()
+    expect(await sessao()).toBeUndefined()
+  })
+
+  it('silencio com estado de uma etapa anterior e SEM sessão: a sessão nasce para guardar o estado', async () => {
+    await configurar('autonomo')
+    await turno('[áudio]', {
+      llm: llmProibido,
+      ...pipeline({ gatilhos: pre(async () => ({ tipo: 'segue', estado: { gatilhos: { audioPendente: 1 } } })),
+        slots: pre(async () => ({ tipo: 'silencio', motivo: 'audio_transcrevendo' })) }),
+    })
+    const s = await sessao()
+    expect(s).toMatchObject({ estado: 'ativa', estado_agente: { gatilhos: { audioPendente: 1 } } })
+    expect((await ultimaDecisao()).sessao_id).toBe(s!.id)
+  })
+
+  it('handoff com estado e sem sessão: a sessão nasce, guarda o estado e fecha com a entrega', async () => {
+    await configurar('sombra')
+    await turno('pare', {
+      llm: llmProibido,
+      ...pipeline({ gatilhos: pre(async () => ({ tipo: 'segue', estado: { gatilhos: { optOut: true } } })),
+        slots: pre(async () => ({ tipo: 'handoff', motivo: 'opt_out', resumo: 'Parar.', avisoCliente: null })) }),
+    })
+    expect(await sessao()).toMatchObject({ estado: 'entregue', estado_agente: { gatilhos: { optOut: true } } })
+  })
+
+  it('resposta_fixa com valor sem fonte não sai: a rede final de R$ substitui e transfere', async () => {
+    await configurar('autonomo')
+    const r = await turno('quanto custa?', {
+      llm: llmProibido,
+      ...pipeline({ gatilhos: pre(async () => ({ tipo: 'resposta_fixa', mensagens: ['Sai por R$ 12,90.'] })) }),
+    })
+    expect(enviados).toEqual(['Vou confirmar os valores certinhos com a equipe e já te retorno.'])
+    expect(r).toMatchObject({ desfecho: 'handoff', handoff: { motivo: 'incerteza' } })
+    const d = await ultimaDecisao()
+    expect(d.numeros_bloqueados).toEqual([1290])
+    expect(d.guardrails.map((g) => `${g.etapa}/${g.codigo}`)).toEqual(['rede-final/valor_sem_fonte'])
   })
 
   it('resposta_fixa: envia o texto fixo sem modelo e grava o estado da raia na sessão', async () => {
@@ -197,6 +258,7 @@ describe('Ponto 4 — teto por conversa (P6)', () => {
     })
     expect(r).toMatchObject({ desfecho: 'handoff', motivo: 'limite_de_custo_conversa' })
     expect(enviados).toEqual([])
+    expect(await ultimaDecisao()).toMatchObject({ desfecho: 'handoff', handoff_motivo: 'limite_de_custo_conversa' })
   })
 
   it('depois: responde e transfere em silêncio', async () => {
@@ -207,6 +269,9 @@ describe('Ponto 4 — teto por conversa (P6)', () => {
     expect(r).toMatchObject({ desfecho: 'handoff', handoff: { motivo: 'limite_de_custo_conversa' } })
     expect(custoVisto).toBeGreaterThanOrEqual(0)
     expect(await atendimentos()).toBe(1)
+    // Decisão e sessão contam a mesma história: respondeu E transferiu.
+    expect(await ultimaDecisao()).toMatchObject({ desfecho: 'handoff', handoff_motivo: 'limite_de_custo_conversa', enviada: true })
+    expect(await sessao()).toMatchObject({ estado: 'entregue', fase: 'handoff' })
   })
 })
 
@@ -221,7 +286,21 @@ describe('Pontos 5–8 — depois do modelo (P7, P2, P3, P12)', () => {
     await turno('oi', pipeline({ numeros: anexa('numeros'), filtro: anexa('filtro'), pergunta: anexa('pergunta'), qualidade: anexa('qualidade') }))
     expect(ordem).toEqual(['numeros', 'filtro', 'pergunta', 'qualidade'])
     expect(enviados).toEqual(['Temos sim! [numeros] [filtro] [pergunta] [qualidade]'])
-    expect((await ultimaDecisao()).guardrails.map((g) => g.etapa)).toEqual(['numeros', 'filtro', 'pergunta', 'qualidade'])
+    const d = await ultimaDecisao()
+    expect(d.guardrails.map((g) => g.etapa)).toEqual(['numeros', 'filtro', 'pergunta', 'qualidade'])
+    // A auditoria guarda o que SAIU e, à parte, o que o modelo escreveu.
+    expect(d.resposta!.mensagens).toEqual(['Temos sim! [numeros] [filtro] [pergunta] [qualidade]'])
+    expect(d.resposta!.original!.mensagens).toEqual(['Temos sim!'])
+  })
+
+  it('rede final: etapa que reescreve com valor sem fonte não passa', async () => {
+    await configurar('autonomo')
+    const r = await turno('oi', pipeline({ filtro: pos(async () => ({ mensagens: ['Fica 39,90 cada.'], guardrails: [] })) }))
+    expect(enviados).toEqual(['Vou confirmar os valores certinhos com a equipe e já te retorno.'])
+    expect(r).toMatchObject({ desfecho: 'handoff', handoff: { motivo: 'incerteza' } })
+    const d = await ultimaDecisao()
+    expect(d.numeros_bloqueados).toEqual([3990])
+    expect(d.resposta!.mensagens).toEqual(['Vou confirmar os valores certinhos com a equipe e já te retorno.'])
   })
 
   it('filtro recebe as falas anteriores do agente e o estado gravado no turno anterior', async () => {
@@ -280,6 +359,34 @@ describe('Ponto 9 — política de falha (P5)', () => {
   })
 })
 
+describe('Ponto 9 — falha: estado e tentativas', () => {
+  it('a política recebe as tentativas da tarefa e o estado que devolve fica na sessão', async () => {
+    await configurar('sombra')
+    let tentativasVistas = 0
+    const falha: PipelineDoTurno['falha'] = { nome: 'falsa', decidir: async (_ctx, e) => {
+      tentativasVistas = e.tentativas
+      return { acao: 'aviso_e_reagendar', classe: 'transitoria', avisoCliente: null, reagendarEmMs: 30_000, estado: { falha: { transitorias: 1 } } }
+    } }
+    const id = await mensagemDoCliente('oi')
+    await conduzirTurnoVendedor({ ...tarefaPara([id]), tentativas: 2 }, { llm: llmQueFalha, ligacoes, enviar: enviarFalso, pipeline: { falha } })
+    expect(tentativasVistas).toBe(2)
+    expect(await sessao()).toMatchObject({ estado: 'ativa', estado_agente: { falha: { transitorias: 1 } } })
+  })
+
+  it('na última tentativa o worker NÃO reagenda: conclui a tarefa', async () => {
+    await configurar('autonomo')
+    const falha: PipelineDoTurno['falha'] = { nome: 'falsa', decidir: async () => ({ acao: 'aviso_e_reagendar', classe: 'transitoria', avisoCliente: null, reagendarEmMs: 30_000 }) }
+    const id = await mensagemDoCliente('oi')
+    await comTenantServico(T, (tx) => agendarTurno(tx, { conversaId: CONVERSA, canalId: CANAL, mensagemId: id, agora: new Date(Date.now() - 60_000), atrasoMs: 0 }))
+    // Já tentou MAX_TENTATIVAS - 1 vezes: a próxima pegada é a última.
+    await dono`UPDATE agente_tarefa SET tentativas = ${MAX_TENTATIVAS - 1} WHERE tenant_id = ${T}`
+    const agora = new Date()
+    await processarTarefasDoAgente(dono as never, { llm: llmQueFalha, ligacoes, enviar: enviarFalso, agora, pipeline: { falha } }, agora)
+    const [t] = await dono<{ estado: string; tentativas: number }[]>`SELECT estado, tentativas FROM agente_tarefa WHERE tenant_id = ${T}`
+    expect(t).toMatchObject({ estado: 'concluida', tentativas: MAX_TENTATIVAS })
+  })
+})
+
 describe('Copiloto (P13)', () => {
   it('numa conversa com atendimento aberto, sugere sem enviar, sem sessão e grava modo copiloto', async () => {
     await configurar('autonomo')
@@ -291,6 +398,16 @@ describe('Copiloto (P13)', () => {
     expect((await ultimaDecisao()).modo).toBe('copiloto')
     const [s] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM agente_sessao WHERE tenant_id = ${T}`
     expect(s!.n).toBe(0)
+  })
+})
+
+describe('Copiloto — teto diário', () => {
+  it('com o orçamento do dia esgotado, o copiloto não chama o modelo', async () => {
+    await configurar('autonomo')
+    await dono`UPDATE agente_config SET orcamento_dia_centavos = 0 WHERE tenant_id = ${T}`
+    const r = await turno('tem em azul?', { copiloto: true, llm: llmProibido })
+    expect(r).toMatchObject({ desfecho: 'silencio', motivo: 'orcamento_do_dia' })
+    expect(await ultimaDecisao()).toMatchObject({ modo: 'copiloto', portao_motivo: 'orcamento_do_dia' })
   })
 })
 
