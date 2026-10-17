@@ -7,7 +7,7 @@ import type { Tarefa } from '../fila.js'
 import type { PedidoDeLaco, PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
 import type { Ligacoes } from '../ferramentas/ligacoes-porta.js'
 import { criarEtapaPerguntaRepetida, falasDoUltimoTurnoDoAgente } from './pergunta-repetida.js'
-import { etapaSlotsDoCliente } from './slots-do-cliente.js'
+import { etapaSlotsDoCliente, perguntaPendenteValida } from './slots-do-cliente.js'
 import type { ContextoPipeline } from './tipos.js'
 
 /**
@@ -286,10 +286,22 @@ describe('etapas isoladas', () => {
 
   it('slots: a pergunta pendente de volume no estado deixa ler a resposta sem verbo de intenção', async () => {
     const entrantes = [{ id: 'm', tipo: 'texto', texto: 'bom dia, tudo certo por aí com vocês? então, 80 caixas mesmo', transcricaoPendente: false, transcricaoFalhou: false }]
-    const estado = { perguntas: { ultima: { texto: PERGUNTA_DO_SLOT.volume, slot: 'volume', em: '' }, respondidos: {} } }
-    const r = await etapaSlotsDoCliente.executar(ctxBase({ entrantes, estado, sessaoId: 'b3b30000-9999-4000-8000-000000000003' }))
+    const estadoEm = (em: string) => ({ perguntas: { ultima: { texto: PERGUNTA_DO_SLOT.volume, slot: 'volume', em }, respondidos: {} } })
+    const sessaoId = 'b3b30000-9999-4000-8000-000000000003'
+    const r = await etapaSlotsDoCliente.executar(ctxBase({ entrantes, estado: estadoEm('2026-10-17T09:00:00Z'), sessaoId }))
     expect(r).toMatchObject({ estado: { perguntas: { respondidos: { volume: '80 caixas' } } } })
     expect(await etapaSlotsDoCliente.executar(ctxBase({ entrantes }))).toEqual({ tipo: 'segue' })
+  })
+
+  it('slots: pergunta pendente só vale em autônomo e por até 24 h', async () => {
+    const entrantes = [{ id: 'm', tipo: 'texto', texto: 'então, 80 caixas mesmo', transcricaoPendente: false, transcricaoFalhou: false }]
+    const estadoEm = (em: string) => ({ perguntas: { ultima: { texto: PERGUNTA_DO_SLOT.volume, slot: 'volume', em }, respondidos: {} } })
+    expect(perguntaPendenteValida(ctxBase({ estado: estadoEm('2026-10-16T12:00:00Z') }))).toBe('volume')
+    expect(perguntaPendenteValida(ctxBase({ estado: estadoEm('2026-10-16T11:59:00Z') }))).toBeNull()
+    expect(perguntaPendenteValida(ctxBase({ estado: estadoEm('lixo') }))).toBeNull()
+    expect(perguntaPendenteValida(ctxBase({ estado: estadoEm('2026-10-17T11:00:00Z'), modo: 'assistido' }))).toBeNull()
+    const velho = await etapaSlotsDoCliente.executar(ctxBase({ entrantes, estado: estadoEm('2026-10-15T12:00:00Z'), sessaoId: 'b3b30000-9999-4000-8000-000000000003' }))
+    expect(velho).not.toHaveProperty('estado')
   })
 
   it('slots: áudio ainda sem transcrição não conta; nada a dizer → só segue', async () => {

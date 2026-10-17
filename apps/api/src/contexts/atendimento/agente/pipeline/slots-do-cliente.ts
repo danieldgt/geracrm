@@ -19,12 +19,30 @@ import type { ContextoPipeline, EtapaPreLlm } from './tipos.js'
  * ⚠️ CNPJ vira 'informado'; orçamento também (valor em R$ na instrução viraria número sem fonte).
  */
 
+/** Até quando a última pergunta do agente ainda é "a pergunta que o cliente está respondendo". */
+export const VALIDADE_PERGUNTA_PENDENTE_MS = 24 * 60 * 60 * 1000
+
 /**
- * Slots lidos dos entrantes deste turno (áudio ainda sem transcrição não conta). A pergunta que o
- * agente deixou pendente (`estado.perguntas.ultima.slot`) deixa ler a resposta curta ("50 cx").
+ * A pergunta pendente que ainda vale: só em AUTÔNOMO (nos outros modos o cliente não viu a
+ * pergunta do agente — `ultima` nem é gravada lá, mas o modo pode ter mudado desde então) e só se
+ * feita há no máximo 24 h (depois disso a mensagem nova não é resposta a ela). Fora disso, a
+ * extração exige intenção explícita.
  */
-export function slotsDosEntrantes(ctx: Pick<ContextoPipeline, 'entrantes' | 'estado'>): SlotsDoCliente {
-  const perguntaPendente = lerEstadoPerguntas(ctx.estado['perguntas']).ultima?.slot ?? null
+export function perguntaPendenteValida(ctx: Pick<ContextoPipeline, 'estado' | 'modo' | 'agora'>): SlotQualificacao | null {
+  if (ctx.modo !== 'autonomo') return null
+  const u = lerEstadoPerguntas(ctx.estado['perguntas']).ultima
+  const em = u ? Date.parse(u.em) : NaN
+  if (!u?.slot || !Number.isFinite(em)) return null
+  const idade = ctx.agora.getTime() - em
+  return idade >= 0 && idade <= VALIDADE_PERGUNTA_PENDENTE_MS ? u.slot : null
+}
+
+/**
+ * Slots lidos dos entrantes deste turno (áudio ainda sem transcrição não conta). A pergunta
+ * pendente válida deixa ler a resposta sem verbo de intenção ("então, 80 caixas mesmo").
+ */
+export function slotsDosEntrantes(ctx: Pick<ContextoPipeline, 'entrantes' | 'estado' | 'modo' | 'agora'>): SlotsDoCliente {
+  const perguntaPendente = perguntaPendenteValida(ctx)
   const r: SlotsDoCliente = {}
   for (const e of ctx.entrantes) {
     if (e.transcricaoPendente || e.transcricaoFalhou) continue

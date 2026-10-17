@@ -115,6 +115,33 @@ describe('extrairSlotsDoCliente', () => {
     expect(extrairSlotsDoCliente('quero o saco de 25 kg', { perguntaPendente: 'volume' })).toEqual({})
   })
 
+  // 3ª revisão da P3: o slot fica na sessão — volume/prazo falso faz o modelo propor o que o
+  // cliente não pediu. Regra final, conservadora.
+  it.each([
+    'tenho umas 30 caixas em estoque',
+    'a gente vende uns 200 pacotes por mês',
+    'uns 3 metros de distância',
+    'vê 2 kg de diferença',
+    '6 unidades por caixa',
+    '12 unidades cada',
+    '1 kg dá quanto',
+    '5 litros',
+    'amanhã te mando o CNPJ',
+    'segunda-feira tô na loja',
+    'amanhã passo aí',
+    '50 caixas ano passado',
+  ])('não extrai nada: %s', (texto) => {
+    expect(extrairSlotsDoCliente(texto)).toEqual({})
+  })
+
+  it('com pergunta pendente, "o de 5 litros" e NAO_VOLUME continuam barrando', () => {
+    expect(extrairSlotsDoCliente('o de 5 litros', { perguntaPendente: 'volume' })).toEqual({})
+    expect(extrairSlotsDoCliente('a de 2 kg', { perguntaPendente: 'volume' })).toEqual({})
+    expect(extrairSlotsDoCliente('tenho 30 caixas em estoque', { perguntaPendente: 'volume' })).toEqual({})
+    expect(extrairSlotsDoCliente('5 litros', { perguntaPendente: 'volume' })).toEqual({ volume: '5 litros' })
+    expect(extrairSlotsDoCliente('amanhã te mando o CNPJ', { perguntaPendente: 'prazo' })).toEqual({})
+  })
+
   it('não confunde passado, telefone nem conversa à toa', () => {
     expect(extrairSlotsDoCliente('da outra vez comprei 10 caixas')).toEqual({})
     expect(extrairSlotsDoCliente('meu número é 85999990000')).toEqual({})

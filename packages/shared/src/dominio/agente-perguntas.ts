@@ -300,10 +300,19 @@ function dobrar(t: string): string {
 /** Sem "um/uma": "tem uma caixa com 12?" não é volume. */
 const NUM = String.raw`(?:\d+(?:[.,]\d+)?|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|doze|quinze|vinte|trinta|cinquenta|cem|duzentos|duzentas|quinhentos|quinhentas|mil)`
 const UNIDADES = String.raw`(?:caixas?|cx|unidades?|und|un|pecas?|pcs?|pares?|fardos?|pacotes?|sacos?|sacas?|kg|quilos?|litros?|lts?|duzias?|paletes?|pallets?|rolos?|metros?|galoes?|latas?|frascos?|garrafas?|cartelas?|displays?|kits?|grades?|bobinas?|resmas?|toneladas?)`
-/** "comprei 10 caixas", "da outra vez 20 caixas": passado não é o volume de agora. */
-const PASSADO = /\b(?:comprei|comprou|compramos|comprava|pedi|pedimos|recebi|recebemos|chegaram|chegou|sobrou|sobraram|faltou|faltaram|ultima vez|da outra vez|mes passado|semana passada)\b/
-/** Volume só com intenção de compra antes da quantidade, na mesma frase. */
-const INTENCAO_VOLUME = /\b(?:preciso|precisamos|precisaria|necessito|quero|queremos|queria|gostaria|vou querer|vamos querer|levar|pegar|pego|ve|manda|mande|separa|separe|separar|pedir|encomendar|comprar|fecha|fechar|fechamos|seriam|serao|vai ser|vao ser|uns|umas)\b/
+/**
+ * Na mesma frase, a quantidade NÃO é o volume que o cliente quer agora: passado ("comprei 10
+ * caixas", "50 caixas ano passado"), estoque ou venda dele ("tenho/temos", "a gente vende"),
+ * proporção ("6 unidades por caixa", "12 unidades cada"), pergunta de preço ("1 kg dá quanto"),
+ * medida ("3 metros de distância", "2 kg de diferença"). Vale com ou sem pergunta pendente.
+ */
+const NAO_VOLUME = /\b(?:comprei|comprou|compramos|comprava|pedi|pedimos|recebi|recebemos|chegaram|chegou|sobrou|sobraram|faltou|faltaram|ultima vez|da outra vez|mes passado|mes retrasado|ano passado|semana passada|por caixa|por pacote|por fardo|por unidade|cada|em estoque|por mes|por semana|por dia|de diferenca|de distancia|quanto|quanta|tenho|temos|vende|vendemos|vendo)\b/
+/** Volume com intenção de compra antes da quantidade, na mesma frase. */
+const INTENCAO_VOLUME = /\b(?:preciso|precisamos|precisaria|necessito|quero|queremos|queria|gostaria|vou querer|vamos querer|levar|pegar|pego|me ve|manda|mande|separa|separe|separar|pedir|encomendar|comprar|fecha|fechar|fechamos|seriam|serao|vai ser|vao ser)\b/
+/** Medida sozinha ("5 litros") pode ser o tamanho que o cliente procura — sozinha não é volume. */
+const MEDIDA = /^(?:kg|quilos?|litros?|lts?|metros?|toneladas?)$/
+/** "o de 5 litros", "a de 2 kg": escolha de variante, não quantidade — barra até com pergunta pendente. */
+const ARTIGO_DE_ANTES = /\b(?:o|a|os|as)\s+de\s+$/
 /** Embalagem logo antes: "galão de 5 litros", "saco de 25 kg", "caixa com 12" — é tamanho, não volume. */
 const EMBALAGEM_ANTES = /\b(?:galao|galoes|saco|sacos|saca|sacas|caixa|caixas|cx|pacote|pacotes|fardo|fardos|frasco|frascos|garrafa|garrafas|lata|latas|balde|baldes|embalagem|embalagens|pote|potes|rolo|rolos|bobina|bobinas|kit|kits|display|displays|refil|tambor|bombona|tamanho)\s+(?:de|com)\s+$/
 
@@ -327,8 +336,8 @@ const PRAZOS_COM_INTENCAO: readonly RegExp[] = [
   new RegExp(String.raw`\b(?:em|dentro de|daqui a|nos proximos)\s+${NUM}\s+(?:dias?(?: uteis)?|semanas?|meses?)\b`),
 ]
 const INTENCAO_PRAZO = /\b(?:preciso|precisamos|precisa|necessito|quero|queremos|entrega\w*|entregar|receber|chegar|chegue|pode ser|consegue\w*|prazo|tem que|tenho que|seriam|serao|vai ser|vao ser)\b/
-/** "obrigado, até amanhã!", "te retorno amanhã", "falo com você segunda-feira". */
-const DESPEDIDA = /\b(?:obrigad\w*|valeu|tchau|abraco|retorno|falo|falamos|aviso|chamo|vejo|penso|decido|resolvo|ate mais|ate logo)\b/
+/** Despedida ou agenda do próprio cliente: "obrigado, até amanhã!", "amanhã te mando o CNPJ", "segunda-feira tô na loja". */
+const DESPEDIDA = /\b(?:obrigad\w*|valeu|tchau|abraco|retorno|falo|falamos|aviso|chamo|vejo|penso|decido|resolvo|mando|passo|to|estou|ate mais|ate logo)\b/
 
 /** Orçamento só com a palavra que diz que é orçamento — "vi por R$ 50 no concorrente" não é. */
 const ORCAMENTO_CONTEXTO = new RegExp(String.raw`\b(?:orcamento|verba|budget|gastar|investir)\b[^.!?\n]{0,30}?(?:\b\d[\d.,]*|\b${NUM}\s+mil)\b(?!\s*(?:mil\s+)?${UNIDADES}\b)`)
@@ -346,16 +355,17 @@ const FIM_DE_FRASE = /[.!?\n]/
 
 export interface OpcoesExtracao {
   /**
-   * Slot da pergunta que o agente acabou de fazer (`estado.perguntas.ultima.slot`). Resposta a
-   * "Qual quantidade?" pode ser só "50 cx" — com a pergunta pendente, a intenção é dispensada
-   * (passado, embalagem e despedida continuam barrando).
+   * Slot da pergunta que o agente acabou de fazer e o cliente está respondendo. Resposta a "Qual
+   * quantidade?" pode vir sem verbo ("então, 80 caixas mesmo") — com a pergunta pendente a
+   * intenção é dispensada; NAO_VOLUME, embalagem, "o de 5 litros" e despedida continuam barrando.
+   * Quem chama decide se a pendência ainda vale (na API: autônomo e ≤ 24 h).
    */
   readonly perguntaPendente?: SlotQualificacao | null | undefined
 }
 
-/** Mensagem que é quase só o dado ("50 caixas até sexta", "50 cx"): curta, sem pergunta. */
-function mensagemCurta(t: string): boolean {
-  return !t.includes('?') && t.trim().split(/\s+/).length <= 6
+/** O texto INTEIRO casa com uma das expressões? */
+function casaInteiro(texto: string, res: readonly RegExp[]): boolean {
+  return res.some((re) => new RegExp(`^(?:${re.source})$`).test(texto))
 }
 
 export function extrairSlotsDoCliente(texto: string, opcoes: OpcoesExtracao = {}): SlotsDoCliente {
@@ -378,31 +388,45 @@ export function extrairSlotsDoCliente(texto: string, opcoes: OpcoesExtracao = {}
     r.tipoCompra = 'revenda'
   }
 
-  const curta = mensagemCurta(t)
-  // Volume: intenção antes, na mesma frase — ou a quantidade abre uma mensagem curta, ou
-  // responde à pergunta de volume pendente. Nunca passado nem tamanho de embalagem.
-  const reVolume = new RegExp(String.raw`\b${NUM}(?:\s+mil)?\s+(?:de\s+)?${UNIDADES}\b`, 'g')
+  // VOLUME — três portas, na dúvida nenhuma:
+  //   1. intenção de compra antes, na mesma frase ("vou pegar 10 caixas", "me vê 30 fardos");
+  //   2. a mensagem é só a quantidade, com "uns/umas" opcional, seguida no máximo de um prazo
+  //      ("50 cx", "50 caixas até sexta", "uns 100 kg") — medida sozinha só com "uns/umas";
+  //   3. a pergunta pendente era de volume.
+  //   Em qualquer porta: NAO_VOLUME na frase, embalagem antes e "o de" antes barram.
+  const reVolume = new RegExp(String.raw`\b${NUM}(?:\s+mil)?\s+(?:de\s+)?(${UNIDADES})\b`, 'g')
   for (const m of t.matchAll(reVolume)) {
+    const fim = m.index + m[0].length
+    const frase = trechoEntre(t, m.index, fim, FIM_DE_FRASE)
     const antes = trechoEntre(t, m.index, m.index, FIM_DE_FRASE)
-    const abreCurta = curta && t.slice(0, m.index).trim() === ''
-    const dispensa = abreCurta || opcoes.perguntaPendente === 'volume'
-    if ((!dispensa && !INTENCAO_VOLUME.test(antes)) || PASSADO.test(antes)) continue
-    if (EMBALAGEM_ANTES.test(t.slice(Math.max(0, m.index - 20), m.index))) continue
-    r.volume = base.slice(m.index, m.index + m[0].length).trim().slice(0, 60)
+    if (NAO_VOLUME.test(frase)) continue
+    const perto = t.slice(Math.max(0, m.index - 20), m.index)
+    if (EMBALAGEM_ANTES.test(perto) || ARTIGO_DE_ANTES.test(perto)) continue
+    const prefixo = t.slice(0, m.index).trim()
+    const resto = t.slice(fim).replace(/[\s.!]+$/, '').trim()
+    const soQuantidade = (prefixo === '' || prefixo === 'uns' || prefixo === 'umas') &&
+      (resto === '' || casaInteiro(resto, PRAZOS_COM_INTENCAO)) &&
+      (!MEDIDA.test(m[1]!) || prefixo !== '' || resto !== '')
+    if (!(INTENCAO_VOLUME.test(antes) || soQuantidade || opcoes.perguntaPendente === 'volume')) continue
+    r.volume = base.slice(m.index, fim).trim().slice(0, 60)
     break
   }
 
+  // PRAZO — urgência vale sozinha; o resto exige intenção na frase, ou (sem despedida/agenda):
+  //   mensagem que é só o prazo com preposição ("pra sexta-feira"), prazo junto do volume desta
+  //   mensagem, ou pergunta pendente de prazo.
+  const soPrazo = (fraseInteira: string, trecho: string) =>
+    fraseInteira.replace(/[\s.!]+$/, '').trim() === trecho && /^(?:ate|pra|para)\b/.test(trecho)
   const lerPrazo = (re: RegExp, comIntencao: boolean): string | null => {
     const m = re.exec(t)
     if (!m) return null
     const fim = m.index + m[0].length
     if (/\b(?:ha|faz|desde)\s*$/.test(t.slice(Math.max(0, m.index - 12), m.index))) return null
     if (comIntencao) {
-      // Despedida na mesma frase barra sempre ("obrigado, até amanhã!"); a intenção é dispensada em mensagem
-      // curta ("pra sexta-feira") ou quando a pergunta pendente era o prazo.
-      if (DESPEDIDA.test(trechoEntre(t, m.index, fim, FIM_DE_FRASE))) return null
-      const dispensa = curta || opcoes.perguntaPendente === 'prazo'
-      if (!dispensa && !INTENCAO_PRAZO.test(trechoEntre(t, m.index, fim, FIM_DE_FRASE))) return null
+      const frase = trechoEntre(t, m.index, fim, FIM_DE_FRASE)
+      if (DESPEDIDA.test(frase)) return null
+      const dispensa = soPrazo(t, m[0].trim()) || r.volume !== undefined || opcoes.perguntaPendente === 'prazo'
+      if (!dispensa && !INTENCAO_PRAZO.test(frase)) return null
     }
     return base.slice(m.index, fim).trim().slice(0, 60) || null
   }
