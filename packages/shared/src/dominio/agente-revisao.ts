@@ -1,10 +1,330 @@
 /**
- * REVISÃO HUMANA E CONCORDÂNCIA (|LLM − humano| ≤ 1 por critério e mesma classe de gravidade) — STUB da raia P16 (docs/plano-port-playbook-am.md).
+ * REVISÃO HUMANA E CONCORDÂNCIA (ADR-031 §5, raia P16) — o lado puro.
+ * TypeScript puro: consumido pela API (rotas de revisão), pelo console (tela
+ * de revisão) e pela P19 (critério de fase "concordância ≥ 85% com ≥ 20").
  *
- * P0 só cria o arquivo e já o exporta em `index.ts`, para a raia P16 preencher
- * os contratos AQUI sem tocar no índice do pacote. TypeScript puro: consumido
- * pela API, pelo console e pelo app.
+ *   1. A AMOSTRA da semana é a da P12 (`ordenarAmostraSemanal`): 20 conversas
+ *      por número — todas as CRÍTICAs, ALTA ou nota ≤ 3 até 8, aleatórias
+ *      estáveis. A revisão grava sobre UMA avaliação de cada conversa.
+ *   2. O revisor dá nota 0–5 por critério da rubrica, a gravidade que viu
+ *      (ou nenhuma), um veredito e — se houver ação — decisão, responsável e prazo.
+ *   3. CONCORDA quando |nota do juiz − nota humana| ≤ 1 em CADA critério e a
+ *      classe de gravidade é a mesma ("nenhuma" é uma classe). Sem nota do
+ *      juiz, a revisão não é comparável (não entra no denominador).
+ *   4. A concordância da semana por número é concordantes ÷ comparáveis.
+ *      Meta ≥ 85% com ≥ 20 comparáveis (ADR-031); abaixo disso, a nota do juiz
+ *      não vale como critério de fase.
+ *
+ * ⚠️ Em sombra a revisão é do texto DECIDIDO (a sugestão), não do que o
+ *    vendedor editou e enviou — é ele que o juiz e as regras avaliaram.
  */
+import { z } from 'zod'
+import {
+  CRITERIOS_RUBRICA, type CriterioRubrica, type GravidadeQualidade, type MotivoAmostra, type OrigemAvaliacao,
+  type ViolacaoQualidade,
+} from './agente-qualidade.js'
 
-/** Marca de stub — a raia P16 remove ao preencher o contrato. */
-export const STUB_AGENTE_REVISAO = 'P16' as const
+// ── vocabulário ─────────────────────────────────────────────────────────────
+
+/** ok = enviaria assim; ajustar = enviaria com edição leve; grave = não poderia sair. */
+export const VEREDITOS_REVISAO = ['ok', 'ajustar', 'grave'] as const
+export type VereditoRevisao = (typeof VEREDITOS_REVISAO)[number]
+
+export const ROTULO_VEREDITO: Readonly<Record<VereditoRevisao, string>> = {
+  ok: 'Ok — enviaria assim',
+  ajustar: 'Ajustar — enviaria com edição leve',
+  grave: 'Grave — não poderia sair',
+}
+
+/** O que fazer com o achado (procedimento da AM, §5, adaptado ao B2B). */
+export const DECISOES_REVISAO = [
+  'nenhuma', 'ajustar_prompt', 'nova_regra', 'falso_positivo', 'calibrar_juiz', 'orientar_equipe', 'recuar_modo',
+] as const
+export type DecisaoRevisao = (typeof DECISOES_REVISAO)[number]
+
+export const ROTULO_DECISAO: Readonly<Record<DecisaoRevisao, string>> = {
+  nenhuma: 'Nada a fazer',
+  ajustar_prompt: 'Ajustar o roteiro/instruções do agente',
+  nova_regra: 'Criar regra de qualidade (ou caso de teste)',
+  falso_positivo: 'Falso positivo das regras (ajustar a regra)',
+  calibrar_juiz: 'Calibrar o juiz (rubrica/instrução)',
+  orientar_equipe: 'Orientar o vendedor que usou a sugestão',
+  recuar_modo: 'Recuar o modo do número (ex.: autônomo → assistido)',
+}
+
+/** Classe de gravidade: as três gravidades e "nenhuma" (null). */
+export type ClasseGravidade = GravidadeQualidade | 'nenhuma'
+export function classeGravidade(g: GravidadeQualidade | null | undefined): ClasseGravidade {
+  return g === 'CRITICA' || g === 'ALTA' || g === 'MEDIA' ? g : 'nenhuma'
+}
+
+/** Meta de concordância (ADR-031) e o mínimo de revisões comparáveis para ela valer. */
+export const META_CONCORDANCIA = 0.85
+export const MIN_REVISADAS_CONCORDANCIA = 20
+/** Diferença máxima entre a nota do juiz e a humana num critério. */
+export const TOLERANCIA_NOTA = 1
+export const MAX_RESPONSAVEL = 120
+export const MAX_OBSERVACAO = 1000
+
+// ── concordância (pura) ─────────────────────────────────────────────────────
+
+export type NotasHumanas = Readonly<Record<CriterioRubrica, number>>
+/** Notas do juiz; critério ausente = não avaliado. */
+export type NotasDoJuiz = Readonly<Partial<Record<CriterioRubrica, number>>>
+
+export interface EntradaConcordancia {
+  /** Notas do juiz (0–5); null = a avaliação não tem nota do juiz. */
+  readonly notasLlm: NotasDoJuiz | null
+  readonly notasHumanas: NotasHumanas
+  /** Pior gravidade que o sistema (regras) registrou na conversa naquela semana. */
+  readonly gravidadeSistema: GravidadeQualidade | null
+  readonly gravidadeHumana: GravidadeQualidade | null
+}
+
+export interface ResultadoConcordancia {
+  /** Por critério: concorda? null = o juiz não deu nota neste critério. */
+  readonly porCriterio: Readonly<Record<CriterioRubrica, boolean | null>>
+  readonly gravidade: boolean
+  /** Só é comparável com nota do juiz em TODOS os critérios. */
+  readonly comparavel: boolean
+  /** null = não comparável. */
+  readonly concorda: boolean | null
+  /** O humano viu CRÍTICA e o sistema não: bloqueia avançar de fase mesmo com concordância alta. */
+  readonly falsoNegativoCritica: boolean
+}
+
+export function concordaCriterio(llm: number, humano: number): boolean {
+  return Math.abs(llm - humano) <= TOLERANCIA_NOTA
+}
+
+/** A regra do ADR-031: |LLM − humano| ≤ 1 em cada critério E mesma classe de gravidade. Pura. */
+export function calcularConcordancia(e: EntradaConcordancia): ResultadoConcordancia {
+  const porCriterio = {} as Record<CriterioRubrica, boolean | null>
+  let comparavel = e.notasLlm !== null
+  for (const c of CRITERIOS_RUBRICA) {
+    const llm = e.notasLlm?.[c]
+    if (typeof llm !== 'number' || !Number.isFinite(llm)) { porCriterio[c] = null; comparavel = false; continue }
+    porCriterio[c] = concordaCriterio(llm, e.notasHumanas[c])
+  }
+  const gravidade = classeGravidade(e.gravidadeSistema) === classeGravidade(e.gravidadeHumana)
+  const concorda = comparavel ? gravidade && CRITERIOS_RUBRICA.every((c) => porCriterio[c] === true) : null
+  return {
+    porCriterio, gravidade, comparavel, concorda,
+    falsoNegativoCritica: e.gravidadeHumana === 'CRITICA' && e.gravidadeSistema !== 'CRITICA',
+  }
+}
+
+/** Uma revisão gravada, só o que a soma precisa. */
+export interface RevisaoParaSomar {
+  readonly concorda: boolean | null
+  readonly porCriterio: Readonly<Partial<Record<CriterioRubrica, boolean | null>>>
+  readonly gravidade: boolean
+  readonly motivo: MotivoAmostra | null
+  readonly falsoNegativoCritica: boolean
+}
+
+export interface SomaConcordancia {
+  /** Revisões gravadas (comparáveis ou não). */
+  readonly revisadas: number
+  /** Revisões com nota do juiz — o denominador. */
+  readonly comparaveis: number
+  readonly concordantes: number
+  /** concordantes ÷ comparáveis (0..1); null sem comparáveis. */
+  readonly concordancia: number | null
+  /** Por critério: fração de comparáveis em que o critério concordou. */
+  readonly porCriterio: Readonly<Record<CriterioRubrica, number | null>>
+  /** Fração das revisões (todas) com a mesma classe de gravidade. */
+  readonly gravidade: number | null
+  /** Só as aleatórias — o que estima a concordância real (a amostra é enviesada para casos difíceis). */
+  readonly aleatorias: { readonly comparaveis: number; readonly concordancia: number | null }
+  readonly falsosNegativosCritica: number
+  /** concordancia ≥ META com comparáveis ≥ MIN e nenhum falso negativo CRÍTICO. */
+  readonly atingeMeta: boolean
+}
+
+const fracao = (a: number, b: number): number | null => (b > 0 ? Math.round((a / b) * 10_000) / 10_000 : null)
+
+/** Soma as revisões de uma semana (de um número ou de todos). Pura. */
+export function somarConcordancia(revs: readonly RevisaoParaSomar[]): SomaConcordancia {
+  const comp = revs.filter((r) => r.concorda !== null)
+  const concordantes = comp.filter((r) => r.concorda === true).length
+  const porCriterio = {} as Record<CriterioRubrica, number | null>
+  for (const c of CRITERIOS_RUBRICA) {
+    const vs = revs.map((r) => r.porCriterio[c]).filter((v): v is boolean => typeof v === 'boolean')
+    porCriterio[c] = fracao(vs.filter(Boolean).length, vs.length)
+  }
+  const alea = comp.filter((r) => r.motivo === 'aleatoria')
+  const concordancia = fracao(concordantes, comp.length)
+  const falsos = revs.filter((r) => r.falsoNegativoCritica).length
+  return {
+    revisadas: revs.length,
+    comparaveis: comp.length,
+    concordantes,
+    concordancia,
+    porCriterio,
+    gravidade: fracao(revs.filter((r) => r.gravidade).length, revs.length),
+    aleatorias: { comparaveis: alea.length, concordancia: fracao(alea.filter((r) => r.concorda === true).length, alea.length) },
+    falsosNegativosCritica: falsos,
+    atingeMeta: concordancia !== null && concordancia >= META_CONCORDANCIA && comp.length >= MIN_REVISADAS_CONCORDANCIA && falsos === 0,
+  }
+}
+
+// ── semana ISO (AAAA-Www) ───────────────────────────────────────────────────
+
+export const SEMANA_RE = /^(\d{4})-W(\d{2})$/
+const DIA = 86_400_000
+
+function segundaDaSemana1(ano: number): number {
+  const jan4 = Date.UTC(ano, 0, 4)
+  const dow = (new Date(jan4).getUTCDay() + 6) % 7 // segunda = 0
+  return jan4 - dow * DIA
+}
+
+/** '2026-W42' → '2026-10-12' (a segunda-feira). null = formato ou semana inexistente. */
+export function segundaDaSemana(semana: string): string | null {
+  const m = SEMANA_RE.exec(semana)
+  if (!m) return null
+  const ano = Number(m[1]), n = Number(m[2])
+  if (n < 1 || n > 53) return null
+  const seg = segundaDaSemana1(ano) + (n - 1) * 7 * DIA
+  // Semana 53 só existe em alguns anos: a segunda tem de cair antes da semana 1 do ano seguinte.
+  if (seg >= segundaDaSemana1(ano + 1)) return null
+  return new Date(seg).toISOString().slice(0, 10)
+}
+
+/** '2026-10-17' (data de calendário, já no fuso da loja) → '2026-W42'. */
+export function semanaDaData(data: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(data)
+  if (!m) return null
+  const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  if (Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== data) return null
+  const dow = (new Date(t).getUTCDay() + 6) % 7
+  const quinta = t + (3 - dow) * DIA // a quinta da semana decide o ano ISO
+  const ano = new Date(quinta).getUTCFullYear()
+  const n = Math.floor((quinta - segundaDaSemana1(ano)) / (7 * DIA)) + 1
+  return `${ano}-W${String(n).padStart(2, '0')}`
+}
+
+/** Anda `delta` semanas a partir de uma semana válida. */
+export function deslocarSemana(semana: string, delta: number): string | null {
+  const seg = segundaDaSemana(semana)
+  if (!seg) return null
+  return semanaDaData(new Date(Date.parse(`${seg}T00:00:00Z`) + delta * 7 * DIA).toISOString().slice(0, 10))
+}
+
+// ── contrato HTTP ───────────────────────────────────────────────────────────
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const nota = z.number().int().min(0).max(5)
+
+/** Corpo de POST /v1/agente/revisao. O revisor e o tenant vêm do token, nunca daqui. */
+export const corpoRevisao = z.object({
+  avaliacaoId: z.string().regex(UUID_RE),
+  notas: z.object(Object.fromEntries(CRITERIOS_RUBRICA.map((c) => [c, nota])) as Record<CriterioRubrica, typeof nota>).strict(),
+  gravidade: z.enum(['CRITICA', 'ALTA', 'MEDIA']).nullable(),
+  veredito: z.enum(VEREDITOS_REVISAO),
+  decisao: z.enum(DECISOES_REVISAO).default('nenhuma'),
+  responsavel: z.string().trim().max(MAX_RESPONSAVEL).nullable().optional().transform((v) => (v ? v : null)),
+  prazo: z.string().refine((v) => semanaDaData(v) !== null, 'data inválida (AAAA-MM-DD)').nullable().optional().transform((v) => v ?? null),
+  observacao: z.string().trim().max(MAX_OBSERVACAO).nullable().optional().transform((v) => (v ? v : null)),
+}).strict().superRefine((v, ctx) => {
+  if (v.decisao === 'nenhuma') return
+  if (!v.responsavel) ctx.addIssue({ code: 'custom', path: ['responsavel'], message: 'decisão com ação precisa de responsável' })
+  if (!v.prazo) ctx.addIssue({ code: 'custom', path: ['prazo'], message: 'decisão com ação precisa de prazo' })
+})
+export type CorpoRevisao = z.input<typeof corpoRevisao>
+/** O corpo depois de validado (vazios viram null, decisão padrão 'nenhuma'). */
+export type RevisaoValidada = z.output<typeof corpoRevisao>
+
+/** Uma revisão (a do revisor que pede, ou de outro). */
+export interface RevisaoDto {
+  readonly id: string
+  readonly avaliacaoId: string
+  readonly revisorId: string
+  readonly revisorNome: string
+  readonly semana: string
+  readonly motivo: MotivoAmostra | null
+  readonly notas: NotasHumanas
+  readonly gravidade: GravidadeQualidade | null
+  readonly veredito: VereditoRevisao
+  readonly decisao: DecisaoRevisao
+  readonly responsavel: string | null
+  readonly prazo: string | null
+  readonly observacao: string | null
+  readonly notasLlm: NotasDoJuiz | null
+  readonly gravidadeSistema: GravidadeQualidade | null
+  readonly porCriterio: Readonly<Record<CriterioRubrica, boolean | null>>
+  readonly concordaGravidade: boolean
+  readonly concorda: boolean | null
+  readonly falsoNegativoCritica: boolean
+  readonly atualizadoEm: string
+}
+
+/** Um item de GET /v1/agente/revisao/amostra. */
+export interface ItemAmostraRevisaoDto {
+  /** 1..20, a ordem da P12. */
+  readonly ordem: number
+  readonly motivo: MotivoAmostra
+  readonly conversaId: string
+  readonly canalId: string
+  /** A avaliação que se revisa: a do juiz com a menor nota da semana; sem juiz, a de regras mais grave. */
+  readonly avaliacaoId: string
+  readonly origem: OrigemAvaliacao
+  readonly piorGravidade: GravidadeQualidade | null
+  readonly menorNota: number | null
+  /** Notas do juiz da avaliação revisada (null = sem juiz: a revisão não entra na concordância). */
+  readonly notasJuiz: NotasDoJuiz | null
+  /** A revisão DE QUEM PEDE (null = ainda não revisou). */
+  readonly revisao: RevisaoDto | null
+  /** Quantos revisores já revisaram esta conversa na semana. */
+  readonly revisoes: number
+}
+
+export interface AmostraRevisaoDto {
+  readonly semana: string
+  /** Segunda-feira da semana (AAAA-MM-DD, fuso da loja). */
+  readonly inicio: string
+  readonly canalId: string
+  readonly itens: readonly ItemAmostraRevisaoDto[]
+  /** A amostra tem no máximo 20 por número — não há próxima página. */
+  readonly proximoCursor: null
+}
+
+export interface FalaRevisao {
+  /** cliente · agente (o que o agente enviou) · sugestao (o que decidiu sem enviar) · humano (vendedor, contexto). */
+  readonly autor: 'cliente' | 'agente' | 'sugestao' | 'humano'
+  /** Mascarado (telefone, CPF, CNPJ, e-mail). */
+  readonly texto: string
+}
+
+/** GET /v1/agente/revisao/avaliacoes/:id — o que a tela mostra ao lado do formulário. */
+export interface DetalheRevisaoDto {
+  readonly avaliacaoId: string
+  readonly conversaId: string
+  readonly canalId: string
+  readonly semana: string
+  readonly origem: OrigemAvaliacao
+  readonly transcricao: readonly FalaRevisao[]
+  /** A transcrição foi cortada no início (conversa longa). */
+  readonly cortada: boolean
+  readonly notasJuiz: NotasDoJuiz | null
+  readonly justificativas: Readonly<Partial<Record<CriterioRubrica, string>>> | null
+  readonly gravidadeSistema: GravidadeQualidade | null
+  /** O que escapou das regras na semana (mascarado). */
+  readonly violacoes: readonly ViolacaoQualidade[]
+  readonly revisao: RevisaoDto | null
+}
+
+export interface ConcordanciaNumeroDto extends SomaConcordancia {
+  readonly canalId: string
+  readonly nome: string
+}
+
+/** GET /v1/agente/revisao/concordancia — o contrato que a P19 consome. */
+export interface ConcordanciaDto extends SomaConcordancia {
+  readonly semana: string
+  readonly canalId: string | null
+  readonly meta: number
+  readonly minimoRevisadas: number
+  readonly porNumero: readonly ConcordanciaNumeroDto[]
+}
