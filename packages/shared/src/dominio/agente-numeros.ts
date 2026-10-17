@@ -8,7 +8,8 @@
  *
  * Decisões (documentadas aqui porque são regra, não detalhe):
  * - Formato pt-BR: "1.234" é mil duzentos e trinta e quatro; "1,5" é um e meio;
- *   "10 %" e "10%" valem igual; "por cento" também; "metade do preço" é 50%.
+ *   "10 %" e "10%" valem igual; "por cento" e "10 pct de desconto" também;
+ *   "metade do preço" (ou "pela metade" com preço/valor/desconto) é 50%.
  * - Por extenso: "dez por cento", "dois dias úteis", "vinte unidades", "mil
  *   unidades" — de dois a noventa e nove, "cem" e "mil". "um/uma" por extenso
  *   NÃO conta em prazo ("um dia desses") nem em quantidade.
@@ -22,7 +23,12 @@
  * - "N semanas"/"N meses" entram como prazo_dias com o valor COMO ESCRITO
  *   (a unidade vai em `unidade`; a fonte é comparada pelo número escrito).
  *   "Nx" (parcelas) NÃO é extraído — fora do contrato desta raia.
- * - Bloqueante (`bloqueante: true`, gravidade CRITICA): todo percentual;
+ * - Grade (cor × tamanho): "Tamanho 42", "Numeração 40", "Tamanhos 38, 40 e 42"
+ *   são atributo, mascarados; os valores de `atributos` das ferramentas são fonte
+ *   de quantidade ("Temos o 42 em estoque"), nunca de percentual.
+ * - Bloqueante (`bloqueante: true`, gravidade CRITICA): percentual em contexto
+ *   comercial (desconto, off, juros, acréscimo, taxa, comissão, à vista…) —
+ *   "100% original"/"100% à disposição" ficam ALTA;
  *   quantidade afirmada como disponibilidade ("temos 12 unidades", "12 em
  *   estoque", "saldo de 12", "restam 3"); prazo num contexto de compromisso
  *   (entrega, envio, chegada, recebimento, saída, prazo, pagamento, boleto,
@@ -48,6 +54,13 @@ export interface NumeroDeNegocio {
   readonly unidade: UnidadeNumeroDeNegocio
   /** Sem fonte, barra a resposta (CRITICA); senão é só marca ALTA. */
   readonly bloqueante: boolean
+  /**
+   * A oração repete o desejo do cliente ("você precisa receber em 10 dias") ou
+   * ressalva verificação ("vou confirmar se dá"), sem afirmação nossa no
+   * indicativo ("entregamos", "vai receber"). Com o número dito pelo cliente,
+   * rebaixa para ALTA.
+   */
+  readonly ecoDoCliente: boolean
 }
 
 /** As fontes de um turno, separadas por tipo. */
@@ -133,6 +146,8 @@ const IGNORAR: readonly RegExp[] = [
   new RegExp(String.raw`${P}\d{1,2}\s+de\s+(?:${MESES})${FIM}`, 'giu'),
   // nº de pedido, nota, protocolo, referência, SKU, código — nunca seguido de %
   new RegExp(String.raw`(?:${P}(?:pedido|nota|nf-?e?|protocolo|ref\.?|referência|referencia|sku|código|codigo|cód\.?|cod\.?|número|numero|n[º°]\.?)|#)(?!${L})\s*(?:n[º°]\.?\s*)?[:#]?\s*[\p{L}\d_-]*\d[\p{L}\d_-]*(?![\p{L}\d_-])(?!\s*(?:%|por\s*cento))`, 'giu'),
+  // grade: "Tamanho 42", "Tamanhos 38, 40 e 42", "Numeração 40", "tam. 44" — atributo, não quantidade
+  new RegExp(String.raw`${P}(?:tamanhos?|numera[çc](?:ão|ao|ões|oes)|tam\.|n[úu]meros?)\s*:?\s*(?:(?:o|a|os|as|do|da)\s+)?\d+(?:\s*(?:,|e|ou|/|a|-)\s*\d+)*${FIM}`, 'giu'),
   // token alfanumérico com letra antes do dígito: CAM-001, AB123, V2
   new RegExp(String.raw`(?<![\p{L}\d])${L}+[-_]?\d[\p{L}\d_-]*`, 'gu'),
   // dinheiro: fica com o guardrail de R$
@@ -166,6 +181,16 @@ const LISTA = String.raw`${ANTES}((?:${NUM})(?:\s*(?:/|,|e|ou|a|até|ate|-|–)\
 const UNIDADE_QTD = String.raw`(?:unidades?|un\.?|und\.?|pe[çc]as?|p[çc]s?|pares|caixas?|cx\.?|itens|kits?|fardos?|d[úu]zias?|pacotes?|pct\.?|pcts|rolos?|sacos?|metros?|kg|quilos?|litros?|frascos?|latas?|garrafas?)(?!${L})`
 const VERBO_ESTOQUE = String.raw`${P}(?:temos|tenho|restam|restaram|resta|sobraram|sobrou|possu[íi]mos|dispomos\s+de|contamos\s+com)\s+(?:(?:apenas|s[óo]|somente|mais|ainda|exatamente|cerca\s+de|as|os)\s+)*`
 const DISPONIVEL = String.raw`(?:em\s+estoque|no\s+estoque|dispon[íi]ve(?:l|is)|[àa]\s+pronta\s+entrega|pronta\s+entrega)`
+/**
+ * % só é compromisso comercial com estas palavras na oração: "Produto 100%
+ * original" e "Ficamos 100% à disposição" não são preço (ficam ALTA).
+ */
+const COMERCIAL = /(?<!\p{L})(desconto|off|juros|acr[ée]scimo|abaixo|acima|taxa|comiss|abat|cashback|promo|margem|[àa]\s+vista|pix|pre[çc]o|valor|consigo|dou|damos|fa[çc]o|fazemos|ganha|economi)/iu
+/** O cliente quer/precisa (eco) ou nós vamos verificar (ressalva)… */
+const ECO_DESEJO = /(?<!\p{L})(?:voc[êe]|vc)\s+(?:\p{L}+\s+)?(?:precisa|quer|queria|gostaria|pediu|prefere|deseja|necessita)(?!\p{L})/iu
+const ECO_RESSALVA = /(?<!\p{L})(?:(?:verificar|confirmar|consultar)\s+se|ver\s+se\s+d[áa])(?!\p{L})/iu
+/** …desde que NÃO haja afirmação nossa no indicativo. */
+const NOSSO_INDICATIVO = /(?<!\p{L})(?:(?:vai|vão|vao|vamos|iremos|ir[áa])\s+(?:receber|chegar|sair|entregar|enviar|despachar|postar|faturar)|recebe|recebem|chega|chegam|sai|saem|entregamos|entrega|entregam|enviamos|envia|despachamos|garantimos|garanto|garante|postamos|faturamos)(?!\p{L})/iu
 const COMPROMISSO = /(?<!\p{L})(entreg|cheg|envi|despach|post|frete|prazo|pag|boleto|venc|fatur|produ[zçc]|separ|libera|retir|pront|transport|coleta|receb|sai(?!\p{L})|saem|sair)/iu
 
 interface Padrao {
@@ -174,6 +199,10 @@ interface Padrao {
   readonly unidade: (m: RegExpExecArray) => UnidadeNumeroDeNegocio
   /** Bloqueante por construção do padrão (null = decide pelo contexto). */
   readonly bloqueante: boolean | null
+  /** Contexto que torna o número bloqueante (padrão: compromisso de prazo). */
+  readonly contexto?: RegExp
+  /** Sem `contexto` na oração o trecho nem é número de negócio ("pela metade do caminho"). */
+  readonly exigeContexto?: boolean
   /** Valor fixo (ex.: "metade do preço" = 50). */
   readonly valorFixo?: number
 }
@@ -191,8 +220,10 @@ const re = (s: string) => new RegExp(s, 'giu')
 
 // ⚠️ A ordem importa: o primeiro padrão que cobre um trecho fica com ele.
 const PADROES: readonly Padrao[] = [
-  { tipo: 'percentual', re: re(String.raw`${NX}\s*(?:%|por\s*cento(?!${L}))`), unidade: () => '%', bloqueante: true },
-  { tipo: 'percentual', re: re(String.raw`${P}(?:metade\s+do\s+(?:pre[çc]o|valor)|pela\s+metade)${FIM}`), unidade: () => '%', bloqueante: true, valorFixo: 50 },
+  { tipo: 'percentual', re: re(String.raw`${NX}\s*(?:%|por\s*cento(?!${L}))`), unidade: () => '%', bloqueante: null, contexto: COMERCIAL },
+  { tipo: 'percentual', re: re(String.raw`${NX}\s*pcts?\.?(?=\s+(?:de\s+desconto|off|de\s+abatimento)(?!${L}))`), unidade: () => '%', bloqueante: true },
+  { tipo: 'percentual', re: re(String.raw`${P}metade\s+do\s+(?:pre[çc]o|valor)${FIM}`), unidade: () => '%', bloqueante: true, valorFixo: 50 },
+  { tipo: 'percentual', re: re(String.raw`${P}pela\s+metade${FIM}`), unidade: () => '%', bloqueante: true, valorFixo: 50, contexto: /(?<!\p{L})(pre[çc]o|valor|desconto)/iu, exigeContexto: true },
   // quantidade afirmada como disponibilidade
   { ...ESTOQUE, re: re(String.raw`${VERBO_ESTOQUE}${NX}\s+${UNIDADE_QTD}`) },
   { ...ESTOQUE, re: re(String.raw`${VERBO_ESTOQUE}${N}(?:\s+(?:de\s+\S+\s+)?${DISPONIVEL})?(?=\s*(?:[.,;!?)]|$|${DISPONIVEL}))`) },
@@ -248,8 +279,12 @@ export function extrairNumerosDeNegocio(texto: string): readonly NumeroDeNegocio
       if (valores.length === 0 || (porExtenso && p.tipo !== 'percentual' && valores.every((v) => v === 1))) continue
       ocupados.push([ini, fim])
       const trecho = texto.slice(ini, fim).trim()
-      const bloqueante = p.bloqueante ?? COMPROMISSO.test(oracaoEmVolta(texto, ini, fim))
-      for (const valor of valores) out.push({ tipo: p.tipo, valor, trecho, unidade: p.unidade(m as RegExpExecArray), bloqueante })
+      const oracao = oracaoEmVolta(texto, ini, fim)
+      const noContexto = (p.contexto ?? COMPROMISSO).test(oracao)
+      if (p.exigeContexto && !noContexto) { ocupados.pop(); continue }
+      const bloqueante = p.bloqueante ?? noContexto
+      const ecoDoCliente = (ECO_DESEJO.test(oracao) || ECO_RESSALVA.test(oracao)) && !NOSSO_INDICATIVO.test(oracao)
+      for (const valor of valores) out.push({ tipo: p.tipo, valor, trecho, unidade: p.unidade(m as RegExpExecArray), bloqueante, ecoDoCliente })
     }
   }
   return out
@@ -284,8 +319,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ISO_DATA = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?$/
 /** Chaves cujo valor numérico É um percentual. */
 const CHAVE_PERCENTUAL = /(?:percentual|porcentagem|percentagem|percent|pct)$/i
-/** Chaves que nunca são fonte: dinheiro, identificador, ordem, referência e atributos. */
-const CHAVE_IGNORADA = /(?:centavos$|^id$|Id$|_id$|^seq$|^referencia$|^ref$|^sku$|^codigo$|^atributos$)/i
+/** Chaves que nunca são fonte: dinheiro, identificador, ordem e referência. */
+const CHAVE_IGNORADA = /(?:centavos$|^id$|Id$|_id$|^seq$|^referencia$|^ref$|^sku$|^codigo$)/i
+/**
+ * Para PERCENTUAL, também os atributos da grade: "tamanho 10" nunca abona "10%".
+ * (Para quantidade/prazo os atributos voltam a valer: "Temos o 42 em estoque".)
+ */
+const CHAVE_IGNORADA_PCT = /(?:centavos$|^id$|Id$|_id$|^seq$|^referencia$|^ref$|^sku$|^codigo$|^atributos$)/i
 
 /**
  * Números de uma saída de ferramenta para quantidade e prazo: valores numéricos
@@ -316,11 +356,11 @@ export function numerosDeSaida(saida: unknown, acc: Set<number> = new Set(), pro
 export function percentuaisDeSaida(saida: unknown, acc: Set<number> = new Set(), prof = 0, chave = ''): Set<number> {
   if (prof > 8 || saida === null || saida === undefined) return acc
   if (typeof saida === 'number') { if (Number.isFinite(saida) && CHAVE_PERCENTUAL.test(chave)) acc.add(saida); return acc }
-  if (typeof saida === 'string') { if (!CHAVE_IGNORADA.test(chave)) percentuaisDoTexto(saida, acc); return acc }
+  if (typeof saida === 'string') { if (!CHAVE_IGNORADA_PCT.test(chave)) percentuaisDoTexto(saida, acc); return acc }
   if (Array.isArray(saida)) { for (const x of saida) percentuaisDeSaida(x, acc, prof + 1, chave); return acc }
   if (typeof saida === 'object') {
     for (const [k, v] of Object.entries(saida as Record<string, unknown>)) {
-      if (CHAVE_IGNORADA.test(k)) continue
+      if (CHAVE_IGNORADA_PCT.test(k)) continue
       percentuaisDeSaida(v, acc, prof + 1, k)
     }
   }
@@ -344,14 +384,21 @@ export function temFonte(n: NumeroDeNegocio, fontes: Iterable<number>): boolean 
  * - Quantidade e prazo: contra `gerais`.
  * - `doCliente` abona só número NÃO bloqueante: "quero 50 peças" pode ser
  *   repetido; "vocês têm 500?" não autoriza "temos 500 em estoque".
+ * - Bloqueante que é ECO do cliente (`ecoDoCliente`) com o número que ele disse
+ *   desce para ALTA: "anotei que você precisa receber em 10 dias" sai marcado;
+ *   "você vai receber em 10 dias" continua barrado.
  */
 export function numerosSemFonte(texto: string, fontes: FontesDeNumeros): readonly NumeroDeNegocio[] {
   const gerais = [...fontes.gerais]
   const percentuais = [...(fontes.percentuais ?? [])]
   const doCliente = [...(fontes.doCliente ?? [])]
-  return extrairNumerosDeNegocio(texto).filter((n) => {
-    if (n.tipo === 'percentual') return !temFonte(n, percentuais)
-    if (temFonte(n, gerais)) return false
-    return n.bloqueante || !temFonte(n, doCliente)
-  })
+  const out: NumeroDeNegocio[] = []
+  for (const n of extrairNumerosDeNegocio(texto)) {
+    if (n.tipo === 'percentual') { if (!temFonte(n, percentuais)) out.push(n); continue }
+    if (temFonte(n, gerais)) continue
+    const disse = temFonte(n, doCliente)
+    if (!n.bloqueante) { if (!disse) out.push(n); continue }
+    out.push(disse && n.ecoDoCliente ? { ...n, bloqueante: false } : n)
+  }
+  return out
 }

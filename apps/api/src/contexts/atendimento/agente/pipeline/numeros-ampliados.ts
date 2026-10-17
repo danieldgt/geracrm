@@ -20,7 +20,12 @@ import { marca, type ContextoPipeline, type EntradaPosResposta, type EtapaPosRes
  *     `conteudo.automatica` e fora de campanha). ⚠️ Fala do PRÓPRIO agente não é
  *     fonte: um número que ele inventou e passou como ALTA não se legitima ao
  *     ser repetido. Como `Fala` não distingue agente de humano, a etapa lê
- *     essas mensagens direto do banco (só leitura, sob RLS);
+ *     essas mensagens direto do banco (só leitura, sob RLS). ⚠️ Contam como
+ *     fala de vendedor: (a) automação do CRM que não grava `automatica` (ex.:
+ *     resposta rápida, mensagem enviada por regra sem marcador) e (b) sugestão do
+ *     agente que o HUMANO enviou (assistido/copiloto) — ao enviar, o humano a
+ *     assumiu. Ausência, retorno e o próprio agente gravam `automatica` e ficam
+ *     fora;
  *   - o CLIENTE — só abona número NÃO bloqueante, e nunca percentual: "vocês
  *     têm 500? entregam em 2 dias?" não autoriza "temos 500 e entregamos em 2".
  * Percentual só confere com percentual de fonte (escrito com %/"por cento" ou

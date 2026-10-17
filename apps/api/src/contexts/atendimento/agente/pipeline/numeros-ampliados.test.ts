@@ -35,7 +35,7 @@ const enviarFalso = (async (_t: string, _c: string, texto: string) => {
 const catalogo: CatalogoPorta = {
   async buscar() {
     return { itens: [{ produtoId: 'b7b70000-aaaa-4000-8000-000000000001', referencia: 'CAM-010', produto: 'Camiseta', categoria: null, descricao: null,
-      skus: [{ skuId: SKU, atributos: { cor: 'verde' }, precoCentavos: 4990, saldo: 12 }] }] }
+      skus: [{ skuId: SKU, atributos: { cor: 'verde', tamanho: '42' }, precoCentavos: 4990, saldo: 12 }] }] }
   },
   async detalhar() { return null },
   async precoEEstoque(_c, ids) { return ids.map((skuId) => ({ skuId, situacao: 'cotado' as const, precoCentavos: 4990, saldo: 12 })) },
@@ -173,6 +173,19 @@ describe('Quantidade', () => {
     expect(enviados).toEqual(['Temos 12 unidades da verde.'])
     expect(await marcasP7()).toEqual([])
   })
+  it('[re-revisão 1] grade: "Temos o 42 em estoque" com o tamanho vindo do catálogo sai; "Tamanhos 38, 40 e 42 disponíveis" também', async () => {
+    await configurar('autonomo')
+    const busca = [{ nome: 'catalogo_buscar', entrada: { consulta: 'camiseta 42', limite: null } }]
+    await turno('tem a 42?', llm(['Temos o 42 em estoque.', 'Tamanhos 38, 40 e 42 disponíveis.'], busca))
+    expect(enviados).toEqual(['Temos o 42 em estoque.', 'Tamanhos 38, 40 e 42 disponíveis.'])
+    expect(await marcasP7()).toEqual([])
+  })
+  it('[re-revisão 3] eco do prazo de entrega do cliente sai com marca ALTA', async () => {
+    await configurar('autonomo')
+    await turno('preciso receber em 10 dias', llm(['Anotei que você precisa receber em 10 dias; vou confirmar com a equipe.']))
+    expect(enviados).toEqual(['Anotei que você precisa receber em 10 dias; vou confirmar com a equipe.'])
+    expect(await marcasP7()).toEqual([expect.objectContaining({ gravidade: 'ALTA', acao: 'registrado' })])
+  })
   it('"temos 40 unidades" sem ferramenta é bloqueado', async () => {
     await configurar('autonomo')
     await turno('tem camiseta verde?', llm(['Temos 40 unidades da verde.']))
@@ -222,9 +235,9 @@ describe('Prazo', () => {
     expect(enviados).toEqual(['Anotei: você vai usar o material daqui 10 dias.'])
     expect(await marcasP7()).toEqual([])
   })
-  it('⚠️ escolha consciente: ecoar prazo de ENTREGA do cliente é compromisso e bloqueia (cliente não abona bloqueante)', async () => {
+  it('afirmar o prazo do cliente como nosso ("você vai receber em 10 dias") continua bloqueado', async () => {
     await configurar('autonomo')
-    await turno('preciso receber em 10 dias', llm(['Anotei que você precisa receber em 10 dias; vou confirmar com a equipe.']))
+    await turno('preciso receber em 10 dias', llm(['Você vai receber em 10 dias.']))
     expect(enviados).toEqual([AVISO_NUMERO_BLOQUEADO])
   })
 })

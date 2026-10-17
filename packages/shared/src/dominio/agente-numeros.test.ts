@@ -165,4 +165,36 @@ describe('Revisão adversarial (P7) — cada achado vira caso', () => {
     expect(tipos('vendo em 12 pct')).toEqual(['quantidade:12'])
     expect(tipos('faço pela metade do preço')).toEqual(['percentual:50!'])
   })
+  it('[re-revisão ALTA 1] grade: tamanho/numeração é atributo; atributos são fonte de quantidade, não de %', () => {
+    for (const t of ['Tamanho 42 disponível.', 'Numeração 40 disponível em preto.', 'Tamanhos 38, 40 e 42 disponíveis.', 'tam. 44 em estoque']) {
+      expect(extrairNumerosDeNegocio(t), t).toEqual([])
+    }
+    const vistos = new NumerosVistos()
+    const saida = { itens: [{ skus: [{ atributos: { cor: 'preto', tamanho: '42' }, saldo: 3 }] }] }
+    numerosDeSaida(saida, vistos); percentuaisDeSaida(saida, vistos.percentuais)
+    expect(numerosSemFonte('Temos o 42 em estoque.', { gerais: vistos, percentuais: vistos.percentuais })).toEqual([])
+    expect(numerosSemFonte('42% de desconto', { gerais: vistos, percentuais: vistos.percentuais })).toHaveLength(1)
+  })
+  it('[re-revisão MÉDIA 2] % fora de contexto comercial é ALTA, não bloqueia', () => {
+    expect(tipos('Produto 100% original.')).toEqual(['percentual:100'])
+    expect(tipos('Ficamos 100% à disposição.')).toEqual(['percentual:100'])
+    expect(tipos('Algodão 100%.')).toEqual(['percentual:100'])
+    expect(tipos('Taxa de 3% no cartão')).toEqual(['percentual:3!'])
+    expect(tipos('5% abaixo da tabela')).toEqual(['percentual:5!'])
+  })
+  it('[re-revisão MÉDIA 3] eco do prazo do cliente desce para ALTA; afirmação nossa continua bloqueando', () => {
+    const doCliente = numerosDoTexto('preciso receber em 10 dias; dá para entregar em 2 dias?')
+    const sem = (t: string) => numerosSemFonte(t, { gerais: [], doCliente }).map((n) => `${n.valor}${n.bloqueante ? '!' : ''}`)
+    expect(sem('Anotei que você precisa receber em 10 dias; vou confirmar com a equipe.')).toEqual(['10'])
+    expect(sem('Vou verificar se dá para entregar em 2 dias.')).toEqual(['2'])
+    expect(sem('Você vai receber em 10 dias.')).toEqual(['10!'])
+    expect(sem('Sim, entregamos em 2 dias.')).toEqual(['2!'])
+    expect(sem('Anotei que você precisa receber em 15 dias.')).toEqual(['15!'])
+  })
+  it('[re-revisão BAIXA 4 e 5] "pct de desconto" é percentual; "pela metade" só com preço/valor/desconto', () => {
+    expect(tipos('dou 10 pct de desconto')).toEqual(['percentual:10!'])
+    expect(tipos('fica 8 pct off')).toEqual(['percentual:8!'])
+    expect(tipos('o preço sai pela metade')).toEqual(['percentual:50!'])
+    expect(tipos('já estamos pela metade do caminho')).toEqual([])
+  })
 })
