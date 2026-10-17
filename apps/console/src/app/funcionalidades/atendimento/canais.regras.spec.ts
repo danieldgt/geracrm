@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, verificacaoAtrasada,
+  abrirAvancado, avisoDeRemocao, classificarFalhaDeCarga, corpoDaApi, idadeVerificacao, intervaloDePolling,
+  mensagemFalhaQr, mudancasDaEdicao, POLL_LENTO_MS, POLL_RAPIDO_MS, rotuloModoAgente, verificacaoAtrasada,
 } from './canais.regras.js'
 
 /**
@@ -133,5 +134,81 @@ describe('Desfecho da remoção', () => {
 
   it('dada uma conversa só, então o plural não escorrega', () => {
     expect(avisoDeRemocao('Wpp', 'arquivado', 1)).toContain('1 conversa preservada')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POLLING POR ESTADO E SERVIDOR INDISPONÍVEL (P10)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Polling da frota — rápido só enquanto alguém espera', () => {
+  it('dado QR aberto aguardando leitura, então 3 s', () => {
+    expect(intervaloDePolling(['conectado'], true)).toBe(POLL_RAPIDO_MS)
+    expect(POLL_RAPIDO_MS).toBe(3_000)
+  })
+
+  it('dado algum número conectando, então 3 s mesmo sem QR', () => {
+    expect(intervaloDePolling(['conectado', 'conectando'], false)).toBe(POLL_RAPIDO_MS)
+  })
+
+  it('dado frota parada (conectado/desconectado), então 30 s', () => {
+    expect(intervaloDePolling(['conectado', 'desconectado', 'degradado'], false)).toBe(POLL_LENTO_MS)
+    expect(POLL_LENTO_MS).toBe(30_000)
+  })
+
+  it('dada frota vazia, então 30 s', () => {
+    expect(intervaloDePolling([], false)).toBe(POLL_LENTO_MS)
+  })
+})
+
+describe('⚠️ Servidor indisponível é estado próprio, não erro genérico', () => {
+  it('rede fora (0) e proxy sem resposta (502/503/504) viram servidor_indisponivel', () => {
+    for (const s of [0, 502, 503, 504]) expect(classificarFalhaDeCarga(s)).toBe('servidor_indisponivel')
+  })
+
+  it('5xx sem corpo da API é o proxy respondendo por ela: servidor indisponível', () => {
+    expect(classificarFalhaDeCarga(500, false)).toBe('servidor_indisponivel')
+    expect(classificarFalhaDeCarga(500, true)).toBe('erro')
+    expect(classificarFalhaDeCarga(404, false)).toBe('erro')
+  })
+
+  it('corpoDaApi reconhece o nosso formato e o erro padrão do Fastify', () => {
+    expect(corpoDaApi({ erro: 'x', mensagem: 'y' })).toBe(true)
+    expect(corpoDaApi({ statusCode: 500, error: 'Internal Server Error' })).toBe(true)
+    expect(corpoDaApi('Error occurred while trying to proxy')).toBe(false)
+    expect(corpoDaApi(null)).toBe(false)
+  })
+
+  it('403 é sem permissão; 500 e o resto são erro', () => {
+    expect(classificarFalhaDeCarga(403)).toBe('sem_permissao')
+    expect(classificarFalhaDeCarga(500)).toBe('erro')
+    expect(classificarFalhaDeCarga(404)).toBe('erro')
+  })
+})
+
+describe('Falha ao gerar o QR', () => {
+  it('403 diz que é do administrador — nunca "tente de novo"', () => {
+    const m = mensagemFalhaQr(403)
+    expect(m).toContain('administrador')
+    expect(m).not.toContain('Tente de novo')
+  })
+
+  it('409 usa o motivo nomeado pelo servidor', () => {
+    expect(mensagemFalhaQr(409, 'Instância já conectada')).toBe('Instância já conectada')
+  })
+
+  it('servidor fora é dito como servidor fora', () => {
+    expect(mensagemFalhaQr(0)).toContain('indisponível')
+    expect(mensagemFalhaQr(500)).toBe('Não foi possível gerar o QR. Tente de novo.')
+  })
+})
+
+describe('Modo do agente no número', () => {
+  it('rótulos conhecidos e ausência = desligado', () => {
+    expect(rotuloModoAgente('autonomo')).toBe('Agente autônomo')
+    expect(rotuloModoAgente(null)).toBe('Agente desligado')
+  })
+
+  it('modo desconhecido aparece cru — nunca some da tela', () => {
+    expect(rotuloModoAgente('copiloto')).toBe('Agente: copiloto')
   })
 })

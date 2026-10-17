@@ -88,3 +88,38 @@ export function formatarTelefoneBR(e164: string): string {
   const assinante = d.slice(4)
   return `+55 (${ddd}) ${assinante.slice(0, assinante.length - 4)}-${assinante.slice(-4)}`
 }
+
+/**
+ * Phone shown MASKED: keeps country + area code and the last 4 digits —
+ * `+5585998617049` becomes `+55 (85) •••••-7049`.
+ *
+ * ⚠️ LGPD + least privilege: the fleet screen is read by managers who need to
+ * tell numbers apart, not dial them. The full number never has to leave the
+ * server for that, so the API masks BEFORE answering — the console never
+ * receives a clear value to hide.
+ *
+ * ⚠️ Already masked input (`•`, `*`) comes back unchanged, so masking twice is
+ * harmless. Input too short to be a phone is fully masked instead of echoed:
+ * an unknown shape must not leak by falling through.
+ */
+export function mascararTelefone(bruto: string | null | undefined): string | null {
+  if (!bruto) return null
+  if (/[•*]/.test(bruto)) return bruto
+  const d = bruto.replace(/\D/g, '')
+  if (d.length < 8) return '••••'
+  const fim = d.slice(-4)
+  if (d.startsWith('55') && d.length >= 12 && d.length <= 13) return `+55 (${d.slice(2, 4)}) •••••-${fim}`
+  return `+${d.slice(0, 2)} •••••-${fim}`
+}
+
+/**
+ * Opaque provider id (Meta `phone_number_id`, Instagram page id) shown as
+ * `••••5678`: enough to match against the Meta Business screen, not enough to
+ * reuse. Short values are fully masked — the last 4 of a 5-char id IS the id.
+ */
+export function mascararIdentificador(bruto: string | null | undefined): string | null {
+  if (!bruto) return null
+  const v = bruto.trim()
+  if (v.length < 8) return '••••'
+  return `••••${v.slice(-4)}`
+}

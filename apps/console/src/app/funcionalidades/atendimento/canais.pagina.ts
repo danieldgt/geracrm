@@ -9,7 +9,10 @@ import { firstValueFrom } from 'rxjs'
 import { CanaisServico, type Canal } from './canais.servico.js'
 import { RouterLink } from '@angular/router'
 import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
-import { abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, verificacaoAtrasada } from './canais.regras.js'
+import {
+  abrirAvancado, avisoDeRemocao, corpoDaApi, idadeVerificacao, intervaloDePolling, mensagemFalhaQr, mudancasDaEdicao,
+  POLL_RAPIDO_MS, rotuloModoAgente, verificacaoAtrasada,
+} from './canais.regras.js'
 
 /**
  * Cadastro de celular / canal — Meta (oficial) e não-oficiais (PlugZapi + futuros).
@@ -36,6 +39,16 @@ import { abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, veri
     @switch (servico.estado()) {
       @case ('carregando') { <div class="bloco" aria-busy="true"><div class="esqueleto"></div></div> }
       @case ('sem_permissao') { <div class="bloco aviso"><h2>Sem acesso aos canais</h2></div> }
+      <!-- ⚠️ Estado PRÓPRIO: quem caiu foi o servidor do GeraCRM, não o número.
+           "Erro ao carregar" faria a pessoa ir mexer no celular. -->
+      @case ('servidor_indisponivel') {
+        <div class="bloco aviso" role="status">
+          <h2>Servidor do GeraCRM indisponível</h2>
+          <p>Não conseguimos falar com o servidor agora. Isso não quer dizer que seus números caíram:
+             o estado deles aparece assim que o servidor voltar. A tela tenta de novo sozinha.</p>
+          <button class="btn btn--secundario" (click)="servico.carregar()">Tentar agora</button>
+        </div>
+      }
       @case ('erro') { <div class="bloco aviso"><h2>Não foi possível carregar</h2>
         <p>{{ servico.erro() }}</p><button class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
@@ -43,6 +56,14 @@ import { abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, veri
              e quem clicou precisa saber qual dos dois aconteceu. -->
         @if (avisoRemocao(); as m) {
           <p class="aviso-remocao" role="status">{{ m }}</p>
+        }
+        <!-- ⚠️ Servidor fora DURANTE o polling: a lista abaixo é a última
+             leitura. Dizer desde quando evita que o estado velho passe por atual. -->
+        @if (servico.indisponivelDesde(); as desde) {
+          <p class="indisponivel" role="status">
+            <strong>Servidor indisponível desde {{ hora(desde) }}.</strong>
+            Os estados abaixo são da última leitura; a tela tenta de novo sozinha.
+          </p>
         }
         @if (servico.vazio()) {
           <div class="bloco vazio">
@@ -76,10 +97,22 @@ import { abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, veri
                 <div class="linha">
                   <div>
                     <h2>{{ c.nomeAmigavel }}</h2>
+                    <!-- ⚠️ Número e id chegam MASCARADOS da API (LGPD): dá para
+                         distinguir os números da frota, não para discá-los. -->
+                    @if (c.telefoneMascarado || c.identificadorMascarado) {
+                      <p class="numero">
+                        @if (c.telefoneMascarado; as t) { <span>{{ t }}</span> }
+                        @if (c.identificadorMascarado; as i) { <span class="id">ID {{ i }}</span> }
+                      </p>
+                    }
+                    <!-- Badges em ordem fixa: tipo · provedor · risco · agente. -->
                     <span class="tags">
                       <span class="tag" [class.oficial]="ehOficial(c)">{{ ehOficial(c) ? 'Oficial (Meta)' : 'Não-oficial' }}</span>
                       <span class="tag prov">{{ nomeProvedor(c.provedor) }}</span>
                       @if (!ehOficial(c)) { <span class="tag risco">⚠️ risco de banimento</span> }
+                      <span class="tag agente" [class.agente--ligado]="c.modoAgente && c.modoAgente !== 'desligado'">
+                        {{ rotuloModo(c.modoAgente) }}
+                      </span>
                     </span>
                   </div>
                   <!-- ⚠️ O estado NUNCA aparece sozinho: vem com quando foi
@@ -104,6 +137,14 @@ import { abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, veri
                     ⏸️ <strong>Disparo pausado</strong>{{ c.pausadoMotivo ? ' — ' + c.pausadoMotivo : '' }}
                     <span class="pausado-ok">Respostas em conversas abertas continuam saindo normalmente.</span>
                     <a class="pausado-link" routerLink="/canal-config">Retomar em Configuração do canal</a>
+                  </p>
+                }
+                <!-- Ativas suspensas (qualidade do número caiu, P11): o que para é
+                     o contato ATIVO; responder quem escreveu continua. -->
+                @if (c.ativasSuspensas; as s) {
+                  <p class="pausado">
+                    ⏸️ <strong>Mensagens ativas suspensas</strong> desde {{ dataHora(s.desde) }}{{ s.motivo ? ' — ' + s.motivo : '' }}
+                    <span class="pausado-ok">Respostas a quem escreveu continuam saindo normalmente.</span>
                   </p>
                 }
                 <div class="acoes">
@@ -144,8 +185,14 @@ import { abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, veri
                      antes o botão dependia do estado ser desconectado, e isso era
                      circular — quem está com o WhatsApp fora do ar ficava
                      esperando o produto descobrir para poder consertar. Ação de
-                     recuperação não depende do diagnóstico. -->
-                @if (!ehOficial(c)) {
+                     recuperação não depende do diagnóstico.
+                     ⚠️ SÓ ADMIN (P10): o QR pareia QUALQUER aparelho ao número.
+                     Gestor vê o estado, nunca o QR — e a garantia é o 403 da
+                     API; esconder o botão aqui é só para não oferecer o que falha. -->
+                @if (!ehOficial(c) && !c.podeParear) {
+                  <p class="so-admin">Parear um aparelho (QR) é com o administrador da conta. Você acompanha o estado por aqui.</p>
+                }
+                @if (!ehOficial(c) && c.podeParear) {
                   <div class="reconectar">
                     <button class="btn"
                             [class.btn--primario]="c.estado === 'desconectado'"
@@ -346,8 +393,18 @@ import { abrirAvancado, avisoDeRemocao, idadeVerificacao, mudancasDaEdicao, veri
     .pausado-ok { color: var(--texto-secundario); }
     .pausado-link { color: var(--acao); text-decoration: none; margin-top: 2px; }
     .pausado-link:hover { text-decoration: underline; }
-    .acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
+    /* flex-wrap: em tela estreita os botões quebram linha em vez de estourar o card. */
+    .acoes { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
     .reconectar { margin-top: var(--espacamento-3); }
+    .so-admin { margin: var(--espacamento-3) 0 0; font-size: 12px; color: var(--texto-suave); }
+    .numero { margin: 0 0 var(--espacamento-1); font-size: 12px; color: var(--texto-secundario);
+      font-family: var(--tipografia-familia-dados, monospace); font-variant-numeric: tabular-nums;
+      display: flex; flex-wrap: wrap; gap: var(--espacamento-3); }
+    .numero .id { color: var(--texto-suave); }
+    .tag.agente--ligado { color: var(--acao); border-color: var(--acao); }
+    .indisponivel { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3);
+      border: 1px solid var(--atencao); border-radius: var(--raio-controle);
+      background: var(--atencao-suave); color: var(--texto); font-size: 13px; line-height: 1.5; }
     .quando { color: var(--texto-suave); font-size: 12px; }
     .qr { margin-top: var(--espacamento-3); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .qr img { display: block; margin: 0 auto var(--espacamento-3); border-radius: var(--raio-controle); }
@@ -420,6 +477,8 @@ export class CanaisPagina implements OnInit, OnDestroy {
    */
   readonly agora = signal(new Date())
   #relogio: ReturnType<typeof setInterval> | null = null
+  #polling: ReturnType<typeof setTimeout> | null = null
+  #destruida = false
   readonly qr = signal<Record<string, { imagem?: string; erro?: string }>>({})
   readonly buscandoQr = signal<string | null>(null)
 
@@ -438,12 +497,10 @@ export class CanaisPagina implements OnInit, OnDestroy {
       //    que o sistema pode descobrir — e a leitura do QR não avisa ninguém.
       this.#abrirSessaoPareamento(canalId)
     } catch (e) {
-      // ⚠️ 409 traz motivo NOMEADO do servidor ("já conectada", "provedor sem
-      //    QR") — mostrar "erro ao carregar" desperdiçaria a informação.
-      const msg = e instanceof HttpErrorResponse && e.status === 409
-        ? String(e.error?.mensagem ?? 'QR indisponível')
-        : 'Não foi possível gerar o QR. Tente de novo.'
-      this.qr.update((a) => ({ ...a, [canalId]: { erro: msg } }))
+      this.qr.update((a) => ({ ...a, [canalId]: { erro: this.#mensagemQr(e) } }))
+      // ⚠️ 403: o papel mudou durante a sessão. Relê a frota para o botão
+      //    sumir — a tela passa a mostrar só o estado.
+      if (e instanceof HttpErrorResponse && e.status === 403) void this.servico.atualizar()
     } finally {
       this.buscandoQr.set(null)
     }
@@ -499,6 +556,7 @@ export class CanaisPagina implements OnInit, OnDestroy {
       for (const c of this.servico.canais()) {
         if (c.tipo !== 'whatsapp_oficial') void this.servico.carregarAquecimento(c.id)
       }
+      this.#agendarPolling()
     })
   }
 
@@ -631,15 +689,16 @@ export class CanaisPagina implements OnInit, OnDestroy {
         ...a, [canalId]: SEGUNDOS_QR - (segundos % SEGUNDOS_QR),
       }))
 
-      // A cada 3s: já pareou? A leitura do QR não avisa ninguém.
-      if (segundos % 3 === 0) {
+      // A cada 3s (o mesmo passo do polling rápido): já pareou? A leitura do
+      // QR não avisa ninguém — o fornecedor precisa ser perguntado.
+      if (segundos % (POLL_RAPIDO_MS / 1000) === 0) {
         void this.servico.testar(canalId).then((r) => {
           this.resultado.update((a) => ({ ...a, [canalId]: r }))
           this.#carimbar(canalId)
           if (r.conectado) {
             this.#encerrarSessao(canalId)
             this.qr.update((a) => ({ ...a, [canalId]: {} }))
-            void this.servico.carregar()
+            void this.servico.atualizar()
           }
         })
       }
@@ -658,6 +717,9 @@ export class CanaisPagina implements OnInit, OnDestroy {
     }, 1000)
 
     this.#timers.set(canalId, timer)
+    // QR na tela = alguém esperando: o polling passa a 3 s já, sem esperar
+    // o fim do intervalo lento que estava agendado.
+    this.#agendarPolling()
   }
 
   /** Busca uma imagem nova de QR e reinicia o contador. */
@@ -669,12 +731,16 @@ export class CanaisPagina implements OnInit, OnDestroy {
       this.restante.update((a) => ({ ...a, [canalId]: SEGUNDOS_QR }))
       return true
     } catch (e) {
-      const msg = e instanceof HttpErrorResponse && e.status === 409
-        ? String(e.error?.mensagem ?? 'QR indisponível')
-        : 'Não foi possível gerar o QR. Tente de novo.'
-      this.qr.update((a) => ({ ...a, [canalId]: { erro: msg } }))
+      this.qr.update((a) => ({ ...a, [canalId]: { erro: this.#mensagemQr(e) } }))
       return false
     }
+  }
+
+  /** Texto da falha do QR — a regra é pura e testada (`mensagemFalhaQr`). */
+  #mensagemQr(e: unknown): string {
+    if (!(e instanceof HttpErrorResponse)) return mensagemFalhaQr(0, null, false)
+    const corpo = e.error as { mensagem?: unknown } | null
+    return mensagemFalhaQr(e.status, typeof corpo?.mensagem === 'string' ? corpo.mensagem : null, corpoDaApi(e.error))
   }
 
   #encerrarSessao(canalId: string): void {
@@ -684,10 +750,36 @@ export class CanaisPagina implements OnInit, OnDestroy {
 
   /** ⚠️ Sair da tela mata todos os relógios — nenhum sobrevive à navegação. */
   ngOnDestroy(): void {
+    this.#destruida = true
     for (const t of this.#timers.values()) clearInterval(t)
     this.#timers.clear()
     if (this.#relogio) { clearInterval(this.#relogio); this.#relogio = null }
+    if (this.#polling) { clearTimeout(this.#polling); this.#polling = null }
   }
+
+  /**
+   * POLLING POR ESTADO (P10): relê a frota em 3 s enquanto alguém espera (QR
+   * aberto, número conectando) e em 30 s no resto — `intervaloDePolling`.
+   *
+   * ⚠️ setTimeout re-agendado, não setInterval: o próximo intervalo é decidido
+   * DEPOIS da resposta, com o estado novo — e uma resposta lenta nunca empilha
+   * com a seguinte. Para ao sair da tela.
+   */
+  #agendarPolling(): void {
+    if (this.#destruida) return
+    if (this.#polling) clearTimeout(this.#polling)
+    const ms = intervaloDePolling(this.servico.canais().map((c) => c.estado), this.#timers.size > 0)
+    this.#polling = setTimeout(() => {
+      this.#polling = null
+      void this.servico.atualizar().finally(() => this.#agendarPolling())
+    }, ms)
+  }
+
+  hora(d: Date): string { return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) }
+  dataHora(iso: string): string {
+    return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  }
+  rotuloModo(modo: string | undefined): string { return rotuloModoAgente(modo) }
 
   #carimbar(canalId: string): void {
     const agora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })

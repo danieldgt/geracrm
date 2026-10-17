@@ -114,3 +114,79 @@ export function avisoDeRemocao(
   const preservadas = conversas === 1 ? '1 conversa preservada' : `${conversas} conversas preservadas`
   return `${nome} foi arquivado e saiu da frota. ${preservadas} no histórico.`
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POLLING POR ESTADO (P10, playbook AM §2.7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Rápido enquanto há algo prestes a mudar (QR na tela, número conectando). */
+export const POLL_RAPIDO_MS = 3_000
+/** Lento no resto: o vigia observa a cada 5 min; mais que isso só gasta. */
+export const POLL_LENTO_MS = 30_000
+
+/**
+ * De quanto em quanto tempo a tela relê a frota.
+ *
+ * ⚠️ 3 s só enquanto ALGUÉM ESPERA: um QR aberto (aguardando a leitura) ou um
+ * número `conectando`. É aí que a resposta muda em segundos e a pessoa está
+ * olhando. No resto, 30 s — polling rápido de fundo foi o que dominou o
+ * tráfego do GeraCloud. O polling para ao sair da tela (ngOnDestroy).
+ */
+export function intervaloDePolling(estados: readonly string[], aguardandoQr: boolean): number {
+  return aguardandoQr || estados.includes('conectando') ? POLL_RAPIDO_MS : POLL_LENTO_MS
+}
+
+export type FalhaDeCarga = 'sem_permissao' | 'servidor_indisponivel' | 'erro'
+
+/**
+ * Classifica a falha ao ler a frota.
+ *
+ * ⚠️ "Servidor indisponível" é um estado PRÓPRIO, não um erro genérico: status
+ * 0 (rede/servidor fora) e 502/503/504 (proxy sem quem responda). A ação é
+ * outra — esperar, a tela tenta sozinha — e o dado na tela é de antes. Juntar
+ * com "erro" faria a pessoa achar que o NÚMERO caiu quando quem caiu fomos nós.
+ *
+ * ⚠️ 5xx SEM corpo da API (`respondeuApi = false`) também é servidor fora: é
+ * o proxy na frente dela respondendo por ela (o dev-server do Angular devolve
+ * 500 em ECONNREFUSED). Um 500 com corpo nosso é erro de verdade.
+ */
+export function classificarFalhaDeCarga(status: number, respondeuApi = true): FalhaDeCarga {
+  if (status === 403) return 'sem_permissao'
+  if (status === 0 || status === 502 || status === 503 || status === 504) return 'servidor_indisponivel'
+  if (status >= 500 && !respondeuApi) return 'servidor_indisponivel'
+  return 'erro'
+}
+
+/** O corpo do erro veio da NOSSA API (forma `{erro}` ou o erro padrão do Fastify)? */
+export function corpoDaApi(corpo: unknown): boolean {
+  return typeof corpo === 'object' && corpo !== null && ('erro' in corpo || 'statusCode' in corpo)
+}
+
+/**
+ * O que dizer quando o QR não vem.
+ *
+ * ⚠️ 409 traz motivo NOMEADO do servidor ("já conectada", "provedor sem QR").
+ * 403 é papel: o QR é só do admin — e a tela diz a quem pedir, em vez de
+ * "tente de novo" (que nunca vai funcionar). Servidor fora não é culpa do QR.
+ */
+export function mensagemFalhaQr(status: number, mensagemServidor?: string | null, respondeuApi = true): string {
+  if (status === 409) return mensagemServidor || 'QR indisponível'
+  if (status === 403) return 'Só o administrador da conta pode gerar o QR. Peça a ele para parear o aparelho.'
+  if (classificarFalhaDeCarga(status, respondeuApi) === 'servidor_indisponivel') {
+    return 'Servidor do GeraCRM indisponível. Tente de novo em instantes.'
+  }
+  return 'Não foi possível gerar o QR. Tente de novo.'
+}
+
+const ROTULOS_MODO:Readonly<Record<string, string>> = {
+  desligado: 'Agente desligado',
+  sombra: 'Agente em sombra',
+  assistido: 'Agente assistido',
+  autonomo: 'Agente autônomo',
+}
+
+/** Rótulo do modo do agente no número; modo desconhecido aparece cru, nunca some. */
+export function rotuloModoAgente(modo: string | null | undefined): string {
+  if (!modo) return 'Agente desligado'
+  return ROTULOS_MODO[modo] ?? `Agente: ${modo}`
+}

@@ -2,6 +2,7 @@ import { Injectable, inject, signal, computed } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import type { EsquemaCredencial } from '../integracao/tipos.js'
+import { classificarFalhaDeCarga, corpoDaApi, type FalhaDeCarga } from './canais.regras.js'
 
 export interface ProvedorCanal {
   readonly codigo: string
@@ -27,6 +28,19 @@ export interface Canal {
   readonly disparoPausado?: boolean
   readonly pausadoMotivo?: string | null
   readonly credencial: { configurada: boolean; camposPreenchidos: readonly string[] }
+  /** ⚠️ Decidido no servidor (só admin, só não-oficial). A garantia é o 403 do QR. */
+  readonly podeParear?: boolean
+  readonly modoAgente?: string
+  /** Ativas suspensas (P11/0101). `null` = não suspensas ou coluna ainda ausente. */
+  readonly ativasSuspensas?: { desde: string; motivo: string | null } | null
+  /** Já MASCARADOS pela API — o valor completo nunca chega ao console. */
+  readonly telefoneMascarado?: string | null
+  readonly identificadorMascarado?: string | null
+}
+
+interface ListaCanais {
+  readonly itens: Canal[]
+  readonly podeParear?: boolean
 }
 
 export interface ErroApi {
@@ -35,7 +49,7 @@ export interface ErroApi {
   readonly detalhe?: { campos?: Record<string, string>; campo?: string }
 }
 
-export type EstadoLista = 'ocioso' | 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
+export type EstadoLista = 'ocioso' | 'carregando' | 'pronto' | 'erro' | 'sem_permissao' | 'servidor_indisponivel'
 
 /** Saúde da frota (EP-03): entrega recente + alertas abertos. */
 export interface SaudeFrota {
@@ -54,26 +68,68 @@ export class CanaisServico {
   readonly testando = signal<ReadonlySet<string>>(new Set())
   readonly saude = signal<SaudeFrota | null>(null)
   readonly vazio = computed(() => this.estado() === 'pronto' && this.canais().length === 0)
+  /** Quem chama pode parear (gerar QR)? Decidido pelo servidor a cada leitura. */
+  readonly podeParear = signal(false)
+  /**
+   * ⚠️ Servidor fora DURANTE o polling, com a frota já na tela: a lista fica
+   * (é a última leitura) e a tela avisa desde quando não há notícia. Trocar a
+   * lista por "erro" apagaria o que a pessoa já sabia; não avisar faria o
+   * estado de 5 min atrás passar por atual.
+   */
+  readonly indisponivelDesde = signal<Date | null>(null)
 
   async carregar(): Promise<void> {
-    this.estado.set('carregando')
+    // ⚠️ Servidor fora: a nova tentativa não troca o aviso por esqueleto a cada
+    //    30 s — a tela piscaria sem nada ter mudado.
+    if (this.estado() !== 'servidor_indisponivel') this.estado.set('carregando')
     this.erro.set(null)
     try {
       const [provs, lista, saude] = await Promise.all([
         firstValueFrom(this.http.get<ProvedorCanal[]>('/v1/canais/provedores')),
-        firstValueFrom(this.http.get<{ itens: Canal[] }>('/v1/canais')),
+        firstValueFrom(this.http.get<ListaCanais>('/v1/canais')),
         // ⚠️ Saúde é PARCIAL: se falhar, os canais ainda aparecem (não derruba a tela).
         firstValueFrom(this.http.get<SaudeFrota>('/v1/frota/saude')).catch(() => null),
       ])
       this.provedores.set(provs)
-      this.canais.set(lista.itens)
+      this.#aplicarLista(lista)
       this.saude.set(saude)
       this.estado.set('pronto')
     } catch (e) {
-      if (e instanceof HttpErrorResponse && e.status === 403) { this.estado.set('sem_permissao'); return }
+      const falha = falhaDe(e)
+      if (falha === 'sem_permissao') { this.estado.set('sem_permissao'); return }
+      if (falha === 'servidor_indisponivel') {
+        this.indisponivelDesde.update((d) => d ?? new Date())
+        this.estado.set('servidor_indisponivel')
+        return
+      }
       this.erro.set('Não foi possível carregar os canais.')
       this.estado.set('erro')
     }
+  }
+
+  /**
+   * Releitura SILENCIOSA da frota (polling e pós-teste): sem esqueleto, sem
+   * apagar a lista. ⚠️ Se a carga inicial ainda não deu certo, cai na carga
+   * completa — é o que tira a tela de "servidor indisponível" quando ele volta.
+   */
+  async atualizar(): Promise<void> {
+    if (this.estado() !== 'pronto') { await this.carregar(); return }
+    try {
+      const lista = await firstValueFrom(this.http.get<ListaCanais>('/v1/canais'))
+      this.#aplicarLista(lista)
+    } catch (e) {
+      const falha = falhaDe(e)
+      // Papel retirado durante a sessão: a tela deixa de mostrar a frota.
+      if (falha === 'sem_permissao') { this.estado.set('sem_permissao'); return }
+      // Qualquer outra falha no polling: mantém a última leitura e AVISA.
+      this.indisponivelDesde.update((d) => d ?? new Date())
+    }
+  }
+
+  #aplicarLista(lista: ListaCanais): void {
+    this.canais.set(lista.itens)
+    this.podeParear.set(lista.podeParear === true)
+    this.indisponivelDesde.set(null)
   }
 
   async criar(dados: { provedor: string; nomeAmigavel: string; credencial: Record<string, string> }):
@@ -130,7 +186,9 @@ export class CanaisServico {
     this.testando.update((s) => new Set(s).add(id))
     try {
       const r = await firstValueFrom(this.http.post<{ conectado: boolean; detalhe?: string }>(`/v1/canais/${id}/testar`, {}))
-      await this.carregar()
+      // ⚠️ Silencioso: o pareamento testa a cada 3 s, e recarregar com
+      //    esqueleto fazia a lista inteira piscar durante a leitura do QR.
+      await this.atualizar()
       return r
     } catch {
       return { conectado: false, detalhe: 'falha ao testar' }
@@ -171,6 +229,12 @@ export interface Aquecimento {
   readonly limiteHoje: number | null
   readonly usadoHoje: number
   readonly restante: number | null
+}
+
+/** Classifica a falha HTTP — regra pura em `canais.regras.ts`. */
+function falhaDe(e: unknown): FalhaDeCarga {
+  if (!(e instanceof HttpErrorResponse)) return classificarFalhaDeCarga(0, false)
+  return classificarFalhaDeCarga(e.status, corpoDaApi(e.error))
 }
 
 function erroApiDe(e: unknown): ErroApi {

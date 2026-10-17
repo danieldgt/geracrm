@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import type { FastifyInstance, FastifyReply } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { validarCredencial, type Credencial } from '@geracrm/conectores'
-import { exigirTenant } from '../../plugins/tenant.js'
+import { mascararIdentificador, mascararTelefone } from '@geracrm/shared'
+import type { Sql } from '../../db/index.js'
+import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { cifrar, decifrar, resumir } from '../integracao/cofre.js'
 import { auditar } from '../plataforma/auditoria.js'
+import { atendePapel, exigirPapel, papeisDoUsuario, type Papel } from '../plataforma/papel.js'
 import { registrarMetrica } from '../plataforma/metricas.js'
 import { garantirUsuarioId } from './rotas-fila.js'
 import { statusAquecimento } from './aquecimento.js'
@@ -28,6 +31,52 @@ function falha(reply: FastifyReply, status: number, erro: string, mensagem: stri
   return reply.code(status).send(detalhe === undefined ? { erro, mensagem } : { erro, mensagem, detalhe })
 }
 
+/**
+ * Quem pode PAREAR um aparelho (gerar o QR): só admin.
+ *
+ * ⚠️ O QR conecta QUALQUER aparelho ao número — quem lê passa a receber e
+ * enviar como a empresa. Gestor acompanha o estado; parear é do admin
+ * (playbook AM §2.7). A regra de papel é a ÚNICA de `plataforma/papel.ts`.
+ */
+const PAPEIS_QUE_PAREIAM: readonly Papel[] = ['admin']
+
+/**
+ * ⚠️ `papeisDoUsuario` só reconhece quem tem linha em `usuario` — inclusive no
+ * modo fundador (plano P10 §4). A linha nasce em `garantirUsuarioId`, que hoje
+ * só o batimento de presença chama: sem garantir aqui, o primeiro acesso de um
+ * fundador à tela de números recebia 403 no próprio QR. Staff não ganha linha
+ * de usuário no tenant do cliente — `papeisDoUsuario` já o trata como admin.
+ */
+async function garantirLinhaDeUsuario(tx: Sql, req: FastifyRequest): Promise<void> {
+  if (!req.atorStaff) await garantirUsuarioId(tx, req)
+}
+
+async function podeParearNoTenant(tx: Sql, req: FastifyRequest): Promise<boolean> {
+  await garantirLinhaDeUsuario(tx, req)
+  const acesso = await papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff })
+  return atendePapel(acesso, PAPEIS_QUE_PAREIAM)
+}
+
+/** preHandler: garante a linha de `usuario` antes do `exigirPapel` (ver acima). */
+async function preGarantirUsuario(req: FastifyRequest): Promise<void> {
+  if (!req.tenantId) return
+  await req.comTenant((tx) => garantirLinhaDeUsuario(tx, req))
+}
+
+/**
+ * Ativas suspensas do número — coluna da P11 (0101: `ativas_suspensas_em`,
+ * `ativas_suspensas_motivo`). ⚠️ Lida pela linha inteira em jsonb, de forma
+ * TOLERANTE: antes da 0101 a chave não existe e o resultado é `null`, sem
+ * quebrar a listagem nem acoplar o deploy desta tela ao da migration.
+ */
+export function ativasSuspensasDe(linha: Record<string, unknown> | null | undefined):
+  { desde: string; motivo: string | null } | null {
+  const desde = linha?.['ativas_suspensas_em']
+  if (typeof desde !== 'string' || desde === '') return null
+  const motivo = linha?.['ativas_suspensas_motivo']
+  return { desde: new Date(desde).toISOString(), motivo: typeof motivo === 'string' ? motivo : null }
+}
+
 export async function rotasCanais(app: FastifyInstance): Promise<void> {
   // O catálogo de provedores — a tela desenha o formulário daqui.
   app.get('/v1/canais/provedores', { preHandler: exigirTenant }, async () =>
@@ -40,25 +89,43 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
 
   app.get('/v1/canais', { preHandler: exigirTenant }, async (req) =>
     req.comTenant(async (tx) => {
+      // ⚠️ Decidido NO SERVIDOR, uma vez por requisição (papel muda durante a
+      //    sessão). A tela só esconde o botão; a garantia é o 403 do QR.
+      const podeParear = await podeParearNoTenant(tx, req)
       const linhas = await tx<{
         id: string; tipo: string; provedor: string | null; nome_amigavel: string; estado: string
         credenciais_cifradas: Buffer | null; ultimo_erro: string | null
         verificado_em: Date | null
         disparo_pausado: boolean; pausado_motivo: string | null
+        modo_agente: string; telefone_e164: string | null; identificador_externo: string | null
+        linha: Record<string, unknown>
       }[]>`
         SELECT c.id, c.tipo, c.provedor, c.nome_amigavel, c.estado, c.credenciais_cifradas,
                c.ultimo_erro, c.verificado_em,
                coalesce(cfg.disparo_pausado, false) AS disparo_pausado,
-               cfg.pausado_motivo
+               cfg.pausado_motivo,
+               coalesce(ac.modo, 'desligado') AS modo_agente,
+               nw.telefone_e164, c.identificador_externo,
+               -- ⚠️ Leitura tolerante das colunas da P11 (ver ativasSuspensasDe).
+               jsonb_build_object(
+                 'ativas_suspensas_em', to_jsonb(c.*)->>'ativas_suspensas_em',
+                 'ativas_suspensas_motivo', to_jsonb(c.*)->>'ativas_suspensas_motivo') AS linha
           FROM canal_conectado c
           LEFT JOIN canal_configuracao cfg
                  ON cfg.tenant_id = c.tenant_id AND cfg.canal_id = c.id
+          LEFT JOIN agente_config ac
+                 ON ac.tenant_id = c.tenant_id AND ac.canal_id = c.id
+          LEFT JOIN numero_whatsapp nw
+                 ON nw.tenant_id = c.tenant_id AND nw.canal_id = c.id
          -- ⚠️ Arquivado saiu da frota (0083): não aparece na tela, não é
          --    vigiado e não recebe envio. O histórico dele continua no banco.
          WHERE c.arquivado_em IS NULL
          ORDER BY c.criado_em
       `
       return {
+        // ⚠️ A frota é por tenant e pequena (dezenas de números): a lista é
+        //    limitada pela própria natureza do recurso, não por página.
+        podeParear,
         itens: linhas.map((l) => ({
           id: l.id, tipo: l.tipo, provedor: l.provedor, nomeAmigavel: l.nome_amigavel,
           estado: l.estado, ultimoErro: l.ultimo_erro,
@@ -75,6 +142,14 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
           //    de BANIMENTO — a interface deixa isso VISÍVEL, por caminho.
           riscoBanimento: l.tipo === 'whatsapp_nao_oficial',
           credencial: resumir(l.credenciais_cifradas),
+          // ⚠️ Parear por QR só existe no não-oficial (sessão de WhatsApp Web);
+          //    no oficial a conexão é gerida no Meta Business.
+          podeParear: podeParear && l.tipo === 'whatsapp_nao_oficial',
+          modoAgente: l.modo_agente,
+          ativasSuspensas: ativasSuspensasDe(l.linha),
+          // ⚠️ Mascarados AQUI: o valor completo não sai do servidor.
+          telefoneMascarado: mascararTelefone(l.telefone_e164),
+          identificadorMascarado: mascararIdentificador(l.identificador_externo),
         })),
       }
     }),
@@ -316,15 +391,19 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
    * sem oferecer o conserto é meio caminho.
    *
    * ⚠️ Não guarda nada: o QR expira em segundos e muda a cada leitura.
+   *
+   * ⚠️ SÓ ADMIN (P10): o QR pareia qualquer aparelho ao número. Quem não é
+   *    admin recebe 403 `acesso.papel_insuficiente` ANTES de qualquer leitura
+   *    do canal — e a tela continua mostrando o estado, sem o QR.
    */
   app.get<{ Params: { id: string } }>(
     '/v1/canais/:id/qrcode',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, preGarantirUsuario, exigirPapel(...PAPEIS_QUE_PAREIAM)] },
     async (req, reply) => {
       const canalDb = await req.comTenant(async (tx) => {
         const [l] = await tx<{ provedor: string | null; credenciais_cifradas: Buffer | null }[]>`
           SELECT provedor, credenciais_cifradas FROM canal_conectado
-           WHERE id = ${req.params.id} AND arquivado_em IS NULL`
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND arquivado_em IS NULL`
         return l ?? null
       })
       if (!canalDb) return falha(reply, 404, 'canal.nao_encontrado', 'Canal não encontrado.')

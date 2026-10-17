@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizarTelefone, ehMovel, formatarTelefoneBR } from './telefone.js'
+import { normalizarTelefone, ehMovel, formatarTelefoneBR, mascararTelefone, mascararIdentificador } from './telefone.js'
 
 describe('Normalização de telefone', () => {
   // ⚠️ O caso que motiva a função existir: três grafias, uma chave.
@@ -63,5 +63,38 @@ describe('formatarTelefoneBR', () => {
 
   it('aceita entrada já pontuada sem duplicar a pontuação', () => {
     expect(formatarTelefoneBR('+55 85 99861-7049')).toBe('+55 (85) 99861-7049')
+  })
+})
+
+describe('Telefone mascarado (tela de números, P10)', () => {
+  it('mantém país, DDD e os 4 últimos — o resto não sai do servidor', () => {
+    expect(mascararTelefone('+5585998617049')).toBe('+55 (85) •••••-7049')
+    expect(mascararTelefone('558532224444')).toBe('+55 (85) •••••-4444')
+  })
+
+  it('número estrangeiro mantém só o prefixo e o fim', () => {
+    expect(mascararTelefone('+12025550123')).toBe('+12 •••••-0123')
+  })
+
+  it('já mascarado volta igual — mascarar duas vezes é inofensivo', () => {
+    expect(mascararTelefone('+55 (85) •••••-7049')).toBe('+55 (85) •••••-7049')
+    expect(mascararTelefone('+55 85 9****-7049')).toBe('+55 85 9****-7049')
+  })
+
+  it('⚠️ formato curto/desconhecido é mascarado INTEIRO, nunca ecoado', () => {
+    expect(mascararTelefone('1234567')).toBe('••••')
+    expect(mascararTelefone('abc')).toBe('••••')
+  })
+
+  it('ausente é null — a tela decide o traço, não a regra', () => {
+    expect(mascararTelefone(null)).toBeNull()
+    expect(mascararTelefone(undefined)).toBeNull()
+    expect(mascararTelefone('')).toBeNull()
+  })
+
+  it('identificador do fornecedor mostra só os 4 finais; curto some inteiro', () => {
+    expect(mascararIdentificador('106540352242922')).toBe('••••2922')
+    expect(mascararIdentificador('12345')).toBe('••••')
+    expect(mascararIdentificador(null)).toBeNull()
   })
 })
