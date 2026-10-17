@@ -162,7 +162,8 @@ const IGNORAR: readonly RegExp[] = [
   // % que não é negócio (lista fechada): "100% original", "95% algodão", "Algodão 100%", "12% de umidade"
   new RegExp(String.raw`${P}100\s*%\s+(?:de\s+)?${PCT_NAO_NEGOCIO}${FIM}`, 'giu'),
   new RegExp(String.raw`${P}\d+(?:[.,]\d+)?\s*%\s+(?:de\s+)?(?:${FIBRA}|umidade|[áa]lcool|cacau|gordura|prote[íi]na)${FIM}`, 'giu'),
-  new RegExp(String.raw`${P}${FIBRA}\s+\d+(?:[.,]\d+)?\s*%`, 'giu'),
+  // "Fibra N%" só é composição se depois do % não vem nada comercial ("algodão 15% off" é desconto)
+  new RegExp(String.raw`${P}${FIBRA}\s+\d+(?:[.,]\d+)?\s*%(?!\s*(?:de\s+desconto|desconto|off|mais|menos|abaixo|acima|na|no|em|[àa]\s+vista|pix|boleto|barat${L}*)(?!${L}))`, 'giu'),
   // dinheiro: fica com o guardrail de R$
   /R\$\s*\d[\d.,]*/g,
   new RegExp(String.raw`\d[\d.,]*\s*(?:reais|real)${FIM}`, 'giu'),

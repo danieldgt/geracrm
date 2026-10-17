@@ -191,6 +191,15 @@ describe('Revisão adversarial (P7) — cada achado vira caso', () => {
     }
     expect(tipos('Camiseta 100% algodão com 10% de desconto')).toEqual(['percentual:10!'])
   })
+  it('[confirmação final] "fibra + N%" seguido de algo comercial é desconto e bloqueia', () => {
+    for (const [t, v] of [['Camisetas de algodão 15% off.', 15], ['Na linha de algodão 15% de desconto.', 15],
+      ['Peças em linho 20% mais baratas.', 20], ['Lã 30% abaixo do preço.', 30]] as const) {
+      expect(tipos(t), t).toEqual([`percentual:${v}!`])
+    }
+    for (const t of ['Algodão 100%', '95% algodão e 5% elastano', 'Tecido 100% poliéster', 'Algodão 95%/elastano 5%']) {
+      expect(extrairNumerosDeNegocio(t), t).toEqual([])
+    }
+  })
   it('[re-revisão MÉDIA 3] eco do prazo do cliente desce para ALTA; afirmação nossa continua bloqueando', () => {
     const doCliente = numerosDoTexto('preciso receber em 10 dias; dá para entregar em 2 dias?')
     const sem = (t: string) => numerosSemFonte(t, { gerais: [], doCliente }).map((n) => `${n.valor}${n.bloqueante ? '!' : ''}`)
