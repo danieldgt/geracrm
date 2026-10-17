@@ -8,8 +8,8 @@
 
 | Raia | Onda | Migration | Estado | Branch | Observação |
 |---|---|---|---|---|---|
-| P0 costura do pipeline | 0 | 0096 | pendente | | dona de vendedor.ts / app.ts / server.ts / index.ts |
-| P1 ADRs 028–034 | 0 | — | pendente | | |
+| P0 costura do pipeline | 0 | 0096 | em andamento | | dona de vendedor.ts / app.ts / server.ts / index.ts |
+| P1 ADRs 028–034 | 0 | — | integrada (d155c22) | worktree-agent-a2ffbdfdac6113d71 | |
 | P2 filtro de saída | 1 | 0097 | pendente | | |
 | P3 pergunta repetida | 1 | — | pendente | | |
 | P4 gatilhos + privacidade | 1 | 0098 | pendente | | |
