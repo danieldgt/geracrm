@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import {
   COMPLEMENTO_AVISO_FORA, TEXTO_AVISO_ESPERA, TEXTO_AVISO_ESPERA_FORA, ajustarMensagemHandoff, calcularJanela,
-  falaDoProximoHorario, filtrarSaida, lerComplianceExtra, permiteTextoLivre, renderizarAvisoEspera, verificarNumerosNaResposta,
+  complianceEfetivo, falaDoProximoHorario, filtrarSaida, lerComplianceExtra, lerPlaybookVigente, mensagemProntaSegura, permiteTextoLivre,
+  personaDoPlaybook, verificarNumerosNaResposta,
   type ResultadoAvisoEspera,
 } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../db/index.js'
@@ -26,7 +27,8 @@ import { gestoresDoTenant, lerContextoSla, respostaHumanaDoAtendimento } from '.
  *      qualquer um assume (inclusive de quem assumiu e não respondeu);
  *   3. chegou a hora da espera → UMA mensagem fixa ao cliente, sem prazo, pelo
  *      gateway, depois do filtro P2 e da rede de R$; só se ninguém respondeu e
- *      a conversa segue com humano; nunca com opt-out, janela de 24 h fechada
+ *      a conversa segue com humano; nunca com opt-out (lista ou marca P4
+ *      `possivel_opt_out` no handoff), janela de 24 h fechada
  *      (oficial) ou `aviso_espera = false`. O que acontecer fica em
  *      `aviso_espera_resultado`.
  *
@@ -71,6 +73,12 @@ export async function processarSla(dono: Sql, deps: DepsSla = {}, agora: Date = 
     if (!travou) conexao.release()
   }
   if (!travou) return vazio
+
+  let respondidos = 0, estourados = 0, liberados = 0, processadas = 0
+  const avisos: Partial<Record<ResultadoAvisoEspera, number>> = {}
+  const contarAviso = (r: ResultadoAvisoEspera) => { avisos[r] = (avisos[r] ?? 0) + 1 }
+  /** Mensagens já RESERVADAS ('pendente') sob a trava — enviadas depois de soltá-la. */
+  const aEnviar: { tenantId: string; atendimentoId: string; conversaId: string; texto: string }[] = []
   try {
     // ⚠️ Pré-filtro pelo índice parcial `atendimento_sla_pendente`: só handoffs
     //    armados, abertos e sem resposta. A resposta humana é checada aqui
@@ -90,11 +98,7 @@ export async function processarSla(dono: Sql, deps: DepsSla = {}, agora: Date = 
                             AND m.criado_em >= a.sla_inicio_em))
        ORDER BY a.sla_vence_em
        LIMIT ${LOTE}`
-
-    let respondidos = 0, estourados = 0, liberados = 0
-    const avisos: Partial<Record<ResultadoAvisoEspera, number>> = {}
-    const contarAviso = (r: ResultadoAvisoEspera) => { avisos[r] = (avisos[r] ?? 0) + 1 }
-    const enviar = deps.enviar ?? enviarTextoNaConversa
+    processadas = candidatos.length
 
     for (const c of candidatos) {
       const passo = await comTenantServico(c.tenant_id, (tx) => processarUm(tx, c.id, agora))
@@ -104,14 +108,7 @@ export async function processarSla(dono: Sql, deps: DepsSla = {}, agora: Date = 
       if (passo.liberou) liberados++
       if (passo.aviso && passo.aviso.tipo === 'registrado') contarAviso(passo.aviso.resultado)
       if (passo.aviso && passo.aviso.tipo === 'enviar') {
-        // Fora da transação: o gateway revalida opt-out, janela e canal.
-        const r = await enviar(c.tenant_id, passo.conversaId, passo.aviso.texto, null, agora, { ehDisparo: false, marcador: 'sla_aviso_espera' })
-        const resultado: ResultadoAvisoEspera = r.ok ? 'enviada'
-          : r.motivo === 'bloqueado' ? 'opt_out' : r.motivo === 'janela_fechada' ? 'janela_fechada' : 'falhou'
-        await comTenantServico(c.tenant_id, (tx) => tx`
-          UPDATE atendimento SET aviso_espera_resultado = ${resultado}
-           WHERE tenant_id = tenant_atual() AND id = ${c.id} AND aviso_espera_resultado = 'pendente'`)
-        contarAviso(resultado)
+        aEnviar.push({ tenantId: c.tenant_id, atendimentoId: c.id, conversaId: passo.conversaId, texto: passo.aviso.texto })
       }
     }
     // Alerta aberto cujos estourados foram encerrados (ou respondidos) sem passar por aqui.
@@ -121,11 +118,33 @@ export async function processarSla(dono: Sql, deps: DepsSla = {}, agora: Date = 
          AND ${deps.somenteTenant ? conexao`tenant_id = ${deps.somenteTenant}` : conexao`true`}
        LIMIT ${LOTE}`
     for (const t of comAlerta) await comTenantServico(t.tenant_id, (tx) => resolverAlertaSeLimpo(tx))
-
-    return { processadas: candidatos.length, respondidos, estourados, liberados, avisos }
   } finally {
     try { await conexao`SELECT pg_advisory_unlock(hashtext(${chave}))` } finally { conexao.release() }
   }
+
+  // ── Envio: FORA da trava e sem conexão presa ─────────────────────────────
+  // ⚠️ A conexão de dono do `server.ts` é UMA para ~13 workers: segurá-la
+  //    durante a rede congelaria a fila do agente, o push e o resto. O
+  //    'pendente' gravado sob a trava já garante o "no máximo uma vez"; o
+  //    gateway revalida opt-out, janela e canal na hora.
+  const enviar = deps.enviar ?? enviarTextoNaConversa
+  for (const e of aEnviar) {
+    let resultado: ResultadoAvisoEspera = 'falhou'
+    try {
+      const r = await enviar(e.tenantId, e.conversaId, e.texto, null, agora, { ehDisparo: false, marcador: 'sla_aviso_espera' })
+      resultado = r.ok ? 'enviada' : r.motivo === 'bloqueado' ? 'opt_out' : r.motivo === 'janela_fechada' ? 'janela_fechada' : 'falhou'
+    } catch {
+      // Exceção de um envio vira 'falhou' e o lote segue — nunca derruba os outros.
+      resultado = 'falhou'
+    }
+    try {
+      await comTenantServico(e.tenantId, (tx) => tx`
+        UPDATE atendimento SET aviso_espera_resultado = ${resultado}
+         WHERE tenant_id = tenant_atual() AND id = ${e.atendimentoId} AND aviso_espera_resultado = 'pendente'`)
+    } catch { /* fica 'pendente': nunca reenvia */ }
+    contarAviso(resultado)
+  }
+  return { processadas, respondidos, estourados, liberados, avisos }
 }
 
 interface Passo {
@@ -154,7 +173,14 @@ async function processarUm(tx: Sql, atendimentoId: string, agora: Date): Promise
            c.conduzida_por, c.ultima_entrante_em, ct.nome AS contato_nome,
            EXISTS (SELECT 1 FROM contato_telefone tel
                      JOIN lista_bloqueio lb ON lb.tenant_id = tel.tenant_id AND lb.chave_bloqueio = tel.chave_bloqueio
-                    WHERE tel.tenant_id = c.tenant_id AND tel.contato_id = c.contato_id AND tel.principal) AS bloqueado,
+                    WHERE tel.tenant_id = c.tenant_id AND tel.contato_id = c.contato_id AND tel.principal)
+           -- P4: o handoff veio de um opt-out AMBÍGUO ("para de me mandar…"): a
+           --    marca possivel_opt_out está na decisão do turno que transferiu.
+           --    Cortesia não sai para quem talvez tenha pedido para parar.
+           OR EXISTS (SELECT 1 FROM agente_decisao d
+                       WHERE d.tenant_id = a.tenant_id AND d.conversa_id = a.conversa_id
+                         AND d.criado_em >= a.sla_inicio_em - interval '10 minutes'
+                         AND d.guardrails @> '[{"codigo":"possivel_opt_out"}]'::jsonb) AS bloqueado,
            -- ⚠️ Leitura TOLERANTE: o playbook (P17) e o compliance (P2) vêm de
            --    colunas que podem ainda não existir nesta versão do banco.
            (SELECT to_jsonb(ac.*) FROM agente_config ac
@@ -248,26 +274,28 @@ function decidirAviso(
  * passa é descartado, nunca "consertado".
  */
 export function textoDaEspera(agente: Record<string, unknown> | null, contatoNome: string | null, fora: boolean): string | null {
-  const extras = lerComplianceExtra(agente?.['compliance']).frasesProibidas
-  const conteudo = (agente?.['playbook'] as { conteudo?: { mensagens?: { avisoEspera?: unknown }; persona?: { nome?: unknown; loja?: unknown } } } | null)?.conteudo
-  const persona = (conteudo?.persona ?? agente?.['persona'] ?? null) as { nome?: unknown; loja?: unknown } | null
+  // Os helpers da P17: espelho publicado lido de forma tolerante (inválido = sem
+  // playbook), compliance do número ∪ do playbook (só acrescenta) e a mensagem
+  // pronta revalidada contra o filtro de HOJE.
+  const playbook = lerPlaybookVigente(agente?.['playbook'])?.conteudo ?? null
+  const extras = complianceEfetivo(lerComplianceExtra(agente?.['compliance']), playbook).frasesProibidas
+  const persona = (playbook ? personaDoPlaybook(playbook) : agente?.['persona'] ?? null) as { nome?: unknown; loja?: unknown } | null
   const candidatos: string[] = []
-  const modelo = conteudo?.mensagens?.avisoEspera
-  if (typeof modelo === 'string' && modelo.trim()) {
-    let t = renderizarAvisoEspera(modelo, {
-      nome: contatoNome, assistente: typeof persona?.nome === 'string' ? persona.nome : null,
-      empresa: typeof persona?.loja === 'string' ? persona.loja : null,
-    })
+  let t = mensagemProntaSegura(playbook, 'avisoEspera', {
+    nome: contatoNome, assistente: typeof persona?.nome === 'string' ? persona.nome : '',
+    empresa: typeof persona?.loja === 'string' ? persona.loja : null,
+  })
+  if (t) {
     if (fora && !falaDoProximoHorario(t)) t = `${t} ${COMPLEMENTO_AVISO_FORA}`
     candidatos.push(t)
   }
   candidatos.push(fora ? TEXTO_AVISO_ESPERA_FORA : TEXTO_AVISO_ESPERA)
-  for (const t of candidatos) {
-    const f = filtrarSaida(t, { extras })
+  for (const c of candidatos) {
+    const f = filtrarSaida(c, { extras })
     if (f.esvaziado || f.ocorrencias.some((o) => o.acao !== 'registrado')) continue
-    if (ajustarMensagemHandoff(t, { semNumeros: true, anexarRetomada: false }).ocorrencias.length > 0) continue
-    if (verificarNumerosNaResposta(t, new Set()).length > 0) continue
-    return t
+    if (ajustarMensagemHandoff(c, { semNumeros: true, anexarRetomada: false }).ocorrencias.length > 0) continue
+    if (verificarNumerosNaResposta(c, new Set()).length > 0) continue
+    return c
   }
   return null
 }

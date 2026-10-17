@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Sql } from '../../db/index.js'
+import { alvosDoHandoff } from './sla-handoff.js'
 
 /**
  * Notificações pessoais (PLT-07).
@@ -74,6 +75,18 @@ async function quemAvisar(
        AND a.estado <> 'encerrado' AND a.atendente_id IS NOT NULL
      LIMIT 1`
   if (alvo) return { alvos: [alvo.atendente_id], tipo: 'mensagem.nova', titulo: alvo.titulo }
+
+  // ── Handoff roteado esperando (P18): a mesma regra do aviso inicial ─────
+  //    — o responsável, ou todos os gestores quando a rota foi 'gestor'. Sem
+  //    isso, a 2ª mensagem do cliente acordava o número inteiro e a do
+  //    handoff, só uma pessoa.
+  const doHandoff = await alvosDoHandoff(tx, conversaId)
+  if (doHandoff) {
+    const [c] = await tx<{ titulo: string }[]>`
+      SELECT ct.nome AS titulo FROM conversa c JOIN contato ct ON ct.tenant_id = c.tenant_id AND ct.id = c.contato_id
+       WHERE c.tenant_id = tenant_atual() AND c.id = ${conversaId}`
+    if (c) return { alvos: doHandoff, tipo: 'fila.nova', titulo: c.titulo }
+  }
 
   // ── Sem dono: é a FILA que precisa saber ────────────────────────────────
   const [contexto] = await tx<{ titulo: string; canal_id: string; dono_carteira: string | null }[]>`
@@ -162,13 +175,11 @@ async function notificar(
  */
 export async function notificarHandoffDoAgente(
   tx: Sql, conversaId: string, motivo: string,
-  // P18: o handoff ROTEADO (`rotearHandoff`) avisa só o responsável, não a fila inteira.
-  responsavelId?: string | null,
 ): Promise<void> {
+  // P18: o handoff ROTEADO avisa pela regra do roteamento (`alvosDoHandoff`, em `quemAvisar`).
   const q = await quemAvisar(tx, conversaId)
   if (!q) return
-  const alvos = responsavelId && q.tipo === 'fila.nova' ? [responsavelId] : q.alvos
-  await notificar(tx, alvos, 'agente.handoff', `${q.titulo} — o agente transferiu: ${motivo}`, conversaId)
+  await notificar(tx, q.alvos, 'agente.handoff', `${q.titulo} — o agente transferiu: ${motivo}`, conversaId)
 }
 
 /**

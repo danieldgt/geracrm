@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
-import { SLA_PADRAO, TEXTO_AVISO_ESPERA, TEXTO_AVISO_ESPERA_FORA } from '@geracrm/shared'
+import { SLA_PADRAO, TEXTO_AVISO_ESPERA, TEXTO_AVISO_ESPERA_FORA, playbookPadrao, type ConteudoPlaybook } from '@geracrm/shared'
 import { criarApp } from '../app.js'
 import { comTenantServico, encerrarBanco } from '../db/index.js'
 import { entregarParaHumano } from '../contexts/atendimento/agente/handoff.js'
+import { notificarMensagemEntrante } from '../contexts/atendimento/notificacao.js'
 import type { enviarTextoNaConversa } from '../contexts/atendimento/envio-conversa.js'
 import { processarSla, textoDaEspera } from './sla.js'
 
@@ -45,8 +46,10 @@ let app: FastifyInstance
 
 const enviados: { conversaId: string; texto: string; marcador?: string | undefined }[] = []
 let recusaDoGateway: string | null = null
+let explodirEm: string | null = null
 const enviarFalso: typeof enviarTextoNaConversa = async (_t, conversaId, texto, _r, _a, op = {}) => {
   enviados.push({ conversaId, texto, marcador: op.marcador })
+  if (explodirEm === conversaId) throw new Error('rede caiu')
   if (recusaDoGateway) return { ok: false, classe: 'recusa', motivo: recusaDoGateway, conversaId }
   return { ok: true, conversaId, mensagemId: randomUUID() }
 }
@@ -115,9 +118,9 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
-  enviados.length = 0; recusaDoGateway = null
+  enviados.length = 0; recusaDoGateway = null; explodirEm = null
   for (const t of ['notificacao', 'alerta', 'auditoria', 'atendimento_evento', 'atendimento_etapa_historico', 'mensagem',
-    'atendimento', 'carteira_atribuicao', 'conversa', 'contato_telefone', 'contato', 'lista_bloqueio', 'usuario_canal',
+    'agente_decisao', 'atendimento', 'carteira_atribuicao', 'conversa', 'contato_telefone', 'contato', 'lista_bloqueio', 'usuario_canal',
     'usuario_filial', 'atendimento_sla_config', 'canal_configuracao', 'outbox']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id IN ('${A}', '${B}')`)
   }
@@ -128,7 +131,7 @@ beforeEach(async () => {
 })
 
 afterAll(async () => {
-  for (const t of ['notificacao', 'alerta', 'auditoria', 'atendimento_evento', 'atendimento_etapa_historico', 'mensagem', 'atendimento',
+  for (const t of ['notificacao', 'alerta', 'auditoria', 'atendimento_evento', 'atendimento_etapa_historico', 'mensagem', 'agente_decisao', 'atendimento',
     'carteira_atribuicao', 'conversa', 'contato_telefone', 'contato', 'lista_bloqueio', 'usuario_canal', 'usuario_filial',
     'atendimento_sla_config', 'canal_configuracao', 'outbox', 'atendimento_etapa', 'agente_config', 'canal_conectado', 'usuario', 'filial']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id IN ('${A}', '${B}')`)
@@ -189,6 +192,8 @@ describe('handoff arma o SLA e roteia', () => {
     const c5 = await novaConversa()
     await handoff(c5.conversa, new Date())
     expect((await atendimentoDe(c5.conversa)).responsavel_id).toBe(GESTOR)
+    // Rota 'gestor' (tenant sem usuario_canal): o aviso vai a TODOS os gestores, não a um só.
+    expect((await notificacoes(c5.conversa, 'agente.handoff')).map((n) => n.usuario_id)).toEqual([GESTOR, ADM].sort())
   })
 })
 
@@ -215,6 +220,7 @@ describe('worker do SLA', () => {
     // Gestores (gestor e admin) avisados; Gil já tinha a pendência do handoff (era o responsável): o título troca.
     expect((await avisosCom(conversa, 'SLA do atendimento estourado')).map((n) => n.usuario_id)).toEqual([GESTOR, ADM].sort())
     const vezesGil = await vezesDe(conversa, GESTOR)
+    const vezesAdm = await vezesDe(conversa, ADM)
     const [al] = await dono<{ mensagem: string }[]>`SELECT mensagem FROM alerta WHERE tenant_id = ${A} AND tipo = 'sla_handoff_estourado' AND resolvido_em IS NULL`
     expect(al!.mensagem).toMatch(/^1 cliente/)
     const [ev] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM outbox WHERE tenant_id = ${A} AND tipo = 'atendimento.mudou' AND agregado_id = ${conversa}`
@@ -225,7 +231,7 @@ describe('worker do SLA', () => {
     await passada(min(40, t0))
     expect(enviados).toHaveLength(1)
     expect(await vezesDe(conversa, GESTOR)).toBe(vezesGil)
-    expect(await vezesDe(conversa, ADM)).toBe(1)
+    expect(await vezesDe(conversa, ADM)).toBe(vezesAdm)
   })
 
   it('no 2º limiar libera a reatribuição e avisa o pool do número', async () => {
@@ -331,6 +337,52 @@ describe('worker do SLA', () => {
     } finally { await unico.end() }
   })
 
+  it('⚠️ envia FORA da conexão de dono: com o pool de 1 e envio lento, outro worker consulta durante a passada', async () => {
+    const unico = postgres(process.env.DATABASE_ADMIN_URL!, { max: 1, onnotice: () => {} })
+    try {
+      const { conversa } = await novaConversa()
+      const t0 = new Date()
+      await handoff(conversa, t0)
+      let outroWorkerConsultou = false
+      const lento: typeof enviarTextoNaConversa = async (_t, conversaId) => {
+        // Enquanto a "rede" demora, outro worker usa a MESMA (e única) conexão.
+        outroWorkerConsultou = await Promise.race([
+          unico`SELECT 1 AS ok`.then(() => true),
+          new Promise<boolean>((ok) => setTimeout(() => ok(false), 2_000)),
+        ])
+        return { ok: true, conversaId, mensagemId: randomUUID() }
+      }
+      await processarSla(unico as never, { somenteTenant: A, enviar: lento }, min(31, t0))
+      expect(outroWorkerConsultou).toBe(true)
+      expect((await atendimentoDe(conversa)).aviso_espera_resultado).toBe('enviada')
+    } finally { await unico.end() }
+  })
+
+  it('exceção num envio grava "falhou" e o lote segue', async () => {
+    const c1 = await novaConversa()
+    const c2 = await novaConversa()
+    const t0 = new Date()
+    await handoff(c1.conversa, t0)
+    await handoff(c2.conversa, new Date(t0.getTime() + 1000))
+    explodirEm = c1.conversa
+    const r = await passada(min(32, t0))
+    expect(r.avisos).toMatchObject({ falhou: 1, enviada: 1 })
+    expect((await atendimentoDe(c1.conversa)).aviso_espera_resultado).toBe('falhou')
+    expect((await atendimentoDe(c2.conversa)).aviso_espera_resultado).toBe('enviada')
+  })
+
+  it('handoff de opt-out AMBÍGUO (marca possivel_opt_out, P4) não recebe espera: registra opt_out', async () => {
+    const { conversa } = await novaConversa()
+    const t0 = new Date()
+    await dono`INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, modo, desfecho, handoff_motivo, guardrails, criado_em)
+               VALUES (${A}, ${randomUUID()}, ${conversa}, ${NAO_OFICIAL}, 'autonomo', 'handoff', 'incerteza',
+                       ${JSON.stringify([{ etapa: 'gatilhos-entrada', codigo: 'possivel_opt_out', gravidade: 'ALTA', acao: 'handoff' }])}::text::jsonb, ${t0})`
+    await comTenantServico(A, (tx) => entregarParaHumano(tx, { conversaId: conversa, canalId: NAO_OFICIAL, sessaoId: null, motivo: 'incerteza', resumo: 'possível opt-out', agora: t0 }))
+    await passada(min(31, t0))
+    expect(enviados).toEqual([])
+    expect((await atendimentoDe(conversa)).aviso_espera_resultado).toBe('opt_out')
+  })
+
   it('RLS: a passada de um tenant não toca o outro', async () => {
     const { conversa } = await novaConversa({ tenant: B, canal: CANAL_B })
     const t0 = new Date()
@@ -342,19 +394,48 @@ describe('worker do SLA', () => {
   })
 })
 
-describe('texto da espera', () => {
-  it('usa o avisoEspera do playbook (P17) com placeholders; fora do expediente anexa o próximo horário', () => {
-    const agente = { persona: { nome: 'Lia', loja: 'Loja X' }, playbook: { conteudo: { mensagens: { avisoEspera: 'Oi {nome}, aqui é {assistente}: sua mensagem está com a equipe da {empresa}.' } } } }
+/** O espelho que a P17 grava em `agente_config.playbook` ao publicar. */
+const publicado = (ajuste: (c: ConteudoPlaybook) => ConteudoPlaybook) => ({
+  versaoId: randomUUID(), numero: 3, escopo: 'numero', publicadaEm: new Date().toISOString(), conteudo: ajuste(playbookPadrao()),
+})
+const comAviso = (avisoEspera: string) => publicado((c) => ({
+  ...c, persona: { ...c.persona, nome: 'Lia', loja: 'Loja X' }, mensagens: { ...c.mensagens, avisoEspera },
+}))
+describe('texto da espera (helpers da P17)', () => {
+  it('usa o avisoEspera do playbook PUBLICADO com placeholders; fora do expediente anexa o próximo horário', () => {
+    const agente = { playbook: comAviso('Oi {nome}, aqui é {assistente}: sua mensagem está com a equipe da {empresa}.') }
     expect(textoDaEspera(agente, 'Ana Maria', false)).toBe('Oi Ana, aqui é Lia: sua mensagem está com a equipe da Loja X.')
     expect(textoDaEspera(agente, 'Ana', true)).toMatch(/próximo horário de atendimento\.$/)
   })
+  it('espelho inválido (sem versão) é ignorado: vale o texto fixo', () => {
+    expect(textoDaEspera({ playbook: { conteudo: { mensagens: { avisoEspera: 'Oi, sua mensagem está com a equipe.' } } } }, null, false)).toBe(TEXTO_AVISO_ESPERA)
+  })
   it('playbook que promete prazo ou cita valor cai no texto fixo', () => {
     for (const t of ['Já já um vendedor te responde!', 'Temos desconto de R$ 50,00 para você.']) {
-      expect(textoDaEspera({ playbook: { conteudo: { mensagens: { avisoEspera: t } } } }, null, false)).toBe(TEXTO_AVISO_ESPERA)
+      expect(textoDaEspera({ playbook: comAviso(t) }, null, false)).toBe(TEXTO_AVISO_ESPERA)
     }
+  })
+  it('compliance do PLAYBOOK também barra (só acrescenta ao do número)', () => {
+    const agente = { playbook: publicado((c) => ({ ...c, compliance: { frasesProibidas: ['obrigado pela paciencia'], gatilhosHandoff: [] } })) }
+    expect(textoDaEspera(agente, null, false)).toBeNull()
   })
   it('frase proibida do compliance do número barra também o fixo → null (texto_bloqueado)', () => {
     expect(textoDaEspera({ compliance: { frasesProibidas: ['obrigado pela paciencia'], gatilhosHandoff: [] } }, null, false)).toBeNull()
+  })
+  it('no worker: o playbook publicado em agente_config é o texto que sai', async () => {
+    await dono`INSERT INTO agente_config (tenant_id, canal_id, ativo, modo, politicas, persona, alcada, playbook)
+               VALUES (${A}, ${NAO_OFICIAL}, true, 'assistido', 'x', '{"nome":"Lia","loja":"Loja X"}'::jsonb, '{}'::jsonb,
+                       ${JSON.stringify(comAviso('Sua mensagem está com a equipe da {empresa}, {nome}.'))}::text::jsonb)
+               ON CONFLICT (tenant_id, canal_id) DO UPDATE SET playbook = EXCLUDED.playbook`
+    try {
+      const { conversa } = await novaConversa()
+      const t0 = new Date()
+      await handoff(conversa, t0)
+      await passada(min(31, t0))
+      expect(enviados.map((e) => e.texto)).toEqual(['Sua mensagem está com a equipe da Loja X, Cliente.'])
+    } finally {
+      await dono`DELETE FROM agente_config WHERE tenant_id = ${A}`
+    }
   })
 })
 
@@ -371,6 +452,13 @@ describe('assumir o handoff (fila + reatribuição)', () => {
     expect(await atendimentoDe(conversa)).toMatchObject({ atendente_id: EU, estado: 'em_atendimento' })
   })
 
+  it('responsável AUSENTE agora não prende a reserva', async () => {
+    const { conversa } = await novaConversa({ dono: ANA })
+    await handoff(conversa, new Date())
+    await dono`UPDATE usuario SET ausente = true WHERE id = ${ANA}`
+    expect((await pedir('POST', `/v1/conversas/${conversa}/assumir`)).statusCode).toBe(201)
+  })
+
   it('gestão assume sempre', async () => {
     await dono`UPDATE usuario_filial SET papel = 'supervisor' WHERE usuario_id = ${EU}`
     const { conversa } = await novaConversa({ dono: ANA })
@@ -382,13 +470,20 @@ describe('assumir o handoff (fila + reatribuição)', () => {
     const { conversa } = await novaConversa({ dono: ANA })
     const t0 = new Date(Date.now() - 61 * 60_000)
     await handoff(conversa, t0)
-    await dono`UPDATE atendimento SET atendente_id = ${ANA}, estado = 'em_atendimento' WHERE conversa_id = ${conversa}`
+    const etapa = randomUUID()
+    await dono`INSERT INTO atendimento_etapa (tenant_id, id, ordem, chave, nome, tipo) VALUES (${A}, ${etapa}, 5, 'p18_aguardando', 'Aguardando nós', 'atendimento')`
+    await dono`UPDATE atendimento SET atendente_id = ${ANA}, estado = 'em_atendimento', etapa_id = ${etapa}, entrou_etapa_em = now() - interval '2 hours'
+                WHERE conversa_id = ${conversa}`
     // Antes da liberação: é da Ana.
     expect((await pedir('POST', `/v1/conversas/${conversa}/assumir`)).json()).toMatchObject({ erro: 'atendimento.ja_assumido' })
     await passada(new Date())
     const r = await pedir('POST', `/v1/conversas/${conversa}/assumir`)
     expect(r.statusCode).toBe(201)
-    expect((await atendimentoDe(conversa)).atendente_id).toBe(EU)
+    const [depois] = await dono<{ atendente_id: string; etapa_id: string; horas: number }[]>`
+      SELECT atendente_id, etapa_id, extract(epoch FROM now() - entrou_etapa_em) / 3600 AS horas FROM atendimento WHERE conversa_id = ${conversa}`
+    // A reatribuição troca a pessoa e MANTÉM a etapa (e o aging) do card.
+    expect(depois).toMatchObject({ atendente_id: EU, etapa_id: etapa })
+    expect(Number(depois!.horas)).toBeGreaterThan(1.9)
     const [aud] = await dono<{ dados: { de: string } }[]>`SELECT dados FROM auditoria WHERE tenant_id = ${A} AND acao = 'atendimento.reatribuido'`
     expect(aud!.dados.de).toBe(ANA)
   })
@@ -406,6 +501,39 @@ describe('fila, kanban e cronômetro', () => {
     const c = await pedir('GET', `/v1/conversas/${conversa}/sla`)
     expect(c.statusCode).toBe(200)
     expect(c.json().cronometro).toMatchObject({ respondidoEm: null, reatribuicaoLiberadaEm: null })
+  })
+
+  it('handoff LEGADO (sem SLA) já respondido não entra na fila', async () => {
+    const { conversa } = await novaConversa()
+    await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, estado) VALUES (${A}, ${randomUUID()}, ${conversa}, ${NAO_OFICIAL}, 918001, 'na_fila')`
+    await dono`UPDATE conversa SET ultima_direcao = 'saliente' WHERE id = ${conversa}`
+    expect((await pedir('GET', '/v1/fila/contadores')).json().fila).toBe(0)
+  })
+
+  it('handoff respondido direto pelo inbox (sem Assumir) sai da fila', async () => {
+    const { conversa } = await novaConversa()
+    const t0 = new Date()
+    await handoff(conversa, t0)
+    await dono`UPDATE conversa SET ultima_direcao = 'saliente' WHERE id = ${conversa}`
+    expect((await pedir('GET', '/v1/fila/contadores')).json().fila).toBe(1)
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, enviada_por_id, criado_em)
+               VALUES (${A}, ${randomUUID()}, ${conversa}, 'saliente', 'texto', '{"texto":"oi"}'::jsonb, ${ANA}, ${min(2, t0)})`
+    await passada(min(3, t0))
+    expect((await pedir('GET', '/v1/fila/contadores')).json().fila).toBe(0)
+    expect((await pedir('GET', '/v1/atendimento-kanban/aguardando')).json().itens).toEqual([])
+  })
+
+  it('mensagens seguintes do cliente avisam o responsável roteado (rota gestor: todos os gestores)', async () => {
+    const c1 = await novaConversa({ dono: ANA })
+    await handoff(c1.conversa, new Date())
+    await dono`DELETE FROM notificacao WHERE tenant_id = ${A}`
+    await comTenantServico(A, (tx) => notificarMensagemEntrante(tx, { conversaId: c1.conversa }))
+    expect((await dono<{ usuario_id: string }[]>`SELECT usuario_id FROM notificacao WHERE conversa_id = ${c1.conversa}`).map((n) => n.usuario_id)).toEqual([ANA])
+    const c2 = await novaConversa()
+    await handoff(c2.conversa, new Date())
+    await dono`DELETE FROM notificacao WHERE tenant_id = ${A}`
+    await comTenantServico(A, (tx) => notificarMensagemEntrante(tx, { conversaId: c2.conversa }))
+    expect((await dono<{ usuario_id: string }[]>`SELECT usuario_id FROM notificacao WHERE conversa_id = ${c2.conversa} ORDER BY usuario_id`).map((n) => n.usuario_id)).toEqual([GESTOR, ADM].sort())
   })
 
   it('conversa sem handoff: cronômetro null; outro tenant: 404', async () => {
@@ -470,6 +598,16 @@ describe('performance: SLA cumprido', () => {
     expect(fixo).toMatchObject({ slaFonte: 'fixo', slaMinutos: 5, slaHandoff: { medidos: 2, cumpridos: 1, estourados: 1, pctCumprido: 50 } })
     await dono`INSERT INTO atendimento_sla_config (tenant_id, canal_id, sla_minutos, reatribuicao_minutos) VALUES (${A}, ${NAO_OFICIAL}, 20, 40)`
     const cfg = (await pedir('GET', '/v1/performance?dias=7')).json()
-    expect(cfg).toMatchObject({ slaFonte: 'handoff', slaMinutos: 20, slaMinutosVariam: false, dentroSla: 1, pctDentroSla: 50 })
+    expect(cfg).toMatchObject({ slaFonte: 'handoff', slaMinutos: 20, slaMinutosVariam: false, dentroSla: 1, respondidos: 2, pctDentroSla: 50 })
+  })
+
+  it('mede na consulta: respondido e encerrado antes de o worker passar conta como cumprido', async () => {
+    const t0 = new Date(Date.now() - 3_600_000)
+    const c = await novaConversa(); await handoff(c.conversa, t0)
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, enviada_por_id, criado_em)
+               VALUES (${A}, ${randomUUID()}, ${c.conversa}, 'saliente', 'texto', '{"texto":"oi"}'::jsonb, ${ANA}, ${min(5, t0)})`
+    await dono`UPDATE atendimento SET estado = 'encerrado', encerrado_em = now() WHERE conversa_id = ${c.conversa}`
+    const r = (await pedir('GET', '/v1/performance?dias=7')).json()
+    expect(r.slaHandoff).toMatchObject({ medidos: 1, cumpridos: 1, estourados: 0, respondidos: 1, pctCumprido: 100 })
   })
 })

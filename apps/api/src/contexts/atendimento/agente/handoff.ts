@@ -18,7 +18,8 @@ import { armarSlaDoHandoff } from '../sla-handoff.js'
  *  4. marca a conversa como conduzida por humano;
  *  5. ARMA O SLA (P18, ADR-034): prazos em minutos ÚTEIS do número e o
  *     responsável roteado (dono da carteira → pool em rodízio → gestor);
- *  6. notifica (o responsável; sem ele, a fila ou o dono da carteira) e emite
+ *  6. notifica (o responsável; rota 'gestor' = todos os gestores; sem rota, a
+ *     fila ou o dono da carteira) e emite
  *     o evento de tempo real.
  *
  * Tudo numa transação só, chamada pelo turno.
@@ -60,7 +61,7 @@ export async function entregarParaHumano(
     INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
     VALUES (tenant_atual(), 'agente.handoff', 'conversa', ${p.conversaId},
             ${JSON.stringify({ conversaId: p.conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
-  const rota = aberto ? await armarSlaDoHandoff(tx, { atendimentoId: aberto.id, conversaId: p.conversaId, canalId: p.canalId, agora: p.agora }) : null
-  await notificarHandoffDoAgente(tx, p.conversaId, rotulo, rota?.usuarioId ?? null)
+  if (aberto) await armarSlaDoHandoff(tx, { atendimentoId: aberto.id, conversaId: p.conversaId, canalId: p.canalId, agora: p.agora })
+  await notificarHandoffDoAgente(tx, p.conversaId, rotulo)
   return { atendimentoId: aberto?.id ?? atId, criouAtendimento: !!criado }
 }

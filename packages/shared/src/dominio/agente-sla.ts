@@ -194,14 +194,3 @@ export const ROTULO_AVISO_ESPERA: Record<ResultadoAvisoEspera, string> = {
   texto_bloqueado: 'sem mensagem de espera: texto barrado pelo filtro',
   falhou: 'mensagem de espera não saiu (canal recusou)',
 }
-
-/** Placeholders aceitos na mensagem do playbook (P17): {nome}, {assistente}, {empresa}. */
-export function renderizarAvisoEspera(modelo: string, v: { nome?: string | null; assistente?: string | null; empresa?: string | null }): string {
-  return modelo
-    .replace(/\{nome\}/g, (v.nome ?? '').trim().split(/\s+/)[0] ?? '')
-    .replace(/\{assistente\}/g, (v.assistente ?? '').trim())
-    .replace(/\{empresa\}/g, (v.empresa ?? '').trim())
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/ +([,.!?])/g, '$1')
-    .trim()
-}

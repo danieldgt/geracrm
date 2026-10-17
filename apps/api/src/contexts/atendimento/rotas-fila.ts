@@ -155,11 +155,11 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
         // Já havia um atendimento aberto — quem tem?
         const [aberto] = await tx<{
           id: string; atendente_id: string | null; nome: string | null; protocolo: string; estado: string
-          responsavel_id: string | null; responsavel_nome: string | null
+          responsavel_id: string | null; responsavel_nome: string | null; responsavel_disponivel: boolean | null
           reatribuicao_liberada_em: Date | null; reatribuicao_vence_em: Date | null; respondido_em: Date | null
         }[]>`
           SELECT a.id, a.atendente_id, u.nome, a.protocolo, a.estado, a.responsavel_id, r.nome AS responsavel_nome,
-                 a.reatribuicao_liberada_em, a.reatribuicao_vence_em,
+                 (r.ativo AND NOT r.ausente) AS responsavel_disponivel, a.reatribuicao_liberada_em, a.reatribuicao_vence_em,
                  ${respostaHumanaDoAtendimento(tx)} AS respondido_em
             FROM atendimento a
             LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id
@@ -179,7 +179,11 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
           if (livre || reatribuivel) {
             const gestao = atendePapel(
               await papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff }), ['gestor', 'supervisor'])
-            if (livre && aberto.responsavel_id && aberto.responsavel_id !== usuarioId && !liberada && !gestao) {
+            // ⚠️ A reserva só vale com o responsável ATIVO e DISPONÍVEL agora: quem
+            //    se marcou ausente (ou foi desativado) depois do roteamento não pode
+            //    prender o cliente até o 2º limiar.
+            if (livre && aberto.responsavel_id && aberto.responsavel_id !== usuarioId && !liberada && !gestao
+              && aberto.responsavel_disponivel === true) {
               return {
                 tipo: 'reservado' as const, para: aberto.responsavel_nome,
                 ate: aberto.reatribuicao_vence_em ? aberto.reatribuicao_vence_em.toISOString() : null,
@@ -187,13 +191,15 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
             }
             const [tomado] = await tx<{ protocolo: string }[]>`
               UPDATE atendimento
-                 SET atendente_id = ${usuarioId}, estado = 'em_atendimento', assumido_em = now(),
-                     etapa_id = coalesce(${etapa?.id ?? null}::uuid, etapa_id), entrou_etapa_em = now(), versao = versao + 1
+                 SET atendente_id = ${usuarioId}, estado = 'em_atendimento', assumido_em = now(), versao = versao + 1,
+                     -- Reatribuição MANTÉM a etapa (e o aging) do card; só a fila ganha etapa.
+                     etapa_id = ${livre ? tx`coalesce(${etapa?.id ?? null}::uuid, etapa_id)` : tx`etapa_id`},
+                     entrou_etapa_em = ${livre ? tx`now()` : tx`entrou_etapa_em`}
                WHERE tenant_id = tenant_atual() AND id = ${aberto.id} AND estado <> 'encerrado'
                  AND atendente_id IS NOT DISTINCT FROM ${aberto.atendente_id}::uuid
               RETURNING protocolo`
             if (tomado) {
-              if (etapa?.id) {
+              if (livre && etapa?.id) {
                 await tx`UPDATE atendimento_etapa_historico SET saiu_em = now()
                           WHERE tenant_id = tenant_atual() AND atendimento_id = ${aberto.id} AND saiu_em IS NULL`
                 await tx`INSERT INTO atendimento_etapa_historico (tenant_id, id, atendimento_id, etapa_id, entrou_em, ator_id)
@@ -206,6 +212,15 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
                 dados: { protocolo: Number(tomado.protocolo), origem: 'handoff', ...(livre ? {} : { de: aberto.atendente_id }) },
               })
               return { tipo: 'assumido' as const, protocolo: Number(tomado.protocolo), meu: true, atendimentoId: aberto.id }
+            }
+            // Perdeu a corrida: devolve QUEM ganhou, lido agora — não o estado da 1ª leitura.
+            const [agora] = await tx<{ atendente_id: string | null; nome: string | null; protocolo: string }[]>`
+              SELECT a.atendente_id, u.nome, a.protocolo FROM atendimento a
+                LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id
+               WHERE a.tenant_id = tenant_atual() AND a.id = ${aberto.id}`
+            return {
+              tipo: 'ja_aberto' as const, meu: agora?.atendente_id === usuarioId,
+              por: agora?.nome ?? null, protocolo: Number(agora?.protocolo ?? aberto.protocolo),
             }
           }
         }

@@ -127,7 +127,8 @@ export async function armarSlaDoHandoff(
     UPDATE atendimento
        SET sla_inicio_em = ${p.agora}, sla_vence_em = ${prazos.venceEm},
            reatribuicao_vence_em = ${prazos.reatribuicaoVenceEm}, aviso_espera_previsto_em = ${prazos.avisoPrevistoEm},
-           responsavel_id = ${rota.usuarioId}
+           responsavel_id = ${rota.usuarioId},
+           responsavel_origem = ${rota.destino === 'ninguem' ? null : rota.destino}
      WHERE tenant_id = tenant_atual() AND id = ${p.atendimentoId}
        AND sla_vence_em IS NULL AND estado <> 'encerrado' AND atendente_id IS NULL
     RETURNING id`
@@ -158,6 +159,9 @@ export function respostaHumanaDoAtendimento(sql: Sql) {
  *      sumia das duas telas — tinha atendimento aberto, então não era "fila", e
  *      não tinha etapa, então não era coluna — e o "Assumir" respondia "em
  *      atendimento por outro atendente". O SLA mede justamente esse cliente.
+ *      ⚠️ Só enquanto ESPERA: o cliente falou por último, ou o SLA está armado e
+ *      ninguém respondeu. Handoff legado (sem SLA) já respondido e handoff
+ *      respondido direto pelo inbox, sem Assumir, saem da fila.
  */
 export function fragmentoNaFila(sql: Sql) {
   return sql`(
@@ -166,5 +170,29 @@ export function fragmentoNaFila(sql: Sql) {
         WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado <> 'encerrado'))
     OR EXISTS (
        SELECT 1 FROM atendimento a
-        WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado = 'na_fila' AND a.atendente_id IS NULL))`
+        WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado = 'na_fila' AND a.atendente_id IS NULL
+          AND (cv.ultima_direcao = 'entrante' OR (a.sla_vence_em IS NOT NULL AND a.sla_respondido_em IS NULL))))`
+}
+
+/**
+ * Quem o handoff ainda esperando deve avisar, pela MESMA regra do roteamento
+ * (P18): rota 'gestor' avisa TODOS os gestores; dono da carteira / pool avisam
+ * o responsável — se ele ainda estiver ativo e disponível. `null` = sem regra
+ * (sem handoff roteado, reatribuição já liberada ou responsável fora): quem
+ * chama cai na fila do número, como antes.
+ */
+export async function alvosDoHandoff(tx: Sql, conversaId: string): Promise<string[] | null> {
+  const [a] = await tx<{ responsavel_id: string; origem: string | null; disponivel: boolean }[]>`
+    SELECT a.responsavel_id, a.responsavel_origem AS origem, (u.ativo AND NOT u.ausente) AS disponivel
+      FROM atendimento a
+      JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.responsavel_id
+     WHERE a.tenant_id = tenant_atual() AND a.conversa_id = ${conversaId} AND a.estado = 'na_fila'
+       AND a.atendente_id IS NULL AND a.reatribuicao_liberada_em IS NULL
+     LIMIT 1`
+  if (!a) return null
+  if (a.origem === 'gestor') {
+    const gestores = (await gestoresDoTenant(tx)).filter((g) => !g.ausente).map((g) => g.id)
+    return gestores.length > 0 ? gestores : null
+  }
+  return a.disponivel ? [a.responsavel_id] : null
 }

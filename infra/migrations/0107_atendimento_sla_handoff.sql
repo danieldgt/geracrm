@@ -22,7 +22,9 @@
 --         aviso_espera_resultado   o que aconteceu com ela (enviada, ou por que não);
 --         sla_respondido_em        1ª mensagem de GENTE depois do início (mede o SLA);
 --         responsavel_id           para quem o handoff foi roteado (dono da
---                                  carteira → pool do número em rodízio → gestor).
+--                                  carteira → pool do número em rodízio → gestor);
+--         responsavel_origem       por qual regra (o aviso de mensagem nova segue a
+--                                  mesma: rota 'gestor' avisa TODOS os gestores).
 --
 -- ⚠️ Aditiva: tabela nova e colunas anuláveis. A versão anterior não as conhece
 --    e segue funcionando (atendimento sem SLA armado = como hoje).
@@ -60,11 +62,16 @@ ALTER TABLE atendimento
     ADD COLUMN aviso_espera_em          timestamptz NULL,
     ADD COLUMN aviso_espera_resultado   text        NULL,
     ADD COLUMN sla_respondido_em        timestamptz NULL,
-    ADD COLUMN responsavel_id           uuid        NULL;
+    ADD COLUMN responsavel_id           uuid        NULL,
+    ADD COLUMN responsavel_origem       text        NULL;
 
 ALTER TABLE atendimento ADD CONSTRAINT atendimento_responsavel_fk
     FOREIGN KEY (tenant_id, responsavel_id) REFERENCES usuario (tenant_id, id) NOT VALID;
 ALTER TABLE atendimento VALIDATE CONSTRAINT atendimento_responsavel_fk;
+
+ALTER TABLE atendimento ADD CONSTRAINT atendimento_responsavel_origem_valida CHECK (
+    responsavel_origem IS NULL OR responsavel_origem IN ('dono_carteira', 'pool', 'gestor')) NOT VALID;
+ALTER TABLE atendimento VALIDATE CONSTRAINT atendimento_responsavel_origem_valida;
 
 ALTER TABLE atendimento ADD CONSTRAINT atendimento_aviso_espera_resultado_valido CHECK (
     aviso_espera_resultado IS NULL OR aviso_espera_resultado IN (
@@ -73,7 +80,7 @@ ALTER TABLE atendimento ADD CONSTRAINT atendimento_aviso_espera_resultado_valido
         'desligado',           -- aviso_espera = false no número
         'humano_respondeu',
         'conversa_com_agente', -- a conversa voltou para o agente
-        'opt_out',
+        'opt_out',             -- lista de bloqueio OU handoff com marca possivel_opt_out (P4)
         'janela_fechada',      -- oficial fora das 24h: não envia, registra
         'texto_bloqueado',     -- nem o texto do playbook nem o fixo passaram na rede/filtro
         'falhou'               -- o gateway recusou ou o transporte falhou

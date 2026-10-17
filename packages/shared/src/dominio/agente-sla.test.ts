@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   COMPLEMENTO_AVISO_FORA, SLA_PADRAO, TEXTO_AVISO_ESPERA, falaDoProximoHorario, TEXTO_AVISO_ESPERA_FORA, corpoSlaConfig, duracaoCurta, faixaDoCronometro,
-  renderizarAvisoEspera, rotearHandoff, type PessoaRoteavel,
+  rotearHandoff, type PessoaRoteavel,
 } from './agente-sla.js'
 import { ajustarMensagemHandoff, filtrarSaida } from './agente-filtro.js'
 import { verificarNumerosNaResposta } from './agente-vendedor.js'
@@ -53,11 +53,6 @@ describe('textos fixos da espera', () => {
     expect(falaDoProximoHorario(TEXTO_AVISO_ESPERA_FORA)).toBe(true)
     expect(falaDoProximoHorario(COMPLEMENTO_AVISO_FORA)).toBe(true)
     expect(falaDoProximoHorario(TEXTO_AVISO_ESPERA)).toBe(false)
-  })
-  it('renderiza placeholders do playbook', () => {
-    expect(renderizarAvisoEspera('Oi {nome}, aqui é {assistente} da {empresa}.', { nome: 'Ana Maria', assistente: 'Bia', empresa: 'Loja X' }))
-      .toBe('Oi Ana, aqui é Bia da Loja X.')
-    expect(renderizarAvisoEspera('Oi {nome}, tudo certo.', { nome: null })).toBe('Oi, tudo certo.')
   })
 })
 

@@ -8,6 +8,8 @@ interface Perf {
   /** P18: 'handoff' = SLA configurado (cumprido dos handoffs, minutos úteis); 'fixo' = 5 min de relógio. */
   readonly slaFonte?: 'handoff' | 'fixo'
   readonly slaMinutosVariam?: boolean
+  /** Contagem geral de atendimentos respondidos por gente (com SLA configurado, `respondidos` vira a base do SLA). */
+  readonly respondidosPorGente?: number
   readonly slaHandoff?: { medidos: number; cumpridos: number; estourados: number; pendentes: number; pctCumprido: number | null }
   readonly total: number
   readonly assumidos: number
@@ -71,7 +73,7 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
               <div class="kpi">
                 <span class="txt-rotulo">Atendimentos</span>
                 <span class="txt-kpi">{{ p.total }}</span>
-                <span class="kpi-sub">{{ p.respondidos }} respondidos por gente</span>
+                <span class="kpi-sub">{{ p.respondidosPorGente ?? p.respondidos }} respondidos por gente</span>
               </div>
             </div>
 

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { respostaHumanaDoAtendimento } from '../atendimento/sla-handoff.js'
 
 /**
  * Performance de atendimento — SLA e 1ª resposta, agregados sobre `atendimento`
@@ -70,14 +71,21 @@ export async function rotasPerformance(app: FastifyInstance): Promise<void> {
            GROUP BY a.primeira_resposta_por_id, u.nome
            ORDER BY count(*) DESC LIMIT 10`
 
-        const [handoff] = await tx<{ medidos: number; cumpridos: number; estourados: number; pendentes: number }[]>`
-          SELECT count(*) FILTER (WHERE sla_respondido_em IS NOT NULL OR sla_estourado_em IS NOT NULL)::int AS medidos,
-                 count(*) FILTER (WHERE sla_respondido_em IS NOT NULL AND sla_respondido_em <= sla_vence_em)::int AS cumpridos,
-                 count(*) FILTER (WHERE sla_estourado_em IS NOT NULL
-                                     OR (sla_respondido_em IS NOT NULL AND sla_respondido_em > sla_vence_em))::int AS estourados,
-                 count(*) FILTER (WHERE sla_respondido_em IS NULL AND sla_estourado_em IS NULL AND estado <> 'encerrado')::int AS pendentes
-            FROM atendimento
-           WHERE tenant_id = tenant_atual() AND sla_vence_em IS NOT NULL AND sla_inicio_em >= ${desde}`
+        // ⚠️ A resposta é medida NA CONSULTA (`respostaHumanaDoAtendimento`), não só
+        //    pelo carimbo do worker: cobre o encerrado antes da passada e o
+        //    respondido nos últimos 30 s. Sem resposta e com o prazo vencido conta
+        //    como estourado mesmo que o worker não tenha passado (encerrado depois do prazo).
+        const [handoff] = await tx<{ medidos: number; cumpridos: number; estourados: number; pendentes: number; respondidos: number }[]>`
+          SELECT count(*) FILTER (WHERE resp IS NOT NULL OR estourado_em IS NOT NULL OR vence <= now())::int AS medidos,
+                 count(*) FILTER (WHERE resp IS NOT NULL AND resp <= vence)::int AS cumpridos,
+                 count(*) FILTER (WHERE (resp IS NOT NULL AND resp > vence)
+                                     OR (resp IS NULL AND (estourado_em IS NOT NULL OR vence <= now())))::int AS estourados,
+                 count(*) FILTER (WHERE resp IS NULL AND estourado_em IS NULL AND vence > now() AND estado <> 'encerrado')::int AS pendentes,
+                 count(*) FILTER (WHERE resp IS NOT NULL)::int AS respondidos
+            FROM (SELECT a.sla_vence_em AS vence, a.sla_estourado_em AS estourado_em, a.estado,
+                         coalesce(a.sla_respondido_em, ${respostaHumanaDoAtendimento(tx)}) AS resp
+                    FROM atendimento a
+                   WHERE a.tenant_id = tenant_atual() AND a.sla_vence_em IS NOT NULL AND a.sla_inicio_em >= ${desde}) s`
         const [cfg] = await tx<{ n: number; min: number | null; max: number | null }[]>`
           SELECT count(*)::int AS n, min(sla_minutos) AS min, max(sla_minutos) AS max
             FROM atendimento_sla_config WHERE tenant_id = tenant_atual()`
@@ -88,6 +96,7 @@ export async function rotasPerformance(app: FastifyInstance): Promise<void> {
       const h = dados.handoff
       const slaHandoff = {
         medidos: h?.medidos ?? 0, cumpridos: h?.cumpridos ?? 0, estourados: h?.estourados ?? 0, pendentes: h?.pendentes ?? 0,
+        respondidos: h?.respondidos ?? 0,
         pctCumprido: h?.medidos ? Math.round((h.cumpridos / h.medidos) * 100) : null,
       }
       const configurado = (dados.cfg?.n ?? 0) > 0
@@ -99,7 +108,10 @@ export async function rotasPerformance(app: FastifyInstance): Promise<void> {
         slaMinutosVariam: configurado && dados.cfg?.min !== dados.cfg?.max,
         total: g?.total ?? 0,
         assumidos: g?.assumidos ?? 0,
-        respondidos: g?.respondidos ?? 0,
+        // Configurado: `respondidos` é a BASE do SLA (handoffs decididos), para que
+        // dentroSla / respondidos = pctDentroSla. A contagem geral vai em `respondidosPorGente`.
+        respondidos: configurado ? slaHandoff.medidos : g?.respondidos ?? 0,
+        respondidosPorGente: g?.respondidos ?? 0,
         dentroSla: configurado ? slaHandoff.cumpridos : g?.dentro_sla ?? 0,
         pctDentroSla: configurado ? slaHandoff.pctCumprido
           : g?.respondidos ? Math.round(((g.dentro_sla) / g.respondidos) * 100) : null,
