@@ -65,14 +65,24 @@ const agendar = (conversaId: string, mensagemId?: string, atrasoMs?: number) =>
 describe('Debounce — uma pendente por conversa', () => {
   it('dado duas mensagens em sequência, quando agendam, então existe UMA tarefa com as duas mensagens', async () => {
     const m1 = 'b1f10000-aaaa-4000-8000-000000000001', m2 = 'b1f10000-aaaa-4000-8000-000000000002'
-    const a = await agendar(CONVERSA, m1)
-    const b = await agendar(CONVERSA, m2)
+    // ⚠️ P0d: o teto do debounce soma ao `criado_em` (relógio do BANCO); o `agora` do agendamento
+    //    vem do mesmo relógio, e a conferência é contra ele — com o relógio do host, o contêiner
+    //    atrasado sob carga (load ~70) fazia o teto "vencer" e o executar_em parecer 12 s no passado.
+    const doBanco = async () => (await dono<{ a: Date }[]>`SELECT clock_timestamp() AS a`)[0]!.a
+    const agendarAgora = async (mensagemId: string) => {
+      const agora = await doBanco()
+      return comTenantServico(T, (tx) => agendarTurno(tx, { conversaId: CONVERSA, canalId: CANAL, mensagemId, agora }))
+    }
+    const a = await agendarAgora(m1)
+    const b = await agendarAgora(m2)
     expect(a.reagendada).toBe(false)
     expect(b.reagendada).toBe(true)
     expect(b.tarefaId).toBe(a.tarefaId)
-    const [t] = await dono<{ mensagens_ids: string[]; executar_em: Date }[]>`SELECT mensagens_ids, executar_em FROM agente_tarefa WHERE tenant_id = ${T}`
+    const [t] = await dono<{ mensagens_ids: string[]; executar_em: Date; criado_em: Date }[]>`SELECT mensagens_ids, executar_em, criado_em FROM agente_tarefa WHERE tenant_id = ${T}`
     expect(t!.mensagens_ids).toEqual([m1, m2])
-    expect(t!.executar_em.getTime()).toBeGreaterThan(Date.now() + DEBOUNCE_MS - 500)
+    // Adiada pelo debounce da 2ª mensagem — e nunca além do teto contado do nascimento.
+    expect(t!.executar_em.getTime()).toBeGreaterThan(t!.criado_em.getTime() + DEBOUNCE_MS)
+    expect(t!.executar_em.getTime()).toBeLessThanOrEqual(t!.criado_em.getTime() + TETO_DEBOUNCE_MS)
   })
 
   it('o debounce tem teto: mensagens sem parar não adiam a execução para sempre', async () => {

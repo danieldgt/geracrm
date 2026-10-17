@@ -1,4 +1,5 @@
 import { TURNOS_ENTRE_AVALIACOES, amostraEfetiva, naAmostra, type GatilhoAvaliacao } from '@geracrm/shared'
+import { randomUUID } from 'node:crypto'
 import { comTenantServico, type Sql } from '../db/index.js'
 import type { PortaLlmFerramentas } from '../contexts/atendimento/agente/porta-llm.js'
 import { registrarRegrasPendentes, julgarSessao, tetoJuizEfetivo, type DesfechoJuiz } from '../contexts/atendimento/agente/qualidade/avaliacao.js'
@@ -20,8 +21,8 @@ import { juizDoAmbiente } from '../contexts/atendimento/agente/qualidade/juiz.js
  *      O juiz avalia a ÚLTIMA decisão com resposta da sessão; teto MENSAL por
  *      número (`qualidade_teto_mes_centavos`); alerta ao bater no teto.
  *
- * Idempotente por (decisão, tipo): duas passadas (ou dois processos — a trava
- * consultiva já evita) nunca avaliam nem cobram duas vezes.
+ * Idempotente por (decisão, tipo): duas passadas (ou dois processos — a
+ * concessão por sessão já evita) nunca avaliam nem cobram duas vezes.
  */
 export const INTERVALO_QUALIDADE_MS = 60_000
 const LOTE_REGRAS = 500
@@ -66,23 +67,39 @@ interface Candidata {
   readonly decisao_id: string | null
 }
 
+/**
+ * Quanto a concessão de uma sessão vale: o lote inteiro julgado em série com o juiz no
+ * prazo máximo (45 s) cabe com folga. Instância que morreu no meio: a sessão volta depois disso.
+ */
+export const TTL_CONCESSAO_JUIZ_MS = LOTE_JUIZ * 60_000 + 5 * 60_000
+
+/** Sessão escolhida e reservada para este processo, com o token que solta a concessão. */
+interface Reservada extends Candidata { readonly token: string }
+
+/**
+ * ⚠️ TRAVA E CONEXÃO (P0d). Nada aqui segura conexão durante o juiz:
+ *   1. regras: idempotentes por (decisão, tipo) — rodam sem trava;
+ *   2. lote: `pg_try_advisory_xact_lock` numa transação CURTA que só escolhe as
+ *      candidatas e grava a concessão com TTL de cada uma (`qualidade_juiz_concessao`);
+ *      o commit solta a trava (era `pg_try_advisory_lock` de sessão pelo pool: com
+ *      pool > 1 o unlock caía noutra conexão e a trava vazava);
+ *   3. juiz: fora de qualquer transação; ao terminar, a concessão sai pelo token.
+ * Com pool de 1 (o `donoAquisicao` é compartilhado por ~13 workers), outro worker consulta
+ * normalmente enquanto o juiz pensa.
+ */
 export async function processarQualidade(dono: Sql, deps: DepsQualidade = {}, agora: Date = new Date()): Promise<RelatorioQualidade> {
   const vazio: RelatorioQualidade = { processadas: 0, regras: 0, julgadas: 0, falhas: 0, noTeto: 0, juizIndisponivel: null }
-  const [trava] = await dono<{ ok: boolean }[]>`SELECT pg_try_advisory_lock(hashtext(${`qualidade_agente:${deps.somenteTenant ?? '*'}`})) AS ok`
-  if (!trava?.ok) return vazio
-  try {
-    const regras = await registrarRegrasPendentes(dono, comTenantServico, { agora, lote: LOTE_REGRAS, somenteTenant: deps.somenteTenant })
+  const regras = await registrarRegrasPendentes(dono, comTenantServico, { agora, lote: LOTE_REGRAS, somenteTenant: deps.somenteTenant })
 
-    const ambiente = deps.juiz ? null : juizDoAmbiente(deps.env)
-    const porta = deps.juiz ?? ambiente?.porta ?? null
-    const modelo = deps.modeloJuiz ?? ambiente?.modelo
-    if (!porta) return { ...vazio, processadas: regras, regras, juizIndisponivel: ambiente?.motivoIndisponivel ?? 'sem juiz' }
+  const ambiente = deps.juiz ? null : juizDoAmbiente(deps.env)
+  const porta = deps.juiz ?? ambiente?.porta ?? null
+  const modelo = deps.modeloJuiz ?? ambiente?.modelo
+  if (!porta) return { ...vazio, processadas: regras, regras, juizIndisponivel: ambiente?.motivoIndisponivel ?? 'sem juiz' }
 
-    const candidatas = await candidatasAoJuiz(dono, agora, deps.somenteTenant, tetoJuizEfetivo(null, deps.env))
-    let julgadas = 0, falhas = 0, noTeto = 0
-    for (const c of candidatas) {
-      // A amostra no SQL é um pré-filtro; esta é a régua (a mesma do shared).
-      if (!c.decisao_id || !naAmostra(c.conversa_id, amostraEfetiva(c.amostra === null ? null : Number(c.amostra), c.modo))) continue
+  const reservadas = await reservarLote(dono, agora, deps)
+  let julgadas = 0, falhas = 0, noTeto = 0
+  for (const c of reservadas) {
+    try {
       const gatilho: GatilhoAvaliacao = c.estado === 'ativa' ? 'turnos' : 'fim_sessao'
       const d: DesfechoJuiz = await julgarSessao((fn) => comTenantServico(c.tenant_id, fn), {
         tenantId: c.tenant_id, sessaoId: c.sessao_id, decisaoId: c.decisao_id!, conversaId: c.conversa_id, canalId: c.canal_id,
@@ -92,11 +109,40 @@ export async function processarQualidade(dono: Sql, deps: DepsQualidade = {}, ag
       if (d === 'avaliada') julgadas++
       else if (d === 'falhou') falhas++
       else if (d === 'teto') noTeto++
+    } finally {
+      await dono`DELETE FROM qualidade_juiz_concessao WHERE tenant_id = ${c.tenant_id} AND sessao_id = ${c.sessao_id} AND token = ${c.token}`
     }
-    return { processadas: regras + julgadas + falhas, regras, julgadas, falhas, noTeto, juizIndisponivel: null }
-  } finally {
-    await dono`SELECT pg_advisory_unlock(hashtext(${`qualidade_agente:${deps.somenteTenant ?? '*'}`}))`
   }
+  return { processadas: regras + julgadas + falhas, regras, julgadas, falhas, noTeto, juizIndisponivel: null }
+}
+
+/**
+ * Escolhe e RESERVA o lote numa transação curta, sob trava de transação (outra instância
+ * na mesma hora sai sem lote, sem esperar). Só volta a sessão cuja concessão este processo
+ * gravou: a de outra instância, ainda viva, fica de fora.
+ */
+async function reservarLote(dono: Sql, agora: Date, deps: DepsQualidade): Promise<readonly Reservada[]> {
+  const token = randomUUID()
+  const expiraEm = new Date(agora.getTime() + TTL_CONCESSAO_JUIZ_MS)
+  return dono.begin(async (tx) => {
+    const [trava] = await tx<{ ok: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${`qualidade_agente:${deps.somenteTenant ?? '*'}`})) AS ok`
+    if (!trava?.ok) return []
+    const candidatas = (await candidatasAoJuiz(tx as unknown as Sql, agora, deps.somenteTenant, tetoJuizEfetivo(null, deps.env)))
+      // A amostra no SQL é um pré-filtro; esta é a régua (a mesma do shared).
+      .filter((c) => c.decisao_id && naAmostra(c.conversa_id, amostraEfetiva(c.amostra === null ? null : Number(c.amostra), c.modo)))
+    const reservadas: Reservada[] = []
+    for (const c of candidatas) {
+      const pegou = await tx`
+        INSERT INTO qualidade_juiz_concessao (tenant_id, sessao_id, token, expira_em)
+        VALUES (${c.tenant_id}, ${c.sessao_id}, ${token}, ${expiraEm})
+        ON CONFLICT (tenant_id, sessao_id) DO UPDATE
+           SET token = EXCLUDED.token, expira_em = EXCLUDED.expira_em, criado_em = now()
+         WHERE qualidade_juiz_concessao.expira_em < ${agora}
+        RETURNING sessao_id`
+      if (pegou.length > 0) reservadas.push({ ...c, token })
+    }
+    return reservadas
+  }) as Promise<readonly Reservada[]>
 }
 
 /**
@@ -123,6 +169,9 @@ async function candidatasAoJuiz(dono: Sql, agora: Date, somenteTenant: string | 
         JOIN tenant t ON t.id = s.tenant_id
         CROSS JOIN LATERAL (SELECT coalesce((SELECT name FROM pg_timezone_names WHERE name = t.fuso), 'America/Sao_Paulo') AS fuso_ok) fz
        WHERE s.iniciada_em > ${desde} AND s.turnos > 0
+         -- Sessão com concessão viva (outra instância julgando agora) fica de fora do lote.
+         AND NOT EXISTS (SELECT 1 FROM qualidade_juiz_concessao q
+                          WHERE q.tenant_id = s.tenant_id AND q.sessao_id = s.id AND q.expira_em >= ${agora})
          ${somenteTenant ? dono`AND s.tenant_id = ${somenteTenant}` : dono``}
          AND qualidade_fracao_estavel(s.conversa_id::text) < coalesce(ac.qualidade_amostra,
                CASE s.modo WHEN 'sombra' THEN 1 WHEN 'assistido' THEN 0.2 WHEN 'autonomo' THEN 0.05 ELSE 0 END)

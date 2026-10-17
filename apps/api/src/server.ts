@@ -1,6 +1,7 @@
 import postgres from 'postgres'
 import { criarApp } from './app.js'
 import { encerrarBanco } from './db/index.js'
+import { APLICACAO_WORKERS } from './db/servidor-no-banco.js'
 import { iniciarBarramento } from './contexts/atendimento/eventos/barramento.js'
 import { despacharTodos, type FetchFn } from './contexts/integracao/webhook-saida.js'
 import { varrerAgendado, encerrarDonoAutomacao } from './contexts/crm/automacao-motor.js'
@@ -42,7 +43,7 @@ if (process.env.DATABASE_ADMIN_URL) {
   // ⚠️ max:1 de propósito: o despacho é serial e o advisory lock precisa de
   //    lock+unlock na MESMA conexão. Uma pool maior vazaria o lock entre
   //    conexões e somaria conexões ociosas ao pool principal + ao LISTEN.
-  donoWebhook = postgres(process.env.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {} })
+  donoWebhook = postgres(process.env.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {}, connection: { application_name: APLICACAO_WORKERS } })
   const entregar: FetchFn = (url, init) =>
     fetch(url, init as RequestInit).then((r) => ({ ok: r.ok, status: r.status }))
   // ⚠️ Guarda anti-sobreposição: se uma passada demora (fetch lento), a próxima
@@ -89,7 +90,7 @@ if (process.env.DATABASE_ADMIN_URL) {
   let conversoesMidia: ReturnType<typeof setInterval>
   // max:1 pelo mesmo motivo do despachante de webhooks: advisory lock exige
   // lock+unlock na MESMA conexão.
-  donoAquisicao = postgres(process.env.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {} })
+  donoAquisicao = postgres(process.env.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {}, connection: { application_name: APLICACAO_WORKERS } })
 
   let sincronizando = false
   sincronizacaoMidia = setInterval(() => {
@@ -307,7 +308,7 @@ let embeddingIntervalo: ReturnType<typeof setInterval> | undefined
 if (process.env.DATABASE_ADMIN_URL) {
   const portaEmbedding = embeddingDoAmbiente()
   if (portaEmbedding.capacidades.buscaSemantica) {
-    donoEmbedding = postgres(process.env.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {} })
+    donoEmbedding = postgres(process.env.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {}, connection: { application_name: APLICACAO_WORKERS } })
     let embutindo = false
     embeddingIntervalo = setInterval(() => {
       if (embutindo) return

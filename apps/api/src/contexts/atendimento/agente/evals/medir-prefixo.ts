@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
-import { persona as personaSchema, ALCADA_PADRAO, type SlotQualificacao } from '@geracrm/shared'
+import { persona as personaSchema, ALCADA_PADRAO, playbookPadrao, type PlaybookVigente, type SlotQualificacao } from '@geracrm/shared'
 import { BLOCO_GLOBAL, montarSistema } from '../instrucao-vendedor.js'
 import type { BlocoSistema, DefinicaoFerramentaLlm } from '../porta-llm.js'
 import { SUITE_B2B } from './suite-b2b.js'
@@ -11,7 +11,7 @@ import { SUITE_B2B } from './suite-b2b.js'
  * `pnpm --filter @geracrm/api agente:medir-prefixo [-- --politicas arquivo.txt] [--contar] [--json]`
  *
  * Mede o PREFIXO de cache do prompt do vendedor (playbook AM §8.4): bloco
- * GLOBAL + bloco do TENANT (persona, políticas, alçada) + definições das
+ * GLOBAL + bloco do TENANT (persona, políticas, alçada, playbook publicado) + definições das
  * ferramentas — o que vai para o cache do fornecedor e se paga a cada turno.
  * E acusa CONTEÚDO VOLÁTIL no system: data, hora, ISO, UUID, telefone ou
  * marcadores do turno ("Agora:", `<dados_cliente>`, pedido aberto). Se entrar
@@ -77,6 +77,25 @@ export interface ConfigPrefixo {
   readonly politicas: string
   readonly persona: { nome: string; loja: string }
   readonly slots?: readonly SlotQualificacao[]
+  /** O playbook publicado do número — entra no bloco do tenant (P0d). */
+  readonly playbook?: PlaybookVigente | null
+}
+
+/**
+ * Um playbook publicado de referência, com estilo, conduta, roteiro e mensagem de
+ * referência preenchidos: o que mais pesa no bloco do tenant e o que mais arrisca
+ * trazer algo volátil para o prefixo.
+ */
+export function playbookDeReferencia(): PlaybookVigente {
+  const c = playbookPadrao()
+  c.estilo = { tratamento: 'voce', maxCaracteres: 400, maxPerguntas: 1, orientacoes: 'Confirme a quantidade antes de cotar. Ofereça a linha profissional para revenda.' }
+  c.qualificacao = [
+    { slot: 'tipoCompra', pergunta: 'É para revenda ou para uso próprio?', obrigatorio: true, ativo: true },
+    { slot: 'volume', pergunta: 'Quantas caixas você precisa por mês?', obrigatorio: true, ativo: true },
+    { slot: 'cidade', pergunta: 'Para qual cidade é a entrega?', obrigatorio: false, ativo: true },
+  ]
+  c.mensagens = { ...c.mensagens, despedida: 'Obrigada pela preferência, {nome}! Qualquer coisa, é só chamar.' }
+  return { versaoId: 'referencia', numero: 3, escopo: 'numero', publicadaEm: '', conteudo: c }
 }
 
 export function medirPrefixo(sistema: () => readonly BlocoSistema[], ferramentas: readonly DefinicaoFerramentaLlm[], agora = new Date()): RelatorioPrefixo {
@@ -103,6 +122,7 @@ export function medirPrefixo(sistema: () => readonly BlocoSistema[], ferramentas
 export function sistemaDoVendedor(c: ConfigPrefixo, capacidades = { catalogo: true, pedido: true, conhecimento: true }): () => readonly BlocoSistema[] {
   return () => montarSistema({
     persona: personaSchema.parse(c.persona), politicas: c.politicas, objetivo: 'vender', slots: c.slots ?? [], alcada: ALCADA_PADRAO, capacidades,
+    playbook: c.playbook ?? null,
   })
 }
 
@@ -155,7 +175,7 @@ export async function executarMedirPrefixo(argv: readonly string[], io: IoMedir)
     try { politicas = await io.ler(resolve(io.env.INIT_CWD ?? process.cwd(), arq)) } catch (e) { io.erro(`não consegui ler ${arq}: ${(e as Error).message}\n`); return 1 }
     origem = arq
   }
-  const sistema = sistemaDoVendedor({ politicas, persona: SUITE_B2B.persona })
+  const sistema = sistemaDoVendedor({ politicas, persona: SUITE_B2B.persona, playbook: playbookDeReferencia() })
   const ferramentas = await definicoesDasFerramentas()
   const r = medirPrefixo(sistema, ferramentas, io.agora)
 

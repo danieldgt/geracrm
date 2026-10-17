@@ -153,6 +153,14 @@ afterAll(async () => {
   await app.close(); await encerrarBanco(); await dono.end()
 })
 
+/**
+ * ⚠️ P0d: `executar_em` da tarefa nasce com o `now()` do Postgres (contêiner) e a passada compara com o
+ * `agora` que recebe. Com o relógio do HOST, a tarefa recém-criada podia não estar vencida: sob carga
+ * do host (load ~20) o relógio do contêiner ficou à frente e 7 de 10 rodadas deste arquivo falharam
+ * isoladas. As passadas usam o relógio do BANCO — o mesmo que carimbou a tarefa.
+ */
+const agoraDoBanco = async (): Promise<Date> => (await dono<{ a: Date }[]>`SELECT clock_timestamp() AS a`)[0]!.a
+
 const nenhumaRede = () => {
   expect(fetchEspiao).not.toHaveBeenCalled()
   expect(espioes.criados).toBe(0)
@@ -199,7 +207,7 @@ describe('Worker de pós-ingestão — a rede sai daqui, com retry', () => {
     nenhumaRede()
     fetchEspiao.mockResolvedValue(new Response(Buffer.from([9, 9, 9]), { status: 200, headers: { 'content-type': 'image/jpeg' } }))
 
-    const r = await processarPosIngestao(dono as never, { somenteTenant: T }, new Date())
+    const r = await processarPosIngestao(dono as never, { somenteTenant: T }, await agoraDoBanco())
     expect(r).toMatchObject({ processadas: 4, feitas: 4, reagendadas: 0, falharam: 0 })
     expect(espioes.enviados.map((e) => e.texto)).toEqual(['Estamos fechados agora.', 'Estamos fechados agora.'])
     expect(espioes.baixados).toEqual(['MEDIA-P11-1'])          // Meta: pelo adaptador, com o token
@@ -211,14 +219,14 @@ describe('Worker de pós-ingestão — a rede sai daqui, com retry', () => {
     expect(midias.map((m) => m.conteudo.imagem)).toEqual([`tenant/${T}/midia-p11.bin`, `tenant/${T}/midia-p11.bin`])
 
     // Passada seguinte não refaz nada.
-    expect(await processarPosIngestao(dono as never, { somenteTenant: T }, new Date())).toMatchObject({ processadas: 0 })
+    expect(await processarPosIngestao(dono as never, { somenteTenant: T }, await agoraDoBanco())).toMatchObject({ processadas: 0 })
   })
 
   it('falha de rede reagenda com backoff e a tentativa seguinte conclui', async () => {
     await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: imagemPlugZapi('P11-NAO-R') })
     let falhar = true
     const copiar = vi.fn(async () => !falhar)
-    const agora = new Date()
+    const agora = await agoraDoBanco()
     const r1 = await processarPosIngestao(dono as never, { somenteTenant: T, copiar, responder: async () => respostaFalsa('enviada') }, agora)
     expect(r1).toMatchObject({ feitas: 1, reagendadas: 1 })
     const [, midia] = await tarefas()
@@ -236,7 +244,7 @@ describe('Worker de pós-ingestão — a rede sai daqui, com retry', () => {
   it('esgotou as tentativas → falhou com o detalhe (a mensagem segue com a URL do provedor)', async () => {
     await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: imagemPlugZapi('P11-NAO-F') })
     const copiar = vi.fn(async () => { throw new Error('provedor fora') })
-    let agora = new Date()
+    let agora = await agoraDoBanco()
     for (let i = 0; i < MAX_TENTATIVAS_POS_INGESTAO.midia; i++) {
       await processarPosIngestao(dono as never, { somenteTenant: T, copiar, responder: async () => respostaFalsa('tem_quem_atenda') }, agora)
       agora = new Date(agora.getTime() + 60 * 60_000)
@@ -250,7 +258,7 @@ describe('Worker de pós-ingestão — a rede sai daqui, com retry', () => {
   it('ausência com envio recusado/transporte reagenda; a próxima passada envia', async () => {
     await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: imagemPlugZapi('P11-NAO-A') })
     espioes.enviarOk = false
-    const agora = new Date()
+    const agora = await agoraDoBanco()
     const copiar = async () => true
     expect(await processarPosIngestao(dono as never, { somenteTenant: T, copiar }, agora)).toMatchObject({ reagendadas: 1, feitas: 1 })
     espioes.enviarOk = true
@@ -272,13 +280,13 @@ describe('Ausência no worker: só transporte re-tenta; atrasada ou já respondi
     await dono`INSERT INTO lista_bloqueio (tenant_id, chave_bloqueio, motivo) VALUES (${T}, ${chave}, 'opt_out') ON CONFLICT DO NOTHING`
     try {
       await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: textoDe('P11-OPT-1') })
-      const r1 = await processarPosIngestao(dono as never, { somenteTenant: T }, new Date())
+      const r1 = await processarPosIngestao(dono as never, { somenteTenant: T }, await agoraDoBanco())
       expect(r1).toMatchObject({ processadas: 1, feitas: 1, reagendadas: 0 })   // recusa é FINAL
       expect(espioes.enviados).toEqual([])                                         // o gateway barrou antes do adaptador
       expect(await bolhas()).toEqual([{ status: 'falhou' }])
 
       await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: { ...textoDe('P11-OPT-2'), momment: Date.now() + 1000 } })
-      await processarPosIngestao(dono as never, { somenteTenant: T }, new Date(Date.now() + 2000))
+      await processarPosIngestao(dono as never, { somenteTenant: T }, new Date((await agoraDoBanco()).getTime() + 2000))
       expect(await bolhas()).toHaveLength(1)                                       // nenhuma bolha repetida
       const ts = await tarefas()
       expect(ts.map((t) => [t.estado, t.tentativas])).toEqual([['feita', 1], ['feita', 1]])
@@ -291,7 +299,7 @@ describe('Ausência no worker: só transporte re-tenta; atrasada ou já respondi
   it('tarefa de ausência com mais de 15 min é descartada (não responde fora de hora)', async () => {
     await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: textoDe('P11-VELHA') })
     await dono`UPDATE tarefa_pos_ingestao SET criado_em = now() - interval '16 minutes' WHERE tenant_id = ${T}`
-    expect(await processarPosIngestao(dono as never, { somenteTenant: T }, new Date())).toMatchObject({ descartadas: 1, feitas: 0 })
+    expect(await processarPosIngestao(dono as never, { somenteTenant: T }, await agoraDoBanco())).toMatchObject({ descartadas: 1, feitas: 0 })
     expect(espioes.enviados).toEqual([])
     expect((await tarefas())[0]!.detalhe).toContain('atrasada')
   })
@@ -299,9 +307,14 @@ describe('Ausência no worker: só transporte re-tenta; atrasada ou já respondi
   it('alguém já respondeu depois da mensagem → a ausência é descartada', async () => {
     await app.inject({ method: 'POST', url: `/webhooks/plugzapi/${NAO}`, payload: textoDe('P11-RESPONDIDA') })
     const [c] = await dono<{ id: string }[]>`SELECT id FROM conversa WHERE tenant_id = ${T}`
+    // ⚠️ P0d: a resposta nasce 1 s depois da mensagem do CLIENTE pelo mesmo relógio (o `momment` do
+    //    payload, gravado na tarefa) — não pelo `now()` do banco: comparar o relógio do host com o do
+    //    Postgres (Docker) com 1 s de folga falhava quando o contêiner atrasava sob carga.
     await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, criado_em)
-               VALUES (${T}, gen_random_uuid(), ${c!.id}, 'saliente', 'texto', '{"texto":"Oi! Já te ajudo."}'::jsonb, 'enviada', now() + interval '1 second')`
-    expect(await processarPosIngestao(dono as never, { somenteTenant: T }, new Date())).toMatchObject({ descartadas: 1 })
+               SELECT ${T}, gen_random_uuid(), ${c!.id}, 'saliente', 'texto', '{"texto":"Oi! Já te ajudo."}'::jsonb, 'enviada',
+                      t.mensagem_criado_em + interval '1 second'
+                 FROM tarefa_pos_ingestao t WHERE t.tenant_id = ${T} AND t.tipo = 'automatica'`
+    expect(await processarPosIngestao(dono as never, { somenteTenant: T }, await agoraDoBanco())).toMatchObject({ descartadas: 1 })
     expect(espioes.enviados).toEqual([])
   })
 })

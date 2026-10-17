@@ -346,4 +346,70 @@ describe('worker de qualidade', () => {
     // A passada de B não toca em A.
     expect((await rodar(B)).processadas).toBe(0)
   })
+
+  // P0d: a trava era `pg_try_advisory_lock` de sessão pelo pool — com pool > 1 o unlock caía noutra
+  // conexão e a trava vazava. Agora: trava de transação curta só para escolher e reservar o lote.
+  it('[P0d] pool de 1: outro worker consulta pelo MESMO pool enquanto o juiz pensa', async () => {
+    await dono`UPDATE agente_config SET qualidade_amostra = 1 WHERE tenant_id = ${A}`
+    await conversaCom(A, CANAL_A, { turnos: 1 })
+    const poolDeUm = postgres(process.env.DATABASE_ADMIN_URL!, { max: 1, onnotice: () => {} })
+    try {
+      let outroWorker: 'respondeu' | 'esperou' = 'esperou'
+      const pensando: PortaLlmFerramentas = { ...juizFalso, async rodar(p) {
+        // Outro worker usando o mesmo pool (o `donoAquisicao` é max 1): se o juiz prendesse a
+        // conexão (tx aberta ou conexão reservada), esta consulta esperaria para sempre.
+        outroWorker = await Promise.race([
+          poolDeUm`SELECT 1`.then(() => 'respondeu' as const),
+          new Promise<'esperou'>((res) => setTimeout(() => res('esperou'), 3_000)),
+        ])
+        return juizFalso.rodar(p)
+      } }
+      const r = await processarQualidade(poolDeUm as never, { juiz: pensando, somenteTenant: A }, new Date())
+      expect(outroWorker).toBe('respondeu')
+      expect(r.julgadas).toBe(1)
+      expect((await dono`SELECT 1 FROM qualidade_juiz_concessao WHERE tenant_id = ${A}`).length).toBe(0)
+    } finally {
+      await poolDeUm.end()
+    }
+  })
+
+  it('[P0d] pool maior que 1, duas passadas ao mesmo tempo: cada sessão é julgada uma vez e a trava não vaza', async () => {
+    await dono`UPDATE agente_config SET qualidade_amostra = 1 WHERE tenant_id = ${A}`
+    for (let i = 0; i < 3; i++) await conversaCom(A, CANAL_A, { turnos: 1 })
+    const pool = postgres(process.env.DATABASE_ADMIN_URL!, { max: 4, onnotice: () => {} })
+    try {
+      const lento: PortaLlmFerramentas = { ...juizFalso, async rodar(p) {
+        await new Promise((res) => setTimeout(res, 50))
+        return juizFalso.rodar(p)
+      } }
+      const passada = () => processarQualidade(pool as never, { juiz: lento, somenteTenant: A }, new Date())
+      const [r1, r2] = await Promise.all([passada(), passada()])
+      expect(r1.julgadas + r2.julgadas).toBe(3)
+      expect(chamadas.length).toBe(3) // o modelo foi pago uma vez por sessão
+      // Nenhuma trava consultiva ficou presa em conexão alguma: outro processo pega na hora.
+      const outro = postgres(process.env.DATABASE_ADMIN_URL!, { max: 1, onnotice: () => {} })
+      try {
+        const [t] = await outro<{ ok: boolean }[]>`SELECT pg_try_advisory_lock(hashtext(${`qualidade_agente:${A}`})) AS ok`
+        expect(t!.ok).toBe(true)
+        await outro`SELECT pg_advisory_unlock(hashtext(${`qualidade_agente:${A}`}))`
+      } finally { await outro.end() }
+      expect((await dono`SELECT 1 FROM qualidade_juiz_concessao WHERE tenant_id = ${A}`).length).toBe(0)
+    } finally {
+      await pool.end()
+    }
+  })
+
+  it('[P0d] concessão viva de outra instância: a sessão fica de fora; expirada, volta ao lote', async () => {
+    await dono`UPDATE agente_config SET qualidade_amostra = 1 WHERE tenant_id = ${A}`
+    const { sessao } = await conversaCom(A, CANAL_A, { turnos: 1 })
+    // O worker compara `expira_em` com o `agora` que recebe (relógio do processo): semeado pelo mesmo
+    // relógio — com `now()` do contêiner, uma pausa do VM do Docker (relógio minutos atrás) mudava o resultado.
+    await dono`INSERT INTO qualidade_juiz_concessao (tenant_id, sessao_id, token, expira_em)
+               VALUES (${A}, ${sessao}, ${crypto.randomUUID()}, ${new Date(Date.now() + 5 * 60_000)})`
+    expect((await rodar(A)).julgadas).toBe(0)
+    expect(chamadas.length).toBe(0)
+    await dono`UPDATE qualidade_juiz_concessao SET expira_em = ${new Date(Date.now() - 1000)} WHERE tenant_id = ${A} AND sessao_id = ${sessao}`
+    expect((await rodar(A)).julgadas).toBe(1)
+    expect((await dono`SELECT 1 FROM qualidade_juiz_concessao WHERE tenant_id = ${A}`).length).toBe(0)
+  })
 })

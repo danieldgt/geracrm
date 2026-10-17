@@ -39,11 +39,14 @@ export async function vigiarConexaoCanais(
   //    caminho "canal DE PÉ" não pode ser exercitado com credencial falsa, que
   //    sempre responde caído. Sem esta injeção, o ramo que FECHA o alerta ficaria
   //    sem teste — justamente o que estava quebrado.
-  deps: { readonly criar?: typeof criarCanal } = {},
+  //    `somenteTenant` restricts the pass to one tenant (tests against the shared database:
+  //    without it the pass walks every tenant's channels and calls each provider).
+  deps: { readonly criar?: typeof criarCanal; readonly somenteTenant?: string | undefined } = {},
 ): Promise<ResumoVigiaCanal> {
   const criar = deps.criar ?? criarCanal
+  const chaveTrava = `vigia_conexao_canal${deps.somenteTenant ? `:${deps.somenteTenant}` : ''}`
   const [trava] = await sql<{ ok: boolean }[]>`
-    SELECT pg_try_advisory_lock(hashtext('vigia_conexao_canal')) AS ok`
+    SELECT pg_try_advisory_lock(hashtext(${chaveTrava})) AS ok`
   if (!trava?.ok) return { verificados: 0, caiu: 0, voltou: 0 }
 
   try {
@@ -57,7 +60,8 @@ export async function vigiarConexaoCanais(
          AND provedor IS NOT NULL AND credenciais_cifradas IS NOT NULL
          -- ⚠️ Canal arquivado saiu da frota (0083): vigiar um número que
          --    ninguém mais vê só produziria alerta sobre o que foi removido.
-         AND arquivado_em IS NULL`
+         AND arquivado_em IS NULL
+         ${deps.somenteTenant ? sql`AND tenant_id = ${deps.somenteTenant}` : sql``}`
 
     let verificados = 0, caiu = 0, voltou = 0
 
@@ -126,7 +130,7 @@ export async function vigiarConexaoCanais(
 
     return { verificados, caiu, voltou }
   } finally {
-    await sql`SELECT pg_advisory_unlock(hashtext('vigia_conexao_canal'))`
+    await sql`SELECT pg_advisory_unlock(hashtext(${chaveTrava}))`
   }
 }
 

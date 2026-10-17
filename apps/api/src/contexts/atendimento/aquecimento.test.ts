@@ -71,7 +71,8 @@ describe('statusAquecimento', () => {
   })
 
   it('⚠️ dia 0: teto 20, conta o disparo de hoje e devolve o restante', async () => {
-    await dono`INSERT INTO canal_aquecimento (tenant_id, canal_id, iniciado_em) VALUES (${T}, ${CANAL}, now())`
+    const agora = new Date()
+    await dono`INSERT INTO canal_aquecimento (tenant_id, canal_id, iniciado_em) VALUES (${T}, ${CANAL}, ${agora})`
     // Uma campanha por este canal com 3 envios ENVIADOS hoje.
     const camp = randomUUID()
     await dono`INSERT INTO campanha (tenant_id, id, nome, canal_id, mensagem, estado, disparada_em) VALUES (${T}, ${camp}, 'C', ${CANAL}, 'oi', 'disparando', now())`
@@ -81,13 +82,16 @@ describe('statusAquecimento', () => {
       await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${c}, ${'C' + i}, 'teste', true)`
       await dono`INSERT INTO campanha_envio (tenant_id, id, campanha_id, contato_id, estado, enviado_em) VALUES (${T}, ${randomUUID()}, ${camp}, ${c}, 'enviado', now())`
     }
-    const s = await comoT((tx) => statusAquecimento(tx, CANAL, new Date()))
+    const s = await comoT((tx) => statusAquecimento(tx, CANAL, agora))
     expect(s).toMatchObject({ emAquecimento: true, dia: 0, limiteHoje: 20, usadoHoje: 3, restante: 17 })
   })
 
   it('dia 5: teto maior que no dia 0', async () => {
-    await dono`INSERT INTO canal_aquecimento (tenant_id, canal_id, iniciado_em) VALUES (${T}, ${CANAL}, now() - interval '5 days')`
-    const s = await comoT((tx) => statusAquecimento(tx, CANAL, new Date()))
+    // P0d: início e "agora" pelo MESMO relógio (o do host). Com `now()` do contêiner à frente do host,
+    // `new Date()` dava 4 dias e 23 h — dia 4 — sob carga.
+    const agora = new Date()
+    await dono`INSERT INTO canal_aquecimento (tenant_id, canal_id, iniciado_em) VALUES (${T}, ${CANAL}, ${new Date(agora.getTime() - 5 * 86_400_000)})`
+    const s = await comoT((tx) => statusAquecimento(tx, CANAL, agora))
     expect(s.dia).toBe(5)
     expect(s.limiteHoje).toBe(limiteDiario(5))
     expect(s.limiteHoje).toBeGreaterThan(20)

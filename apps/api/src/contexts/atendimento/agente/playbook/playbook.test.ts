@@ -1,14 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import postgres from 'postgres'
 import type { FastifyInstance } from 'fastify'
-import { playbookPadrao, type ConteudoPlaybook } from '@geracrm/shared'
+import { personaDoPlaybook, playbookPadrao, type ConteudoPlaybook } from '@geracrm/shared'
 import { criarApp } from '../../../../app.js'
 import { encerrarBanco, comTenantServico } from '../../../../db/index.js'
 import { conduzirTurnoVendedor } from '../vendedor.js'
 import { depsPlaybook } from '../rotas-playbook.js'
 import { ferramentaMemoriaAnotar } from '../memoria/ferramenta-memoria.js'
 import { montarFerramentas } from '../ferramentas/montar.js'
-import type { PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
+import type { PedidoDeLaco, PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
+import { aplicarPlaybookAoSistema } from '../instrucao-vendedor.js'
+import { detectarVolatil } from '../evals/medir-prefixo.js'
 import type { ContextoFerramenta } from '../ferramentas/porta.js'
 import type { Ligacoes } from '../ferramentas/ligacoes-porta.js'
 
@@ -259,6 +261,47 @@ describe('Rascunho → publicar → a próxima mensagem muda (turno real)', () =
     expect(r.desfecho).toBe('handoff')
     expect(enviados[0]).toBe('Anotado! No próximo horário de atendimento alguém da equipe segue com você por aqui.')
     await dono`DELETE FROM atendimento WHERE tenant_id = ${A}`
+  })
+  // P0d: o playbook entrava como OPERADOR a cada turno (sem cache). Agora vai no bloco do tenant.
+  it('[P0d] o playbook publicado vai no bloco do tenant (cacheado) e a instrução do turno fica só com o que muda por turno', async () => {
+    const pedidos: PedidoDeLaco[] = []
+    const espiao: PortaLlmFerramentas = { ...llmQueDiz(['Temos sim.']), async rodar(p) { pedidos.push(p); return llmQueDiz(['Temos sim.']).rodar(p) } }
+    for (const texto of ['quero camisetas', 'e bonés?']) {
+      await dono`DELETE FROM agente_sessao WHERE tenant_id = ${A} AND conversa_id = ${CONVERSA}`
+      await conduzirTurnoVendedor(
+        { tenant_id: A, id: crypto.randomUUID(), conversa_id: CONVERSA, canal_id: CANAL, mensagens_ids: [await msg(texto)], tentativas: 1, executar_em: new Date() },
+        { llm: espiao, ligacoes: ligacoesFalsas, enviar: enviarFalso },
+      )
+    }
+    expect(pedidos.length).toBe(2)
+    const tenant = pedidos[0]!.sistema[1]!
+    expect(tenant.cachear).toBe(true)
+    expect(tenant.texto).toContain('<playbook versao="v2">')
+    expect(tenant.texto).toContain('No máximo 1 pergunta(s) por mensagem.')
+    // Mesmo prefixo nos dois turnos (o cache vale) e nada volátil nele.
+    expect(JSON.stringify(pedidos[1]!.sistema)).toBe(JSON.stringify(pedidos[0]!.sistema))
+    expect(detectarVolatil(pedidos[0]!.sistema.map((b, i) => ({ nome: `bloco${i}`, texto: b.texto })))).toEqual([])
+    // A instrução do turno (operador) não repete o playbook.
+    for (const p of pedidos) {
+      const operador = p.mensagens.filter((m) => m.papel === 'operador').map((m) => m.texto).join('\n')
+      expect(operador).toContain('Agora:')
+      expect(operador).not.toContain('<playbook')
+      expect(operador).not.toContain('No máximo 1 pergunta')
+    }
+    await dono`DELETE FROM atendimento WHERE tenant_id = ${A}`
+  })
+
+  it('[P0d] sandbox: o <playbook> do rascunho substitui o publicado no bloco do tenant (ou entra no fim, se não há publicado)', () => {
+    const rascunho = playbookPadrao()
+    rascunho.estilo.orientacoes = 'Seja breve.'
+    const persona = personaDoPlaybook(rascunho)
+    const sistema = [{ texto: 'GLOBAL', cachear: true }, { texto: '<persona>x</persona>\n<objetivo>y</objetivo>\n\n<playbook versao="v2">\nantigo\n</playbook>', cachear: true }]
+    const [, trocado] = aplicarPlaybookAoSistema(sistema, { persona, objetivo: 'vender', slots: [], playbook: rascunho })
+    expect(trocado!.texto).not.toContain('antigo')
+    expect(trocado!.texto).toContain('Seja breve.')
+    expect(trocado!.texto.match(/<playbook/g)?.length).toBe(1)
+    const [, semPublicado] = aplicarPlaybookAoSistema([sistema[0]!, { texto: '<persona>x</persona>\n<objetivo>y</objetivo>', cachear: true }], { persona, objetivo: 'vender', slots: [], playbook: rascunho })
+    expect(semPublicado!.texto).toMatch(/<\/objetivo>\n\n<playbook>[\s\S]*Seja breve\.[\s\S]*<\/playbook>$/)
   })
 })
 

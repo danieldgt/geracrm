@@ -95,6 +95,20 @@ const donoV = postgres(process.env.DATABASE_ADMIN_URL!, { max: 1, onnotice: () =
 const sqlV = donoV as unknown as Sql
 const AGORA_V = new Date('2026-08-24T12:00:00Z')
 
+/**
+ * ⚠️ Flaky fixed in P0d: without the tenant cut the pass walked EVERY channel in the shared
+ * database (other files create PlugZapi channels with fake credentials) and called the real
+ * provider for each, with no timeout — 20 s in the full suite. The provider answers like the
+ * fake credential does in production ("You are not connected."), with no network.
+ */
+const soDesteTenant = {
+  somenteTenant: TV,
+  criar: () => ({
+    capacidades: { sessaoPodeCair: true },
+    verificarConexao: async () => ({ conectado: false, detalhe: 'You are not connected.' }),
+  }),
+} as unknown as { criar: typeof import('./canais/fabrica.js').criarCanal; somenteTenant: string }
+
 beforeAll(async () => {
   await donoV`INSERT INTO plano (id, codigo, nome) VALUES (${PLANOV}, 'plano-vigia-canal', 'Pro') ON CONFLICT DO NOTHING`
   await donoV`INSERT INTO perfil_vertical_modelo (id, codigo, nome) VALUES (${MODELOV}, 'modelo-vigia-canal', 'Varejo') ON CONFLICT DO NOTHING`
@@ -132,19 +146,19 @@ describe('Vigia contra o banco — a consulta existe de verdade', () => {
     await canalPlugZapi('conectado')
     // ⚠️ Se qualquer coluna do SELECT não existir, isto lança — que é
     //    exatamente o que os testes de contrato NÃO pegaram.
-    await expect(vigiarConexaoCanais(sqlV, AGORA_V)).resolves.toBeDefined()
+    await expect(vigiarConexaoCanais(sqlV, AGORA_V, soDesteTenant)).resolves.toBeDefined()
   })
 
   it('canal sem provedor ou sem credencial é ignorado, não quebra', async () => {
     await donoV`INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado)
                 VALUES (${TV}, ${CANAL}, 'whatsapp_nao_oficial', 'Sem credencial', 'conectado')`
-    const r = await vigiarConexaoCanais(sqlV, AGORA_V)
+    const r = await vigiarConexaoCanais(sqlV, AGORA_V, soDesteTenant)
     expect(r.verificados).toBe(0)
   })
 
   it('canal suspenso não é tocado — suspensão é decisão humana', async () => {
     await canalPlugZapi('suspenso')
-    await vigiarConexaoCanais(sqlV, AGORA_V)
+    await vigiarConexaoCanais(sqlV, AGORA_V, soDesteTenant)
     const [c] = await donoV<{ estado: string }[]>`
       SELECT estado FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
     expect(c!.estado).toBe('suspenso')
@@ -168,7 +182,7 @@ describe('Carimbo de verificação', () => {
       SELECT verificado_em FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
     expect(antes!.verificado_em).toBeNull()
 
-    await vigiarConexaoCanais(sqlV, AGORA_V)
+    await vigiarConexaoCanais(sqlV, AGORA_V, soDesteTenant)
 
     const [depois] = await donoV<{ estado: string; verificado_em: Date | null }[]>`
       SELECT estado, verificado_em FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
@@ -178,7 +192,7 @@ describe('Carimbo de verificação', () => {
 
   it('carimba também na passada que derruba o canal', async () => {
     await canalPlugZapi('conectado')
-    await vigiarConexaoCanais(sqlV, AGORA_V)
+    await vigiarConexaoCanais(sqlV, AGORA_V, soDesteTenant)
     const [c] = await donoV<{ estado: string; verificado_em: Date | null }[]>`
       SELECT estado, verificado_em FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
     expect(c!.estado).toBe('desconectado')
@@ -192,7 +206,7 @@ describe('Carimbo de verificação', () => {
    */
   it('canal suspenso não ganha carimbo', async () => {
     await canalPlugZapi('suspenso')
-    await vigiarConexaoCanais(sqlV, AGORA_V)
+    await vigiarConexaoCanais(sqlV, AGORA_V, soDesteTenant)
     const [c] = await donoV<{ verificado_em: Date | null }[]>`
       SELECT verificado_em FROM canal_conectado WHERE tenant_id = ${TV} AND id = ${CANAL}`
     expect(c!.verificado_em).toBeNull()
@@ -233,7 +247,7 @@ describe('Alerta de canal caído', () => {
                 VALUES (${TV}, gen_random_uuid(), 'canal_desconectado', 'critico', 'caiu ontem')`
     expect(await alertaAberto()).toBe(1)
 
-    const r = await vigiarConexaoCanais(sqlV, AGORA_V, canalDePe)
+    const r = await vigiarConexaoCanais(sqlV, AGORA_V, { ...canalDePe, somenteTenant: TV })
 
     expect(r.voltou).toBe(0)          // não houve transição…
     expect(await alertaAberto()).toBe(0)  // …e mesmo assim o alerta fechou
@@ -243,7 +257,7 @@ describe('Alerta de canal caído', () => {
     await canalPlugZapi('desconectado')
     await donoV`INSERT INTO alerta (tenant_id, id, tipo, severidade, mensagem)
                 VALUES (${TV}, gen_random_uuid(), 'canal_desconectado', 'critico', 'caiu')`
-    const r = await vigiarConexaoCanais(sqlV, AGORA_V, canalDePe)
+    const r = await vigiarConexaoCanais(sqlV, AGORA_V, { ...canalDePe, somenteTenant: TV })
     expect(r.voltou).toBe(1)
     expect(await alertaAberto()).toBe(0)
   })
@@ -253,7 +267,7 @@ describe('Alerta de canal caído', () => {
     await canalPlugZapi('desconectado')
     await donoV`INSERT INTO alerta (tenant_id, id, tipo, severidade, mensagem)
                 VALUES (${TV}, gen_random_uuid(), 'canal_desconectado', 'critico', 'caiu')`
-    await vigiarConexaoCanais(sqlV, AGORA_V)   // credencial falsa = segue caído
+    await vigiarConexaoCanais(sqlV, AGORA_V, soDesteTenant)   // credencial falsa = segue caído
     expect(await alertaAberto()).toBe(1)
   })
 })

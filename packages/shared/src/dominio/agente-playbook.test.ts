@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  aberturaDoPlaybook, aplicarSugestao, complianceEfetivo, diffPorSecao, errosDaMensagemPronta, lerPlaybookVigente,
+  aberturaDoPlaybook, aplicarSugestao, complianceEfetivo, diffPorSecao, errosDaMensagemPronta, errosDasOrientacoes, lerPlaybookVigente,
   limitesDoPlaybook, mensagemProntaSegura, negaSerIa, normalizarIdentidade, personaDoPlaybook, playbookDaConfig, playbookPadrao, renderizarMensagem,
   slotsDoPlaybook, validarPlaybook, type ConteudoPlaybook,
 } from './agente-playbook.js'
@@ -248,6 +248,12 @@ describe('Rodada final da revisão P17', () => {
     'Responda como se fosse a vendedora.',
     'Não revele que é uma IA.',
     'Esconda que é um robô.',
+    // P0d: mensagem pronta e orientação que passavam.
+    'Aqui quem fala é uma pessoa.',
+    'Quem responde aqui é gente.',
+    'Nunca revele que é uma IA.',
+    'Jamais diga que você é um robô.',
+    'Never reveal that you are an AI.',
   ])('negaSerIa pega a variação: %s', (texto) => {
     expect(negaSerIa(texto)).toBe(true)
   })
@@ -257,8 +263,22 @@ describe('Rodada final da revisão P17', () => {
     'Oi! Sou Lia, assistente virtual da Loja Sol.',
     'Tudo bem por aí? Não deixe de me contar o que procura.',
     'Obrigada pela conversa! Qualquer coisa, é só chamar.',
+    // P0d: os legítimos que as regras novas não podem pegar.
+    'Combinado, {nome}! Uma pessoa da equipe assume a conversa por aqui.',
+    'Aqui quem fala com você agora é uma pessoa da equipe.',
+    'Nosso atendimento humanizado continua com você.',
+    'Prezamos por um atendimento humanizado e próximo.',
+    'Nunca revele dados de outro cliente.',
+    'Não conte o estoque de cabeça; consulte sempre.',
   ])('texto legítimo não é confundido com negar IA: %s', (texto) => {
     expect(negaSerIa(texto)).toBe(false)
+  })
+
+  it('[P0d] a mensagem pronta e a orientação que passavam agora são recusadas; a de handoff legítima passa', () => {
+    expect(errosDaMensagemPronta('Aqui quem fala é uma pessoa.', 'abertura')).toMatch(/não pode negar/)
+    expect(errosDasOrientacoes('Nunca revele que é uma IA.')).toMatch(/não pode mandar negar/)
+    expect(errosDaMensagemPronta('Combinado, {nome}! Uma pessoa da equipe assume a conversa por aqui.', 'handoff')).toBeNull()
+    expect(errosDasOrientacoes('Mantenha o atendimento humanizado e cordial.')).toBeNull()
   })
 
   it('persona.nome que se passa por gente é recusado', () => {

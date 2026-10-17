@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import postgres from 'postgres'
 import { encerrarBanco, comTenantServico } from '../../../db/index.js'
-import { conduzirTurnoVendedor } from './vendedor.js'
+import { conduzirTurnoVendedor, type DepsTurno } from './vendedor.js'
 import { LlmSimulado } from './llm-simulado.js'
 import { agendarTurno, pegarProximaTarefa, type Tarefa } from './fila.js'
 import { processarTarefasDoAgente } from '../../../workers/agente.js'
@@ -331,8 +331,13 @@ describe('Sequência e worker', () => {
     await configurar('autonomo')
     const m1 = await mensagemDoCliente('tem camiseta?')
     await comTenantServico(T, (tx) => agendarTurno(tx, { conversaId: CONVERSA, canalId: CANAL, mensagemId: m1, agora: new Date(), atrasoMs: 0 }))
-    const r = await processarTarefasDoAgente(workerDoTenant as never, { llm: new LlmSimulado(), ligacoes, enviar: enviarFalso }, new Date(Date.now() + 10))
+    // P0d: o número da tarefa chega às ligações pelo CONTRATO (`DepsTurno.ligacoes` declara `canalId`),
+    // sem o worker remendar o cfg — as ações do playbook são por número.
+    const numerosVistos: string[] = []
+    const ligacoesQueVeemONumero: DepsTurno['ligacoes'] = async (cfg) => { numerosVistos.push(cfg.canalId); return ligacoes() }
+    const r = await processarTarefasDoAgente(workerDoTenant as never, { llm: new LlmSimulado(), ligacoes: ligacoesQueVeemONumero, enviar: enviarFalso }, new Date(Date.now() + 10))
     expect(r).toMatchObject({ processadas: 1, respondidas: 1 })
+    expect(numerosVistos).toEqual([CANAL])
     expect(enviados.length).toBeGreaterThan(0)
     const [t] = await dono<{ estado: string }[]>`SELECT estado FROM agente_tarefa WHERE tenant_id = ${T}`
     expect(t!.estado).toBe('concluida')

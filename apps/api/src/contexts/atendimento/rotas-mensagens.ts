@@ -13,6 +13,7 @@ import { midiaHabilitada, subirMidia, urlAssinada } from './midia/armazenamento.
 import { ehDataUrl, decodificarMidia } from './midia/dataurl.js'
 import { registrarMetrica, avaliarEAlertarEntrega } from '../plataforma/metricas.js'
 import { registrarAvisoSeExibido } from './agente/privacidade.js'
+import { marcarPrimeiraRespostaHumana } from './primeira-resposta.js'
 import {
   registrarUsoDaSugestao, superarPendentes, registrarSimilaridadeSombra, publicarSugestaoMudou, envioBloqueadoPelaQualidade,
   type ResultadoUso,
@@ -60,6 +61,8 @@ interface Preparo {
   ultimaEntranteEm: Date | null
   destinoBloqueado: boolean
   remetenteNome: string | null
+  /** Quem envia (usuário do token) — autor da 1ª resposta humana do atendimento. */
+  remetenteId: string
   contatoId: string
   canalId: string
 }
@@ -195,7 +198,7 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
         const eu = await garantirUsuarioId(tx, req)
         const [rem] = await tx<{ nome: string }[]>`
           SELECT nome FROM usuario WHERE tenant_id = tenant_atual() AND id = ${eu}`
-        return { ...ctx, mensagemId, remetenteNome: rem?.nome ?? null }
+        return { ...ctx, mensagemId, remetenteNome: rem?.nome ?? null, remetenteId: eu }
       })
 
       if (!preparo) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
@@ -413,6 +416,13 @@ async function posEnvioHumano(
   log: { warn: (o: object, m: string) => void },
 ): Promise<ResultadoUso | null> {
   const agora = new Date()
+  // Marco da 1ª resposta HUMANA (métrica fixa de performance). Transação própria: a parte de
+  // sugestão/sombra abaixo falhar não pode apagar o marco, nem o marco falhar derrubar a dela.
+  try {
+    await comTenantServico(tenantId, (tx) => marcarPrimeiraRespostaHumana(tx, { conversaId, usuarioId: p.remetenteId, agora }))
+  } catch (erro) {
+    log.warn({ erro, conversaId }, 'pos-envio humano (primeira resposta) falhou')
+  }
   try {
     return await comTenantServico(tenantId, async (tx) => {
       const uso = sugestaoDecisaoId && texto

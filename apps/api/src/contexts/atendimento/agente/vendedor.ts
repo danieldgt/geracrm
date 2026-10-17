@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   ALCADA_PADRAO, PERFIL_PRECO_PADRAO, REGRAS_AGENTE_PADRAO, alcadaAgente, persona as personaSchema,
-  perfilDeCotacao, respostaDoAgente, verificarNumerosNaResposta, fatiarMensagem, numerosDoTexto,
+  perfilDeCotacao, respostaDoAgente, verificarNumerosNaResposta, fatiarMensagem, numerosDoTexto, lerPlaybookVigente,
   type AlcadaAgente, type ModoAgente, type ModoDoTurno, type PersonaResolvida, type RegrasDoAgente, type RespostaDoAgente,
   type SlotQualificacao, type MotivoHandoff, type MarcaGuardrail,
 } from '@geracrm/shared'
@@ -96,7 +96,11 @@ interface ConfigVendedor {
 
 export interface DepsTurno {
   readonly llm?: PortaLlmFerramentas | undefined
-  readonly ligacoes: (cfg: { tenantId: string; politicas: string; modo: ModoDoTurno }) => Promise<Ligacoes> | Ligacoes
+  /**
+   * Monta as ligações das ferramentas. `canalId` é o número da tarefa: as AÇÕES do playbook
+   * publicado são por número (P17) — o turno sempre o passa.
+   */
+  readonly ligacoes: (cfg: { tenantId: string; politicas: string; modo: ModoDoTurno; canalId: string }) => Promise<Ligacoes> | Ligacoes
   readonly enviar?: typeof enviarTextoNaConversa | undefined
   readonly equipe?: QuemAtende | undefined
   readonly agora?: Date | undefined
@@ -310,7 +314,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   // Ferramentas e mensagens do laço (também montadas para a resposta fixa:
   // o pedido aberto entra na sessão do mesmo jeito).
   const ctxFerr: ContextoFerramenta = { tenantId, conversaId, contatoId: conv.contato_id, canalId, perfil, sessaoId: reuniao.sessao_id, modo, agora, enviar: deps.enviar }
-  const ligacoes: Ligacoes = await deps.ligacoes({ tenantId, politicas: cfg.politicas, modo })
+  const ligacoes: Ligacoes = await deps.ligacoes({ tenantId, politicas: cfg.politicas, modo, canalId })
   const { ferramentas, capacidades } = montarFerramentas(ligacoes)
   const registro = registroDeFerramentas(ctxFerr, ferramentas)
   const pedidoAberto = ligacoes.pedido ? await ligacoes.pedido.ver(ctxFerr).catch(() => null) : null
@@ -482,7 +486,11 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
   }
 
   // ── 5. O laço ───────────────────────────────────────────────────────────
-  const sistema = montarSistema({ persona: cfg.persona, politicas: cfg.politicas, objetivo: cfg.objetivo, slots: cfg.slots, alcada: cfg.alcada, capacidades })
+  // O playbook publicado entra no bloco do tenant (cacheado), não na instrução do turno (P0d).
+  const sistema = montarSistema({
+    persona: cfg.persona, politicas: cfg.politicas, objetivo: cfg.objetivo, slots: cfg.slots, alcada: cfg.alcada, capacidades,
+    playbook: lerPlaybookVigente(cfg.extra['playbook']),
+  })
   const mensagens: MensagemLlm[] = [
     ...historico.map((f): MensagemLlm => ({ papel: f.de === 'cliente' ? 'cliente' : 'nos', texto: f.texto })),
     {

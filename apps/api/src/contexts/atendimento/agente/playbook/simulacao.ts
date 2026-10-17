@@ -18,7 +18,7 @@ import { PIPELINE_PADRAO, type ContextoPipeline, type EtapaPosResposta, type Eta
  * costuras que já existem, sem tocar no vendedor:
  *   - as ETAPAS do pipeline enxergam `cfgExtra.playbook`/`qualificacao` e a
  *     persona do rascunho (`DepsTurno.pipeline`);
- *   - o LLM recebe o `<persona>`/`<objetivo>` do rascunho no bloco do tenant
+ *   - o LLM recebe o `<persona>`/`<objetivo>`/`<playbook>` do rascunho no bloco do tenant
  *     (`DepsTurno.llm`, envolvendo o modelo do número);
  *   - as LIGAÇÕES levam as ações do rascunho (o menu de ferramentas muda).
  * Ferramentas de escrita já são secas em simulação: pedido em carrinho de
@@ -54,21 +54,21 @@ export function pipelineComPlaybook(espelho: PlaybookVigente, base: PipelineDoTu
   }
 }
 
-/** O modelo do número com a persona e o objetivo do rascunho no bloco do tenant. */
+/** O modelo do número com a persona, o objetivo e o playbook do rascunho no bloco do tenant. */
 export function llmComPlaybook(llm: PortaLlmFerramentas, conteudo: ConteudoPlaybook, objetivo: 'vender' | 'qualificar'): PortaLlmFerramentas {
   const persona = personaDoPlaybook(conteudo)
   const slots = slotsDoPlaybook(conteudo)
   return {
     nome: llm.nome,
     capacidades: llm.capacidades,
-    rodar: (p) => llm.rodar({ ...p, sistema: aplicarPlaybookAoSistema(p.sistema, { persona, objetivo, slots }) }),
+    rodar: (p) => llm.rodar({ ...p, sistema: aplicarPlaybookAoSistema(p.sistema, { persona, objetivo, slots, playbook: conteudo }) }),
   }
 }
 
 /** Ligações do número com as ações do playbook dado (ou as do espelho, quando `acoes` é null). */
 export function ligacoesDoSandbox(base: DepsTurno['ligacoes'], canalId: string, acoes: AcoesPlaybook | null): DepsTurno['ligacoes'] {
   return async (cfg) => {
-    const l = await base(Object.assign({}, cfg, { canalId }))
+    const l = await base({ ...cfg, canalId })
     return acoes ? { ...l, acoes } : l
   }
 }

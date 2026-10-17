@@ -328,12 +328,16 @@ const NEGA_IA_RES: readonly RegExp[] = [
   // gente de verdade
   /\batendimento (?:\w+ )?human[oa]\b|\bpessoas? (?:real|reais|de verdade|de carne)\b|\bde carne e osso\b|\bgente de verdade\b|\bso gente\b|\bhuman[oa]s? (?:de verdade|mesmo)\b|\bequipe humana\b|\bem pessoa\b|\bsou de verdade\b/,
   /\b(?:sou|somos) (?:um |uma )?(?:human[oa]s?|pessoas?|gente|atendente humano)\b/,
+  // "Aqui quem fala é uma pessoa.", "quem responde é gente" — sem ser a pessoa DA EQUIPE que assume (handoff legítimo).
+  /\b(?:aqui|quem (?:fala|esta falando|atende|responde|escreve)|com quem voce (?:fala|esta falando))\b(?:\s+\w+){0,3}\s+(?:e|sou|somos)\s+(?:um |uma )?(?:pessoa|human[oa]|gente)\b(?!\s+(?:da|do|de|das|dos)\s+(?:equipe|time|loja|atendimento|empresa|nossa|nosso))/,
   // inglês
   /\breal (?:person|people|human)\b|\bhumans? here\b|\bi ?a?m (?:a )?human\b|\bnot (?:a |an )?(?:bot|robot|ai|machine)\b/,
   // mandar mentir, esconder ou revogar
   /\b(?:diga|fale|responda|afirme|finja|diz|dizer|fingir|say|tell)\s+(?:que\s+|that\s+)?(?:e|ser|somos|sou|voce e|you are|youre|we are|i am)\s+(?:um\s+|uma\s+|a\s+)?(?:human[oa]?|pessoa|person|gente|atendente|vendedor[a]?|funcionari[oa])\b/,
   /\b(?:fing\w*|finj\w*|pretend\w*|desconvers\w*|como se fosse)\b/,
   new RegExp(String.raw`\b(?:nao revel\w*|nao conte|escond\w*|ocult\w*|disfarc\w*)${PERTO.replace('{0,4}', '{0,5}')}(?:${MAQ}|que e|que somos|humano)\b|\b(?:nao revel\w*|escond\w*|ocult\w*) (?:${MAQ})\b`),
+  // "Nunca revele que é uma IA.", "jamais diga que é um robô", "never reveal you are an AI"
+  new RegExp(String.raw`\b(?:nao|nunca|jamais|never|dont|do not)\s+(?:revel\w*|reveal\w*|cont\w*|diga|dizer|fale|falar|mencion\w*|mention\w*|admit\w*|confess\w*|assum\w*|tell|say)${PERTO.replace('{0,4}', '{0,5}')}${MAQ}\b`),
   /\bignor\w* (?:as |todas as |all |the |previous |anteriores )*(?:regras|instruc\w*|orientac\w*|rules|instructions)\b|\bdesconsider\w* (?:as )?(?:regras|instruc\w*)\b/,
 ]
 

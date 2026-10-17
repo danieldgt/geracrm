@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import {
-  respostaDoAgente, type AlcadaAgente, type ConteudoPlaybook, type PersonaResolvida, type SlotQualificacao,
+  respostaDoAgente, type AlcadaAgente, type ConteudoPlaybook, type PersonaResolvida, type PlaybookVigente, type SlotQualificacao,
 } from '@geracrm/shared'
 import type { BlocoSistema } from './porta-llm.js'
 import type { ContextoDoLead } from './porta.js'
@@ -11,8 +11,9 @@ import type { ContextoDoLead } from './porta.js'
  *
  *   1. GLOBAL  — igual para todos os tenants: papel, regras de catálogo,
  *                escalonamento, formato. Muda só com deploy.
- *   2. TENANT  — persona + políticas + método de venda do canal. Muda quando o
- *                dono edita a tela.
+ *   2. TENANT  — persona + políticas + método de venda do canal + o PLAYBOOK
+ *                publicado (estilo, conduta, roteiro). Muda quando o dono edita
+ *                a tela ou publica uma versão.
  *   3. TURNO   — vai como mensagem de OPERADOR dentro de `messages`, depois do
  *                breakpoint: o que sabemos do cliente, resumo, pedido aberto,
  *                hora. Muda a cada turno e por isso NÃO entra no system.
@@ -108,6 +109,8 @@ export function blocoTenant(p: {
   slots: readonly SlotQualificacao[]
   alcada: AlcadaAgente
   capacidades: CapacidadesDoTurno
+  /** O playbook publicado do número (espelho em `agente_config.playbook`); null/ausente = sem playbook. */
+  playbook?: PlaybookVigente | null | undefined
 }): string {
   const proposta = p.capacidades.proposta !== false
   const linhas = [
@@ -130,33 +133,44 @@ export function blocoTenant(p: {
     '<politicas_da_loja>',
     p.politicas.trim() || '(nenhuma política escrita — tudo que não estiver aqui, transfira)',
     '</politicas_da_loja>',
+    ...(p.playbook ? ['', instrucoesDoPlaybook(p.playbook.conteudo, p.playbook.numero)] : []),
   ]
   return linhas.filter((l) => l !== '').join('\n')
 }
 
 /**
- * SANDBOX DO PLAYBOOK (P17): troca `<persona>` e `<objetivo>` do bloco do
- * tenant pelos do RASCUNHO — o turno real monta o sistema com o que está
- * publicado em `agente_config`; o sandbox testa o rascunho sem publicar.
+ * SANDBOX DO PLAYBOOK (P17): troca `<persona>`, `<objetivo>` e `<playbook>` do
+ * bloco do tenant pelos do RASCUNHO — o turno real monta o sistema com o que
+ * está publicado em `agente_config`; o sandbox testa o rascunho sem publicar.
+ * Sem playbook publicado, o do rascunho entra no fim do bloco.
  */
 export function aplicarPlaybookAoSistema(
-  sistema: readonly BlocoSistema[], p: { persona: PersonaResolvida; objetivo: 'vender' | 'qualificar'; slots: readonly SlotQualificacao[] },
+  sistema: readonly BlocoSistema[],
+  p: { persona: PersonaResolvida; objetivo: 'vender' | 'qualificar'; slots: readonly SlotQualificacao[]; playbook?: ConteudoPlaybook | undefined },
 ): BlocoSistema[] {
   return sistema.map((b) => {
     if (!b.texto.includes('<persona>')) return b
-    const texto = b.texto
+    let texto = b.texto
       .replace(/<persona>[\s\S]*?<\/persona>/, () => blocoPersona(p.persona))
       .replace(/<objetivo>[\s\S]*?<\/objetivo>/, () => blocoObjetivo(p.objetivo, p.slots))
+    if (p.playbook) {
+      const rascunho = instrucoesDoPlaybook(p.playbook, null)
+      texto = /<playbook[ >][\s\S]*?<\/playbook>/.test(texto)
+        ? texto.replace(/<playbook[ >][\s\S]*?<\/playbook>/, () => rascunho)
+        : `${texto}\n\n${rascunho}`
+    }
     return { ...b, texto }
   })
 }
 
 /**
- * O PLAYBOOK no turno (P17): estilo, conduta, roteiro de qualificação e as
- * mensagens de referência. Vai como OPERADOR (instrução do turno, via etapa de
- * gatilhos), não no system: o system do turno real só conhece o que está em
- * `agente_config`. Os máximos de caracteres e de perguntas também são
- * APLICADOS no filtro de saída — o prompt só pede, o filtro garante.
+ * O PLAYBOOK publicado (P17): estilo, conduta, roteiro de qualificação e as
+ * mensagens de referência. Entra no BLOCO DO TENANT (system, cacheado): só muda
+ * quando alguém publica uma versão — repeti-lo na instrução do turno pagava o
+ * texto inteiro sem cache a cada mensagem (P0d). ⚠️ Nada aqui pode variar por
+ * turno ou por contato (data, hora, nome do cliente): `agente:medir-prefixo`
+ * acusa. Os máximos de caracteres e de perguntas também são APLICADOS no filtro
+ * de saída — o prompt só pede, o filtro garante.
  */
 export function instrucoesDoPlaybook(c: ConteudoPlaybook, numero: number | null): string {
   const ativos = c.qualificacao.filter((q) => q.ativo)

@@ -10,7 +10,6 @@ import { comTenantServico, type Sql } from '../../../../db/index.js'
 import { registrarOptOut, contatoBloqueado } from '../../../crm/opt-out.js'
 import { lerPrivacidade, registrarAvisoSeExibido } from '../privacidade.js'
 import { lerEstado, patchEstado } from '../estado-agente.js'
-import { instrucoesDoPlaybook } from '../instrucao-vendedor.js'
 import {
   marca, mascararTexto, type ContextoPipeline, type DecisaoPreLlm, type EfeitoPosEnvio, type EtapaPreLlm,
 } from './tipos.js'
@@ -177,12 +176,9 @@ export const etapaGatilhosEntrada: EtapaPreLlm = {
       }
     }
 
-    // O playbook publicado entra na instrução do turno (estilo, conduta, roteiro).
-    const playbook = playbookDoTurno(ctx)
-    const instrucoes = [
-      ...(abertura ? [INSTRUCAO_ABERTURA_ENVIADA] : []),
-      ...(playbook ? [instrucoesDoPlaybook(playbook.conteudo, playbook.numero)] : []),
-    ]
+    // Só o que muda por turno vai na instrução: o playbook publicado (estilo, conduta,
+    // roteiro) está no bloco do tenant, cacheado (`montarSistema`, P0d).
+    const instrucoes = abertura ? [INSTRUCAO_ABERTURA_ENVIADA] : []
     return {
       tipo: 'segue',
       ...(instrucoes.length ? { instrucoes } : {}),

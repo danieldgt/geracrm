@@ -257,8 +257,8 @@ export async function gerarCopiloto(
   let relogio: ReturnType<typeof setTimeout> | undefined
   const turno = conduzirTurnoVendedor(
     { tenant_id: tenantId, id: randomUUID(), conversa_id: conversaId, canal_id: conv.canalId, mensagens_ids: entrantes, tentativas: 1, executar_em: agora },
-    // O número vai junto: as AÇÕES do playbook publicado valem também para o copiloto (P17).
-    { ligacoes: (cfg) => ligacoesPadrao({ ...cfg, canalId: conv.canalId }), copiloto: true, agora, ...(opcoes.llm ? { llm: opcoes.llm } : {}) },
+    // O turno passa o número às ligações: as AÇÕES do playbook publicado valem também para o copiloto (P17).
+    { ligacoes: ligacoesPadrao, copiloto: true, agora, ...(opcoes.llm ? { llm: opcoes.llm } : {}) },
   )
   // O turno segue sozinho depois do prazo. Quando termina: marca quem pediu; se já tinha
   // estourado o prazo e saiu sugestão, publica para o painel; e só então solta a trava.
@@ -270,12 +270,15 @@ export async function gerarCopiloto(
     })
     return r
   })
-  void fim.catch(() => undefined).finally(() => void soltar().catch(() => undefined))
+  // The lease is released BEFORE the result settles: an answer that left within the deadline
+  // never leaves a row behind (another instance or a retry sees the conversation free at once).
+  const fimSolto = fim.finally(() => soltar().catch(() => undefined))
+  void fimSolto.catch(() => undefined)
 
   let r: ResultadoTurnoVendedor | typeof TEMPO_ESGOTADO
   try {
     r = await Promise.race([
-      fim,
+      fimSolto,
       new Promise<typeof TEMPO_ESGOTADO>((res) => { relogio = setTimeout(() => { esgotou = true; res(TEMPO_ESGOTADO) }, opcoes.prazoMs ?? PRAZO_COPILOTO_MS) }),
     ])
   } catch (e) {

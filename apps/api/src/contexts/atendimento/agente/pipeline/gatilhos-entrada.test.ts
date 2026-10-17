@@ -178,16 +178,21 @@ describe('Opt-out em autônomo — "pare" bloqueia sem LLM, DEPOIS da confirmaç
     await configurar('autonomo')
     await avisoVigente()
     const conf = JSON.stringify({ texto: 'Certo. Não vamos mais te enviar mensagens por aqui.', automatica: 'agente' })
-    const entrante = async (min: number) => {
+    // ⚠️ P0d: tudo no MESMO relógio — o `agora` injetado no turno. Antes as mensagens nasciam com o
+    //    `now()` do banco e o turno usava `new Date()`: sob carga (load 30–55) o tempo real entre semear
+    //    e rodar passou de 90 s e o "pendente recente" (30 s) virou "antigo" (> 2 min) — 2 de 10 rodadas.
+    const agora = new Date()
+    const antes = (seg: number) => new Date(agora.getTime() - seg * 1000)
+    const entrante = async (seg: number) => {
       const id = crypto.randomUUID()
       await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-                 VALUES (${T}, ${id}, ${CONVERSA}, 'entrante', 'texto', '{"texto":"pare"}'::jsonb, now() - make_interval(mins => ${min}))`
+                 VALUES (${T}, ${id}, ${CONVERSA}, 'entrante', 'texto', '{"texto":"pare"}'::jsonb, ${antes(seg)})`
       return id
     }
-    const idVelho = await entrante(10)
+    const idVelho = await entrante(600)
     await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, criado_em)
-               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', ${conf}::text::jsonb, 'pendente', now() - interval '5 minutes')`
-    await turno([idVelho])
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', ${conf}::text::jsonb, 'pendente', ${antes(300)})`
+    await turno([idVelho], { agora })
     expect(enviados).toHaveLength(1)
 
     // Recente (o envio pode estar em voo): conta como enviada.
@@ -195,10 +200,10 @@ describe('Opt-out em autônomo — "pare" bloqueia sem LLM, DEPOIS da confirmaç
     await dono`DELETE FROM mensagem WHERE tenant_id = ${T}`
     await dono`DELETE FROM agente_sessao WHERE tenant_id = ${T}`
     enviados.length = 0
-    const idNovo = await entrante(1)
+    const idNovo = await entrante(60)
     await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, criado_em)
-               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', ${conf}::text::jsonb, 'pendente', now() - interval '30 seconds')`
-    await turno([idNovo])
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', ${conf}::text::jsonb, 'pendente', ${antes(30)})`
+    await turno([idNovo], { agora })
     expect(enviados).toHaveLength(0)
     expect(await bloqueios()).toBe(1)
   })

@@ -9,7 +9,7 @@ import type { PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
 import { avaliarTranscricao, criticasDoCenario, formatarParaJuiz, parseTranscricao } from './transcricao.js'
 import { executarAvaliar, SAIDA_CRITICA, SAIDA_ERRO, SAIDA_OK } from './avaliar.js'
 import { executarSmoke, segredosDoAmbiente, semSegredos } from './smoke.js'
-import { BLOCO_GLOBAL, definicoesDasFerramentas, executarMedirPrefixo, medirPrefixo, sistemaDoVendedor } from './medir-prefixo.js'
+import { BLOCO_GLOBAL, definicoesDasFerramentas, executarMedirPrefixo, medirPrefixo, playbookDeReferencia, sistemaDoVendedor } from './medir-prefixo.js'
 import { SUITE_B2B } from './suite-b2b.js'
 
 /**
@@ -279,6 +279,17 @@ describe('agente:medir-prefixo', () => {
     expect(r.blocos[0]!.caracteres).toBe(BLOCO_GLOBAL.length)
     expect(r.ferramentas.quantidade).toBeGreaterThanOrEqual(8)
     expect(r.totalTokensEstimados).toBeGreaterThan(1000)
+  })
+
+  it('[P0d] com o playbook publicado: ele entra no bloco do tenant, o prefixo segue determinístico e sem nada volátil', async () => {
+    const sem = medirPrefixo(sistemaDoVendedor({ politicas: SUITE_B2B.politicas, persona: SUITE_B2B.persona }), [], agora)
+    const sistema = sistemaDoVendedor({ politicas: SUITE_B2B.politicas, persona: SUITE_B2B.persona, playbook: playbookDeReferencia() })
+    const r = medirPrefixo(sistema, await definicoesDasFerramentas(), agora)
+    expect(r.deterministico).toBe(true)
+    expect(r.volateis).toEqual([])
+    expect(sistema()[1]!.texto).toContain('<playbook versao="v3">')
+    expect(sistema()[1]!.texto).toContain('Roteiro de qualificação')
+    expect(r.blocos[1]!.caracteres).toBeGreaterThan(sem.blocos[1]!.caracteres)
   })
 
   it('dado políticas com a data de hoje, um UUID e o marcador do turno, então acusa cada um e sai 1', async () => {
