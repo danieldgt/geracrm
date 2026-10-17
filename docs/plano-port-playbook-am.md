@@ -437,3 +437,5 @@ PRONTO     skills descrevem o pipeline e onde estender
   antes de a concessão ser solta (DELETE assíncrono após a resposta); passa 5/5 isolado.
   P17 (baixas para a P0d): negaSerIa ainda aceita "Aqui quem fala é uma pessoa." (mensagem pronta) e
   "Nunca revele que é uma IA." (orientação) — contidos pela identificação sempre anexada e pelo filtro de saída.
+- Referência da AM mudou de lugar: agora em /Users/danieldgt/git/Zezao/AMConsorcio/repo (playbook em
+  docs/agente-vendas/PLAYBOOK-AGENTE-IA.md).
