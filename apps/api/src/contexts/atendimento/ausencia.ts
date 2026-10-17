@@ -80,6 +80,9 @@ export async function responderAusencia(
                       WHERE m.tenant_id = cfg.tenant_id AND m.conversa_id = ${conversaId}
                         AND m.direcao = 'saliente'
                         AND m.conteudo->>'automatica' = 'ausencia'
+                        -- A que FALHOU não conta: o worker de pós-ingestão (P11)
+                        -- tenta de novo, e o cliente não recebeu nada ainda.
+                        AND m.status IS DISTINCT FROM 'falhou'
                         AND m.criado_em > ${agora}::timestamptz - make_interval(hours => ${HORAS_ENTRE_RESPOSTAS}))
                AS ja_respondida
         FROM canal_configuracao cfg

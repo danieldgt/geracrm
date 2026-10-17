@@ -184,6 +184,21 @@ export interface PortaCanal {
    * assinada → bytes, tudo com o token). Fora do caminho da requisição.
    */
   baixarMidia?(idMidia: string): Promise<ResultadoMidiaBaixada>
+
+  /**
+   * Envia um TEMPLATE aprovado (HSM). OPCIONAL — só onde
+   * `capacidades.aceitaTemplate` é verdadeira (oficial). É o único envio que a
+   * Meta aceita fora da janela de 24h. `variaveis` preenche o corpo na ordem
+   * ({{1}}, {{2}}…). O gateway confere a aprovação ANTES de chamar isto.
+   */
+  enviarTemplate?(paraE164: string, template: TemplateParaEnvio): Promise<ResultadoEnvio>
+}
+
+/** Template pronto para o envio: nome e idioma como estão NA META. */
+export interface TemplateParaEnvio {
+  readonly nome: string
+  readonly idioma: string
+  readonly variaveis: readonly string[]
 }
 
 export type ResultadoAcaoMensagem =

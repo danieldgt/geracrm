@@ -2,9 +2,6 @@ import type { FastifyInstance } from 'fastify'
 import { sql, comTenantServico } from '../../db/index.js'
 import { parseWebhookPlugZapi } from './canais/plugzapi.js'
 import { ingerirMensagemEntrante, registrarStatusMensagem } from './ingestao-mensagem.js'
-import { responderAutomaticamente } from './resposta-automatica.js'
-import { midiaHabilitada } from './midia/armazenamento.js'
-import { copiarMidiaEntrante } from './midia/copiar-entrante.js'
 
 /**
  * Webhook de entrada dos canais — o que faz o Inbox acender.
@@ -83,33 +80,12 @@ export async function rotasWebhook(app: FastifyInstance): Promise<void> {
         // ⚠️ O NOTIFY é disparado pela TRIGGER do outbox no COMMIT (migration
         //    0026) — transacional por construção. Reentrega (duplicada) não
         //    grava outbox, então não republica.
-
-        // ⚠️ Resposta de AUSÊNCIA, pós-commit e best-effort. Fora do expediente,
-        //    quem escreve merece saber que ninguém está — e quando alguém volta.
-        //    Nunca derruba o 200: falhar aqui faria o PlugZapi reenviar a
-        //    mensagem do cliente em loop por causa de uma cortesia.
-        if (!r.duplicada) {
-          try {
-            const r2 = await responderAutomaticamente(canal.tenant_id, r.conversaId, canalId)
-            // ⚠️ Registra o DESFECHO, inclusive o silêncio. Logar só quando algo
-            //    saiu deixava o caso mais perguntado do produto — "por que o
-            //    agente não respondeu?" — sem nenhuma linha para consultar.
-            req.log.info({ canalId, conversaId: r.conversaId, ...r2 }, 'resposta automática')
-          } catch (erro) {
-            req.log.warn({ erro, canalId }, 'falha na resposta automática (mensagem do cliente já está salva)')
-          }
-        }
-
-        // E5-14: copia a mídia da URL do provedor para o nosso bucket, PÓS-COMMIT
-        // e best-effort — nunca falha o 200 (senão o PlugZapi reenviaria em loop).
-        if (r.midiaExterna && midiaHabilitada()) {
-          try {
-            const copiada = await copiarMidiaEntrante(canal.tenant_id, r.midiaExterna)
-            if (!copiada) req.log.warn({ canalId, conversaId: r.conversaId }, 'mídia de entrada mantida na URL do provedor (cópia falhou)')
-          } catch (erro) {
-            req.log.warn({ erro, canalId }, 'falha ao copiar mídia de entrada (mantém URL do provedor)')
-          }
-        }
+        //
+        // ⚠️ ENXUTO (raia P11): nenhuma rede antes do 200. A resposta de
+        //    AUSÊNCIA e a cópia da mídia (E5-14) foram AGENDADAS pela ingestão
+        //    na mesma transação (`tarefa_pos_ingestao`) e saem pelo worker de
+        //    pós-ingestão, com retry e com o desfecho registrado no log de lá —
+        //    inclusive o silêncio ("por que o agente não respondeu?").
         return reply.code(200).send({ ok: true })
       } catch (erro) {
         // ⚠️ Erro NOSSO (banco fora, bug): 500 para o PlugZapi reenviar — a

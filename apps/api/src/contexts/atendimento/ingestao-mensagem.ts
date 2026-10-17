@@ -7,6 +7,7 @@ import { emSavepoint, type Sql } from '../../db/index.js'
 import { notificarMensagemEntrante, notificarConfirmacaoSemPedido } from './notificacao.js'
 import { agendarTurno } from './agente/fila.js'
 import { cancelarRetornosDaConversa } from './agente/retorno.js'
+import { midiaHabilitada } from './midia/armazenamento.js'
 
 /**
  * Ingestão de mensagem ENTRANTE — o nosso fluxo (INV-12), não o do ERP.
@@ -243,11 +244,44 @@ export async function ingerirMensagemEntrante(
   await notificarMensagemEntrante(tx, { conversaId })
 
   // 8. Mídia externa a copiar (E5-14): imagem/áudio que ainda aponta para a URL
-  //    do provedor. A cópia é PÓS-COMMIT (fetch é rede, não pode segurar a tx).
+  //    do provedor. A cópia é rede — vai para o worker, nunca no request.
   const midiaExterna: MidiaExterna | undefined =
     (msg.tipo === 'imagem' || msg.tipo === 'audio') && msg.midiaUrl && /^(https?:\/\/|meta:media:)/i.test(msg.midiaUrl)
       ? { mensagemId, mensagemCriadoEm: msg.recebidaEm, tipo: msg.tipo, url: msg.midiaUrl, mime: msg.mime ?? null }
       : undefined
 
+  // 9. ⚠️ PÓS-INGESTÃO AGENDADA NO MESMO COMMIT (raia P11). Resposta automática
+  //    (ausência) e mídia fazem REDE; no request do webhook, um provedor lento
+  //    segurava o 2xx — e com a entrega sequencial da Meta, a fila de TODOS os
+  //    clientes. Aqui só agendamos; `workers/pos-ingestao.ts` executa com retry.
+  //    Se a mensagem reverter, as tarefas somem junto. A chave (mensagem, tipo)
+  //    é única: reprocessar não manda duas ausências.
+  try {
+    await emSavepoint(tx, (sp) => agendarPosIngestao(sp, { conversaId, canalId, mensagemId, mensagemCriadoEm: msg.recebidaEm, midiaExterna }))
+  } catch { /* agendar é acessório; a mensagem do cliente não pode se perder por ele */ }
+
   return { ok: true, conversaId, contatoId, duplicada: false, leadNovo, ...(midiaExterna ? { midiaExterna } : {}) }
+}
+
+/**
+ * Agenda os passos pós-ingestão de uma mensagem NOVA (dentro da transação da
+ * ingestão, tenant setado): sempre a resposta automática; a mídia só quando há
+ * bucket configurado (sem bucket, ela fica na URL/placeholder — degrada como antes).
+ */
+export async function agendarPosIngestao(
+  tx: Sql,
+  p: { conversaId: string; canalId: string; mensagemId: string; mensagemCriadoEm: Date; midiaExterna?: MidiaExterna | undefined },
+): Promise<void> {
+  await tx`
+    INSERT INTO tarefa_pos_ingestao (tenant_id, id, tipo, conversa_id, canal_id, mensagem_id, mensagem_criado_em)
+    VALUES (tenant_atual(), ${randomUUID()}, 'automatica', ${p.conversaId}, ${p.canalId}, ${p.mensagemId}, ${p.mensagemCriadoEm})
+    ON CONFLICT (tenant_id, mensagem_id, tipo) DO NOTHING`
+  if (p.midiaExterna && midiaHabilitada()) {
+    const m = p.midiaExterna
+    await tx`
+      INSERT INTO tarefa_pos_ingestao (tenant_id, id, tipo, conversa_id, canal_id, mensagem_id, mensagem_criado_em, dados)
+      VALUES (tenant_atual(), ${randomUUID()}, 'midia', ${p.conversaId}, ${p.canalId}, ${p.mensagemId}, ${p.mensagemCriadoEm},
+              ${JSON.stringify({ tipo: m.tipo, url: m.url, mime: m.mime })}::text::jsonb)
+      ON CONFLICT (tenant_id, mensagem_id, tipo) DO NOTHING`
+  }
 }

@@ -1,5 +1,6 @@
 import type {
   CapacidadesCanal, PortaCanal, ResultadoEnvio, ResultadoAcaoMensagem, BotaoResposta, ResultadoMidiaBaixada,
+  TemplateParaEnvio,
 } from './porta.js'
 import { LIMITE_BYTES } from '../midia/dataurl.js'
 
@@ -220,6 +221,25 @@ export class CanalMetaOficial implements PortaCanal {
     } finally {
       clearTimeout(relogio)
     }
+  }
+
+  /**
+   * Template aprovado (`type: template`). As variáveis vão como parâmetros de
+   * TEXTO do corpo, na ordem; sem variáveis, nenhum componente (a Meta recusa
+   * parâmetro que o template não declara).
+   */
+  async enviarTemplate(paraE164: string, template: TemplateParaEnvio): Promise<ResultadoEnvio> {
+    return this.#postar({
+      to: paraE164.replace(/^\+/, ''),
+      type: 'template',
+      template: {
+        name: template.nome,
+        language: { code: template.idioma },
+        ...(template.variaveis.length > 0
+          ? { components: [{ type: 'body', parameters: template.variaveis.map((text) => ({ type: 'text', text })) }] }
+          : {}),
+      },
+    })
   }
 
   // ⚠️ Sem recall/edição na Cloud API — degrada honesto (não é falha, é limite).

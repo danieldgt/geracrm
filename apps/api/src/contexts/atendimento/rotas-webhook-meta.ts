@@ -2,10 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { sql, comTenantServico } from '../../db/index.js'
 import { parseWebhookMeta, verificarAssinaturaMeta, type EventoMeta } from './canais/meta.js'
 import { ingerirMensagemEntrante, registrarStatusMensagem } from './ingestao-mensagem.js'
-import { responderAutomaticamente } from './resposta-automatica.js'
 import { PREFIXO_MIDIA_META } from './canais/meta-oficial.js'
-import { midiaHabilitada } from './midia/armazenamento.js'
-import { resolverMidiaMeta } from './midia/resolver-midia-meta.js'
+import { aplicarQualidadeNumero, aplicarStatusTemplate } from './qualidade-numero.js'
 import type { MensagemEntrante } from './canais/porta.js'
 
 /**
@@ -19,7 +17,14 @@ import type { MensagemEntrante } from './canais/porta.js'
  * ⚠️ O código HTTP é INSTRUÇÃO (skill geracrm-whatsapp-meta): 2xx encerra; erro
  * faz a Meta reenviar. Assinatura inválida → 401 (não é evento da Meta, é ruído;
  * a Meta legítima sempre assina, então não entra em loop). Evento reconhecido →
- * sempre 200. O gateway só valida/registra; processar fica para worker.
+ * sempre 200.
+ *
+ * ⚠️ ENXUTO (raia P11): o request só VALIDA, GRAVA e AGENDA — nenhuma chamada de
+ * rede antes do 200. A resposta automática (ausência) e o download da mídia
+ * eram feitos aqui, pós-commit: um provedor lento segurava o 2xx e, com a
+ * entrega sequencial da Meta, a fila de TODOS os clientes. Agora a ingestão
+ * agenda `tarefa_pos_ingestao` na mesma transação e o worker de pós-ingestão
+ * executa com retry. Qualidade do número e status de template são só banco.
  */
 export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
   // Parser de buffer SÓ neste escopo — mantém o corpo cru para o HMAC e ainda
@@ -57,11 +62,38 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
     }
 
     const eventos = parseWebhookMeta(req.body)
+    const agora = new Date()
     for (const ev of eventos) {
-      // Status/qualidade do número e status de template: por WABA, não por
-      // número — tratamento próprio entra depois. Por ora, loga (200).
-      if (ev.tipo === 'ignorado' || ev.tipo === 'template_status' || ev.tipo === 'qualidade') {
-        if (ev.tipo !== 'ignorado') req.log.info({ tipo: ev.tipo }, 'webhook meta (adiado)')
+      if (ev.tipo === 'ignorado') continue
+
+      // Qualidade do número / conta e status de template chegam POR WABA.
+      // Só banco; erro NOSSO (banco) → 500 para a Meta reenviar.
+      if (ev.tipo === 'qualidade' || ev.tipo === 'template_status') {
+        try {
+          const canais = await sql<{ tenant_id: string; canal_id: string }[]>`
+            SELECT tenant_id, canal_id
+              FROM canais_meta_por_waba(${ev.wabaId}, ${ev.tipo === 'qualidade' ? ev.telefone : null})`
+          if (canais.length === 0) {
+            // ⚠️ Sem alvo é falha PERMANENTE: 200 + log (a WABA pode ainda não
+            //    ter sido sincronizada — o worker de pós-ingestão preenche).
+            req.log.warn({ tipo: ev.tipo, wabaId: ev.wabaId }, 'webhook meta: nenhum canal para a WABA')
+            continue
+          }
+          if (ev.tipo === 'qualidade') {
+            for (const c of canais) {
+              const r = await comTenantServico(c.tenant_id, (tx) => aplicarQualidadeNumero(tx, c.canal_id, ev, agora))
+              req.log.info({ canalId: c.canal_id, evento: ev.evento, qualidade: ev.qualidade, baixa: ev.baixa, ...r }, 'webhook meta: qualidade do número')
+            }
+          } else {
+            for (const tenantId of new Set(canais.map((c) => c.tenant_id))) {
+              const r = await comTenantServico(tenantId, (tx) => aplicarStatusTemplate(tx, ev, agora))
+              req.log.info({ template: ev.nome, status: ev.status, ...r }, 'webhook meta: status de template')
+            }
+          }
+        } catch (erro) {
+          req.log.error({ erro, tipo: ev.tipo }, 'webhook meta: falha ao processar evento da WABA')
+          return reply.code(500).send({ erro: 'erro.interno' })
+        }
         continue
       }
 
@@ -84,43 +116,14 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
             req.log.info({ tipo: ev.conteudo.tipo === 'outro' ? ev.conteudo.tipoCru : ev.conteudo.tipo }, 'webhook meta: tipo ainda não ingerido')
             continue
           }
+          // ⚠️ A ingestão grava a mensagem E agenda, no mesmo commit, a resposta
+          //    automática (ausência — vale no oficial igual: quem escreve às 23h
+          //    merece a mesma resposta, venha por onde vier) e o download da mídia
+          //    (`meta:media:<id>` → nosso bucket). Os dois são rede e saem pelo
+          //    worker de pós-ingestão, com retry. A janela de 24h segue aberta
+          //    quando o worker roda: o cliente acabou de escrever.
           const r = await comTenantServico(canal.tenant_id, (tx) => ingerirMensagemEntrante(tx, canal.canal_id, entrante))
-
-          // ⚠️ Ausência e agente valem no canal OFICIAL igual: quem escreve às
-          //    23h merece a mesma resposta, venha por onde vier. Faltava aqui —
-          //    o produto respondia sozinho só no não-oficial, e isso só apareceria
-          //    no dia em que o registro na Meta saísse.
-          //
-          // ⚠️ Pós-commit e best-effort: a mensagem do cliente já está salva, e
-          //    erro aqui NÃO pode virar 500 — a Meta reenviaria o evento em loop,
-          //    travando a fila sequencial de todos os clientes.
-          //
-          // ⚠️ A janela de 24h está aberta por construção: o cliente ACABOU de
-          //    escrever. É o único momento em que texto livre é permitido no
-          //    oficial, e é exatamente quando isto roda.
-          if (r.ok && !r.duplicada) {
-            try {
-              const auto = await responderAutomaticamente(canal.tenant_id, r.conversaId, canal.canal_id)
-              // ⚠️ Sempre, inclusive o silêncio — ver a nota no webhook do
-              //    não-oficial. O motivo é o que torna a decisão auditável.
-              req.log.info({ canalId: canal.canal_id, conversaId: r.conversaId, ...auto }, 'resposta automática (meta)')
-            } catch (erro) {
-              req.log.warn({ erro, canalId: canal.canal_id }, 'resposta automática falhou (mensagem já está salva)')
-            }
-          }
-
-          // ⚠️ Mídia da Meta vem como `media id`, não URL: baixar exige o token
-          //    e dois GETs. PÓS-COMMIT e best-effort, como a cópia do não-oficial:
-          //    a mensagem já está salva com o placeholder `meta:media:<id>`; se
-          //    isto falhar, o worker de transcrição ainda sabe baixar pelo id.
-          if (r.ok && !r.duplicada && r.midiaExterna && midiaHabilitada()) {
-            try {
-              const ok = await resolverMidiaMeta(canal.tenant_id, canal.canal_id, r.midiaExterna)
-              if (!ok) req.log.warn({ canalId: canal.canal_id, conversaId: r.conversaId }, 'mídia da Meta mantida como media id (download falhou)')
-            } catch (erro) {
-              req.log.warn({ erro, canalId: canal.canal_id }, 'falha ao baixar mídia da Meta (mensagem já está salva)')
-            }
-          }
+          if (r.ok) req.log.info({ canalId: canal.canal_id, conversaId: r.conversaId, duplicada: r.duplicada }, 'mensagem entrante ingerida (meta)')
         } else if (ev.status === 'enviada' || ev.status === 'entregue' || ev.status === 'lida') {
           await comTenantServico(canal.tenant_id, (tx) => registrarStatusMensagem(tx, ev.idExterno, ev.status as 'enviada' | 'entregue' | 'lida'))
         }

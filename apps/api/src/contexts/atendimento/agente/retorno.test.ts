@@ -23,7 +23,7 @@ const CANAL = 'c4d40000-5555-4000-8000-000000000001'
 const CONTATO = 'c4d40000-6666-4000-8000-000000000001'
 const CONVERSA = 'c4d40000-7777-4000-8000-000000000001'
 
-const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
+const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 1, onnotice: () => {} })
 const H = 3_600_000
 
 interface Envio { conversaId: string; texto: string; opcoes: Record<string, unknown> }

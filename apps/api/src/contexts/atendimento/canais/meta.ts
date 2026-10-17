@@ -39,9 +39,53 @@ export type EventoMeta =
   | { tipo: 'mensagem'; phoneNumberId: string; de: string; idExterno: string; timestamp: number
       conteudo: ConteudoMeta; nomePerfil: string | null }
   | { tipo: 'status'; phoneNumberId: string; idExterno: string; status: string; timestamp: number }
-  | { tipo: 'template_status'; wabaId: string; nome: string; idioma: string | null; status: string; motivo: string | null }
-  | { tipo: 'qualidade'; phoneNumberId: string | null; evento: string; detalhe: string | null }
+  | { tipo: 'template_status'; wabaId: string; nome: string; idioma: string | null; status: string; motivo: string | null
+      /** `message_template_id` — casa com `template_versao.id_externo` quando já submetido. */
+      templateIdExterno: string | null }
+  | EventoQualidadeMeta
   | { tipo: 'ignorado'; motivo: string }
+
+/**
+ * Qualidade do número (`phone_number_quality_update`) ou restrição da conta
+ * (`account_update`). Chegam POR WABA (`entry.id`) e com o telefone de
+ * exibição — não com o phone_number_id.
+ *
+ * `baixa`: true = qualidade caiu/conta restrita (suspende as ativas);
+ * false = voltou ao normal (libera); null = informativo (só histórico).
+ */
+export interface EventoQualidadeMeta {
+  readonly tipo: 'qualidade'
+  readonly wabaId: string
+  readonly campo: 'phone_number_quality_update' | 'account_update'
+  readonly phoneNumberId: string | null
+  /** Só dígitos; `null` = o evento vale para a conta inteira. */
+  readonly telefone: string | null
+  readonly evento: string
+  /** GREEN | YELLOW | RED quando a Meta manda a nota. */
+  readonly qualidade: string | null
+  /** Tier/limite atual ou estado do banimento — vai para o histórico. */
+  readonly detalhe: string | null
+  readonly baixa: boolean | null
+}
+
+// Playbook da AM §2.5: FLAGGED/DOWNGRADE ou nota RED suspendem; UNFLAGGED/UPGRADE
+// ou nota GREEN liberam. Conta violada/restrita/desabilitada suspende e NUNCA
+// libera sozinha (a volta é decisão de quem opera, na tela).
+const QUALIDADE_BAIXA = new Set(['FLAGGED', 'DOWNGRADE'])
+const QUALIDADE_OK = new Set(['UNFLAGGED', 'UPGRADE'])
+const CONTA_RESTRITA = new Set(['ACCOUNT_VIOLATION', 'ACCOUNT_RESTRICTION', 'DISABLED_UPDATE'])
+
+/** Classificação pura do evento de qualidade/conta. */
+export function classificarQualidade(
+  campo: EventoQualidadeMeta['campo'], evento: string, qualidade: string | null, banimento: string | null,
+): boolean | null {
+  if (campo === 'phone_number_quality_update') {
+    if (qualidade === 'RED' || QUALIDADE_BAIXA.has(evento)) return true
+    if (qualidade === 'GREEN' || QUALIDADE_OK.has(evento)) return false
+    return null
+  }
+  return CONTA_RESTRITA.has(evento) || /DISABLE/.test(banimento ?? '') ? true : null
+}
 
 // Mapa dos status do WhatsApp Cloud para o nosso vocabulário de mensagem.
 const STATUS_META: Record<string, string> = {
@@ -91,18 +135,30 @@ export function parseWebhookMeta(corpo: unknown): EventoMeta[] {
           eventos.push({ tipo: 'ignorado', motivo: 'messages_sem_conteudo' })
         }
       } else if (ch.field === 'message_template_status_update') {
+        const idTpl = v.message_template_id
+        const motivo = typeof v.reason === 'string' && v.reason !== 'NONE' ? v.reason : null
         eventos.push({
           tipo: 'template_status', wabaId,
           nome: (v.message_template_name as string) ?? '',
           idioma: (v.message_template_language as string) ?? null,
-          status: (v.event as string) ?? 'UNKNOWN',
-          motivo: (v.reason as string) ?? null,
+          status: String(v.event ?? 'UNKNOWN').toUpperCase(),
+          motivo,
+          templateIdExterno: typeof idTpl === 'number' || typeof idTpl === 'string' ? String(idTpl) : null,
         })
       } else if (ch.field === 'phone_number_quality_update' || ch.field === 'account_update') {
+        const evento = String(v.event ?? ch.field).toUpperCase()
+        const nota = (v.current_quality_rating ?? v.quality_rating) as string | undefined
+        const qualidade = typeof nota === 'string' ? nota.toUpperCase() : null
+        // ban_info.waba_ban_state vem como lista na documentação ("DISABLE", "REINSTATE"…).
+        const ban = (v.ban_info as { waba_ban_state?: unknown } | undefined)?.waba_ban_state
+        const banimento = Array.isArray(ban) ? ban.join(',') : typeof ban === 'string' ? ban : null
+        const tel = (v.display_phone_number ?? v.phone_number) as string | undefined
         eventos.push({
-          tipo: 'qualidade', phoneNumberId,
-          evento: (v.event as string) ?? ch.field,
-          detalhe: (v.current_limit as string) ?? (v.ban_state as string) ?? null,
+          tipo: 'qualidade', wabaId, campo: ch.field, phoneNumberId,
+          telefone: typeof tel === 'string' && tel.replace(/\D/g, '') ? tel.replace(/\D/g, '') : null,
+          evento, qualidade,
+          detalhe: (v.current_limit as string | undefined) ?? banimento ?? null,
+          baixa: classificarQualidade(ch.field, evento, qualidade, banimento),
         })
       } else {
         eventos.push({ tipo: 'ignorado', motivo: `campo_${ch.field ?? 'ausente'}` })

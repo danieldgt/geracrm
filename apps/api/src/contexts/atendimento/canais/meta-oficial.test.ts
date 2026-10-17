@@ -51,6 +51,20 @@ describe('CanalMetaOficial', () => {
     expect(r).toEqual({ ok: true, idExterno: 'wamid.IMG' })
     expect(JSON.parse(capturado!.body as string)).toMatchObject({ type: 'image', image: { link: 'https://cdn.x/y.jpg', caption: 'legenda' } })
   })
+
+  it('enviarTemplate (P11): nome, idioma e as variáveis como parâmetros de texto do corpo', async () => {
+    const corpos: unknown[] = []
+    const canal = new CanalMetaOficial(cred, { buscar: fakeFetch(200, { messages: [{ id: 'wamid.TPL' }] }, (_u, init) => { corpos.push(JSON.parse(init.body as string)) }) })
+    expect(await canal.enviarTemplate('+5581999990000', { nome: 'retorno_pedido', idioma: 'pt_BR', variaveis: ['Joana'] }))
+      .toEqual({ ok: true, idExterno: 'wamid.TPL' })
+    expect(corpos[0]).toEqual({
+      messaging_product: 'whatsapp', recipient_type: 'individual', to: '5581999990000', type: 'template',
+      template: { name: 'retorno_pedido', language: { code: 'pt_BR' }, components: [{ type: 'body', parameters: [{ type: 'text', text: 'Joana' }] }] },
+    })
+    // Sem variáveis, sem `components` (a Meta recusa parâmetro que o template não declara).
+    await canal.enviarTemplate('5581999990000', { nome: 'aviso', idioma: 'pt_BR', variaveis: [] })
+    expect((corpos[1] as { template: object }).template).toEqual({ name: 'aviso', language: { code: 'pt_BR' } })
+  })
 })
 
 /** Ritmo humano e capacidades (R5): "digitando…", botões e download de mídia. */

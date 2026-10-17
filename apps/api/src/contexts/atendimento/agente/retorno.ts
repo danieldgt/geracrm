@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { comTenantServico, type Sql } from '../../../db/index.js'
 import { enviarTextoNaConversa } from '../envio-conversa.js'
+import { enviarTemplateNaConversa } from '../envio-template.js'
+import { decidirAtiva, lerContextoAtiva, type DecisaoAtiva } from './ativas.js'
 
 /**
  * O RETORNO DO AGENTE (follow-up, R5) — a cutucada programada quando o cliente
@@ -9,14 +11,18 @@ import { enviarTextoNaConversa } from '../envio-conversa.js'
  *   proposta enviada ──agendarRetorno(+1h)──▶ agente_retorno (pendente)
  *   workers (60 s, dono, advisory lock) ──▶ processarRetornos
  *     ├─ cliente escreveu? motivo ainda vale? agente em modo autônomo?
- *     ├─ envia UM texto curto pelo GATEWAY (opt-out, pausa, janela de 24h)
+ *     ├─ política das ATIVAS (P11, `ativas.ts`): suspensão por qualidade →
+ *     │  adia; expediente/feriado → adia para a próxima abertura; limite
+ *     │  dia/semana → descarta; oficial fora de 24h → template aprovado ou recusa
+ *     ├─ envia UM texto curto (ou o template) pelo GATEWAY (opt-out, pausa, janela)
  *     └─ enviado → agenda o próximo passo (24h, depois 72h); recusa → recusado
  *
  * ⚠️ Texto FIXO, educado e SEM NÚMEROS: não há ferramenta neste caminho, então
- * não há de onde um número sair com origem (guardrail do agente).
- * ⚠️ No oficial fora da janela o gateway recusa (`janela_fechada`) e a linha
- * vira `recusado` com o motivo — template de reabertura é decisão de quem
- * opera, nunca forçada daqui.
+ * não há de onde um número sair com origem (guardrail do agente). O template
+ * também é fixo (aprovado pela Meta) e só leva o primeiro nome.
+ * ⚠️ No oficial fora da janela só sai o template ESCOLHIDO na tela
+ * (`agente_config.ativas.templateRetorno`) e APROVADO; sem ele a linha vira
+ * `recusado` com o motivo nomeado (`sem_template`, `template_indisponivel`).
  */
 
 export type MotivoRetorno = 'proposta_sem_resposta' | 'carrinho_abandonado' | 'combinado'
@@ -105,6 +111,8 @@ export async function cancelarRetornosDaConversa(tx: Sql, conversaId: string, mo
 
 export interface DepsRetorno {
   readonly enviar?: typeof enviarTextoNaConversa | undefined
+  /** Envio de template (oficial fora de 24h). Padrão: `enviarTemplateNaConversa`. */
+  readonly enviarTemplate?: typeof enviarTemplateNaConversa | undefined
   /** Restringe a passada a UM tenant (reprocessamento dirigido; testes contra banco compartilhado). */
   readonly somenteTenant?: string | undefined
 }
@@ -114,7 +122,12 @@ export interface RelatorioRetornos {
   enviados: number
   cancelados: number
   recusados: number
+  /** Falha de transporte ou erro: mesma linha, mais tarde. */
   reagendados: number
+  /** Política das ativas: suspensão, expediente ou feriado — mesma linha, na próxima abertura. */
+  adiados: number
+  /** Política das ativas: limite do dia/semana — final (estado `cancelado`, detalhe com o limite). */
+  descartados: number
 }
 
 interface RetornoVencido {
@@ -135,9 +148,17 @@ interface RetornoVencido {
 export async function processarRetornos(
   dono: Sql, deps: DepsRetorno = {}, agora: Date = new Date(),
 ): Promise<RelatorioRetornos> {
-  const r: RelatorioRetornos = { vencidos: 0, enviados: 0, cancelados: 0, recusados: 0, reagendados: 0 }
-  const [trava] = await dono<{ ok: boolean }[]>`SELECT pg_try_advisory_lock(hashtext('agente_retorno')) AS ok`
-  if (!trava?.ok) return r
+  const r: RelatorioRetornos = { vencidos: 0, enviados: 0, cancelados: 0, recusados: 0, reagendados: 0, adiados: 0, descartados: 0 }
+  // ⚠️ A passada do worker desiste se outra está rodando; a DIRIGIDA
+  //    (`somenteTenant`: reprocessamento, testes em paralelo) espera a vez —
+  //    senão volta vazia sem dizer por quê.
+  let travou = false
+  for (let i = 0; i < (deps.somenteTenant ? 400 : 1) && !travou; i++) {
+    if (i > 0) await new Promise((ok) => setTimeout(ok, 25))
+    const [t] = await dono<{ ok: boolean }[]>`SELECT pg_try_advisory_lock(hashtext('agente_retorno')) AS ok`
+    travou = !!t?.ok
+  }
+  if (!travou) return r
   try {
     const vencidos = await dono<RetornoVencido[]>`
       SELECT tenant_id, id, conversa_id, canal_id, motivo, tentativa, texto, criado_em
@@ -153,6 +174,8 @@ export async function processarRetornos(
         if (desfecho === 'enviado') r.enviados += 1
         else if (desfecho === 'cancelado') r.cancelados += 1
         else if (desfecho === 'recusado') r.recusados += 1
+        else if (desfecho === 'adiado') r.adiados += 1
+        else if (desfecho === 'descartado') r.descartados += 1
         else r.reagendados += 1
       } catch (erro) {
         // ⚠️ Um retorno quebrado não pode parar os OUTROS (de todos os tenants).
@@ -170,23 +193,49 @@ export async function processarRetornos(
   return r
 }
 
-type Desfecho = 'enviado' | 'cancelado' | 'recusado' | 'reagendado'
+type Desfecho = 'enviado' | 'cancelado' | 'recusado' | 'reagendado' | 'adiado' | 'descartado'
+
+type Veredito = { tipo: 'cancelar'; motivo: string } | { tipo: 'politica'; decisao: DecisaoAtiva }
 
 async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): Promise<Desfecho> {
   // 1. Decidir, sob o tenant: o motivo ainda vale? o agente pode falar sozinho?
-  const veredito = await comTenantServico(v.tenant_id, (tx) => avaliar(tx, v))
-  if (veredito !== 'envia') {
-    await comTenantServico(v.tenant_id, (tx) => encerrar(tx, v, 'cancelado', veredito, agora))
+  //    E a política das ATIVAS: suspensão, expediente, limites, janela/template.
+  const veredito = await comTenantServico(v.tenant_id, async (tx): Promise<Veredito> => {
+    const motivo = await avaliar(tx, v)
+    if (motivo !== 'envia') return { tipo: 'cancelar', motivo }
+    const ctx = await lerContextoAtiva(tx, { conversaId: v.conversa_id, agora })
+    if (!ctx) return { tipo: 'cancelar', motivo: 'conversa_inexistente' }
+    return { tipo: 'politica', decisao: decidirAtiva(ctx, agora) }
+  })
+  if (veredito.tipo === 'cancelar') {
+    await comTenantServico(v.tenant_id, (tx) => encerrar(tx, v, 'cancelado', veredito.motivo, agora))
     return 'cancelado'
+  }
+  const d = veredito.decisao
+  if (d.acao === 'adiar') {
+    // ⚠️ Mesma linha, mesma tentativa: adiar não é falhar.
+    await comTenantServico(v.tenant_id, (tx) => tx`
+      UPDATE agente_retorno SET executar_em = ${d.ate}, detalhe = ${d.motivo}
+       WHERE tenant_id = tenant_atual() AND id = ${v.id} AND estado = 'pendente'`)
+    return 'adiado'
+  }
+  if (d.acao === 'descartar') {
+    await comTenantServico(v.tenant_id, (tx) => encerrar(tx, v, 'cancelado', d.motivo, agora))
+    return 'descartado'
+  }
+  if (d.acao === 'recusar') {
+    await comTenantServico(v.tenant_id, (tx) => encerrar(tx, v, 'recusado', d.motivo, agora))
+    return 'recusado'
   }
 
   // 2. Enviar pelo gateway único — FORA de transação. `ehDisparo: true`: a
   //    pausa de disparo e o opt-out alcançam o retorno, como qualquer envio
   //    programático.
-  const enviar = deps.enviar ?? enviarTextoNaConversa
-  const envio = await enviar(v.tenant_id, v.conversa_id, textoDoRetorno(v.motivo, v.tentativa, v.texto), null, agora, {
-    marcador: MARCADOR_RETORNO, ehDisparo: true,
-  })
+  const opcoes = { marcador: MARCADOR_RETORNO, ehDisparo: true }
+  const envio = d.acao === 'template'
+    ? await (deps.enviarTemplate ?? enviarTemplateNaConversa)(v.tenant_id, v.conversa_id, d.templateId, agora, opcoes)
+    : await (deps.enviar ?? enviarTextoNaConversa)(
+      v.tenant_id, v.conversa_id, textoDoRetorno(v.motivo, v.tentativa, v.texto), null, agora, opcoes)
 
   // 3. Desfecho + próximo passo, no MESMO commit.
   return comTenantServico(v.tenant_id, async (tx) => {
