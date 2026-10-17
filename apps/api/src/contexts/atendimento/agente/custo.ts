@@ -91,7 +91,7 @@ export function normalizarIdModelo(id: string): string {
   let v = id.trim().toLowerCase()
   // ARN e caminho de fornecedor (`openai/…`, `models/…`, `meta-llama/…`): fica o último segmento.
   if (v.includes('/')) v = v.slice(v.lastIndexOf('/') + 1)
-  v = v.replace(/-v\d+(?::\d+)?$/, '') // versão do Bedrock (-v1:0)
+  v = v.replace(/-v\d+:\d+$/, '') // versão do Bedrock (-v1:0) — só com ':N', para não juntar deepseek-v2/v3
   v = v.replace(SUFIXO_VARIANTE, '') // :free, :nitro…
   v = v.replace(PREFIXO_PERFIL, '') // us.anthropic. / anthropic.
   v = v.replace(/@\d{8}$/, '') // Vertex: claude-…@20251001
@@ -136,7 +136,11 @@ export function resolverPreco(
   if (p.provedor === 'simulado' || idNormalizado === 'simulado') return { preco: ZERO, origem: 'gratuito', codigo: null, idNormalizado }
   if (ehVarianteGratuita(p.modelo)) return { preco: ZERO, origem: 'gratuito', codigo: null, idNormalizado }
 
-  const candidatos = catalogo.filter((l) => normalizarIdModelo(l.modelo) === idNormalizado || normalizarIdModelo(l.codigo) === idNormalizado)
+  // ⚠️ Linha `…:free` do catálogo só vale para id também `:free` (que já saiu
+  //    acima como gratuito): o mesmo modelo SEM `:free` é o pago, e não pode
+  //    herdar o preço zero da variante gratuita.
+  const candidatos = catalogo.filter((l) => !ehVarianteGratuita(l.modelo)
+    && (normalizarIdModelo(l.modelo) === idNormalizado || normalizarIdModelo(l.codigo) === idNormalizado))
   const doProvedor = p.provedor ? candidatos.filter((l) => l.provedor === p.provedor) : candidatos
   const unico = doProvedor.length === 1 ? doProvedor[0]! : null
   if (unico) {
@@ -289,11 +293,23 @@ export function tetoSessaoEfetivo(cfgExtra: Readonly<Record<string, unknown>>, e
   return v === 0 ? null : v
 }
 
-/** Custo acumulado da sessão (`agente_sessao.custo_centavos`). 0 sem sessão. Chamar sob tenant. */
-export async function custoDaSessao(tx: Sql, sessaoId: string | null): Promise<number> {
+/**
+ * Custo acumulado da sessão. 0 sem sessão. Chamar sob tenant.
+ *
+ * ⚠️ Soma `agente_decisao.custo_centavos` da sessão — inclusive dos turnos que
+ *    FALHARAM (o laço gastou e não respondeu), que `agente_sessao.custo_centavos`
+ *    não acumula. Fica o MAIOR dos dois: decisão antiga sem `sessao_id` ainda
+ *    conta pela sessão. Filtra pela conversa para usar o índice
+ *    `agente_decisao_por_conversa`.
+ */
+export async function custoDaSessao(tx: Sql, sessaoId: string | null, conversaId: string): Promise<number> {
   if (!sessaoId) return 0
   const [l] = await tx<{ custo: string }[]>`
-    SELECT custo_centavos::text AS custo FROM agente_sessao WHERE tenant_id = tenant_atual() AND id = ${sessaoId}`
+    SELECT greatest(
+             (SELECT coalesce(sum(custo_centavos), 0) FROM agente_decisao
+               WHERE tenant_id = tenant_atual() AND conversa_id = ${conversaId} AND sessao_id = ${sessaoId}),
+             (SELECT coalesce(max(custo_centavos), 0) FROM agente_sessao
+               WHERE tenant_id = tenant_atual() AND id = ${sessaoId}))::text AS custo`
   return Number(l?.custo ?? 0)
 }
 
@@ -314,6 +330,11 @@ export interface SituacaoMensal {
  * Gasto do mês corrente do tenant (fuso do tenant), somado POR NÚMERO para usar
  * o índice `agente_decisao_custo_dia (tenant_id, canal_id, criado_em)` — a
  * soma direta por tenant varreria o histórico inteiro. Chamar sob tenant.
+ *
+ * TODO(P20): `array_agg(DISTINCT modelo)` lê o heap (o índice só INCLUI
+ *   `custo_centavos`). Se a soma do mês pesar, criar índice
+ *   `(tenant_id, canal_id, criado_em) INCLUDE (custo_centavos, modelo)` em
+ *   migration própria (CONCURRENTLY fora da transação do runner).
  */
 export async function situacaoMensal(tx: Sql, agora: Date, custoExtraCentavos = 0): Promise<SituacaoMensal> {
   const [l] = await tx<{

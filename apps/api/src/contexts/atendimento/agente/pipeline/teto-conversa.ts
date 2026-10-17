@@ -8,8 +8,9 @@ import { marca, type EtapaTetoConversa } from './tipos.js'
  * contra UMA sessão que consome o dia inteiro.
  *
  * Teto: `agente_config.teto_sessao_centavos` do número (`cfgExtra`), senão
- * `IA_TETO_SESSAO_CENTAVOS`, senão R$ 3,00; 0 desliga. O acumulado é
- * `agente_sessao.custo_centavos` — está no banco, sobrevive a restart.
+ * `IA_TETO_SESSAO_CENTAVOS`, senão R$ 3,00; 0 desliga. O acumulado é a soma das
+ * decisões da sessão, inclusive as que falharam (`custoDaSessao`) — está no
+ * banco, sobrevive a restart.
  *
  *   antes  — a sessão JÁ está no teto: nem chama o modelo.
  *            autônomo → handoff `limite_de_custo_conversa` COM aviso ao cliente;
@@ -33,7 +34,7 @@ export const etapaTetoConversa: EtapaTetoConversa = {
     await verificarOrcamentoNoTurno(ctx.tenantId, ctx.agora)
     const teto = tetoSessaoEfetivo(ctx.cfgExtra)
     if (teto === null || !ctx.sessaoId || ctx.modo === 'simulacao' || ctx.modo === 'copiloto') return { tipo: 'segue' }
-    const acumulado = await comTenantServico(ctx.tenantId, (tx) => custoDaSessao(tx, ctx.sessaoId))
+    const acumulado = await comTenantServico(ctx.tenantId, (tx) => custoDaSessao(tx, ctx.sessaoId, ctx.conversaId))
     if (acumulado < teto) return { tipo: 'segue' }
     if (ctx.modo !== 'autonomo') return { tipo: 'silencio', motivo: 'limite_de_custo_conversa' }
     return {
@@ -47,14 +48,16 @@ export const etapaTetoConversa: EtapaTetoConversa = {
 
   async depois(ctx, turno) {
     // O turno que acabou de gastar entra no mês (ainda não persistido: vai como
-    // extra). Respeita o intervalo por tenant — uma soma por turno pesaria no banco.
+    // extra). `forcar`: o `antes` deste mesmo turno, com o mesmo `agora`, já
+    // ocupou o intervalo — sem forçar, a verificação pós-turno nunca rodaria.
+    // Só turno que GASTOU paga a soma.
     if (turno.custoCentavos > 0) {
-      await verificarOrcamentoNoTurno(ctx.tenantId, ctx.agora, { custoExtraCentavos: turno.custoCentavos })
+      await verificarOrcamentoNoTurno(ctx.tenantId, ctx.agora, { custoExtraCentavos: turno.custoCentavos, forcar: true })
     }
     const teto = tetoSessaoEfetivo(ctx.cfgExtra)
     if (teto === null || ctx.modo === 'simulacao' || ctx.modo === 'copiloto') return { tipo: 'segue' }
     // ⚠️ O custo deste turno ainda NÃO está somado na sessão (contrato de P0).
-    const acumulado = (await comTenantServico(ctx.tenantId, (tx) => custoDaSessao(tx, ctx.sessaoId))) + turno.custoCentavos
+    const acumulado = (await comTenantServico(ctx.tenantId, (tx) => custoDaSessao(tx, ctx.sessaoId, ctx.conversaId))) + turno.custoCentavos
     if (acumulado < teto) return { tipo: 'segue' }
     return {
       tipo: 'handoff',

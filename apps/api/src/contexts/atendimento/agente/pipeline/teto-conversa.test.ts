@@ -6,7 +6,8 @@ import type { Tarefa } from '../fila.js'
 import type { PortaLlmFerramentas, ResultadoLaco, UsoDoLaco } from '../porta-llm.js'
 import type { Ligacoes } from '../ferramentas/ligacoes-porta.js'
 import { limparCacheDeCusto } from '../custo.js'
-import { AVISO_TETO_CONVERSA } from './teto-conversa.js'
+import { AVISO_TETO_CONVERSA, etapaTetoConversa } from './teto-conversa.js'
+import type { ContextoPipeline } from './tipos.js'
 
 /**
  * TETO DE CUSTO POR CONVERSA (ADR-032, raia P6) — o turno de verdade, banco
@@ -86,13 +87,13 @@ beforeAll(async () => {
 beforeEach(async () => {
   limparCacheDeCusto()
   enviados.length = 0; chamadas = 0
-  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'notificacao', 'atendimento', 'mensagem', 'alerta']) {
+  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'notificacao', 'atendimento', 'mensagem', 'alerta', 'agente_orcamento']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`UPDATE conversa SET conduzida_por = 'humano' WHERE tenant_id = ${T}`
 })
 afterAll(async () => {
-  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_config', 'notificacao', 'atendimento', 'mensagem', 'alerta', 'conversa', 'contato_telefone', 'contato', 'canal_configuracao', 'canal_conectado', 'outbox']) {
+  for (const t of ['agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_config', 'agente_orcamento', 'notificacao', 'atendimento', 'mensagem', 'alerta', 'conversa', 'contato_telefone', 'contato', 'canal_configuracao', 'canal_conectado', 'outbox']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${T}`
@@ -182,5 +183,80 @@ describe('Teto(pós): o turno que passa do teto responde e transfere em silênci
     expect(r.desfecho).toBe('handoff')
     expect(enviados).toEqual([])
     expect(await atendimentos()).toBe(0)
+  })
+})
+
+/** LLM que falha DEPOIS de gastar (o laço rodou e a saída não veio). */
+function llmQueFalhaGastando(uso: UsoDoLaco): PortaLlmFerramentas {
+  return { nome: 'claude', capacidades: { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false },
+    async rodar(): Promise<ResultadoLaco> {
+      chamadas++
+      return { ok: false, motivo: 'indisponivel', detalhe: 'simulada',
+        rastro: { chamadas: [], rodadas: 1, uso, modelo: 'claude-sonnet-5-5', provedor: 'claude', latenciaMs: 1, parouPor: 'fim' } }
+    } }
+}
+
+describe('Turnos com FALHA contam no teto da sessão', () => {
+  it('assistido: falhas caras em loop acumulam na sessão e o teto(pré) para de chamar o modelo', async () => {
+    await configurar('assistido', 300)
+    await turno(llm('claude', 'claude-sonnet-5-5', POUCO)) // abre a sessão
+    const s = (await sessao())!
+    for (let i = 0; i < 3; i++) await turno(llmQueFalhaGastando(CARO)) // 3 × 110 = 330 ≥ 300
+    expect((await sessao())!.id).toBe(s.id)
+    expect(Number((await sessao())!.custo)).toBeLessThan(300) // a sessão em si não somou as falhas…
+    chamadas = 0
+    const r = await turno(llm('claude', 'claude-sonnet-5-5', POUCO))
+    expect(chamadas).toBe(0) // …mas o teto soma as decisões e barra
+    expect(r.desfecho).toBe('silencio')
+  })
+})
+
+describe('Orçamento mensal pelo teto: antes → depois no MESMO instante', () => {
+  const ctxEm = async (agora: Date): Promise<ContextoPipeline> => ({
+    tenantId: T, conversaId: CONVERSA, canalId: CANAL, contatoId: CONTATO, sessaoId: null, modo: 'autonomo', agora,
+    cfgExtra: { teto_sessao_centavos: 0 }, persona: {} as ContextoPipeline['persona'], estado: {}, historico: [], entrantes: [],
+    primeiraResposta: false, foraDoExpediente: false,
+  })
+  const gastar = (centavos: number, quando: Date) => dono`
+    INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, modo, desfecho, modelo, custo_centavos, criado_em)
+    VALUES (${T}, ${crypto.randomUUID()}, ${CONVERSA}, ${CANAL}, 'autonomo', 'respondeu', 'claude-sonnet-5-5', ${centavos}, ${quando})`
+  const tiposDeAlerta = async () => (await dono<{ tipo: string }[]>`
+    SELECT tipo FROM alerta WHERE tenant_id = ${T} AND resolvido_em IS NULL AND tipo LIKE 'agente_orcamento%' ORDER BY tipo`).map((a) => a.tipo)
+
+  /** Turno completo do ponto de vista do teto: antes e depois com o mesmo `agora`. */
+  const turnoDoTeto = async (agora: Date, custo: number) => {
+    const ctx = await ctxEm(agora)
+    await etapaTetoConversa.antes(ctx)
+    await etapaTetoConversa.depois(ctx, { custoCentavos: custo })
+    await gastar(custo, agora) // o vendedor persiste depois do teto(pós)
+  }
+
+  it('o depois do turno que cruza 80% e depois 100% alerta na hora, sem esperar o intervalo', async () => {
+    await dono`INSERT INTO agente_orcamento (tenant_id, mensal_centavos) VALUES (${T}, 1000)`
+    const agora = new Date()
+    await gastar(700, agora)
+    await turnoDoTeto(agora, 150) // 850 → 80%
+    expect(await tiposDeAlerta()).toEqual(['agente_orcamento_80'])
+    await turnoDoTeto(agora, 200) // 1050 → 100%
+    expect(await tiposDeAlerta()).toEqual(['agente_orcamento_100', 'agente_orcamento_80'])
+  })
+
+  it('no último minuto do mês (fuso da loja) o turno conta no mês que está acabando', async () => {
+    await dono`INSERT INTO agente_orcamento (tenant_id, mensal_centavos) VALUES (${T}, 1000)`
+    const [l] = await dono<{ ultimo: Date }[]>`
+      SELECT ((date_trunc('month', now() AT TIME ZONE coalesce(fuso, 'America/Sao_Paulo')) + interval '1 month' - interval '30 seconds')
+               AT TIME ZONE coalesce(fuso, 'America/Sao_Paulo')) AS ultimo
+        FROM tenant WHERE id = ${T}`
+    const ultimo = l!.ultimo
+    await gastar(790, new Date(ultimo.getTime() - 60_000))
+    await turnoDoTeto(ultimo, 20) // 810 → 80%, mesmo a 30 s da virada
+    expect(await tiposDeAlerta()).toEqual(['agente_orcamento_80'])
+    await turnoDoTeto(ultimo, 200) // 1010 → 100%
+    expect(await tiposDeAlerta()).toEqual(['agente_orcamento_100', 'agente_orcamento_80'])
+    // Virou o mês: o gasto do mês novo começa do zero — nada alerta.
+    const virada = new Date(ultimo.getTime() + 60_000)
+    await turnoDoTeto(virada, 10)
+    const [o] = await dono<{ a80: string; a100: string }[]>`SELECT alertado_80_mes AS a80, alertado_100_mes AS a100 FROM agente_orcamento WHERE tenant_id = ${T}`
+    expect(o!.a80).toBe(o!.a100) // ainda o mês que acabou
   })
 })

@@ -33,9 +33,16 @@ describe('normalizarIdModelo', () => {
     ['anthropic/claude-sonnet-5.5', 'claude-sonnet-5-5'],
     ['models/gemini-2.5-flash', 'gemini-2-5-flash'],
     ['  Claude-Opus-5-5-latest ', 'claude-opus-5-5'],
+    ['deepseek/deepseek-v3', 'deepseek-v3'],
+    ['deepseek-v2', 'deepseek-v2'],
+    ['acme-modelo-v2:1', 'acme-modelo'],
   ])('%s → %s', (bruto, base) => {
     expect(normalizarIdModelo(bruto)).toBe(base)
     expect(normalizarIdModelo(base)).toBe(base) // idempotente
+  })
+
+  it('deepseek-v2 e deepseek-v3 continuam distintos (só -vN:M é versão do Bedrock)', () => {
+    expect(normalizarIdModelo('deepseek-v2')).not.toBe(normalizarIdModelo('deepseek-v3'))
   })
 
   it(':free é variante gratuita; :nitro não', () => {
@@ -69,6 +76,16 @@ describe('resolverPreco (catálogo em memória)', () => {
       const r = resolverPreco(CAT, { provedor: 'claude', modelo: id })
       expect(r).toMatchObject({ origem: 'catalogo', codigo: 'claude-sonnet-5-5' })
     }
+  })
+
+  it(':free do catálogo NÃO contamina o modelo pago de mesmo nome', () => {
+    const comFree: LinhaPreco[] = [...CAT,
+      { codigo: 'openrouter-qwen3-coder-free', provedor: 'openrouter', modelo: 'qwen/qwen3-coder:free', gratuito: true, entrada: 0, saida: 0, cacheLeitura: null, cacheEscrita: null }]
+    expect(resolverPreco(comFree, { provedor: 'openrouter', modelo: 'qwen/qwen3-coder:free' }).origem).toBe('gratuito')
+    const pago = resolverPreco(comFree, { provedor: 'openrouter', modelo: 'qwen/qwen3-coder' })
+    expect(pago.origem).toBe('desconhecido')
+    expect(pago.preco).toEqual(maiorPreco(comFree))
+    expect(resolverPreco(comFree, { provedor: null, modelo: 'qwen/qwen3-coder' }).origem).toBe('desconhecido')
   })
 
   it(':free custa 0 mesmo fora do catálogo; simulado custa 0', () => {
@@ -183,6 +200,11 @@ describe('precoDoModelo pelo catálogo do banco (0093 + 0099)', () => {
     expect((await catalogoDePrecos()).length).toBeGreaterThanOrEqual(12)
   })
 
+  it('catálogo real: qwen3-coder pago não herda o :free do OpenRouter', async () => {
+    expect((await precoDoModelo({ provedor: 'openrouter', modelo: 'qwen/qwen3-coder:free' })).origem).toBe('gratuito')
+    expect((await precoDoModelo({ provedor: 'openrouter', modelo: 'qwen/qwen3-coder' })).origem).toBe('desconhecido')
+  })
+
   it('Groq gratuito custa 0 no laço (contrato do turno)', async () => {
     const c = await custoDoLaco({ provedor: 'groq', modelo: 'openai/gpt-oss-120b', uso: { entrada: 900_000, saida: 100_000, cacheLeitura: 0, cacheEscrita: 0 } })
     expect(c).toBe(0)
@@ -244,6 +266,14 @@ describe('Orçamento mensal: alerta 80% e 100%, uma vez por mês cada', () => {
     expect((await verificar(A)).alertou).toBe(100)
     expect((await verificar(A)).alertou).toBe(0)
     expect((await alertas(A)).map((x) => x.tipo)).toEqual(['agente_orcamento_100'])
+  })
+
+  it('concorrência: duas verificações em paralelo cruzando 80% → UM alerta só', async () => {
+    await dono`INSERT INTO agente_orcamento (tenant_id, mensal_centavos) VALUES (${A}, 1000)`
+    await gastar(A, 850)
+    const rs = await Promise.all([verificar(A), verificar(A), verificar(A)])
+    expect(rs.map((r) => r.alertou).sort()).toEqual([0, 0, 80])
+    expect((await alertas(A)).map((x) => x.tipo)).toEqual(['agente_orcamento_80'])
   })
 
   it('notifica os admins (ou, sem admin, os usuários ativos) no sino', async () => {

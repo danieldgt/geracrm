@@ -17,7 +17,9 @@ ALTER TABLE modelo_ia
     ADD COLUMN custo_cache_leitura_usd_milhao numeric(10,4) NULL,
     ADD COLUMN custo_cache_escrita_usd_milhao numeric(10,4) NULL;
 
--- Claude: leitura de cache = 0,1× a entrada; escrita (TTL 5 min) = 1,25× a entrada.
+-- Claude: preços OFICIAIS da Anthropic (conferidos na skill claude-api, out/2026), US$/milhão.
+--   leitura de cache: Opus 5.5 = 0,20 (exceção: 0,05× a entrada, não 0,1×); Sonnet 5.5 = 0,20 (0,1×);
+--   Haiku 4.5 = 0,10 (0,1×). Escrita com TTL de 5 min = 1,25× a entrada (é o TTL que o adaptador usa).
 UPDATE modelo_ia SET custo_cache_leitura_usd_milhao = 0.20, custo_cache_escrita_usd_milhao = 5.00 WHERE codigo = 'claude-opus-5-5';
 UPDATE modelo_ia SET custo_cache_leitura_usd_milhao = 0.20, custo_cache_escrita_usd_milhao = 2.50 WHERE codigo = 'claude-sonnet-5-5';
 UPDATE modelo_ia SET custo_cache_leitura_usd_milhao = 0.10, custo_cache_escrita_usd_milhao = 1.25 WHERE codigo = 'claude-haiku-4-5';
