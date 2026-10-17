@@ -176,11 +176,35 @@ export function paraMensagens(falas: readonly PedidoDeLaco['mensagens'][number][
   return out
 }
 
-function mapearErro(e: unknown): { motivo: MotivoFalhaLlm; detalhe?: string } {
-  if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return { motivo: 'credencial_invalida', detalhe: e.message }
+/**
+ * Erro do SDK → motivo do domínio (tabela do ADR-030; teste em `falha-llm.test.ts`).
+ *
+ * ⚠️ 403 é `acesso_negado` (o MODELO não está liberado para a chave), não
+ *    `credencial_invalida`: tratar como chave errada fazia a tela mandar trocar
+ *    a chave quando bastava trocar o modelo (AM §12 #9). 404 também: o id do
+ *    modelo não existe para esta conta.
+ * ⚠️ Sem crédito a Anthropic responde 400 `invalid_request_error` com "credit
+ *    balance" (ou 402 `billing_error`): é fatal e conta para a reserva — não é
+ *    erro de requisição nosso.
+ */
+export function mapearErro(e: unknown): { motivo: MotivoFalhaLlm; detalhe?: string } {
+  if (e instanceof Anthropic.AuthenticationError) return { motivo: 'credencial_invalida', detalhe: e.message }
+  if (e instanceof Anthropic.PermissionDeniedError || e instanceof Anthropic.NotFoundError) return { motivo: 'acesso_negado', detalhe: e.message }
   if (e instanceof Anthropic.RateLimitError) return { motivo: 'limite_de_taxa', detalhe: e.message }
-  if (e instanceof Anthropic.BadRequestError) return { motivo: 'resposta_inesperada', detalhe: e.message }
+  if (e instanceof Anthropic.APIError && (e.status === 402 || tipoDoErro(e) === 'billing_error' || /credit balance/i.test(e.message))) {
+    return { motivo: 'limite_de_custo', detalhe: e.message }
+  }
+  if (e instanceof Anthropic.APIError && typeof e.status === 'number' && e.status >= 400 && e.status < 500 && e.status !== 408) {
+    return { motivo: 'requisicao_invalida', detalhe: `${e.status} ${e.message}` }
+  }
+  // 408, 5xx, 529 (overloaded), conexão e tempo esgotado do SDK.
   if (e instanceof Anthropic.APIError) return { motivo: 'indisponivel', detalhe: `${e.status ?? ''} ${e.message}`.trim() }
   if (e instanceof Error && (e.name === 'AbortError' || /abort/i.test(e.message))) return { motivo: 'indisponivel', detalhe: 'prazo do turno estourado' }
   return { motivo: 'indisponivel', detalhe: e instanceof Error ? e.message : String(e) }
+}
+
+/** `error.type` do corpo de erro da Anthropic (`{type:'error', error:{type, message}}`). */
+function tipoDoErro(e: InstanceType<typeof Anthropic.APIError>): string | undefined {
+  const corpo = e.error as { error?: { type?: unknown } } | undefined
+  return typeof corpo?.error?.type === 'string' ? corpo.error.type : undefined
 }

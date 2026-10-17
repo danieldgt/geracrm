@@ -131,6 +131,9 @@ export class LlmOpenRouterFerramentas implements PortaLlmFerramentas {
             rodadas -= 1
             continue
           }
+          // O OpenRouter repassa o status do fornecedor de trás em `error.code`: 403 lá é acesso negado aqui.
+          const codigo = typeof json.error.code === 'number' ? json.error.code : null
+          if (codigo !== null && codigo >= 400) return { ok: false, ...mapearStatus(codigo, json.error.message ?? ''), rastro: rastro('fim') }
           return { ok: false, motivo: 'indisponivel', detalhe: json.error.message ?? 'erro do fornecedor', rastro: rastro('fim') }
         }
         if (!json) return { ok: false, motivo: 'indisponivel', detalhe: 'corpo vazio', rastro: rastro('fim') }
@@ -267,7 +270,7 @@ function extrairJson(texto: string): unknown {
 
 interface RespostaFio {
   model?: string
-  error?: { message?: string }
+  error?: { message?: string; code?: number | string }
   usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } }
   choices?: { finish_reason?: string; message?: { content?: string | null; tool_calls?: ChamadaFio[] } }[]
 }
@@ -284,11 +287,32 @@ function paraFio(falas: PedidoDeLaco['mensagens']): MensagemFio[] {
   return out
 }
 
-function mapearStatus(status: number, texto: string): { motivo: MotivoFalhaLlm; detalhe: string } {
+/**
+ * Status HTTP (+ corpo) de um fornecedor OpenAI-compatível → motivo do domínio.
+ * Vale para openrouter, groq, gemini, cerebras e maritaca (mesmo fio; tabela do
+ * ADR-030, teste em `falha-llm.test.ts`).
+ *
+ * ⚠️ 403/404 = `acesso_negado` (modelo não liberado ou inexistente para a
+ *    chave); 401 é a chave. ⚠️ 429 com `insufficient_quota` (código do corpo,
+ *    não do texto) é cota/crédito esgotado — fatal, não passageiro.
+ */
+export function mapearStatus(status: number, texto: string): { motivo: MotivoFalhaLlm; detalhe: string } {
   const detalhe = `${status} ${texto.slice(0, 160)}`.trim()
-  if (status === 401 || status === 403) return { motivo: 'credencial_invalida', detalhe }
+  if (status === 401) return { motivo: 'credencial_invalida', detalhe }
+  if (status === 403 || status === 404) return { motivo: 'acesso_negado', detalhe }
   if (status === 402) return { motivo: 'limite_de_custo', detalhe }
-  if (status === 429) return { motivo: 'limite_de_taxa', detalhe }
-  if (status >= 500) return { motivo: 'indisponivel', detalhe }
-  return { motivo: 'resposta_inesperada', detalhe }
+  if (status === 429) return { motivo: codigoDoErro(texto) === 'insufficient_quota' ? 'limite_de_custo' : 'limite_de_taxa', detalhe }
+  if (status === 408 || status >= 500) return { motivo: 'indisponivel', detalhe }
+  return { motivo: 'requisicao_invalida', detalhe }
+}
+
+/** `error.code` (ou `error.type`) do corpo JSON de erro do fio OpenAI. */
+function codigoDoErro(texto: string): string | undefined {
+  try {
+    const j = JSON.parse(texto) as { error?: { code?: unknown; type?: unknown } }
+    const c = j.error?.code ?? j.error?.type
+    return typeof c === 'string' ? c : undefined
+  } catch {
+    return undefined
+  }
 }

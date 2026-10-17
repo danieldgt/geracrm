@@ -8,6 +8,7 @@ import type { PedidoDeLaco, PortaLlmFerramentas, ResultadoLaco } from '../porta-
 import type { Ligacoes } from '../ferramentas/ligacoes-porta.js'
 import { marca, rodarPosResposta, rodarPreLlm, montarPipeline, PIPELINE_PADRAO } from './index.js'
 import type { ContextoPipeline, EtapaPosResposta, EtapaPreLlm, PipelineDoTurno } from './tipos.js'
+import { AVISO_INSTABILIDADE, REAGENDAR_INSTABILIDADE_MS } from './falha-llm.js'
 
 /**
  * O PIPELINE DO TURNO — uma etapa FALSA em cada ponto de extensão, com o turno
@@ -24,6 +25,13 @@ const CONTATO = 'c0de0000-6666-4000-8000-000000000001'
 const CONVERSA = 'c0de0000-7777-4000-8000-000000000001'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
+/**
+ * ⚠️ O worker pega tarefa de QUALQUER tenant, e os arquivos de teste rodam em
+ *    paralelo no mesmo banco: com o dono, o worker deste arquivo roubava a
+ *    tarefa do outro (e vice-versa). Sob o papel da aplicação com o tenant fixo
+ *    na conexão, o RLS faz o worker do teste enxergar só as tarefas deste arquivo.
+ */
+const workerDoTenant = postgres(process.env.DATABASE_URL!, { max: 2, onnotice: () => {}, connection: { 'geracrm.tenant_id': T } as never })
 const SEMPRE_FECHADO = { seg: null, ter: null, qua: null, qui: null, sex: null, sab: null, dom: null }
 
 const enviados: string[] = []
@@ -129,7 +137,7 @@ afterAll(async () => {
   await dono`DELETE FROM tenant WHERE id = ${T}`
   await dono`DELETE FROM plano WHERE id = ${PLANO}`
   await dono`DELETE FROM perfil_vertical_modelo WHERE id = ${MODELO}`
-  await encerrarBanco(); await dono.end()
+  await encerrarBanco(); await dono.end(); await workerDoTenant.end()
 })
 
 describe('Pipeline padrão = comportamento anterior', () => {
@@ -390,11 +398,11 @@ describe('Pontos 5–8 — depois do modelo (P7, P2, P3, P12)', () => {
 })
 
 describe('Ponto 9 — política de falha (P5)', () => {
-  it('stub: falha em autônomo vira handoff mudo e grava a classe da falha', async () => {
+  it('padrão (P5): 1ª falha transitória em autônomo avisa o cliente, pede reagendamento e grava a classe', async () => {
     await configurar('autonomo')
     const r = await turno('oi', { llm: llmQueFalha })
-    expect(r).toMatchObject({ desfecho: 'handoff', motivo: 'modelo_indisponivel' })
-    expect(enviados).toEqual([])
+    expect(r).toMatchObject({ desfecho: 'falha', motivo: 'modelo_indisponivel', reagendarEmMs: REAGENDAR_INSTABILIDADE_MS })
+    expect(enviados).toEqual([AVISO_INSTABILIDADE])
     expect((await ultimaDecisao()).falha_tipo).toBe('transitoria')
   })
 
@@ -405,7 +413,7 @@ describe('Ponto 9 — política de falha (P5)', () => {
     const agendada = new Date(Date.now() - 60_000)
     await comTenantServico(T, (tx) => agendarTurno(tx, { conversaId: CONVERSA, canalId: CANAL, mensagemId: id, agora: agendada, atrasoMs: 0 }))
     const agora = new Date()
-    await processarTarefasDoAgente(dono as never, { llm: llmQueFalha, ligacoes, enviar: enviarFalso, agora, pipeline: { falha } }, agora)
+    await processarTarefasDoAgente(workerDoTenant as never, { llm: llmQueFalha, ligacoes, enviar: enviarFalso, agora, pipeline: { falha } }, agora)
     expect(enviados).toEqual(['Tive uma instabilidade, já te respondo.'])
     const [t] = await dono<{ estado: string; executar_em: Date }[]>`SELECT estado, executar_em FROM agente_tarefa WHERE tenant_id = ${T}`
     expect(t!.estado).toBe('pendente')
@@ -469,7 +477,7 @@ describe('Ponto 9 — falha: estado e tentativas', () => {
     // Já tentou MAX_TENTATIVAS - 1 vezes: a próxima pegada é a última.
     await dono`UPDATE agente_tarefa SET tentativas = ${MAX_TENTATIVAS - 1} WHERE tenant_id = ${T}`
     const agora = new Date()
-    await processarTarefasDoAgente(dono as never, { llm: llmQueFalha, ligacoes, enviar: enviarFalso, agora, pipeline: { falha } }, agora)
+    await processarTarefasDoAgente(workerDoTenant as never, { llm: llmQueFalha, ligacoes, enviar: enviarFalso, agora, pipeline: { falha } }, agora)
     const [t] = await dono<{ estado: string; tentativas: number }[]>`SELECT estado, tentativas FROM agente_tarefa WHERE tenant_id = ${T}`
     expect(t).toMatchObject({ estado: 'concluida', tentativas: MAX_TENTATIVAS })
   })

@@ -15,27 +15,86 @@
 /**
  * Falha do modelo como resultado TIPIFICADO, nunca exceção — cada motivo pede
  * uma ação diferente de quem opera (regra da casa, PED-08).
+ *
+ * ⚠️ Quem traduz HTTP/SDK para estes motivos é o ADAPTADOR (só ele conhece o
+ *    formato do fornecedor). A tabela completa, com a classe de cada motivo,
+ *    está em `CLASSE_DO_MOTIVO` abaixo e no teste `falha-llm.test.ts` (ADR-030).
  */
 export type MotivoFalhaLlm =
-  /** Chave ausente, inválida ou revogada. Ação: reconfigurar. */
+  /** 401: chave ausente, inválida ou revogada. Ação: reconfigurar. */
   | 'credencial_invalida'
   /**
-   * ⚠️ Estouro de cota do fornecedor. Ação: RECUAR e mandar para a fila humana.
-   * Insistir no limite atrasa todos os tenants que dividem a mesma chave.
+   * 403/404 num MODELO: a chave vale, mas este modelo não está liberado para
+   * ela (ou não existe mais). ⚠️ Não é a credencial inteira: bloqueia o modelo
+   * por 1 h e cai no `IA_MODELO` (ADR-030 §3 — o "Haiku bloqueado no Bedrock").
+   */
+  | 'acesso_negado'
+  /**
+   * 429: estouro de taxa do fornecedor. Ação: RECUAR. Insistir no limite atrasa
+   * todos os tenants que dividem a mesma chave.
    */
   | 'limite_de_taxa'
-  /** Fornecedor fora do ar. Ação: fila humana, e tentar de novo depois. */
+  /** 408/5xx/529, rede, tempo esgotado: fornecedor fora ou sobrecarregado. */
   | 'indisponivel'
   /**
-   * ⚠️ O modelo recusou responder (política de conteúdo). Ação: fila humana com
-   * o motivo. NÃO é erro nosso e não adianta repetir — mas o cliente está
-   * esperando, então alguém precisa saber.
+   * ⚠️ O modelo recusou responder (política de conteúdo). NÃO é erro nosso e não
+   * adianta repetir — mas o cliente está esperando, então alguém precisa saber.
    */
   | 'conteudo_recusado'
-  /** Respondeu algo que não reconhecemos: JSON quebrado, campo faltando. */
+  /**
+   * 400/413/422: o fornecedor recusou o PEDIDO (erro nosso: esquema, tamanho,
+   * parâmetro). Trocar de provedor não resolve — não conta para a reserva.
+   */
+  | 'requisicao_invalida'
+  /** Respondeu algo que não reconhecemos: JSON quebrado, campo faltando, teto de tokens. */
   | 'resposta_inesperada'
-  /** Nosso limite de custo por tenant estourou. Ação: degradar para humano. */
+  /** 402 / cota / sem crédito no fornecedor. Não se resolve sozinho. */
   | 'limite_de_custo'
+
+/**
+ * As quatro classes de falha (ADR-030 §1) — o que a política do turno e a
+ * reserva de provedor fazem com cada uma.
+ *
+ * | classe       | o que é                                   | reserva conta? | turno em autônomo                       |
+ * |--------------|-------------------------------------------|----------------|-----------------------------------------|
+ * | fatal        | chave, crédito, modelo negado             | sim            | handoff na hora, com aviso sem prazo    |
+ * | transitoria  | taxa, 5xx, rede, tempo                    | sim            | 1ª: aviso + reagenda 30 s; 2ª: handoff  |
+ * | requisicao   | pedido recusado, conteúdo recusado        | não            | handoff com aviso                       |
+ * | formato      | saída fora do esquema                     | não            | handoff com aviso                       |
+ */
+export type ClasseFalhaLlm = 'fatal' | 'transitoria' | 'requisicao' | 'formato'
+
+const CLASSE_DO_MOTIVO: Record<MotivoFalhaLlm, ClasseFalhaLlm> = {
+  credencial_invalida: 'fatal',
+  acesso_negado: 'fatal',
+  limite_de_custo: 'fatal',
+  limite_de_taxa: 'transitoria',
+  indisponivel: 'transitoria',
+  conteudo_recusado: 'requisicao',
+  requisicao_invalida: 'requisicao',
+  resposta_inesperada: 'formato',
+}
+
+/**
+ * Classe de um motivo. Aceita `string` porque o turno também classifica
+ * `'formato'` (saída que não passou no esquema do domínio). ⚠️ Motivo
+ * desconhecido é `fatal`: tratar o que não entendemos como passageiro faria o
+ * agente insistir num erro que não sabe nomear.
+ */
+export function classeDaFalhaLlm(motivo: string): ClasseFalhaLlm {
+  if (motivo === 'formato') return 'formato'
+  return (CLASSE_DO_MOTIVO as Record<string, ClasseFalhaLlm>)[motivo] ?? 'fatal'
+}
+
+/**
+ * Falha DO PROVEDOR (fatal ou transitória): é a que conta para ligar a
+ * reserva. Erro de requisição e de formato não contam — outro fornecedor
+ * receberia o mesmo pedido e falharia igual.
+ */
+export function ehFalhaDeProvedor(motivo: string): boolean {
+  const c = classeDaFalhaLlm(motivo)
+  return c === 'fatal' || c === 'transitoria'
+}
 
 /**
  * A falha do modelo em LINGUAGEM DE QUEM OPERA, para a tela e para o log.
@@ -52,9 +111,11 @@ export type MotivoFalhaLlm =
  */
 const RECADO_DA_FALHA: Record<MotivoFalhaLlm, string> = {
   credencial_invalida: 'IA sem credencial válida',
+  acesso_negado: 'IA sem acesso a este modelo',
   limite_de_taxa: 'IA no limite de uso do fornecedor',
   indisponivel: 'IA fora do ar',
   conteudo_recusado: 'a IA recusou responder',
+  requisicao_invalida: 'o fornecedor de IA recusou o pedido',
   resposta_inesperada: 'a IA respondeu fora do formato',
   limite_de_custo: 'sem crédito para a IA',
 }

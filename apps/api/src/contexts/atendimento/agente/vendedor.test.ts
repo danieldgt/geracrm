@@ -24,6 +24,13 @@ const USUARIO = 'b2e20000-8888-4000-8000-000000000001'
 const SKU_VERDE = 'b2e20000-9999-4000-8000-000000000001'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
+/**
+ * ⚠️ O worker pega tarefa de QUALQUER tenant, e os arquivos de teste rodam em
+ *    paralelo no mesmo banco: com o dono, o worker deste arquivo roubava a
+ *    tarefa do outro (e vice-versa). Sob o papel da aplicação com o tenant fixo
+ *    na conexão, o RLS faz o worker do teste enxergar só as tarefas deste arquivo.
+ */
+const workerDoTenant = postgres(process.env.DATABASE_URL!, { max: 2, onnotice: () => {}, connection: { 'geracrm.tenant_id': T } as never })
 const SEMPRE_FECHADO = { seg: null, ter: null, qua: null, qui: null, sex: null, sab: null, dom: null }
 
 const enviados: string[] = []
@@ -126,7 +133,7 @@ afterAll(async () => {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
   }
   await dono`DELETE FROM tenant WHERE id = ${T}`
-  await encerrarBanco(); await dono.end()
+  await encerrarBanco(); await dono.end(); await workerDoTenant.end()
 })
 
 describe('Modo autônomo — vende com ferramentas', () => {
@@ -219,9 +226,10 @@ describe('Modos sombra e assistido — nunca enviam', () => {
 })
 
 describe('Falha do modelo não é silêncio', () => {
-  it('modelo fora do ar → handoff modelo_indisponivel com atendimento na fila e decisão de falha', async () => {
+  // A transitória (fora do ar) tem 1ª tentativa com aviso e reagendamento (P5): ver pipeline/falha-llm.test.ts.
+  it('chave do fornecedor revogada (fatal) → handoff modelo_indisponivel com atendimento na fila e decisão de falha', async () => {
     await configurar('autonomo')
-    const r = await turno([await mensagemDoCliente('oi')], llmQueFalha('indisponivel'))
+    const r = await turno([await mensagemDoCliente('oi')], llmQueFalha('credencial_invalida'))
     expect(r.desfecho).toBe('handoff')
     expect(r.motivo).toBe('modelo_indisponivel')
     const [a] = await dono<{ estado: string }[]>`SELECT estado FROM atendimento WHERE tenant_id = ${T}`
@@ -311,7 +319,7 @@ describe('Sequência e worker', () => {
         }
         return { ok: true, saida: { mensagens: ['Incluí a verde.'], confianca: 0.9 }, rastro: { chamadas: [], rodadas: 1, uso: { entrada: 0, saida: 0, cacheLeitura: 0, cacheEscrita: 0 }, modelo: 'lento', latenciaMs: 1, parouPor: 'fim' } }
       } }
-    const r = await processarTarefasDoAgente(dono as never, { llm: lento, ligacoes, enviar: enviarFalso }, new Date(Date.now() + 10))
+    const r = await processarTarefasDoAgente(workerDoTenant as never, { llm: lento, ligacoes, enviar: enviarFalso }, new Date(Date.now() + 10))
     // A antiga foi superada e CANCELADA (a nova já cobria); a nova rodou na mesma passada e respondeu.
     expect(r.processadas).toBe(2)
     expect(enviados).toEqual(['Incluí a verde.'])
@@ -323,7 +331,7 @@ describe('Sequência e worker', () => {
     await configurar('autonomo')
     const m1 = await mensagemDoCliente('tem camiseta?')
     await comTenantServico(T, (tx) => agendarTurno(tx, { conversaId: CONVERSA, canalId: CANAL, mensagemId: m1, agora: new Date(), atrasoMs: 0 }))
-    const r = await processarTarefasDoAgente(dono as never, { llm: new LlmSimulado(), ligacoes, enviar: enviarFalso }, new Date(Date.now() + 10))
+    const r = await processarTarefasDoAgente(workerDoTenant as never, { llm: new LlmSimulado(), ligacoes, enviar: enviarFalso }, new Date(Date.now() + 10))
     expect(r).toMatchObject({ processadas: 1, respondidas: 1 })
     expect(enviados.length).toBeGreaterThan(0)
     const [t] = await dono<{ estado: string }[]>`SELECT estado FROM agente_tarefa WHERE tenant_id = ${T}`
