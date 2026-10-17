@@ -3,7 +3,10 @@ import { comTenantServico, type Sql } from '../../../db/index.js'
 import { enviarTextoNaConversa } from '../envio-conversa.js'
 import { enviarTemplateNaConversa } from '../envio-template.js'
 import { decidirAtiva, lerContextoAtiva, type DecisaoAtiva } from './ativas.js'
-import { modoEfetivoDoCanal } from './pipeline/modo-efetivo.js'
+import { normalizarFeriados, recorteAgente, type RecorteAgente } from '@geracrm/shared'
+import { modoEfetivoDoCanal, lerFatosDoModo } from './pipeline/modo-efetivo.js'
+import { proximaAbertura, partesLocais, instanteLocal, ehFeriado, type Feriados, type HorarioAtendimento } from '../expediente.js'
+import { fusoSeguro } from '../../plataforma/fuso.js'
 
 /**
  * O RETORNO DO AGENTE (follow-up, R5) — a cutucada programada quando o cliente
@@ -212,13 +215,20 @@ export async function processarRetornos(
 
 type Desfecho = 'enviado' | 'cancelado' | 'recusado' | 'reagendado' | 'adiado' | 'descartado'
 
-type Veredito = { tipo: 'cancelar'; motivo: string } | { tipo: 'politica'; decisao: DecisaoAtiva }
+type Veredito =
+  | { tipo: 'cancelar'; motivo: string }
+  | { tipo: 'adiar'; ate: Date; motivo: string }
+  | { tipo: 'politica'; decisao: DecisaoAtiva }
+
+/** Fora do recorte SÓ por horário/feriado: adia até a próxima abertura do recorte (decisão (q), plano-port §4). */
+interface AdiarRecorte { readonly adiarAte: Date; readonly motivo: string }
 
 async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): Promise<Desfecho> {
   // 1. Decidir, sob o tenant: o motivo ainda vale? o agente pode falar sozinho?
   //    E a política das ATIVAS: suspensão, expediente, limites, janela/template.
   const veredito = await comTenantServico(v.tenant_id, async (tx): Promise<Veredito> => {
     const motivo = await avaliar(tx, v, agora)
+    if (typeof motivo !== 'string') return { tipo: 'adiar', ate: motivo.adiarAte, motivo: motivo.motivo }
     if (motivo !== 'envia') return { tipo: 'cancelar', motivo }
     const ctx = await lerContextoAtiva(tx, { conversaId: v.conversa_id, agora })
     if (!ctx) return { tipo: 'cancelar', motivo: 'conversa_inexistente' }
@@ -227,6 +237,13 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
   if (veredito.tipo === 'cancelar') {
     await comTenantServico(v.tenant_id, (tx) => encerrar(tx, v, 'cancelado', veredito.motivo, agora))
     return 'cancelado'
+  }
+  if (veredito.tipo === 'adiar') {
+    // ⚠️ Mesma linha, mesma tentativa: o recorte fechado por horário não é falha nem desistência.
+    await comTenantServico(v.tenant_id, (tx) => tx`
+      UPDATE agente_retorno SET executar_em = ${veredito.ate}, detalhe = ${veredito.motivo}
+       WHERE tenant_id = tenant_atual() AND id = ${v.id} AND estado = 'pendente'`)
+    return 'adiado'
   }
   const d = veredito.decisao
   if (d.acao === 'adiar') {
@@ -300,7 +317,7 @@ const FALHAS_PERMANENTES: ReadonlySet<string> = new Set(['destino_invalido', 'cr
 export const MAX_FALHAS_TRANSPORTE = 4
 
 /** Por que NÃO enviar — ou `envia`. Tudo lido sob RLS. */
-async function avaliar(tx: Sql, v: RetornoVencido, agora: Date): Promise<'envia' | string> {
+async function avaliar(tx: Sql, v: RetornoVencido, agora: Date): Promise<'envia' | string | AdiarRecorte> {
   // Cliente escreveu depois de agendado (cinto e suspensório: a ingestão já
   // cancela, mas um webhook pode ter corrido sem o savepoint acessório).
   const [conv] = await tx<{ ultima_entrante_em: Date | null; humano_assumiu: boolean; contato_id: string }[]>`
@@ -317,7 +334,21 @@ async function avaliar(tx: Sql, v: RetornoVencido, agora: Date): Promise<'envia'
   //    horário/segmento/feriado — nunca a coluna `agente_config.modo` direto.
   //    A cutucada é o agente falando sozinho: só em autônomo de fato.
   const efetivo = await modoEfetivoDoCanal(tx, { canalId: v.canal_id, contatoId: conv.contato_id, agora })
-  if (efetivo.modo !== 'autonomo') return `modo:${efetivo.modo}${efetivo.motivo ? ` (${efetivo.motivo})` : ''}`
+  if (efetivo.modo !== 'autonomo') {
+    const motivoModo = `modo:${efetivo.modo}${efetivo.motivo ? ` (${efetivo.motivo})` : ''}`
+    // ⚠️ Decisão (q): fora do recorte SÓ por horário/feriado, com número autônomo e
+    //    teto do tenant que permite autônomo → ADIA para a próxima abertura do
+    //    recorte. Kill switch, segmento, recorte inválido e modo do número cancelam.
+    const soHorario = efetivo.modoDoNumero === 'autonomo' && !efetivo.recorteInvalido
+      && efetivo.foraDoRecorte.length === 1 && efetivo.foraDoRecorte[0] === 'horario'
+    if (!soHorario) return motivoModo
+    const fatos = await lerFatosDoModo(tx, agora, v.canal_id)
+    if (fatos.modoTenant !== null && fatos.modoTenant !== 'autonomo') return motivoModo
+    const ate = await aberturaDoRecorte(tx, v.canal_id, agora)
+    if (ate === undefined) return motivoModo
+    if (ate === null) return 'fora_do_recorte_sem_abertura'
+    return { adiarAte: ate, motivo: `${motivoModo}: adiado para a abertura do recorte` }
+  }
 
   if (v.motivo === 'proposta_sem_resposta') {
     const [p] = await tx<{ ok: boolean }[]>`
@@ -339,4 +370,47 @@ async function encerrar(tx: Sql, v: RetornoVencido, estado: EstadoRetorno, detal
   await tx`
     UPDATE agente_retorno SET estado = ${estado}, detalhe = ${detalhe}, concluido_em = ${agora}
      WHERE tenant_id = tenant_atual() AND id = ${v.id} AND estado = 'pendente'`
+}
+
+/** Quantos dias à frente procurar o próximo feriado (mesmo horizonte de `proximaAbertura`). */
+const HORIZONTE_FERIADO_DIAS = 31
+
+/**
+ * Próxima abertura do HORÁRIO do recorte (decisão (q)): o horário do recorte tem
+ * o formato do horário de atendimento, então vale `proximaAbertura` (fuso do
+ * tenant, feriados do número). Com `feriado: 'dentro'` o feriado não fecha — ele
+ * ABRE o dia inteiro: a abertura é a mais cedo entre a próxima faixa (sem
+ * feriados) e a meia-noite do próximo feriado.
+ * `null` = nenhuma abertura no horizonte; `undefined` = recorte sem horário/ilegível.
+ */
+export function proximaAberturaDoRecorte(
+  recorte: RecorteAgente, feriados: Feriados, agora: Date, fuso: string,
+): Date | null | undefined {
+  if (!recorte.horario) return undefined
+  const horario = recorte.horario as unknown as HorarioAtendimento
+  if (recorte.feriado === 'fora') return proximaAbertura(horario, feriados, agora, fuso)
+  const porFaixa = proximaAbertura(horario, [], agora, fuso)
+  let porFeriado: Date | null = null
+  if (feriados.length > 0) {
+    const hoje = partesLocais(agora, fuso).data
+    const [y, m, d] = hoje.split('-').map(Number) as [number, number, number]
+    for (let n = 1; n <= HORIZONTE_FERIADO_DIAS; n++) {
+      const x = new Date(Date.UTC(y, m - 1, d + n))
+      const data = `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, '0')}-${String(x.getUTCDate()).padStart(2, '0')}`
+      if (ehFeriado(feriados, data)) { porFeriado = instanteLocal(data, '00:00', fuso); break }
+    }
+  }
+  if (!porFaixa) return porFeriado
+  if (!porFeriado) return porFaixa
+  return porFaixa.getTime() <= porFeriado.getTime() ? porFaixa : porFeriado
+}
+
+async function aberturaDoRecorte(tx: Sql, canalId: string, agora: Date): Promise<Date | null | undefined> {
+  const [l] = await tx<{ recorte: unknown; fuso: string | null; feriados: unknown }[]>`
+    SELECT (SELECT recorte FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}) AS recorte,
+           (SELECT fuso FROM tenant WHERE id = tenant_atual()) AS fuso,
+           (SELECT feriados FROM canal_configuracao WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}) AS feriados`
+  const r = recorteAgente.safeParse(l?.recorte ?? null)
+  if (!r.success) return undefined
+  return proximaAberturaDoRecorte(r.data, normalizarFeriados(l?.feriados), agora, fusoSeguro(l?.fuso))
 }

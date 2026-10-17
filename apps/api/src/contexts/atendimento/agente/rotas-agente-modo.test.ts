@@ -174,17 +174,19 @@ describe('Recorte e modo efetivo na tela', () => {
     const [l] = await dono<{ dia: number }[]>`SELECT to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'ID')::int AS dia`
     const outroDia = DIAS[l!.dia % 7]!
     const recorte = { horario: { [outroDia]: { de: '08:00', ate: '18:00' } }, segmentosRfv: ['cliente-fiel'], foraDoRecorte: 'sombra' }
+    // Corpo sem 'feriado' (console anterior) grava o padrão 'fora' (decisão (r)).
+    const salvo = { ...recorte, feriado: 'fora' }
     expect((await chamar(T, 'PUT', URL_CFG, { modo: 'autonomo', politicas: POLITICAS, confirmacao: 'autonomo', recorte })).statusCode).toBe(200)
     const g = (await chamar(T, 'GET', URL_CFG)).json() as Record<string, unknown>
-    expect(g['recorte']).toEqual(recorte)
+    expect(g['recorte']).toEqual(salvo)
     expect(g['modoEfetivo']).toMatchObject({ modo: 'sombra', origem: 'recorte', motivo: 'fora_do_recorte_horario', dependeDoContato: true })
     // Ausente no corpo = mantém; null = remove.
     await chamar(T, 'PUT', URL_CFG, { modo: 'autonomo', politicas: POLITICAS })
-    expect(((await chamar(T, 'GET', URL_CFG)).json() as Record<string, unknown>)['recorte']).toEqual(recorte)
+    expect(((await chamar(T, 'GET', URL_CFG)).json() as Record<string, unknown>)['recorte']).toEqual(salvo)
     // ⚠️ Tirar o recorte de um número autônomo solta o robô: pede "autonomo".
     const sem = await chamar(T, 'PUT', URL_CFG, { modo: 'autonomo', politicas: POLITICAS, recorte: null })
     expect(sem.json()).toMatchObject({ erro: 'agente.confirmacao_necessaria', confirmar: 'autonomo' })
-    expect(((await chamar(T, 'GET', URL_CFG)).json() as Record<string, unknown>)['recorte']).toEqual(recorte)
+    expect(((await chamar(T, 'GET', URL_CFG)).json() as Record<string, unknown>)['recorte']).toEqual(salvo)
     await chamar(T, 'PUT', URL_CFG, { modo: 'autonomo', politicas: POLITICAS, recorte: null, confirmacao: 'autonomo' })
     expect((await chamar(T, 'GET', URL_CFG)).json()).toMatchObject({ recorte: null, modoEfetivo: { modo: 'autonomo', origem: 'numero' } })
   })

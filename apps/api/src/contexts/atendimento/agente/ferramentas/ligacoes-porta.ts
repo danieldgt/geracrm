@@ -1,4 +1,4 @@
-import type { AtributosSku } from '@geracrm/shared'
+import type { AcoesPlaybook, AtributosSku } from '@geracrm/shared'
 import type { ContextoFerramenta } from './porta.js'
 
 /**
@@ -76,4 +76,10 @@ export interface Ligacoes {
   readonly catalogo?: CatalogoPorta | undefined
   readonly pedido?: PedidoPorta | undefined
   readonly conhecimento: ConhecimentoPorta
+  /**
+   * Ações que o PLAYBOOK do número habilita (P17). Ausente = todas ligadas.
+   * `montarFerramentas` tira do menu o que estiver desligado; transferir e
+   * perfil do cliente não são ação habilitável (sempre no menu).
+   */
+  readonly acoes?: AcoesPlaybook | undefined
 }

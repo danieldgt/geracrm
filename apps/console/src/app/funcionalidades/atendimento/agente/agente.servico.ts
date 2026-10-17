@@ -34,6 +34,8 @@ export interface ConfigAgente {
   readonly faltaConfigurar: readonly string[]
   /** ⚠️ Opcional: a API anterior não manda; ver o aviso na tela de config. */
   readonly temMensagemAusencia?: boolean
+  /** Playbook publicado que vale para este número (P17). Ausente/null = nenhum. Ler com `lerPlaybookVigente`. */
+  readonly playbookVigente?: unknown
 }
 
 export interface ChamadaFerramenta {
@@ -61,7 +63,18 @@ export interface ResultadoSimulacao {
   readonly detalhe: string | null
   readonly decisaoId: string | null
   readonly rastro: Rastro | null
+  // ── sandbox do playbook (P17) — leitura tolerante: API antiga não manda ──
+  readonly modoSeco?: boolean
+  readonly playbook?: { readonly tipo: 'rascunho' | 'publicada'; readonly escopo: 'numero' | 'tenant'; readonly versaoId: string; readonly numero: number | null } | null
+  readonly acoes?: readonly { readonly ferramenta: string; readonly entrada: unknown; readonly escrita: boolean; readonly erro: string | null }[]
+  readonly guardrails?: readonly { readonly etapa: string; readonly codigo: string; readonly gravidade: string; readonly acao: string; readonly trecho?: string }[]
+  readonly custoCentavos?: number
+  readonly mensagensDoCliente?: number
+  readonly limiteMensagens?: number
 }
+
+/** Qual playbook o sandbox roda (P17). Ausente = o que está valendo. */
+export interface OpcoesSimulacao { readonly playbook?: 'rascunho' | 'publicada'; readonly escopoPlaybook?: 'numero' | 'tenant' }
 
 export interface Decisao {
   readonly id: string
@@ -139,10 +152,10 @@ export class AgenteServico {
     } catch (e) { return falhaDe(e) }
   }
 
-  async simular(canalId: string, mensagem: string, conversaId: string | null): Promise<Resultado<{ resultado: ResultadoSimulacao }>> {
+  async simular(canalId: string, mensagem: string, conversaId: string | null, opcoes: OpcoesSimulacao = {}): Promise<Resultado<{ resultado: ResultadoSimulacao }>> {
     try {
       const r = await firstValueFrom(this.http.post<ResultadoSimulacao>(
-        `/v1/canais/${canalId}/agente/simular`, conversaId ? { mensagem, conversaId } : { mensagem }))
+        `/v1/canais/${canalId}/agente/simular`, { mensagem, ...(conversaId ? { conversaId } : {}), ...opcoes }))
       return { ok: true, resultado: r }
     } catch (e) { return falhaDe(e) }
   }

@@ -30,7 +30,13 @@ export interface Canal {
   readonly credencial: { configurada: boolean; camposPreenchidos: readonly string[] }
   /** ⚠️ Decidido no servidor (só admin, só não-oficial). A garantia é o 403 do QR. */
   readonly podeParear?: boolean
+  /** Modo EFETIVO agora (teto da conta, número e recorte de horário). */
   readonly modoAgente?: string
+  /** Modo configurado no número. */
+  readonly modoAgenteNumero?: string
+  /** Quem restringiu: 'numero' (ninguém), 'tenant' (teto da conta) ou 'recorte'. */
+  readonly modoAgenteOrigem?: 'numero' | 'tenant' | 'recorte'
+  readonly modoAgenteMotivo?: string | null
   /** Ativas suspensas (P11/0101). `null` = não suspensas ou coluna ainda ausente. */
   readonly ativasSuspensas?: { desde: string; motivo: string | null } | null
   /** Já MASCARADOS pela API — o valor completo nunca chega ao console. */

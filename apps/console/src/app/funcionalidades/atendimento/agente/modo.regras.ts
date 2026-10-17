@@ -1,6 +1,6 @@
 import {
-  DIAS_RECORTE, MODOS_FORA_DO_RECORTE, ROTULO_SEGMENTO_RECORTE, SEGMENTOS_RECORTE, exigeConfirmacao, textoDeConfirmacao,
-  type ModoAgente, type ModoForaDoRecorte, type OrigemModo, type ParteForaDoRecorte, type RecorteAgente, type SegmentoRecorte,
+  DIAS_RECORTE, FERIADO_RECORTE, MODOS_FORA_DO_RECORTE, ROTULO_SEGMENTO_RECORTE, SEGMENTOS_RECORTE, exigeConfirmacao, textoDeConfirmacao,
+  type FeriadoRecorte, type ModoAgente, type ModoForaDoRecorte, type OrigemModo, type ParteForaDoRecorte, type RecorteAgente, type SegmentoRecorte,
 } from '@geracrm/shared'
 import type { HorarioAtendimento } from '../../../compartilhado/ui/index.js'
 
@@ -76,6 +76,14 @@ export interface FormularioRecorte {
   readonly horario: HorarioAtendimento
   readonly segmentos: readonly SegmentoRecorte[]
   readonly foraDoRecorte: ModoForaDoRecorte
+  /** Feriado do número conta como fora (padrão) ou dentro do recorte (decisão (r)). */
+  readonly feriado: FeriadoRecorte
+}
+
+export const OPCOES_FERIADO = FERIADO_RECORTE
+export const ROTULO_FERIADO: Readonly<Record<FeriadoRecorte, string>> = {
+  fora: 'Fora do recorte — no feriado, cai para o modo de fora',
+  dentro: 'Dentro do recorte — no feriado, vale o modo do número o dia todo',
 }
 
 const HORARIO_PADRAO: HorarioAtendimento = {
@@ -84,7 +92,7 @@ const HORARIO_PADRAO: HorarioAtendimento = {
 }
 
 export function recorteParaFormulario(r: RecorteAgente | null | undefined): FormularioRecorte {
-  if (!r) return { ativo: false, usaHorario: true, horario: HORARIO_PADRAO, segmentos: [], foraDoRecorte: 'sombra' }
+  if (!r) return { ativo: false, usaHorario: true, horario: HORARIO_PADRAO, segmentos: [], foraDoRecorte: 'sombra', feriado: 'fora' }
   const horario: HorarioAtendimento = {}
   for (const d of DIAS_RECORTE) horario[d] = r.horario?.[d] ?? null
   return {
@@ -93,6 +101,8 @@ export function recorteParaFormulario(r: RecorteAgente | null | undefined): Form
     horario: r.horario ? horario : HORARIO_PADRAO,
     segmentos: [...r.segmentosRfv],
     foraDoRecorte: r.foraDoRecorte,
+    // Recorte salvo antes da opção (sem o campo) = 'fora', o padrão do servidor.
+    feriado: r.feriado ?? 'fora',
   }
 }
 
@@ -119,7 +129,7 @@ export function recorteParaSalvar(f: FormularioRecorte): RecorteAgente | null {
     for (const d of DIAS_RECORTE) { const faixa = f.horario[d]; if (faixa?.de && faixa.ate) h[d] = { de: faixa.de, ate: faixa.ate } }
     horario = h as RecorteAgente['horario']
   }
-  return { horario, segmentosRfv: [...f.segmentos], foraDoRecorte: f.foraDoRecorte }
+  return { horario, segmentosRfv: [...f.segmentos], foraDoRecorte: f.foraDoRecorte, feriado: f.feriado }
 }
 
 export const SEGMENTOS = SEGMENTOS_RECORTE

@@ -9,6 +9,7 @@ import {
 import { ingerirMensagemEntrante } from '../ingestao-mensagem.js'
 import { proporPedido } from '../../pedido/proposta.js'
 import type { ResultadoEnvioTexto } from '../envio-conversa.js'
+import { instanteLocal, partesLocais } from '../expediente.js'
 
 /**
  * O retorno do agente (follow-up, R5): agenda/reagenda, cancela quando o
@@ -71,6 +72,7 @@ beforeEach(async () => {
   await dono`DELETE FROM agente_retorno WHERE tenant_id = ${T}`
   await dono`DELETE FROM agente_tenant WHERE tenant_id = ${T}`
   await dono`UPDATE agente_config SET recorte = NULL WHERE tenant_id = ${T}`
+  await dono`DELETE FROM canal_configuracao WHERE tenant_id = ${T}`
   await dono`DELETE FROM agente_tarefa WHERE tenant_id = ${T}`
   await dono`DELETE FROM atendimento WHERE tenant_id = ${T}`
   await dono`DELETE FROM pedido_proposta WHERE tenant_id = ${T}`
@@ -288,15 +290,62 @@ describe('Processar os vencidos', () => {
     expect((await retornos())[0]).toMatchObject({ estado: 'cancelado', detalhe: 'modo:desligado (teto_do_tenant)' })
   })
 
-  it('número autônomo FORA do recorte (horário) → o retorno vencido não sai', async () => {
+  /** A data local de hoje e de amanhã em São Paulo (fuso padrão do tenant de teste). */
+  const diasLocais = () => {
+    const hoje = partesLocais(new Date(), 'America/Sao_Paulo')
+    const amanha = partesLocais(new Date(Date.now() + 24 * H), 'America/Sao_Paulo')
+    const DIAS = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'] as const
+    return { hoje, amanha, diaHoje: DIAS[hoje.diaIso - 1]!, diaAmanha: DIAS[amanha.diaIso - 1]! }
+  }
+  const TODO_DIA = { de: '00:00', ate: '23:59' }
+
+  it('(q) número autônomo FORA do horário do recorte → ADIADO (mesma linha, mesma tentativa) para a próxima abertura do recorte', async () => {
     await pedido('aguardando_confirmacao')
-    const [l] = await dono<{ dia: number }[]>`SELECT to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'ID')::int AS dia`
-    const outroDia = (['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom'] as const)[l!.dia % 7]!
-    await dono`UPDATE agente_config SET recorte = ${JSON.stringify({ horario: { [outroDia]: { de: '00:00', ate: '23:59' } } })}::text::jsonb WHERE tenant_id = ${T}`
+    const { amanha, diaAmanha } = diasLocais()
+    await dono`UPDATE agente_config SET recorte = ${JSON.stringify({ horario: { [diaAmanha]: TODO_DIA } })}::text::jsonb WHERE tenant_id = ${T}`
+    await agendar('proposta_sem_resposta', new Date(Date.now() - 1000))
+    const r = await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T })
+    expect(r).toMatchObject({ adiados: 1, cancelados: 0 })
+    expect(enviados).toEqual([])
+    const [l] = await retornos()
+    expect(l).toMatchObject({ estado: 'pendente', tentativa: 1 })
+    expect(l!.detalhe).toContain('fora_do_recorte_horario')
+    expect(l!.executar_em.getTime()).toBe(instanteLocal(amanha.data, '00:00', 'America/Sao_Paulo').getTime())
+  })
+
+  it("(q) FERIADO do número com recorte 'feriado conta como fora' → adiado para o próximo dia do recorte", async () => {
+    await pedido('aguardando_confirmacao')
+    const { hoje, amanha, diaHoje, diaAmanha } = diasLocais()
+    await dono`INSERT INTO canal_configuracao (tenant_id, canal_id, feriados) VALUES (${T}, ${CANAL}, ${JSON.stringify([hoje.data])}::text::jsonb)`
+    await dono`UPDATE agente_config SET recorte = ${JSON.stringify({ horario: { [diaHoje]: TODO_DIA, [diaAmanha]: TODO_DIA }, feriado: 'fora' })}::text::jsonb WHERE tenant_id = ${T}`
     await agendar('proposta_sem_resposta', new Date(Date.now() - 1000))
     await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T })
     expect(enviados).toEqual([])
-    expect((await retornos())[0]).toMatchObject({ estado: 'cancelado', detalhe: 'modo:sombra (fora_do_recorte_horario)' })
+    const [l] = await retornos()
+    expect(l).toMatchObject({ estado: 'pendente', tentativa: 1 })
+    expect(l!.detalhe).toContain('adiado para a abertura do recorte')
+    expect(l!.executar_em.getTime()).toBe(instanteLocal(amanha.data, '00:00', 'America/Sao_Paulo').getTime())
+  })
+
+  it('(q) contato FORA do segmento do recorte → continua CANCELADO (segmento não é horário)', async () => {
+    await pedido('aguardando_confirmacao')
+    // O contato de teste não tem compra: é `sem-historico`, fora de 'cliente-fiel'.
+    await dono`UPDATE agente_config SET recorte = ${JSON.stringify({ segmentosRfv: ['cliente-fiel'] })}::text::jsonb WHERE tenant_id = ${T}`
+    await agendar('proposta_sem_resposta', new Date(Date.now() - 1000))
+    await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T })
+    expect(enviados).toEqual([])
+    expect((await retornos())[0]).toMatchObject({ estado: 'cancelado', detalhe: 'modo:sombra (fora_do_recorte_segmento)' })
+  })
+
+  it('(q) fora do horário do recorte MAS sob o kill switch do tenant → CANCELADO (o teto da conta não adia)', async () => {
+    await pedido('aguardando_confirmacao')
+    const { diaAmanha } = diasLocais()
+    await dono`INSERT INTO agente_tenant (tenant_id, modo_maximo) VALUES (${T}, 'assistido')`
+    await dono`UPDATE agente_config SET recorte = ${JSON.stringify({ horario: { [diaAmanha]: TODO_DIA }, foraDoRecorte: 'sombra' })}::text::jsonb WHERE tenant_id = ${T}`
+    await agendar('proposta_sem_resposta', new Date(Date.now() - 1000))
+    await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T })
+    expect(enviados).toEqual([])
+    expect((await retornos())[0]).toMatchObject({ estado: 'cancelado' })
   })
 
   it('atendimento humano aberto cala o retorno', async () => {

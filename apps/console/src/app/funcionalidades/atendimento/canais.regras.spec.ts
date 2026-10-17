@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   abrirAvancado, avisoDeRemocao, classificarFalhaDeCarga, corpoDaApi, idadeVerificacao, intervaloDePolling,
-  mensagemFalhaQr, mudancasDaEdicao, POLL_LENTO_MS, POLL_RAPIDO_MS, rotuloModoAgente, TETO_CONECTANDO_MS, verificacaoAtrasada,
+  mensagemFalhaQr, mudancasDaEdicao, POLL_LENTO_MS, POLL_RAPIDO_MS, rotuloModoAgente, seloRestricaoModo, TETO_CONECTANDO_MS, verificacaoAtrasada,
 } from './canais.regras.js'
 
 /**
@@ -222,5 +222,15 @@ describe('Modo do agente no número', () => {
 
   it('modo desconhecido aparece cru — nunca some da tela', () => {
     expect(rotuloModoAgente('copiloto')).toBe('Agente: copiloto')
+  })
+})
+
+describe('Selo de restrição do modo (modo efetivo na lista)', () => {
+  it('teto da conta e fora do recorte ganham selo; o modo do número valendo, não', () => {
+    expect(seloRestricaoModo('tenant', 'autonomo')).toMatchObject({ rotulo: 'teto da conta' })
+    expect(seloRestricaoModo('tenant', 'autonomo')!.dica).toContain('Configurado: autônomo')
+    expect(seloRestricaoModo('recorte', 'autonomo')).toMatchObject({ rotulo: 'fora do recorte' })
+    expect(seloRestricaoModo('numero', 'assistido')).toBeNull()
+    expect(seloRestricaoModo(undefined, undefined)).toBeNull()
   })
 })

@@ -3,12 +3,14 @@ import {
   detectarOptOut, detectarPedidoHumano, detectarReclamacao, detectarPerguntaRobo, gatilhoExtra,
   textoAbertura, textoRobo, textoOptOut, textoHandoffGatilho, TEXTO_PEDE_TEXTO_AUDIO, INSTRUCAO_ABERTURA_ENVIADA,
   AVISO_CONFIRMAR_OPT_OUT, RESUMO_POSSIVEL_OPT_OUT, REGRAS_AGENTE_PADRAO, fatiarMensagem,
-  type MarcaGuardrail, type MotivoHandoff,
+  aberturaDoPlaybook, complianceEfetivo, lerComplianceExtra, lerPlaybookVigente, mensagemProntaSegura,
+  type ConteudoPlaybook, type MarcaGuardrail, type MotivoHandoff, type PlaybookVigente,
 } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../../../../db/index.js'
 import { registrarOptOut, contatoBloqueado } from '../../../crm/opt-out.js'
 import { lerPrivacidade, registrarAvisoSeExibido } from '../privacidade.js'
 import { lerEstado, patchEstado } from '../estado-agente.js'
+import { instrucoesDoPlaybook } from '../instrucao-vendedor.js'
 import {
   marca, mascararTexto, type ContextoPipeline, type DecisaoPreLlm, type EfeitoPosEnvio, type EtapaPreLlm,
 } from './tipos.js'
@@ -63,11 +65,19 @@ function lerEstadoGatilhos(ctx: ContextoPipeline): EstadoGatilhos {
   return g && typeof g === 'object' && !Array.isArray(g) ? (g as EstadoGatilhos) : {}
 }
 
+/**
+ * PLAYBOOK publicado do número (P17) — o espelho em `agente_config.playbook`,
+ * leitura tolerante: ausente ou inválido = o comportamento padrão do código.
+ */
+function playbookDoTurno(ctx: Pick<ContextoPipeline, 'cfgExtra'>): PlaybookVigente | null {
+  return lerPlaybookVigente(ctx.cfgExtra['playbook'])
+}
+
 function gatilhosExtrasDoNumero(cfgExtra: Readonly<Record<string, unknown>>): readonly string[] {
-  // Leitura tolerante da coluna `compliance` (0097, raia P2): ausente → sem extras.
-  const c = cfgExtra['compliance']
-  const lista = c && typeof c === 'object' ? (c as Record<string, unknown>)['gatilhosHandoff'] : undefined
-  return Array.isArray(lista) ? lista.filter((x): x is string => typeof x === 'string').slice(0, 50) : []
+  // Leitura tolerante da coluna `compliance` (0097, raia P2) + os gatilhos do
+  // playbook publicado (P17) — os dois só acrescentam.
+  const playbook = lerPlaybookVigente(cfgExtra['playbook'])?.conteudo
+  return complianceEfetivo(lerComplianceExtra(cfgExtra['compliance']), playbook).gatilhosHandoff.slice(0, 100)
 }
 
 const modoReal = (ctx: ContextoPipeline) => ctx.modo !== 'simulacao' && ctx.modo !== 'copiloto'
@@ -81,10 +91,22 @@ const identidade = (ctx: ContextoPipeline) => ({ assistenteNome: ctx.persona.nom
 function handoffComAviso(ctx: ContextoPipeline, motivo: MotivoHandoff, codigo: string, resumo: string, trecho: string, gravidade: 'INFO' | 'ALTA' = 'INFO'): DecisaoPreLlm {
   return {
     tipo: 'resposta_fixa',
-    mensagens: [textoHandoffGatilho({ foraDoExpediente: ctx.foraDoExpediente })],
+    mensagens: [textoDoHandoff(ctx, playbookDoTurno(ctx)?.conteudo ?? null)],
     handoff: { motivo, resumo },
     guardrails: [marca(ETAPA, codigo, gravidade, 'handoff', trecho || undefined)],
   }
+}
+
+/**
+ * Aviso de transferência: a mensagem pronta do playbook (no expediente ou fora
+ * dele), se ainda passar no filtro de hoje e sem valor/prazo; senão, a do código.
+ */
+function textoDoHandoff(ctx: ContextoPipeline, playbook: ConteudoPlaybook | null): string {
+  const valores = { assistente: ctx.persona.nome, empresa: ctx.persona.loja }
+  const doPlaybook = ctx.foraDoExpediente
+    ? mensagemProntaSegura(playbook, 'foraDoHorario', valores)
+    : mensagemProntaSegura(playbook, 'handoff', valores)
+  return doPlaybook ?? textoHandoffGatilho({ foraDoExpediente: ctx.foraDoExpediente })
 }
 
 export const etapaGatilhosEntrada: EtapaPreLlm = {
@@ -155,9 +177,16 @@ export const etapaGatilhosEntrada: EtapaPreLlm = {
       }
     }
 
+    // O playbook publicado entra na instrução do turno (estilo, conduta, roteiro).
+    const playbook = playbookDoTurno(ctx)
+    const instrucoes = [
+      ...(abertura ? [INSTRUCAO_ABERTURA_ENVIADA] : []),
+      ...(playbook ? [instrucoesDoPlaybook(playbook.conteudo, playbook.numero)] : []),
+    ]
     return {
       tipo: 'segue',
-      ...(abertura ? { prefixo: [abertura.texto], instrucoes: [INSTRUCAO_ABERTURA_ENVIADA], efeitos: [abertura.efeito], guardrails: [abertura.marca] } : {}),
+      ...(instrucoes.length ? { instrucoes } : {}),
+      ...(abertura ? { prefixo: [abertura.texto], efeitos: [abertura.efeito], guardrails: [abertura.marca] } : {}),
       ...(Object.keys(zerarAudio).length ? { estado: { gatilhos: { ...g, ...zerarAudio } } } : {}),
     }
   },
@@ -314,10 +343,13 @@ async function aberturaDoTurno(ctx: ContextoPipeline): Promise<{ texto: string; 
     return { privacidade, nome: c?.nome ?? null }
   })
   if (!prep) return null
-  const texto = textoAbertura({
-    ...identidade(ctx), clienteNome: prep.nome,
-    privacidade: { url: prep.privacidade.url, textoPadrao: prep.privacidade.textoPadrao },
-  })
+  // A saudação pode vir do playbook (P17); identificação como assistente e aviso
+  // de privacidade são garantidos pelo código em qualquer caso.
+  const privacidade = { url: prep.privacidade.url, textoPadrao: prep.privacidade.textoPadrao }
+  const doPlaybook = playbookDoTurno(ctx)?.conteudo.mensagens.abertura
+  const texto = doPlaybook
+    ? aberturaDoPlaybook(doPlaybook, { assistenteNome: ctx.persona.nome, loja: ctx.persona.loja, clienteNome: prep.nome, privacidade })
+    : textoAbertura({ ...identidade(ctx), clienteNome: prep.nome, privacidade })
   const maxCaracteres = Number(ctx.cfgExtra['max_caracteres']) || REGRAS_AGENTE_PADRAO.maxCaracteres
   const fatias = fatiarMensagem(texto, maxCaracteres * 4)
   return {

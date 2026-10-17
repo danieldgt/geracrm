@@ -312,3 +312,41 @@ export const ROTULO_FASE: Readonly<Record<string, string>> = {
   handoff: 'Handoff',
   encerrada: 'Encerrada',
 }
+
+// ─── Persona e qualificação moram no PLAYBOOK quando há versão publicada (P17) ───
+
+/** O que o GET de configuração diz do playbook vigente (ausente na API anterior = null). */
+export interface PlaybookVigente {
+  readonly numero: number
+  /** 'numero' = versão deste número; 'tenant' = a da conta, valendo para ele. */
+  readonly escopo: 'numero' | 'tenant'
+  readonly publicadoEm: string
+}
+
+/** Leitura tolerante do campo `playbookVigente`: qualquer forma inesperada vira null. */
+export function lerPlaybookVigente(v: unknown): PlaybookVigente | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  const numero = o['numero']
+  const escopo = o['escopo']
+  if (typeof numero !== 'number' || (escopo !== 'numero' && escopo !== 'tenant')) return null
+  return { numero, escopo, publicadoEm: typeof o['publicadoEm'] === 'string' ? o['publicadoEm'] : '' }
+}
+
+/** O aviso nos campos que o playbook controla. */
+export function avisoDoPlaybook(p: PlaybookVigente): string {
+  return `Editados no Playbook (v${p.numero}${p.escopo === 'tenant' ? ', da conta' : ''}) — aba Playbook.`
+}
+
+/**
+ * Com playbook vigente, o PUT da configuração NÃO manda persona nem
+ * qualificação: quem manda nelas é a versão publicada (a API recusa com 409
+ * `agente.campo_do_playbook` se vierem diferentes).
+ */
+export function semCamposDoPlaybook(corpo: Record<string, unknown>, p: PlaybookVigente | null): Record<string, unknown> {
+  if (!p) return corpo
+  const resto = { ...corpo }
+  delete resto['persona']
+  delete resto['qualificacao']
+  return resto
+}

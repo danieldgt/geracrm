@@ -6,6 +6,7 @@ import {
   HorarioAtendimentoComponente, somenteDiasAbertos, type HorarioAtendimento,
 } from '../../compartilhado/ui/index.js'
 import { PrivacidadeComponente } from './privacidade.componente.js'
+import { mensagemFalhaAoSalvar } from './config.regras.js'
 
 interface Empresa { readonly nome: string; readonly fuso: string; readonly plano: string }
 interface CanalResumo { readonly id: string; readonly nomeAmigavel: string }
@@ -53,7 +54,7 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
             <div class="linha-plano"><span class="txt-rotulo">Plano</span><span class="plano">{{ empresa()?.plano }}</span></div>
             <div class="acoes">
               <button class="btn btn--primario" type="submit" [disabled]="salvando() || !nome().trim()">{{ salvando() ? 'Salvando…' : 'Salvar' }}</button>
-              @if (msg()) { <span class="ok">{{ msg() }}</span> }
+              @if (msg()) { <span [class.ok]="!msgErro()" [class.falha]="msgErro()" [attr.role]="msgErro() ? 'alert' : null">{{ msg() }}</span> }
             </div>
           </form>
         </section>
@@ -94,7 +95,7 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
                 <div class="acoes">
                   <button class="btn btn--primario" type="submit" [disabled]="salvandoHorario()">
                     {{ salvandoHorario() ? 'Salvando…' : 'Salvar atendimento' }}</button>
-                  @if (msgHorario()) { <span class="ok">{{ msgHorario() }}</span> }
+                  @if (msgHorario()) { <span [class.ok]="!msgHorarioErro()" [class.falha]="msgHorarioErro()" [attr.role]="msgHorarioErro() ? 'alert' : null">{{ msgHorario() }}</span> }
                 </div>
               </form>
             }
@@ -157,6 +158,7 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
     .plano { color: var(--texto); font-size: 14px; }
     .acoes { display: flex; align-items: center; gap: var(--espacamento-3); margin-top: var(--espacamento-1); }
     .ok { color: var(--sucesso); font-size: 13px; }
+    .falha { color: var(--erro); font-size: 13px; }
     .vazio { color: var(--texto-suave); font-size: 13px; margin: 0; }
     .equipe { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }
     .u { display: flex; align-items: center; gap: var(--espacamento-3); padding: var(--espacamento-2) 0; border-bottom: 1px solid var(--borda); }
@@ -185,7 +187,7 @@ export class ConfigPagina implements OnInit {
   readonly empresa = signal<Empresa | null>(null)
   readonly equipe = signal<readonly Membro[]>([])
   readonly nome = signal(''); readonly fuso = signal('America/Sao_Paulo')
-  readonly salvando = signal(false); readonly msg = signal<string | null>(null)
+  readonly salvando = signal(false); readonly msg = signal<string | null>(null); readonly msgErro = signal(false)
 
   readonly canais = signal<readonly CanalResumo[]>([])
   readonly canaisFalharam = signal(false)
@@ -193,6 +195,7 @@ export class ConfigPagina implements OnInit {
   readonly ausencia = signal('')
   readonly salvandoHorario = signal(false)
   readonly msgHorario = signal<string | null>(null)
+  readonly msgHorarioErro = signal(false)
 
   /**
    * ⚠️ Estado PRÓPRIO da seção. Se a lista de números falhar, esta tela não
@@ -245,13 +248,13 @@ export class ConfigPagina implements OnInit {
   async salvar(ev: Event): Promise<void> {
     ev.preventDefault()
     if (this.salvando() || !this.nome().trim()) return
-    this.salvando.set(true); this.msg.set(null)
+    this.salvando.set(true); this.msg.set(null); this.msgErro.set(false)
     try {
       await firstValueFrom(this.http.patch('/v1/config/empresa', { nome: this.nome().trim(), fuso: this.fuso() }))
       this.msg.set('Salvo.')
       const emp = this.empresa()
       if (emp) this.empresa.set({ ...emp, nome: this.nome().trim(), fuso: this.fuso() })
-    } catch { this.msg.set('Não foi possível salvar.') } finally { this.salvando.set(false) }
+    } catch (e) { this.msg.set(mensagemFalhaAoSalvar(e)); this.msgErro.set(true) } finally { this.salvando.set(false) }
   }
 
   /** ⚠️ Pós-carga e tolerante a falha: nunca derruba a tela principal. */
@@ -272,13 +275,13 @@ export class ConfigPagina implements OnInit {
     ev.preventDefault()
     const unico = this.canais().length === 1 ? this.canais()[0] : null
     if (!unico || this.salvandoHorario()) return
-    this.salvandoHorario.set(true); this.msgHorario.set(null)
+    this.salvandoHorario.set(true); this.msgHorario.set(null); this.msgHorarioErro.set(false)
     try {
       await firstValueFrom(this.http.put(`/v1/canais/${unico.id}/config`, {
         horarioAtendimento: somenteDiasAbertos(this.horario()),
         mensagemAusencia: this.ausencia(),
       }))
       this.msgHorario.set('Atendimento salvo.')
-    } catch { this.msgHorario.set('Não foi possível salvar.') } finally { this.salvandoHorario.set(false) }
+    } catch (e) { this.msgHorario.set(mensagemFalhaAoSalvar(e)); this.msgHorarioErro.set(true) } finally { this.salvandoHorario.set(false) }
   }
 }

@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { validarCredencial, type Credencial } from '@geracrm/conectores'
-import { mascararIdentificador, mascararTelefone } from '@geracrm/shared'
+import { decidirModoEfetivo, ehModoAgente, mascararIdentificador, mascararTelefone, normalizarFeriados } from '@geracrm/shared'
+import { lerFatosDoModo } from './agente/pipeline/modo-efetivo.js'
+import { ehFeriado } from './expediente.js'
+import { momentoNoFuso } from '../plataforma/fuso.js'
 import type { Sql } from '../../db/index.js'
 import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { cifrar, decifrar, resumir } from '../integracao/cofre.js'
@@ -103,13 +106,13 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
         verificado_em: Date | null
         disparo_pausado: boolean; pausado_motivo: string | null
         modo_agente: string; telefone_e164: string | null; identificador_externo: string | null
-        linha: Record<string, unknown>
+        linha: Record<string, unknown>; recorte: unknown; feriados: unknown
       }[]>`
         SELECT c.id, c.tipo, c.provedor, c.nome_amigavel, c.estado, c.credenciais_cifradas,
                c.ultimo_erro, c.verificado_em,
                coalesce(cfg.disparo_pausado, false) AS disparo_pausado,
                cfg.pausado_motivo,
-               coalesce(ac.modo, 'desligado') AS modo_agente,
+               coalesce(ac.modo, 'desligado') AS modo_agente, ac.recorte, cfg.feriados,
                nw.telefone_e164, c.identificador_externo,
                -- ⚠️ Leitura tolerante das colunas da P11 (ver ativasSuspensasDe).
                jsonb_build_object(
@@ -127,6 +130,23 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
          WHERE c.arquivado_em IS NULL
          ORDER BY c.criado_em
       `
+      // MODO EFETIVO (decisão (s), plano-port §4): o mais restritivo entre o teto
+      // da conta (kill switch), o número e o recorte de HORÁRIO/feriado — os fatos
+      // do tenant são lidos UMA vez e a decisão pura roda por número (sem N+1).
+      // Segmento depende do contato: não é avaliado na lista.
+      const agora = new Date()
+      const fatos = await lerFatosDoModo(tx, agora)
+      const [t] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
+      const hojeLocal = momentoNoFuso(agora, t?.fuso).data
+      const modoDe = (l: { modo_agente: string; recorte: unknown; feriados: unknown }) => {
+        const numero = ehModoAgente(l.modo_agente) ? l.modo_agente : 'desligado'
+        if (numero === 'desligado') return { modo: numero, numero, origem: 'numero' as const, motivo: null }
+        const d = decidirModoEfetivo({
+          modoTenant: fatos.modoTenant, modoNumero: numero, recorte: l.recorte ?? null,
+          momento: { ...fatos.momento, feriado: ehFeriado(normalizarFeriados(l.feriados), hojeLocal) },
+        })
+        return { modo: d.modo, numero, origem: d.origem, motivo: d.motivo }
+      }
       return {
         // ⚠️ A frota é por tenant e pequena (dezenas de números): a lista é
         //    limitada pela própria natureza do recurso, não por página.
@@ -150,7 +170,14 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
           // ⚠️ Parear por QR só existe no não-oficial (sessão de WhatsApp Web);
           //    no oficial a conexão é gerida no Meta Business.
           podeParear: podeParear && l.tipo === 'whatsapp_nao_oficial',
-          modoAgente: l.modo_agente,
+          // ⚠️ `modoAgente` é o modo EFETIVO agora (o que o robô faz de fato);
+          //    `modoAgenteNumero` é o configurado no número. `modoAgenteOrigem`
+          //    diz quem restringiu: 'tenant' = teto da conta (kill switch),
+          //    'recorte' = fora do horário do recorte.
+          ...(() => {
+            const m = modoDe(l)
+            return { modoAgente: m.modo, modoAgenteNumero: m.numero, modoAgenteOrigem: m.origem, modoAgenteMotivo: m.motivo }
+          })(),
           ativasSuspensas: ativasSuspensasDe(l.linha),
           // ⚠️ Mascarados AQUI: o valor completo não sai do servidor.
           telefoneMascarado: mascararTelefone(l.telefone_e164),

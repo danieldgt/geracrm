@@ -84,9 +84,19 @@ export const horarioRecorte = z.object({
 }).strict().refine((h) => DIAS_RECORTE.some((d) => !!h[d]), { message: 'marque ao menos um dia com horário' })
 export type HorarioRecorte = z.output<typeof horarioRecorte>
 
+/**
+ * Como o FERIADO do número conta para o recorte (decisão (r) do plano-port §4):
+ *   `fora`   — feriado é fora do horário do recorte o dia inteiro (padrão: "a equipe não está de olho");
+ *   `dentro` — feriado é DENTRO do recorte o dia inteiro (cobre "autônomo fora do expediente").
+ */
+export const FERIADO_RECORTE = ['fora', 'dentro'] as const
+export type FeriadoRecorte = (typeof FERIADO_RECORTE)[number]
+
 export const recorteAgente = z.object({
   /** null = qualquer hora. */
   horario: horarioRecorte.nullable().default(null),
+  /** Feriado conta como fora (padrão) ou dentro do recorte. Recorte antigo sem o campo = 'fora'. */
+  feriado: z.enum(FERIADO_RECORTE).default('fora'),
   /** Vazio = todos os segmentos. */
   segmentosRfv: z.array(z.enum(SEGMENTOS_RECORTE)).max(SEGMENTOS_RECORTE.length).default([]),
   foraDoRecorte: z.enum(MODOS_FORA_DO_RECORTE).default('sombra'),
@@ -115,12 +125,13 @@ export interface MomentoLocal {
  *    de TERÇA, não pela de segunda. Quem quer "segunda à noite até 2h de terça"
  *    declara `seg 22:00–23:59` e `ter 00:00–02:00` (ou a faixa cruzada nos dois dias).
  *
- * ⚠️ FERIADO conta como fora do horário (`m.feriado`): o recorte por horário é
- *    "quando a equipe está de olho"; feriado não é.
+ * ⚠️ FERIADO (`m.feriado`) conta como FORA do horário por padrão: o recorte por
+ *    horário é "quando a equipe está de olho"; feriado não é. Com
+ *    `feriado = 'dentro'` o feriado é DENTRO o dia inteiro ("autônomo fora do expediente").
  */
-export function dentroDoHorarioRecorte(h: HorarioRecorte | null, m: MomentoLocal): boolean {
+export function dentroDoHorarioRecorte(h: HorarioRecorte | null, m: MomentoLocal, feriado: FeriadoRecorte = 'fora'): boolean {
   if (!h) return true
-  if (m.feriado) return false
+  if (m.feriado) return feriado === 'dentro'
   const faixa = h[DIA_POR_ISO[m.diaIso] ?? 'seg']
   if (!faixa) return false
   // Comparação lexicográfica de "HH:MM" — o formato é fixo (validado no schema).
@@ -187,7 +198,7 @@ export function decidirModoEfetivo(e: EntradaDecisaoModo): DecisaoModo {
       tetoRecorte = 'sombra'
     } else {
       const r = p.data
-      if (!dentroDoHorarioRecorte(r.horario, e.momento)) fora.push('horario')
+      if (!dentroDoHorarioRecorte(r.horario, e.momento, r.feriado)) fora.push('horario')
       if (r.segmentosRfv.length > 0 && e.segmento !== undefined && !r.segmentosRfv.includes(e.segmento)) fora.push('segmento')
       if (fora.length > 0) tetoRecorte = r.foraDoRecorte
     }

@@ -37,14 +37,21 @@ describe('recorte como formulário', () => {
     expect(recorteParaSalvar(f)).toBeNull()
   })
   it('ida e volta preserva o recorte e manda só os dias abertos', () => {
-    const r = { horario: { seg: { de: '08:00', ate: '18:00' } }, segmentosRfv: ['cliente-fiel' as const], foraDoRecorte: 'desligado' as const }
+    const r = { horario: { seg: { de: '08:00', ate: '18:00' } }, segmentosRfv: ['cliente-fiel' as const], foraDoRecorte: 'desligado' as const, feriado: 'dentro' as const }
     const f = recorteParaFormulario(r)
-    expect(f).toMatchObject({ ativo: true, usaHorario: true, segmentos: ['cliente-fiel'], foraDoRecorte: 'desligado' })
+    expect(f).toMatchObject({ ativo: true, usaHorario: true, segmentos: ['cliente-fiel'], foraDoRecorte: 'desligado', feriado: 'dentro' })
     expect(recorteParaSalvar(f)).toEqual(r)
   })
   it('só segmento: horário vai null', () => {
     const f = { ...recorteParaFormulario(null), ativo: true, usaHorario: false, segmentos: ['sem-historico' as const] }
-    expect(recorteParaSalvar(f)).toEqual({ horario: null, segmentosRfv: ['sem-historico'], foraDoRecorte: 'sombra' })
+    expect(recorteParaSalvar(f)).toEqual({ horario: null, segmentosRfv: ['sem-historico'], foraDoRecorte: 'sombra', feriado: 'fora' })
+  })
+  it("feriado: padrão 'fora'; recorte salvo antes da opção (sem o campo) lê como 'fora' e salva o campo", () => {
+    expect(recorteParaFormulario(null).feriado).toBe('fora')
+    const antigo = { horario: { seg: { de: '08:00', ate: '18:00' } }, segmentosRfv: [], foraDoRecorte: 'sombra' as const } as never
+    const f = recorteParaFormulario(antigo)
+    expect(f.feriado).toBe('fora')
+    expect(recorteParaSalvar({ ...f, feriado: 'dentro' })).toMatchObject({ feriado: 'dentro' })
   })
   it('erros: nada escolhido, nenhum dia, início = fim', () => {
     const base = { ...recorteParaFormulario(null), ativo: true }
@@ -75,7 +82,7 @@ describe('tirar o recorte de autônomo', () => {
     expect(pedidoAoTirarRecorte('autonomo', 'autonomo', true, null)).toMatchObject({ digitar: 'autonomo' })
     expect(pedidoAoTirarRecorte('autonomo', 'autonomo', false, null)).toBeNull()
     expect(pedidoAoTirarRecorte('autonomo', 'sombra', true, null)).toBeNull()
-    expect(pedidoAoTirarRecorte('autonomo', 'autonomo', true, { horario: null, segmentosRfv: ['cliente-fiel'], foraDoRecorte: 'sombra' })).toBeNull()
+    expect(pedidoAoTirarRecorte('autonomo', 'autonomo', true, { horario: null, segmentosRfv: ['cliente-fiel'], foraDoRecorte: 'sombra', feriado: 'fora' })).toBeNull()
   })
 })
 

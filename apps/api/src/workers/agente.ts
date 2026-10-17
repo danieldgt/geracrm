@@ -60,7 +60,11 @@ export async function processarTarefasDoAgente(
 async function executarUma(dono: Sql, tarefa: Tarefa, deps: DepsTurno, agora: Date): Promise<ResultadoTurnoVendedor['desfecho'] | 'erro'> {
   let resultado: ResultadoTurnoVendedor
   try {
-    resultado = await conduzirTurnoVendedor(tarefa, { ...deps, agora: deps.agora ?? new Date() })
+    // O número da tarefa vai junto para as ligações: as AÇÕES do playbook são
+    // por número (P17). `Object.assign` porque o contrato de `DepsTurno.ligacoes`
+    // (vendedor.ts, dono P0) ainda não declara `canalId` — pendência P0c.
+    const ligacoes: DepsTurno['ligacoes'] = (cfg) => deps.ligacoes(Object.assign({}, cfg, { canalId: tarefa.canal_id }))
+    resultado = await conduzirTurnoVendedor(tarefa, { ...deps, ligacoes, agora: deps.agora ?? new Date() })
   } catch (e) {
     // ⚠️ Erro NOSSO (bug, banco): volta para a fila com backoff, até o teto.
     //    O cliente não fica sem resposta para sempre: no teto, a tarefa falha

@@ -6,6 +6,9 @@ import {
 } from '../../../compartilhado/ui/index.js'
 import { AgenteServico, type Rastro, type ResultadoSimulacao } from './agente.servico.js'
 import { badgeDesfecho, formatarReais, jsonLegivel, resumoDeUso, rotuloHandoff } from './agente.regras.js'
+import { textoDaSimulacao, tomDaGravidade } from './playbook.regras.js'
+
+type QualPlaybook = 'publicada' | 'rascunho'
 
 interface Turno {
   readonly id: number
@@ -15,6 +18,8 @@ interface Turno {
   /** Custo vem da decisão gravada (a simulação não devolve preço). `null` = não deu para buscar. */
   readonly custoCentavos: number | null
   readonly erro: string | null
+  /** Qual playbook rodou neste turno (o seletor pode mudar no meio da conversa). */
+  readonly playbook: QualPlaybook
 }
 
 type Estado = 'pronto' | 'sem_permissao'
@@ -26,6 +31,11 @@ type Estado = 'pronto' | 'sem_permissao'
  *
  * ⚠️ Um turno que falha NÃO apaga a conversa (estado parcial): o erro aparece
  * no lugar da resposta e a pessoa continua de onde estava.
+ *
+ * SANDBOX DO PLAYBOOK (P17): roda o playbook PUBLICADO ou o RASCUNHO em modo
+ * seco — mostra as ações que o agente teria executado (as de escrita só são
+ * registradas), os guardrails acionados e o custo. Embutido na aba Playbook
+ * com `playbook="rascunho"` fixo; sozinho, com seletor.
  */
 @Component({
   selector: 'app-agente-playground',
@@ -41,6 +51,15 @@ type Estado = 'pronto' | 'sem_permissao'
         <div class="chat">
           <div class="barra">
             <p class="dica encolhe">Conversa de teste com o agente deste número — nada sai para cliente. O custo é real e fica na auditoria como “simulação”.</p>
+            <ui-badge tom="info">Modo seco — nada é enviado ao cliente</ui-badge>
+            @if (playbook() === null) {
+              <label class="seletor">Playbook
+                <select [value]="escolha()" (change)="escolha.set($any($event.target).value)" [disabled]="enviando()">
+                  <option value="publicada">publicado (o que vale)</option>
+                  <option value="rascunho">rascunho (ainda não publicado)</option>
+                </select>
+              </label>
+            }
             <ui-botao variante="secundario" [desabilitado]="turnos().length === 0 || enviando()" [carregando]="reiniciando()"
                       (click)="reiniciar()">Reiniciar conversa</ui-botao>
           </div>
@@ -67,10 +86,34 @@ type Estado = 'pronto' | 'sem_permissao'
                     @if (r.mensagens.length === 0) {
                       <div class="bolha sistema">{{ semMensagem(r) }}</div>
                     }
+                    @if (r.acoes?.length || r.guardrails?.length) {
+                      <div class="seco">
+                        @if (r.acoes?.length) {
+                          <p class="txt-rotulo">Ações que o agente teria executado</p>
+                          <ul class="lista-seca">
+                            @for (a of r.acoes; track $index) {
+                              <li><span class="txt-dados">{{ a.ferramenta }}</span>
+                                @if (a.escrita) { <ui-badge tom="atencao">registrada, não executada</ui-badge> } @else { <ui-badge>leitura</ui-badge> }
+                                @if (a.erro) { <ui-badge tom="erro">erro</ui-badge> }</li>
+                            }
+                          </ul>
+                        }
+                        @if (r.guardrails?.length) {
+                          <p class="txt-rotulo">Guardrails acionados</p>
+                          <ul class="lista-seca">
+                            @for (g of r.guardrails; track $index) {
+                              <li><ui-badge [tom]="tomGravidade(g.gravidade)">{{ g.gravidade }}</ui-badge>
+                                <span class="txt-dados">{{ g.etapa }} · {{ g.codigo }}</span> <span class="meta">{{ g.acao }}</span></li>
+                            }
+                          </ul>
+                        }
+                      </div>
+                    }
                     <details class="bastidores">
                       <summary>
                         <span class="sum">
                           <span>Bastidores</span>
+                          <ui-badge>playbook {{ t.playbook === 'rascunho' ? 'rascunho' : rotuloPublicado(r) }}</ui-badge>
                           <ui-badge [tom]="badge(r.desfecho).tom">{{ badge(r.desfecho).rotulo }}</ui-badge>
                           @if (r.rastro; as ra) {
                             <span class="txt-dados meta">{{ ra.latenciaMs }} ms</span>
@@ -113,14 +156,19 @@ type Estado = 'pronto' | 'sem_permissao'
             }
           </div>
 
-          @if (erroGeral(); as e) { <p class="erro-geral" role="alert">{{ e }}</p> }
+          @if (erroGeral(); as e) {
+            <p class="erro-geral" role="alert">{{ e }}
+              @if (sugerirReinicio()) { <ui-botao variante="secundario" (click)="reiniciar()">Reiniciar conversa</ui-botao> }
+            </p>
+          }
+          @if (rascunhoIndisponivel()) { <p class="dica">Abra um rascunho (Editar) para testá-lo aqui.</p> }
 
           <form class="composer" (submit)="enviar($event)">
             <label class="sr" for="pg-texto">Mensagem do cliente</label>
             <textarea id="pg-texto" class="entrada" rows="1" [value]="texto()" (input)="texto.set($any($event.target).value)"
                       (keydown.enter)="aoEnter($event)" placeholder="Escreva como o cliente…" [disabled]="enviando()"
                       maxlength="2000"></textarea>
-            <ui-botao tipo="submit" [desabilitado]="!podeEnviar()" [carregando]="enviando()">Enviar</ui-botao>
+            <ui-botao tipo="submit" [desabilitado]="!podeEnviar() || rascunhoIndisponivel()" [carregando]="enviando()">Enviar</ui-botao>
           </form>
         </div>
       }
@@ -160,7 +208,15 @@ type Estado = 'pronto' | 'sem_permissao'
     .ferramenta .txt-rotulo { margin: var(--espacamento-2) 0 var(--espacamento-1); }
     pre { margin: 0; padding: var(--espacamento-2); font-family: var(--tipografia-familia-dados); font-size: 12px;
       background: var(--fundo); border-radius: var(--raio-controle); max-height: 240px; overflow: auto; max-width: 100%; }
-    .erro-geral { margin: 0; color: var(--erro); font-size: 13px; }
+    .erro-geral { margin: 0; color: var(--erro); font-size: 13px; display: flex; gap: var(--espacamento-2); align-items: center; flex-wrap: wrap; }
+    .seletor { display: inline-flex; gap: var(--espacamento-2); align-items: center; font-size: 13px; color: var(--texto-secundario); }
+    .seletor select { font: inherit; min-height: var(--densidade-alvo-clique-console); padding: 0 var(--espacamento-2);
+      border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto); }
+    .seco { align-self: flex-start; max-width: min(100%, 720px); width: 100%; padding: var(--espacamento-2) var(--espacamento-3);
+      border: 1px dashed var(--borda); border-radius: var(--raio-controle); font-size: 13px; }
+    .seco .txt-rotulo { margin: var(--espacamento-1) 0; }
+    .lista-seca { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--espacamento-1); }
+    .lista-seca li { display: flex; gap: var(--espacamento-2); align-items: center; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; }
     .composer { display: flex; gap: var(--espacamento-2); align-items: flex-end; }
     .entrada { flex: 1; min-width: 0; resize: none; padding: var(--espacamento-2) var(--espacamento-3); font: inherit;
       border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto);
@@ -176,6 +232,12 @@ type Estado = 'pronto' | 'sem_permissao'
 })
 export class AgentePlaygroundComponente {
   readonly canalId = input.required<string>()
+  /** Fixa o playbook (aba Playbook → 'rascunho'). null = a pessoa escolhe no seletor. */
+  readonly playbook = input<QualPlaybook | null>(null)
+  /** Escopo do rascunho testado: o do número ou o padrão da conta. */
+  readonly escopoPlaybook = input<'numero' | 'tenant'>('numero')
+  /** Com `playbook="rascunho"`: há rascunho para testar? Sem ele, o envio fica desligado. */
+  readonly rascunhoDisponivel = input(true)
 
   private readonly api = inject(AgenteServico)
   private readonly toast = inject(ToastServico)
@@ -187,6 +249,11 @@ export class AgentePlaygroundComponente {
   readonly enviando = signal(false)
   readonly reiniciando = signal(false)
   readonly erroGeral = signal<string | null>(null)
+  readonly sugerirReinicio = signal(false)
+  /** Escolha do seletor quando o playbook não vem fixo. */
+  readonly escolha = signal<QualPlaybook>('publicada')
+  readonly qualPlaybook = computed<QualPlaybook>(() => this.playbook() ?? this.escolha())
+  readonly rascunhoIndisponivel = computed(() => this.playbook() === 'rascunho' && !this.rascunhoDisponivel())
   /** Devolvido no primeiro turno; os seguintes continuam a MESMA conversa. */
   private readonly conversaId = signal<string | null>(null)
   private seq = 0
@@ -203,6 +270,10 @@ export class AgentePlaygroundComponente {
   json(v: unknown): string { return jsonLegivel(v) }
   rotuloHandoff(m: string | null | undefined): string | null { return rotuloHandoff(m) }
   custo(t: Turno): string { return t.custoCentavos === null ? '— custo' : formatarReais(t.custoCentavos) }
+  tomGravidade(g: string) { return tomDaGravidade(g) }
+  rotuloPublicado(r: ResultadoSimulacao): string {
+    return r.playbook?.numero ? `v${r.playbook.numero}${r.playbook.escopo === 'tenant' ? ' (da conta)' : ''}` : 'publicado'
+  }
 
   semMensagem(r: ResultadoSimulacao): string {
     switch (r.desfecho) {
@@ -225,23 +296,29 @@ export class AgentePlaygroundComponente {
     const pergunta = this.texto().trim()
     if (!pergunta || this.enviando()) return
     const id = ++this.seq
-    this.turnos.update((ts) => [...ts, { id, pergunta, estado: 'pendente', resultado: null, custoCentavos: null, erro: null }])
+    const playbook = this.qualPlaybook()
+    this.turnos.update((ts) => [...ts, { id, pergunta, estado: 'pendente', resultado: null, custoCentavos: null, erro: null, playbook }])
     this.texto.set('')
     this.erroGeral.set(null)
+    this.sugerirReinicio.set(false)
     this.enviando.set(true)
     this.rolarParaFim()
     try {
-      const r = await this.api.simular(this.canalId(), pergunta, this.conversaId())
+      const r = await this.api.simular(this.canalId(), pergunta, this.conversaId(), {
+        playbook, ...(playbook === 'rascunho' ? { escopoPlaybook: this.escopoPlaybook() } : {}),
+      })
       if (!r.ok) {
         if (r.status === 403) { this.estado.set('sem_permissao'); return }
-        // ⚠️ 422 tem frase pronta e corretiva ("salve a configuração antes").
-        const msg = r.erro.mensagem ?? 'Não foi possível simular.'
-        this.turnos.update((ts) => ts.map((t) => (t.id === id ? { ...t, estado: 'erro', erro: msg } : t)))
+        // ⚠️ 422/409 têm frase pronta e corretiva (limite → reiniciar; outra simulação → esperar).
+        const f = textoDaSimulacao(r.status, r.erro.erro, r.erro.mensagem)
+        this.turnos.update((ts) => ts.map((t) => (t.id === id ? { ...t, estado: 'erro', erro: f.texto } : t)))
+        if (f.reiniciar) { this.erroGeral.set(f.texto); this.sugerirReinicio.set(true) }
         return
       }
       this.conversaId.set(r.resultado.conversaId)
-      this.turnos.update((ts) => ts.map((t) => (t.id === id ? { ...t, estado: 'ok', resultado: r.resultado } : t)))
-      void this.buscarCusto(id, r.resultado)
+      const custo = typeof r.resultado.custoCentavos === 'number' ? r.resultado.custoCentavos : null
+      this.turnos.update((ts) => ts.map((t) => (t.id === id ? { ...t, estado: 'ok', resultado: r.resultado, custoCentavos: custo } : t)))
+      if (custo === null) void this.buscarCusto(id, r.resultado)
     } finally {
       this.enviando.set(false)
       this.rolarParaFim()
@@ -275,7 +352,7 @@ export class AgentePlaygroundComponente {
   }
 
   private limpar(): void {
-    this.turnos.set([]); this.conversaId.set(null); this.erroGeral.set(null); this.texto.set('')
+    this.turnos.set([]); this.conversaId.set(null); this.erroGeral.set(null); this.texto.set(''); this.sugerirReinicio.set(false)
   }
 
   private rolarParaFim(): void {

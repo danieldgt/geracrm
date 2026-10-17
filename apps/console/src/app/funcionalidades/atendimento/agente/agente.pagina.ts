@@ -102,7 +102,7 @@ const ABAS = TODAS_AS_ABAS.filter((a) => a.pronta)
 
           <div role="tabpanel" [id]="'painel-' + aba()" [attr.aria-labelledby]="'aba-' + aba()" class="painel-aba">
             @switch (aba()) {
-              @case ('configuracao') { <app-agente-config [canalId]="canalId()" (abrirConhecimento)="aba.set('conhecimento')" /> }
+              @case ('configuracao') { <app-agente-config [canalId]="canalId()" (abrirConhecimento)="aba.set('conhecimento')" (abrirPlaybook)="aba.set('playbook')" /> }
               @case ('conhecimento') { <app-agente-conhecimento [canalId]="canalId()" /> }
               @case ('playground') { <app-agente-playground [canalId]="canalId()" /> }
               @case ('decisoes') { <app-agente-decisoes [canalId]="canalId()" /> }

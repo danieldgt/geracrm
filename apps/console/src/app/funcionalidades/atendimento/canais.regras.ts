@@ -215,3 +215,18 @@ export function rotuloModoAgente(modo: string | null | undefined): string {
   if (!modo) return 'Agente desligado'
   return ROTULOS_MODO[modo] ?? `Agente: ${modo}`
 }
+
+/**
+ * Selo de RESTRIÇÃO do modo (decisão (s), plano-port §4): a lista mostra o modo
+ * EFETIVO; quando ele é menor que o configurado no número, diz quem restringiu.
+ * `null` = o modo do número valeu (sem selo). Leitura tolerante: origem
+ * ausente (API antiga) = sem selo.
+ */
+export function seloRestricaoModo(
+  origem: string | null | undefined, modoNumero: string | null | undefined,
+): { readonly rotulo: string; readonly dica: string } | null {
+  const configurado = rotuloModoAgente(modoNumero).replace(/^Agente /, '')
+  if (origem === 'tenant') return { rotulo: 'teto da conta', dica: `Configurado: ${configurado}. O limite do agente na conta (Empresa) restringe este número.` }
+  if (origem === 'recorte') return { rotulo: 'fora do recorte', dica: `Configurado: ${configurado}. Agora está fora do horário do recorte deste número.` }
+  return null
+}

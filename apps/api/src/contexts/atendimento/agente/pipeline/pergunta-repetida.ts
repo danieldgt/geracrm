@@ -1,5 +1,5 @@
 import {
-  ehSlot, evitarPerguntaRepetidaNasMensagens, lerEstadoPerguntas, perguntasDe, slotDaPergunta, temPerguntaRepetida,
+  ehSlot, evitarPerguntaRepetidaNasMensagens, lerPlaybookVigente, slotsDoPlaybook, lerEstadoPerguntas, perguntasDe, slotDaPergunta, temPerguntaRepetida,
   type EstadoPerguntas, type UltimaPergunta,
 } from '@geracrm/shared'
 import { comTenantServico } from '../../../../db/index.js'
@@ -57,7 +57,10 @@ async function slotsConhecidosDoBanco(ctx: ContextoPipeline): Promise<readonly s
   })
 }
 
+/** Ordem do roteiro: a do playbook publicado (P17) ou, sem ele, `agente_config.qualificacao`. */
 function slotsDoCanal(cfgExtra: Readonly<Record<string, unknown>>): string[] {
+  const playbook = lerPlaybookVigente(cfgExtra['playbook'])
+  if (playbook) return slotsDoPlaybook(playbook.conteudo)
   const q = cfgExtra['qualificacao']
   return Array.isArray(q) ? q.filter(ehSlot) : []
 }

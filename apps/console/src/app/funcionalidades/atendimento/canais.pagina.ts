@@ -11,7 +11,7 @@ import { RouterLink } from '@angular/router'
 import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
 import {
   abrirAvancado, avisoDeRemocao, corpoDaApi, idadeVerificacao, intervaloDePolling, mensagemFalhaQr, mudancasDaEdicao,
-  POLL_RAPIDO_MS, rotuloModoAgente, verificacaoAtrasada,
+  POLL_RAPIDO_MS, rotuloModoAgente, seloRestricaoModo, verificacaoAtrasada,
 } from './canais.regras.js'
 
 /**
@@ -115,6 +115,9 @@ import {
                       <span class="tag agente" [class.agente--ligado]="c.modoAgente && c.modoAgente !== 'desligado'">
                         {{ rotuloModo(c.modoAgente) }}
                       </span>
+                      @if (seloModo(c); as selo) {
+                        <span class="tag restricao" [title]="selo.dica">{{ selo.rotulo }}</span>
+                      }
                     </span>
                   </div>
                   <!-- ⚠️ O estado NUNCA aparece sozinho: vem com quando foi
@@ -404,6 +407,7 @@ import {
       display: flex; flex-wrap: wrap; gap: var(--espacamento-3); }
     .numero .id { color: var(--texto-suave); }
     .tag.agente--ligado { color: var(--acao); border-color: var(--acao); }
+    .tag.restricao { color: var(--atencao); border-color: var(--atencao); background: var(--atencao-suave); }
     .indisponivel { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3);
       border: 1px solid var(--atencao); border-radius: var(--raio-controle);
       background: var(--atencao-suave); color: var(--texto); }
@@ -810,6 +814,7 @@ export class CanaisPagina implements OnInit, OnDestroy {
     return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
   }
   rotuloModo(modo: string | undefined): string { return rotuloModoAgente(modo) }
+  seloModo(c: Canal): { rotulo: string; dica: string } | null { return seloRestricaoModo(c.modoAgenteOrigem, c.modoAgenteNumero) }
 
   #carimbar(canalId: string): void {
     const agora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })

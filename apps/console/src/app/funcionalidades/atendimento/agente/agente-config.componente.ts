@@ -12,7 +12,8 @@ import {
 import { AgenteServico, ehSemPermissao, type ConfigAgente } from './agente.servico.js'
 import {
   EXPLICACAO_MODO, FAIXAS_AVANCADO, FAIXAS_REGRAS_AGENTE, ROTULO_OBJETIVO, ROTULO_SLOT, ROTULO_TOM,
-  badgeModo, centavosParaTexto, corpoParaSalvar, errosDoServidor, mudouDoPadrao, validarFormulario,
+  avisoDoPlaybook, badgeModo, centavosParaTexto, corpoParaSalvar, errosDoServidor, lerPlaybookVigente, mudouDoPadrao,
+  semCamposDoPlaybook, validarFormulario,
   type FormularioAgente,
 } from './agente.regras.js'
 import {
@@ -21,7 +22,7 @@ import {
 import { ConhecimentoServico } from './conhecimento.servico.js'
 import { ModoServico } from './modo.servico.js'
 import {
-  MODOS_FORA, ROTULO_FORA, ROTULO_SEGMENTO, SEGMENTOS, erroDoRecorte, fraseOrigem, fraseReserva, pedidoAoTirarRecorte, pedidoDeConfirmacao,
+  MODOS_FORA, OPCOES_FERIADO, ROTULO_FERIADO, ROTULO_FORA, ROTULO_SEGMENTO, SEGMENTOS, erroDoRecorte, fraseOrigem, fraseReserva, pedidoAoTirarRecorte, pedidoDeConfirmacao,
   recorteParaFormulario, recorteParaSalvar, type FormularioRecorte, type ModoNaConfig, type TetoDoTenant,
 } from './modo.regras.js'
 import { fraseCapacidade } from './conhecimento.regras.js'
@@ -152,6 +153,20 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
                       }
                     </div>
                   </fieldset>
+                  @if (rf().usaHorario) {
+                    <fieldset class="segmentos">
+                      <legend class="txt-rotulo">Feriado do número conta como</legend>
+                      <p class="dica">Os feriados ficam na Config. do Canal. "Dentro" deixa o agente no modo do número o dia todo no feriado — útil para "autônomo fora do expediente".</p>
+                      <div class="fora" role="radiogroup" aria-label="Feriado conta como">
+                        @for (o of opcoesFeriado; track o) {
+                          <label class="chk">
+                            <input type="radio" name="feriadoRecorte" [value]="o" [checked]="rf().feriado === o" (change)="mudarRecorte('feriado', o)" />
+                            {{ rotuloFeriado[o] }}
+                          </label>
+                        }
+                      </div>
+                    </fieldset>
+                  }
                   @if (erroRecorte(); as e) { <span class="msg-erro" role="alert">{{ e }}</span> }
                   @if (erroDe('recorte'); as e) { <span class="msg-erro" role="alert">{{ e }}</span> }
                 </div>
@@ -285,6 +300,11 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
             <!-- (b) Persona -->
             <ui-painel>
               <h2 class="txt-secao secao">Persona</h2>
+              @if (playbook(); as pb) {
+                <p class="aviso-playbook">{{ avisoPlaybook(pb) }}
+                  <button type="button" class="link" (click)="abrirPlaybook.emit()">Abrir a aba Playbook</button></p>
+              }
+              <fieldset class="sem-moldura" [disabled]="!!playbook()">
               <div class="grade-2">
                 <ui-campo rotulo="Nome do agente" [valor]="f().persona.nome" (valorChange)="mudarPersona('nome', $event)"
                           [erro]="erroDe('persona.nome')" placeholder="Ex.: Ana" />
@@ -303,6 +323,7 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
                 <input type="checkbox" [checked]="f().persona.usaEmojis" (change)="mudarPersona('usaEmojis', $any($event.target).checked)" />
                 Usa emojis
               </label>
+              </fieldset>
               <!-- Sem opção de desligar (ADR-028/029): identificar-se é regra, não preferência. -->
               <p class="dica">O agente <strong>sempre</strong> se apresenta como assistente virtual da loja — é regra (exigência da Meta e do produto), não uma opção.</p>
             </ui-painel>
@@ -320,6 +341,11 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
               </div>
               <h3 class="txt-corpo sub">O que ele pergunta antes de recomendar</h3>
               <p class="dica">Campos, não roteiro: ele não pergunta o que já sabe do cliente.</p>
+              @if (playbook(); as pb) {
+                <p class="aviso-playbook">{{ avisoPlaybook(pb) }}
+                  <button type="button" class="link" (click)="abrirPlaybook.emit()">Abrir a aba Playbook</button></p>
+              }
+              <fieldset class="sem-moldura" [disabled]="!!playbook()">
               <div class="slots">
                 @for (s of slots; track s) {
                   <label class="chk">
@@ -328,6 +354,7 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
                   </label>
                 }
               </div>
+              </fieldset>
             </ui-painel>
 
             <!-- (d) Alçada -->
@@ -589,6 +616,9 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
       border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--fundo); }
     .selo-frase { color: var(--texto-secundario); font-size: 13px; flex: 1 1 260px; }
     .recorte { display: grid; gap: var(--espacamento-3); margin-top: var(--espacamento-2); min-width: 0; }
+    .sem-moldura { border: 0; margin: 0; padding: 0; min-width: 0; }
+    .sem-moldura:disabled { opacity: 0.7; }
+    .aviso-playbook { margin: 0 0 var(--espacamento-2); padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle); background: var(--acao-suave); color: var(--texto); }
     .segmentos { border: 1px solid var(--borda); border-radius: var(--raio-painel); margin: 0;
       padding: var(--espacamento-2) var(--espacamento-4) var(--espacamento-3); min-width: 0; }
     .segmentos legend { padding: 0 var(--espacamento-1); }
@@ -604,6 +634,8 @@ export class AgenteConfigComponente {
   readonly canalId = input.required<string>()
   /** A página troca para a aba Conhecimento. */
   readonly abrirConhecimento = output<void>()
+  /** A página troca para a aba Playbook (persona e qualificação moram lá quando há versão publicada). */
+  readonly abrirPlaybook = output<void>()
 
   private readonly api = inject(AgenteServico)
   private readonly conhecimento = inject(ConhecimentoServico)
@@ -616,6 +648,11 @@ export class AgenteConfigComponente {
   readonly rotuloSegmento = ROTULO_SEGMENTO
   readonly modosFora = MODOS_FORA
   readonly rotuloFora = ROTULO_FORA
+  readonly opcoesFeriado = OPCOES_FERIADO
+  readonly rotuloFeriado = ROTULO_FERIADO
+  /** Playbook publicado vigente neste número (P17): persona e qualificação ficam só leitura. */
+  readonly playbook = computed(() => lerPlaybookVigente(this.cfg()?.playbookVigente))
+  readonly avisoPlaybook = avisoDoPlaybook
   /** O GET com os campos do modo (opcionais: a API anterior não manda). */
   readonly cfgModo = computed(() => this.cfg() as (ConfigAgente & ModoNaConfig) | null)
   readonly modoEfetivo = computed(() => this.cfgModo()?.modoEfetivo ?? null)
@@ -686,7 +723,7 @@ export class AgenteConfigComponente {
   frase(e: NonNullable<ModoNaConfig['modoEfetivo']>): string { return fraseOrigem(e, this.cfg()?.modo ?? 'desligado') }
   dataHora(iso: string): string { return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) }
 
-  mudarRecorte<K extends 'ativo' | 'usaHorario' | 'foraDoRecorte'>(campo: K, valor: FormularioRecorte[K]): void {
+  mudarRecorte<K extends 'ativo' | 'usaHorario' | 'foraDoRecorte' | 'feriado'>(campo: K, valor: FormularioRecorte[K]): void {
     this.rf.update((r) => ({ ...r, [campo]: valor }))
     this.recorteMexido.set(true)
     this.limparErro('recorte')
@@ -834,7 +871,7 @@ export class AgenteConfigComponente {
     this.salvando.set(true)
     try {
       const corpo = {
-        ...corpoParaSalvar(this.f()),
+        ...semCamposDoPlaybook(corpoParaSalvar(this.f()), this.playbook()),
         recorte,
         ...(pedido ? { confirmacao: this.confirmacao.digitado() } : {}),
       }

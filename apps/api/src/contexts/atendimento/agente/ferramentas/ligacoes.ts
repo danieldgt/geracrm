@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { lerPlaybookVigente } from '@geracrm/shared'
 import { comTenantServico, type Sql, sql } from '../../../../db/index.js'
 import { buscarCatalogo, detalharProduto, precoEEstoque, type ProdutoDetalhe } from '../../../catalogo/busca.js'
 import {
@@ -23,10 +24,16 @@ import { conhecimentoReal } from '../conhecimento/conhecimento-real.js'
  * índice, a ferramenta não existe e o prompt diz que não há catálogo neste
  * canal — degradação visível (ADR-008), não busca vazia fingindo que procurou.
  */
-export async function ligacoesPadrao(cfg: { tenantId: string; politicas: string; modo?: string | undefined }): Promise<Ligacoes> {
-  const temCatalogo = await comTenantServico(cfg.tenantId, async (tx) => {
-    const [r] = await tx<{ tem: boolean }[]>`SELECT EXISTS (SELECT 1 FROM produto_indice WHERE tenant_id = tenant_atual()) AS tem`
-    return r?.tem ?? false
+export async function ligacoesPadrao(cfg: { tenantId: string; politicas: string; modo?: string | undefined; canalId?: string | undefined }): Promise<Ligacoes> {
+  const { temCatalogo, acoes } = await comTenantServico(cfg.tenantId, async (tx) => {
+    const [r] = await tx<{ tem: boolean; playbook: unknown }[]>`
+      SELECT EXISTS (SELECT 1 FROM produto_indice WHERE tenant_id = tenant_atual()) AS tem,
+             ${cfg.canalId
+               ? tx`(SELECT ac.playbook FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${cfg.canalId})`
+               : tx`NULL::jsonb`} AS playbook`
+    // Ações do PLAYBOOK publicado do número (P17) — o espelho em agente_config;
+    // sem número (chamador antigo) ou sem playbook, todas ligadas.
+    return { temCatalogo: r?.tem ?? false, acoes: lerPlaybookVigente(r?.playbook)?.conteudo.acoes }
   })
   // ⚠️ Só o modo AUTÔNOMO toca o pedido real. Sombra, assistido e simulação
   //    ensaiam num carrinho em memória — nunca no rascunho da vendedora.
@@ -35,6 +42,7 @@ export async function ligacoesPadrao(cfg: { tenantId: string; politicas: string;
     catalogo: temCatalogo ? catalogoReal : undefined,
     pedido,
     conhecimento: conhecimentoReal,
+    ...(acoes ? { acoes } : {}),
   }
 }
 

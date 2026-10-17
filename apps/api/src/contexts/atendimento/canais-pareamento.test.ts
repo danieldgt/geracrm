@@ -39,6 +39,7 @@ const idDoUsuarioDev = async () =>
 
 interface ItemCanal {
   id: string; podeParear: boolean; modoAgente: string
+  modoAgenteNumero: string; modoAgenteOrigem: string; modoAgenteMotivo: string | null
   telefoneMascarado: string | null; identificadorMascarado: string | null
   ativasSuspensas: { desde: string; motivo: string | null } | null
 }
@@ -79,6 +80,7 @@ afterAll(async () => {
   await dono`DELETE FROM auditoria WHERE tenant_id IN (${T}, ${T2})`
   await dono`DELETE FROM usuario_filial WHERE tenant_id IN (${T}, ${T2})`
   await dono`DELETE FROM agente_config WHERE tenant_id IN (${T}, ${T2})`
+  await dono`DELETE FROM agente_tenant WHERE tenant_id IN (${T}, ${T2})`
   await dono`DELETE FROM numero_whatsapp WHERE tenant_id IN (${T}, ${T2})`
   await dono`DELETE FROM canal_conectado WHERE tenant_id IN (${T}, ${T2})`
   await dono`DELETE FROM usuario WHERE tenant_id IN (${T}, ${T2})`
@@ -181,6 +183,19 @@ describe('Listagem — dados mascarados, modo do agente, ativas', () => {
     const porId = Object.fromEntries(((await get('/v1/canais')).json() as { itens: ItemCanal[] }).itens.map((i) => [i.id, i]))
     expect(porId[NAO_OFICIAL]!.modoAgente).toBe('assistido')
     expect(porId[OFICIAL]!.modoAgente).toBe('desligado')
+  })
+
+  it('(s) a lista mostra o modo EFETIVO: sob o kill switch, origem = teto da conta (tenant); o configurado fica em modoAgenteNumero', async () => {
+    await dono`INSERT INTO agente_tenant (tenant_id, modo_maximo) VALUES (${T}, 'sombra')`
+    try {
+      const porId = Object.fromEntries(((await get('/v1/canais')).json() as { itens: ItemCanal[] }).itens.map((i) => [i.id, i]))
+      expect(porId[NAO_OFICIAL]).toMatchObject({ modoAgente: 'sombra', modoAgenteNumero: 'assistido', modoAgenteOrigem: 'tenant', modoAgenteMotivo: 'teto_do_tenant' })
+      expect(porId[OFICIAL]).toMatchObject({ modoAgente: 'desligado', modoAgenteNumero: 'desligado', modoAgenteOrigem: 'numero' })
+    } finally {
+      await dono`DELETE FROM agente_tenant WHERE tenant_id = ${T}`
+    }
+    const depois = Object.fromEntries(((await get('/v1/canais')).json() as { itens: ItemCanal[] }).itens.map((i) => [i.id, i]))
+    expect(depois[NAO_OFICIAL]).toMatchObject({ modoAgente: 'assistido', modoAgenteOrigem: 'numero', modoAgenteMotivo: null })
   })
 
   it('ativas suspensas: tolerante antes da 0101 (null), e lida quando a coluna existe', async () => {

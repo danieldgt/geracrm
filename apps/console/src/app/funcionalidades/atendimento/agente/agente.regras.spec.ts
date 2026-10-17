@@ -4,6 +4,7 @@ import {
   reaisParaCentavos, centavosParaTexto, formatarReais,
   errosDoServidor, validarFormulario, corpoParaSalvar, mudouDoPadrao,
   badgeDesfecho, badgeModo, resumoDeUso, formatarConfianca, resumoExtraido, jsonLegivel,
+  avisoDoPlaybook, lerPlaybookVigente, semCamposDoPlaybook,
   type FormularioAgente,
 } from './agente.regras.js'
 
@@ -174,5 +175,24 @@ describe('Bastidores em uma linha', () => {
     circular['eu'] = circular
     expect(jsonLegivel({ a: 1 })).toBe('{\n  "a": 1\n}')
     expect(typeof jsonLegivel(circular)).toBe('string')
+  })
+})
+
+describe('Persona e qualificação editadas no Playbook (P17)', () => {
+  it('leitura tolerante: ausente ou torto = null', () => {
+    expect(lerPlaybookVigente(undefined)).toBeNull()
+    expect(lerPlaybookVigente({ numero: '3', escopo: 'numero' })).toBeNull()
+    expect(lerPlaybookVigente({ numero: 3, escopo: 'outro' })).toBeNull()
+    expect(lerPlaybookVigente({ numero: 3, escopo: 'tenant', publicadoEm: '2026-10-17T12:00:00Z' }))
+      .toEqual({ numero: 3, escopo: 'tenant', publicadoEm: '2026-10-17T12:00:00Z' })
+  })
+  it('com playbook vigente o PUT não manda persona nem qualificação; sem ele, manda tudo', () => {
+    const corpo = corpoParaSalvar(FORM_OK)
+    expect(semCamposDoPlaybook(corpo, null)).toBe(corpo)
+    const sem = semCamposDoPlaybook(corpo, { numero: 2, escopo: 'numero', publicadoEm: '' })
+    expect(sem).not.toHaveProperty('persona')
+    expect(sem).not.toHaveProperty('qualificacao')
+    expect(sem['modo']).toBe(FORM_OK.modo)
+    expect(avisoDoPlaybook({ numero: 2, escopo: 'tenant', publicadoEm: '' })).toBe('Editados no Playbook (v2, da conta) — aba Playbook.')
   })
 })

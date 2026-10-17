@@ -68,6 +68,23 @@ describe('horário do recorte', () => {
     expect(decidirModoEfetivo({ modoTenant: null, modoNumero: 'autonomo', recorte: { horario: COMERCIAL }, momento: { ...SEG_14H, feriado: true } }))
       .toMatchObject({ modo: 'sombra', motivo: 'fora_do_recorte_horario' })
   })
+  it("feriado: padrão 'fora'; 'dentro' deixa o feriado dentro do recorte o dia inteiro", () => {
+    expect(recorteAgente.parse({ horario: COMERCIAL }).feriado).toBe('fora')
+    const h = recorteAgente.parse({ horario: COMERCIAL }).horario
+    // domingo (sem faixa) às 03:00, feriado: dentro com 'dentro', fora com 'fora'
+    expect(dentroDoHorarioRecorte(h, { diaIso: 7, hora: '03:00', feriado: true }, 'dentro')).toBe(true)
+    expect(dentroDoHorarioRecorte(h, { diaIso: 7, hora: '03:00', feriado: true }, 'fora')).toBe(false)
+    // sem feriado, a opção não muda nada
+    expect(dentroDoHorarioRecorte(h, { diaIso: 7, hora: '03:00' }, 'dentro')).toBe(false)
+    expect(decidirModoEfetivo({ modoTenant: null, modoNumero: 'autonomo', recorte: { horario: COMERCIAL, feriado: 'dentro' }, momento: { ...SEG_14H, hora: '22:00', feriado: true } }))
+      .toMatchObject({ modo: 'autonomo', motivo: null })
+    expect(decidirModoEfetivo({ modoTenant: null, modoNumero: 'autonomo', recorte: { horario: COMERCIAL, feriado: 'fora' }, momento: { ...SEG_14H, feriado: true } }))
+      .toMatchObject({ modo: 'sombra', motivo: 'fora_do_recorte_horario' })
+  })
+  it('recorte antigo (sem o campo feriado) continua válido; valor desconhecido é recusado', () => {
+    expect(recorteAgente.safeParse({ horario: COMERCIAL, segmentosRfv: [], foraDoRecorte: 'sombra' }).success).toBe(true)
+    expect(recorteAgente.safeParse({ horario: COMERCIAL, feriado: 'talvez' }).success).toBe(false)
+  })
   it('fim é exclusivo, início inclusivo', () => {
     const h = recorteAgente.parse({ horario: COMERCIAL }).horario
     expect(dentroDoHorarioRecorte(h, { diaIso: 2, hora: '08:00' })).toBe(true)

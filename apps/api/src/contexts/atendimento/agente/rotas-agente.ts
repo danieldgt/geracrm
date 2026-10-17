@@ -4,6 +4,7 @@ import {
   REGRAS_AGENTE_PADRAO, validarRegrasAgente, MODOS_AGENTE, OBJETIVOS_AGENTE, SLOTS_QUALIFICACAO,
   persona as personaSchema, alcadaAgente, ALCADA_PADRAO, PERSONA_PADRAO,
   recorteAgente, exigeConfirmacao, confirmacaoConfere, textoDeConfirmacao, decidirModoEfetivo, ehModoAgente,
+  lerPlaybookVigente, personaDoPlaybook, slotsDoPlaybook, PLAYBOOK_SIMULACAO, LIMITE_MENSAGENS_SIMULACAO, FERRAMENTAS_DE_ESCRITA,
   type RegrasDoAgente, type ModoAgente,
 } from '@geracrm/shared'
 import { z } from 'zod'
@@ -18,7 +19,13 @@ import { estadoDoLlm } from './llm-estado.js'
 import { lerFatosDoModo } from './pipeline/modo-efetivo.js'
 import { diferencaDeConfig } from './auditoria-config.js'
 import { modelosPermitidos } from './modelos.js'
-import { conduzirTurnoVendedor } from './vendedor.js'
+import { conduzirTurnoVendedor, type DepsTurno } from './vendedor.js'
+import { criarLlmDoCatalogo, llmFerramentasDoAmbiente } from './fabrica-ferramentas.js'
+import { resolverModelo } from './modelos.js'
+import { lerRascunho } from './playbook/repositorio.js'
+import {
+  adquirirTravaSimulacao, espelhoDoConteudo, liberarTravaSimulacao, ligacoesDoSandbox, llmComPlaybook, pipelineComPlaybook,
+} from './playbook/simulacao.js'
 import { ligacoesPadrao } from './ferramentas/ligacoes.js'
 import { sincronizarPoliticas } from './conhecimento/indexador.js'
 
@@ -101,6 +108,29 @@ const corpoTenant = z.object({
   confirmacao: z.string().max(40).optional(),
 }).strict()
 
+/** O que a tela de configuração precisa saber do playbook publicado (P17). */
+function resumoDoVigente(v: unknown): { numero: number; escopo: 'numero' | 'tenant'; publicadoEm: string } | null {
+  const p = lerPlaybookVigente(v)
+  return p ? { numero: p.numero, escopo: p.escopo, publicadoEm: p.publicadaEm } : null
+}
+
+/** Campos do corpo que contradizem o playbook publicado (persona/qualificação). null = sem conflito. */
+function conflitoComPlaybook(espelho: unknown, corpo: z.output<typeof corpoConfig>, bruto: unknown): { campos: string[]; numero: number } | null {
+  const p = lerPlaybookVigente(espelho)
+  if (!p) return null
+  const campos: string[] = []
+  if (corpo.persona) {
+    const doPlaybook = personaDoPlaybook(p.conteudo) as Record<string, unknown>
+    // Só as chaves que vieram no corpo: o parse do Zod preenche padrões nas ausentes.
+    const enviadas = new Set(Object.keys((bruto as { persona?: object } | null)?.persona ?? {}))
+    const difere = Object.entries(corpo.persona)
+      .some(([k, v]) => enviadas.has(k) && k !== 'identificaComoRobo' && k !== 'idioma' && doPlaybook[k] !== v)
+    if (difere) campos.push('persona')
+  }
+  if (corpo.qualificacao && corpo.qualificacao.join() !== slotsDoPlaybook(p.conteudo).join()) campos.push('qualificacao')
+  return campos.length ? { campos, numero: p.numero } : null
+}
+
 export async function rotasAgente(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>(
     '/v1/canais/:id/agente', { preHandler: exigirTenant },
@@ -113,13 +143,14 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           so_quando_ninguem_disponivel: boolean; exigir_ausencia_antes: boolean
           horas_desde_ausencia: number; reabrir_apos_encerrada: boolean; horas_para_reabrir: number
           minutos_presenca: number; max_turnos: number; max_caracteres: number; falas_de_contexto: number
-          recorte: unknown
+          recorte: unknown; playbook: unknown
         }[]>`
           SELECT ativo, modo, politicas, persona, objetivo, alcada, qualificacao, modelo, limiar_confianca, max_rodadas,
                  prazo_turno_ms, orcamento_dia_centavos,
                  so_quando_ninguem_disponivel, exigir_ausencia_antes,
                  horas_desde_ausencia, reabrir_apos_encerrada, horas_para_reabrir,
-                 minutos_presenca, max_turnos, max_caracteres, falas_de_contexto, recorte
+                 minutos_presenca, max_turnos, max_caracteres, falas_de_contexto, recorte,
+                 (to_jsonb(agente_config.*) -> 'playbook') AS playbook
             FROM agente_config
            WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
         const [canal] = await tx<{ tem: boolean }[]>`
@@ -181,6 +212,8 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         },
         podeConfigurar,
         reservaLlm: situacaoDaReserva(),
+        // P17: persona e roteiro deste número vêm do playbook publicado (a tela os mostra só para leitura).
+        playbookVigente: resumoDoVigente(cfg?.playbook),
       })
     },
   )
@@ -254,6 +287,10 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         if ((exigeConfirmacao(modoTravado, modo) || tiraRecorte) && !confirmacaoConfere(corpo.confirmacao, modo)) {
           return { tipo: 'confirmar' as const, tiraRecorte }
         }
+        // P17: com playbook publicado, persona e roteiro de qualificação são do
+        // PLAYBOOK — editar aqui divergiria da versão auditada. Igual ao vigente passa.
+        const doPlaybook = conflitoComPlaybook(antes?.linha['playbook'], corpo, req.body)
+        if (doPlaybook) return { tipo: 'campo_do_playbook' as const, ...doPlaybook }
         await tx`
           INSERT INTO agente_config (
             tenant_id, canal_id, ativo, modo, politicas, max_turnos,
@@ -307,6 +344,13 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         return { tipo: 'ok' as const }
       })
       if (gravado.tipo === 'sem_canal') return reply.code(404).send({ erro: 'canal.nao_encontrado' })
+      if (gravado.tipo === 'campo_do_playbook') {
+        return reply.code(409).send({
+          erro: 'agente.campo_do_playbook',
+          mensagem: `Persona e roteiro de qualificação deste número são editados no Playbook (v${gravado.numero}). Abra a aba Playbook para mudar.`,
+          campos: gravado.campos,
+        })
+      }
       if (gravado.tipo === 'confirmar') {
         return pedirConfirmacao(reply, modo, gravado.tiraRecorte ? 'o agente deste número sem recorte (sempre)' : 'o agente deste número')
       }
@@ -465,8 +509,15 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
    *
    * ⚠️ É assim que o dono testa antes de ligar: "o que ele diria se o cliente
    * perguntasse X?" com o catálogo de verdade e o custo de verdade medido.
+   *
+   * SANDBOX DO PLAYBOOK (P17): `playbook: 'rascunho'` roda o RASCUNHO do número
+   * (ou da conta, com `escopoPlaybook: 'tenant'`) em MODO SECO; `'publicada'`
+   * (padrão) roda o que está valendo. A resposta traz as ações que o agente
+   * TERIA executado (escrita vira registro), os guardrails acionados e o custo.
+   * Limites: 20 mensagens do cliente por conversa de teste e UMA simulação por
+   * vez no tenant (409 `agente.simulacao_em_andamento`).
    */
-  app.post<{ Params: { id: string }; Body: { mensagem?: string; conversaId?: string } }>(
+  app.post<{ Params: { id: string }; Body: { mensagem?: string; conversaId?: string; playbook?: string; escopoPlaybook?: string } }>(
     '/v1/canais/:id/agente/simular', { preHandler: exigirTenant },
     async (req, reply) => {
       const canalId = req.params.id
@@ -474,75 +525,137 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
       if (!texto) return reply.code(422).send({ erro: 'agente.mensagem_vazia', mensagem: 'Escreva a mensagem do cliente.' })
       if (texto.length > 2000) return reply.code(422).send({ erro: 'agente.mensagem_longa', mensagem: 'Até 2000 caracteres.' })
       const pedida = req.body?.conversaId && UUID.test(req.body.conversaId) ? req.body.conversaId : null
+      const qualPlaybook = req.body?.playbook ?? 'publicada'
+      if (!(PLAYBOOK_SIMULACAO as readonly string[]).includes(qualPlaybook)) {
+        return reply.code(422).send({ erro: 'agente.campo_invalido', mensagem: 'playbook: use "rascunho" ou "publicada".', campos: ['playbook'] })
+      }
+      const escopoRascunho: 'numero' | 'tenant' = req.body?.escopoPlaybook === 'tenant' ? 'tenant' : 'numero'
 
-      const preparo = await req.comTenant(async (tx) => {
-        const [canal] = await tx<{ id: string }[]>`SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${canalId}`
-        if (!canal) return null
-        const [cfg] = await tx<{ modo: string }[]>`SELECT modo FROM agente_config WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}`
-        if (!cfg) return { semConfig: true as const }
-        // O contato de simulação do canal: um só, reaproveitado.
-        const chave = `sim:${canalId}`
-        const [existente] = await tx<{ contato_id: string }[]>`
-          SELECT ie.contato_id FROM contato_identidade_externa ie
-           WHERE ie.tenant_id = tenant_atual() AND ie.sistema = 'simulacao' AND ie.id_externo = ${chave}`
-        let contatoId = existente?.contato_id
-        if (!contatoId) {
-          contatoId = randomUUID()
-          await tx`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo, recebe_campanhas, recebe_automacoes)
-                   VALUES (tenant_atual(), ${contatoId}, 'Cliente de simulação', 'simulacao', true, false, false)`
-          await tx`INSERT INTO contato_identidade_externa (tenant_id, contato_id, sistema, id_externo)
-                   VALUES (tenant_atual(), ${contatoId}, 'simulacao', ${chave})`
-        }
-        let conversaId = pedida
-        if (conversaId) {
-          const [c] = await tx<{ id: string }[]>`
-            SELECT id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId} AND contato_id = ${contatoId} AND canal_id = ${canalId}`
-          if (!c) conversaId = null
-        }
-        if (!conversaId) {
-          const [c] = await tx<{ id: string }[]>`
-            SELECT id FROM conversa WHERE tenant_id = tenant_atual() AND canal_id = ${canalId} AND contato_id = ${contatoId}`
-          conversaId = c?.id ?? null
-          if (!conversaId) {
-            conversaId = randomUUID()
-            await tx`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao, ultima_entrante_em)
-                     VALUES (tenant_atual(), ${conversaId}, ${canalId}, ${contatoId}, 1, now())`
+      // Uma simulação por vez no tenant (lease em banco; expira sozinho).
+      const trava = await adquirirTravaSimulacao(req.tenantId!)
+      if (!trava) {
+        return reply.code(409).send({ erro: 'agente.simulacao_em_andamento', mensagem: 'Já há uma simulação rodando nesta conta. Espere ela terminar e tente de novo.' })
+      }
+      const tupla = (c: number, b: unknown): [number, unknown] => [c, b]
+      let resposta: [number, unknown]
+      try {
+        // ⚠️ A trava sai ANTES da resposta: a tela pode mandar a próxima mensagem assim que recebe esta.
+        resposta = await (async (): Promise<[number, unknown]> => {
+        const preparo = await req.comTenant(async (tx) => {
+          const [canal] = await tx<{ id: string }[]>`SELECT id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${canalId}`
+          if (!canal) return null
+          const [cfg] = await tx<{ modo: string; objetivo: 'vender' | 'qualificar'; modelo: string | null; playbook: unknown }[]>`
+            SELECT modo, objetivo, modelo, (to_jsonb(ac.*) -> 'playbook') AS playbook
+              FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${canalId}`
+          if (!cfg) return { tipo: 'sem_config' as const }
+          // O playbook do teste: o rascunho pedido, ou o que vale (espelho).
+          const rascunho = qualPlaybook === 'rascunho' ? await lerRascunho(tx, escopoRascunho === 'tenant' ? null : canalId) : null
+          if (qualPlaybook === 'rascunho' && !rascunho) return { tipo: 'sem_rascunho' as const }
+          // O contato de simulação do canal: um só, reaproveitado.
+          const chave = `sim:${canalId}`
+          const [existente] = await tx<{ contato_id: string }[]>`
+            SELECT ie.contato_id FROM contato_identidade_externa ie
+             WHERE ie.tenant_id = tenant_atual() AND ie.sistema = 'simulacao' AND ie.id_externo = ${chave}`
+          let contatoId = existente?.contato_id
+          if (!contatoId) {
+            contatoId = randomUUID()
+            await tx`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo, recebe_campanhas, recebe_automacoes)
+                     VALUES (tenant_atual(), ${contatoId}, 'Cliente de simulação', 'simulacao', true, false, false)`
+            await tx`INSERT INTO contato_identidade_externa (tenant_id, contato_id, sistema, id_externo)
+                     VALUES (tenant_atual(), ${contatoId}, 'simulacao', ${chave})`
           }
+          let conversaId = pedida
+          if (conversaId) {
+            const [c] = await tx<{ id: string }[]>`
+              SELECT id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId} AND contato_id = ${contatoId} AND canal_id = ${canalId}`
+            if (!c) conversaId = null
+          }
+          if (!conversaId) {
+            const [c] = await tx<{ id: string }[]>`
+              SELECT id FROM conversa WHERE tenant_id = tenant_atual() AND canal_id = ${canalId} AND contato_id = ${contatoId}`
+            conversaId = c?.id ?? null
+            if (!conversaId) {
+              conversaId = randomUUID()
+              await tx`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao, ultima_entrante_em)
+                       VALUES (tenant_atual(), ${conversaId}, ${canalId}, ${contatoId}, 1, now())`
+            }
+          }
+          const [n] = await tx<{ n: number }[]>`
+            SELECT count(*)::int AS n FROM mensagem WHERE tenant_id = tenant_atual() AND conversa_id = ${conversaId} AND direcao = 'entrante'`
+          if ((n?.n ?? 0) >= LIMITE_MENSAGENS_SIMULACAO) return { tipo: 'limite' as const, conversaId }
+          const mensagemId = randomUUID()
+          await tx`
+            INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+            VALUES (tenant_atual(), ${mensagemId}, ${conversaId}, 'entrante', 'texto', ${JSON.stringify({ texto, simulacao: true })}::text::jsonb, now())`
+          await tx`UPDATE conversa SET ultima_entrante_em = now(), ultima_mensagem_em = now(), ultima_direcao = 'entrante' WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
+          const modelo = rascunho ? await resolverModelo(tx, cfg.modelo) : null
+          return { tipo: 'ok' as const, conversaId, mensagemId, contatoId, cfg, rascunho, modelo, mensagensDoCliente: (n?.n ?? 0) + 1 }
+        })
+        if (!preparo) return tupla(404, { erro: 'canal.nao_encontrado' })
+        if (preparo.tipo === 'sem_config') return tupla(422, { erro: 'agente.sem_configuracao', mensagem: 'Salve a configuração do agente antes de simular.' })
+        if (preparo.tipo === 'sem_rascunho') return tupla(422, { erro: 'playbook.sem_rascunho', mensagem: 'Não há rascunho do playbook para testar. Edite o playbook primeiro.' })
+        if (preparo.tipo === 'limite') {
+          return tupla(422, {
+            erro: 'agente.simulacao_limite', conversaId: preparo.conversaId,
+            mensagem: `Esta conversa de teste chegou a ${LIMITE_MENSAGENS_SIMULACAO} mensagens. Reinicie a conversa para continuar testando.`,
+          })
         }
-        const mensagemId = randomUUID()
-        await tx`
-          INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-          VALUES (tenant_atual(), ${mensagemId}, ${conversaId}, 'entrante', 'texto', ${JSON.stringify({ texto, simulacao: true })}::text::jsonb, now())`
-        await tx`UPDATE conversa SET ultima_entrante_em = now(), ultima_mensagem_em = now(), ultima_direcao = 'entrante' WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
-        return { semConfig: false as const, conversaId, mensagemId, contatoId }
-      })
-      if (!preparo) return reply.code(404).send({ erro: 'canal.nao_encontrado' })
-      if (preparo.semConfig) return reply.code(422).send({ erro: 'agente.sem_configuracao', mensagem: 'Salve a configuração do agente antes de simular.' })
 
-      const r = await conduzirTurnoVendedor(
-        { tenant_id: req.tenantId!, id: randomUUID(), conversa_id: preparo.conversaId, canal_id: canalId, mensagens_ids: [preparo.mensagemId], tentativas: 1, executar_em: new Date() },
-        { ligacoes: ligacoesPadrao, simulacao: true },
-      )
-      // As mensagens do agente entram na conversa de simulação para o próximo turno ter contexto.
-      if (r.mensagens?.length) {
-        await comTenantServico(req.tenantId!, async (tx) => {
-          for (const m of r.mensagens!) {
+        // O rascunho entra pelas costuras do turno (pipeline, LLM, ligações); a publicada é o padrão.
+        const r = preparo.rascunho
+        const espelho = r ? espelhoDoConteudo(r.conteudo, { versaoId: r.id, numero: null, escopo: escopoRascunho }) : null
+        const deps: DepsTurno = espelho && r
+          ? {
+            ligacoes: ligacoesDoSandbox(ligacoesPadrao, canalId, r.conteudo.acoes), simulacao: true,
+            pipeline: pipelineComPlaybook(espelho),
+            llm: llmComPlaybook(preparo.modelo ? criarLlmDoCatalogo(preparo.modelo) : llmFerramentasDoAmbiente(), r.conteudo, preparo.cfg.objetivo),
+          }
+          : { ligacoes: ligacoesDoSandbox(ligacoesPadrao, canalId, null), simulacao: true }
+        const t = await conduzirTurnoVendedor(
+          { tenant_id: req.tenantId!, id: randomUUID(), conversa_id: preparo.conversaId, canal_id: canalId, mensagens_ids: [preparo.mensagemId], tentativas: 1, executar_em: new Date() },
+          deps,
+        )
+        // As mensagens do agente entram na conversa de simulação para o próximo turno ter contexto.
+        const decisao = await comTenantServico(req.tenantId!, async (tx) => {
+          for (const m of t.mensagens ?? []) {
             await tx`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, criado_em)
                      VALUES (tenant_atual(), ${randomUUID()}, ${preparo.conversaId}, 'saliente', 'texto',
                              ${JSON.stringify({ texto: m, automatica: 'agente', simulacao: true })}::text::jsonb, 'enviada', now())`
           }
+          if (!t.decisaoId) return null
+          const [d] = await tx<{ guardrails: unknown; custo_centavos: string }[]>`
+            SELECT guardrails, custo_centavos::text FROM agente_decisao WHERE tenant_id = tenant_atual() AND id = ${t.decisaoId}`
+          return d ?? null
         })
+        const vigente = lerPlaybookVigente(preparo.cfg.playbook)
+        return tupla(200, {
+          conversaId: preparo.conversaId,
+          desfecho: t.desfecho,
+          mensagens: t.mensagens ?? [],
+          handoff: t.handoff ?? null,
+          motivo: t.motivo ?? null,
+          detalhe: t.detalhe ?? null,
+          decisaoId: t.decisaoId ?? null,
+          rastro: t.rastro ? { chamadas: t.rastro.chamadas, rodadas: t.rastro.rodadas, uso: t.rastro.uso, modelo: t.rastro.modelo, latenciaMs: t.rastro.latenciaMs } : null,
+          // ── sandbox (P17) ──
+          modoSeco: true,
+          playbook: r
+            ? { tipo: 'rascunho' as const, escopo: escopoRascunho, versaoId: r.id, numero: null }
+            : vigente ? { tipo: 'publicada' as const, escopo: vigente.escopo, versaoId: vigente.versaoId, numero: vigente.numero } : null,
+          /** O que o agente teria feito: ferramentas chamadas; as de escrita só foram registradas (nada gravado nem enviado). */
+          acoes: (t.rastro?.chamadas ?? []).map((c) => ({
+            ferramenta: c.nome, entrada: c.entrada, escrita: FERRAMENTAS_DE_ESCRITA.includes(c.nome), erro: c.erro ?? null,
+          })),
+          guardrails: Array.isArray(decisao?.guardrails) ? decisao.guardrails : [],
+          custoCentavos: decisao ? Number(decisao.custo_centavos) : 0,
+          mensagensDoCliente: preparo.mensagensDoCliente,
+          limiteMensagens: LIMITE_MENSAGENS_SIMULACAO,
+        })
+        })()
+      } finally {
+        await liberarTravaSimulacao(req.tenantId!, trava).catch(() => undefined)
       }
-      return reply.send({
-        conversaId: preparo.conversaId,
-        desfecho: r.desfecho,
-        mensagens: r.mensagens ?? [],
-        handoff: r.handoff ?? null,
-        motivo: r.motivo ?? null,
-        detalhe: r.detalhe ?? null,
-        decisaoId: r.decisaoId ?? null,
-        rastro: r.rastro ? { chamadas: r.rastro.chamadas, rodadas: r.rastro.rodadas, uso: r.rastro.uso, modelo: r.rastro.modelo, latenciaMs: r.rastro.latenciaMs } : null,
-      })
+      return reply.code(resposta[0]).send(resposta[1])
     },
   )
 
