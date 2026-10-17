@@ -19,7 +19,7 @@
 | P8 saúde 3 estados | 1 | — | integrada (d589e00; main verde 1323 api) | | |
 | P9 histórico do conhecimento | 1 | 0100 | integrada (0fce467; main verde 1414 api) | | |
 | P10 tela de números | 1 | — | integrada (15c0f85; revalidar visual no fim) | | |
-| P11 webhook enxuto + ativas | 1 | 0101 | em andamento | | |
+| P11 webhook enxuto + ativas | 1 | 0101 | integrada (3ad34fa; 2 revisões; main verde 1759 api) | | |
 | P12 qualidade em produção | 2 | 0102 | em andamento | | |
 | P13 sugestão/copiloto/edição | 2 | 0103 | em andamento | | |
 | P14 modo: recorte/confirmação/auditoria | 2 | 0104 | em andamento | | |
