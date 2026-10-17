@@ -124,6 +124,19 @@ describe('Etapa isolada: mesmo estoqueComFonte do P2', () => {
   })
 })
 
+describe('Etapa isolada: número abonado só pela memória do contato (P0c)', () => {
+  it('não é violação, mas fica a marca INFO numero_da_memoria; sem a memória, é ALTA', async () => {
+    const ctx = { tenantId: T, conversaId: CONVERSA, canalId: CANAL, contatoId: CONTATO, sessaoId: null, modo: 'assistido', agora: new Date(),
+      cfgExtra: {}, persona: {} as never, estado: {}, historico: [], entrantes: [], primeiraResposta: false, foraDoExpediente: false } as const
+    const base = { handoff: null, centavosVistos: new Set<number>(), numerosVistos: new Set<number>(), falasAnterioresDoAgente: [] }
+    const msg = ['Posso separar 37 unidades para você.']
+    const com = await etapaRegrasQualidade.executar(ctx as never, { ...base, mensagens: msg, numerosDoCliente: new Set([37]) })
+    expect(com.guardrails.map((g) => [g.codigo, g.gravidade])).toEqual([['numero_da_memoria', 'INFO']])
+    const sem = await etapaRegrasQualidade.executar(ctx as never, { ...base, mensagens: msg })
+    expect(sem.guardrails.map((g) => [g.codigo, g.gravidade])).toEqual([['numero_sem_fonte', 'ALTA']])
+  })
+})
+
 describe('Regras de qualidade no turno (P12)', () => {
   it('autônomo: violação CRÍTICA não sai, transfere com qualidade_violacao_critica sem mensagem extra, e alerta', async () => {
     await configurar('autonomo')

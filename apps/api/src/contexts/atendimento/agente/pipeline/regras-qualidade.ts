@@ -1,6 +1,6 @@
 import {
   CODIGO_NAO_ENVIE, ETAPA_REGRAS_QUALIDADE, NumerosVistos, avaliarRegrasQualidade, extrairNumerosDeNegocio, lerComplianceExtra,
-  perguntasJaRespondiveis, type MarcaGuardrail, type ViolacaoQualidade,
+  numerosSemFonte, perguntasJaRespondiveis, type MarcaGuardrail, type ViolacaoQualidade,
 } from '@geracrm/shared'
 import { fontesDoTurno } from './numeros-ampliados.js'
 import { abrirAlertaViolacaoCritica } from '../qualidade/alerta.js'
@@ -46,39 +46,56 @@ function maxCaracteresDe(cfgExtra: Readonly<Record<string, unknown>>): number | 
   return typeof v === 'number' && v > 0 ? v : undefined
 }
 
-export async function violacoesDoTurno(ctx: ContextoPipeline, entrada: EntradaPosResposta): Promise<ViolacaoQualidade[]> {
+export interface ResultadoRegrasDoTurno {
+  readonly violacoes: ViolacaoQualidade[]
+  /** Números abonados SÓ pela memória do contato (P0c): não são violação, mas a métrica guarda o rastro. */
+  readonly daMemoria: readonly string[]
+}
+
+export async function violacoesDoTurno(ctx: ContextoPipeline, entrada: EntradaPosResposta): Promise<ResultadoRegrasDoTurno> {
   const compliance = lerComplianceExtra(ctx.cfgExtra['compliance'])
   // Barato: só vai ao banco pelas fontes de número quando há número de negócio.
   const temNumero = entrada.mensagens.some((m) => extrairNumerosDeNegocio(m).length > 0)
   let fontes = null
+  const daMemoria: string[] = []
   if (temNumero) {
     const f = await fontesDoTurno(ctx)
     for (const n of entrada.numerosVistos) f.gerais.add(n)
     if (entrada.numerosVistos instanceof NumerosVistos) for (const p of entrada.numerosVistos.percentuais) f.percentuais.add(p)
+    // A memória do contato (o que ELE disse em outra conversa) vale como fala do cliente — o mesmo do P7.
+    const memoria = entrada.numerosDoCliente ?? new Set<number>()
+    if (memoria.size > 0) {
+      const semMemoria = new Set(entrada.mensagens.flatMap((m) => numerosSemFonte(m, f).map((n) => n.trecho)))
+      for (const n of memoria) f.doCliente.add(n)
+      const comMemoria = new Set(entrada.mensagens.flatMap((m) => numerosSemFonte(m, f).map((n) => n.trecho)))
+      for (const t of semMemoria) if (!comMemoria.has(t)) daMemoria.push(t)
+    }
     fontes = f
   }
-  // Leitura tolerante dos campos da P0c (u/j): presentes depois do merge, ausentes antes.
-  const extra = entrada as EntradaPosResposta & { readonly saldoBaixoVisto?: boolean; readonly mensagensFixas?: readonly string[] }
-  return avaliarRegrasQualidade({
+  const violacoes = avaliarRegrasQualidade({
     mensagens: entrada.mensagens,
     // Texto fixo do sistema (abertura da P4) não é resposta do agente: não é avaliado.
-    isentas: extra.mensagensFixas,
+    isentas: entrada.mensagensFixas,
     // O MESMO critério do filtro P2 (P0c): saldo BAIXO de ferramenta no turno (0 < saldo ≤ 10) torna
     // "poucas unidades" verdade — escassez deixa de ser urgência falsa.
-    estoqueComFonte: extra.saldoBaixoVisto === true,
+    estoqueComFonte: entrada.saldoBaixoVisto === true,
     extras: compliance.frasesProibidas,
     perguntasAnteriores: perguntasJaRespondiveis(ctx.historico),
     fontes,
     maxCaracteres: maxCaracteresDe(ctx.cfgExtra),
   })
+  return { violacoes, daMemoria }
 }
 
 export const etapaRegrasQualidade: EtapaPosResposta = {
   nome: ETAPA,
   async executar(ctx, entrada) {
     if (entrada.mensagens.length === 0) return { mensagens: entrada.mensagens, guardrails: [] }
-    const violacoes = await violacoesDoTurno(ctx, entrada)
-    const guardrails: MarcaGuardrail[] = violacoes.map((v) => marca(ETAPA, v.regra, v.gravidade, 'registrado', v.trecho))
+    const { violacoes, daMemoria } = await violacoesDoTurno(ctx, entrada)
+    const guardrails: MarcaGuardrail[] = [
+      ...violacoes.map((v) => marca(ETAPA, v.regra, v.gravidade, 'registrado', v.trecho)),
+      ...daMemoria.map((t) => marca(ETAPA, 'numero_da_memoria', 'INFO', 'registrado', t)),
+    ]
     const criticas = violacoes.filter((v) => v.gravidade === 'CRITICA')
     if (criticas.length === 0) return { mensagens: entrada.mensagens, guardrails }
 
