@@ -3,11 +3,13 @@ import { FormsModule } from '@angular/forms'
 import { RouterLink } from '@angular/router'
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
-import { formatarProtocolo, parsearProtocolo } from '@geracrm/shared'
+import { formatarProtocolo, parsearProtocolo, type SugestaoVigente } from '@geracrm/shared'
 import { InboxServico, type ItemConversa, type Mensagem, type Thread } from '../../nucleo/inbox.servico.js'
 import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { PresencaServico } from '../../nucleo/presenca.servico.js'
 import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.componente.js'
+import { SugestaoServico } from './sugestao.servico.js'
+import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo } from './sugestao.regras.js'
 
 /**
  * Inbox — visual inspirado no WhatsApp (tema escuro, bolhas, avatares).
@@ -272,6 +274,88 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
                   </div>
                 }
               </div>
+
+              <!-- ───────── Sugestão do agente (P13) ─────────
+                   Só onde dá para responder: ausente ou janela fechada não têm o que fazer
+                   com uma sugestão. O texto vem por API (o evento SSE só avisa). -->
+              @if (!presenca.ausente() && (!t.exigeJanela24h || janelaAberta(t.janela.estado))) {
+                <section class="sug" aria-label="Sugestão do agente">
+                  @switch (sugestao.estado()) {
+                    @case ('carregando') { <div class="sug-esqueleto" aria-busy="true" aria-label="Carregando sugestão"></div> }
+                    @case ('sem_permissao') { }
+                    @case ('erro') {
+                      <div class="sug-linha">
+                        <span class="sug-falha">Não foi possível carregar a sugestão do agente.</span>
+                        <button type="button" class="sug-btn" (click)="sugestao.carregar(t.id)">Tentar de novo</button>
+                      </div>
+                    }
+                    @case ('pronto') {
+                      @if (sugestao.resposta(); as r) {
+                        @if (r.sugestao; as s) {
+                          @if (s.optOutAConfirmar) {
+                            <div class="sug-optout" role="alert">
+                              <strong>O cliente pediu para não receber mensagens.</strong>
+                              Confirme com ele e bloqueie em <a routerLink="/bloqueios">Opt-out / Bloqueios</a> — nada foi bloqueado ainda.
+                            </div>
+                          }
+                          <div class="sug-cartao" [class.critica]="s.naoEnvie">
+                            <div class="sug-topo">
+                              <span class="sug-titulo">{{ s.origem === 'copiloto' ? 'Sugestão que você pediu' : 'Sugestão do agente' }}</span>
+                              <span class="selo" [title]="dicaModo(r.modoAgente)">{{ rotuloModo(r.modoAgente) }}</span>
+                              <span class="sug-idade">{{ idade(s.criadaEm) }}</span>
+                            </div>
+                            @if (s.bloqueada) {
+                              <!-- P12 nao_envie: o texto inalterado não sai (a API recusa com 422). -->
+                              <p class="sug-nao-envie" role="alert">
+                                <span class="selo-bloqueio">Não envie assim</span> {{ s.motivoBloqueio }} — copie e reescreva antes de enviar.
+                              </p>
+                            } @else if (s.naoEnvie) {
+                              <p class="sug-nao-envie" role="alert">Não envie assim — uma proteção crítica alterou este texto. Revise antes de usar.</p>
+                            }
+                            <p class="sug-texto">{{ s.texto }}</p>
+                            @if (s.handoff) {
+                              <p class="sug-handoff">O agente também passaria a conversa para uma pessoa: {{ s.handoff.resumo || s.handoff.motivo }}</p>
+                            }
+                            @if (s.avisos.length) {
+                              <ul class="sug-avisos">
+                                @for (a of s.avisos; track a.codigo) {
+                                  <li [attr.data-gravidade]="a.gravidade"><span class="grav">{{ rotuloGravidade(a.gravidade) }}</span>{{ a.texto }}</li>
+                                }
+                              </ul>
+                            }
+                            <div class="sug-acoes">
+                              @if (s.bloqueada) {
+                                <button type="button" class="sug-btn primario" disabled title="Barrada pela regra de qualidade — copie e reescreva">Usar</button>
+                                <button type="button" class="sug-btn" (click)="usarSugestao(s)" [disabled]="servico.enviando()"
+                                        title="Coloca o texto no campo para você reescrever; igual, ele não sai">Copiar para editar</button>
+                              } @else {
+                                <button type="button" class="sug-btn primario" (click)="usarSugestao(s)" [disabled]="servico.enviando()">Usar</button>
+                              }
+                              <button type="button" class="sug-btn" (click)="descartarSugestao(t.id, s.decisaoId)">Descartar</button>
+                              @if (r.copilotoDisponivel) {
+                                <button type="button" class="sug-btn" (click)="pedirSugestao(t.id)" [disabled]="sugestao.gerando()">
+                                  {{ sugestao.gerando() ? 'Pensando…' : 'Sugerir outra' }}</button>
+                              }
+                            </div>
+                          </div>
+                        } @else {
+                          <div class="sug-linha">
+                            <span class="selo" [title]="dicaModo(r.modoAgente)">{{ rotuloModo(r.modoAgente) }}</span>
+                            @if (motivoSemCopiloto(r); as motivo) {
+                              <span class="sug-indisponivel">{{ motivo }}</span>
+                            } @else {
+                              <button type="button" class="sug-btn" (click)="pedirSugestao(t.id)" [disabled]="sugestao.gerando()"
+                                      title="O agente lê a conversa e sugere uma resposta. Nada é enviado sem você.">
+                                {{ sugestao.gerando() ? 'Pensando… (até 20 s)' : 'Sugerir resposta' }}</button>
+                            }
+                          </div>
+                        }
+                      }
+                    }
+                  }
+                  @if (sugestao.erroAcao(); as e) { <p class="sug-falha" role="alert">{{ e }}</p> }
+                </section>
+              }
 
               <footer class="composer">
                 <!-- ⚠️ AUSENTE VÊ, NÃO RESPONDE — e vem ANTES da janela de 24h
@@ -541,6 +625,49 @@ import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.com
     .assumir-btn:disabled { opacity: .5; cursor: default; }
     .erro-envio { width: 100%; margin: 0; font-size: 12px; color: #ff6b5e; }
 
+    /* ── Sugestão do agente (P13) — acento IA, gravidade por token, nunca cor solta ── */
+    .sug { z-index: 1; padding: var(--espacamento-2) 16px 0; background: var(--wa-panel); border-top: 1px solid var(--wa-line);
+      display: flex; flex-direction: column; gap: var(--espacamento-2); max-height: 45%; overflow-y: auto; }
+    .sug-esqueleto { height: 28px; margin-bottom: var(--espacamento-2); border-radius: var(--raio-controle); background: var(--superficie-hover); }
+    .sug-linha { display: flex; align-items: center; flex-wrap: wrap; gap: var(--espacamento-2); min-width: 0; padding-bottom: var(--espacamento-2); }
+    .selo { flex: none; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: var(--raio-completo);
+      background: var(--ia-suave); color: var(--texto); border: 1px solid var(--borda); }
+    .sug-indisponivel { font-size: 12px; color: var(--texto-secundario); }
+    .sug-falha { margin: 0; font-size: 12px; color: var(--erro); padding-bottom: var(--espacamento-2); }
+    .sug-optout { font-size: 12.5px; padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle);
+      border: 1px solid var(--atencao); background: var(--atencao-suave); color: var(--texto); }
+    .sug-optout a { color: var(--acao); font-weight: 600; }
+    .sug-cartao { border: 1px solid var(--borda); border-left: 3px solid var(--ia); border-radius: var(--raio-painel);
+      background: var(--superficie); padding: var(--espacamento-2) var(--espacamento-3); margin-bottom: var(--espacamento-2);
+      display: flex; flex-direction: column; gap: var(--espacamento-1); min-width: 0; }
+    .sug-cartao.critica { border-left-color: var(--erro); }
+    .sug-topo { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; min-width: 0; }
+    .sug-titulo { font-size: 12px; font-weight: 600; color: var(--texto-secundario); text-transform: uppercase; letter-spacing: .03em; }
+    .sug-idade { margin-left: auto; font-size: 11px; color: var(--texto-suave); }
+    .sug-nao-envie { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--erro); background: var(--erro-suave);
+      padding: var(--espacamento-1) var(--espacamento-2); border-radius: var(--raio-controle); }
+    .selo-bloqueio { display: inline-block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; padding: 1px 8px;
+      margin-right: var(--espacamento-1); border-radius: var(--raio-completo); background: var(--erro); color: var(--texto-invertido); }
+    .sug-texto { margin: 0; font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--texto); }
+    .sug-handoff { margin: 0; font-size: 12px; color: var(--texto-secundario); }
+    .sug-avisos { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+    .sug-avisos li { font-size: 12px; color: var(--texto-secundario); display: flex; gap: var(--espacamento-1); align-items: baseline; }
+    .sug-avisos .grav { flex: none; font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 0 6px; border-radius: var(--raio-completo);
+      border: 1px solid var(--borda); }
+    .sug-avisos li[data-gravidade='CRITICA'] .grav { color: var(--erro); border-color: var(--erro); background: var(--erro-suave); }
+    .sug-avisos li[data-gravidade='ALTA'] .grav { color: var(--atencao); border-color: var(--atencao); background: var(--atencao-suave); }
+    /* ⚠️ Ações grudadas no pé do cartão: com texto longo e avisos o painel rola, e "Usar" não pode
+       sumir para baixo da dobra (visto na validação a 577 px). */
+    .sug-acoes { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; margin-top: var(--espacamento-1);
+      position: sticky; bottom: 0; background: var(--superficie); padding: var(--espacamento-1) 0; }
+    .sug-btn { font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: var(--raio-controle); cursor: pointer;
+      border: 1px solid var(--borda-controle); background: transparent; color: var(--texto); }
+    .sug-btn:hover:not(:disabled) { background: var(--superficie-hover); }
+    .sug-btn.primario { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); font-weight: 600; }
+    .sug-btn.primario:hover:not(:disabled) { background: var(--acao-hover); }
+    .sug-btn:disabled { opacity: .55; cursor: default; }
+    .sug-btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+
     /* Rail estreito: uma coluna só. Sem conversa aberta → lista; com conversa →
        diálogo em largura total + botão "voltar". Assim o diálogo nunca fica
        espremido, mesmo num painel estreito. Baseado na largura do PRÓPRIO inbox. */
@@ -564,6 +691,13 @@ export class InboxPagina implements OnDestroy {
    * dois falando com o mesmo cliente, cada um sem saber do outro.
    */
   readonly presenca = inject(PresencaServico)
+  /** P13: a sugestão do agente da conversa aberta (assistido/copiloto). */
+  readonly sugestao = inject(SugestaoServico)
+  readonly rotuloModo = rotuloModo
+  readonly dicaModo = dicaModo
+  readonly motivoSemCopiloto = motivoSemCopiloto
+  readonly entradaEl = viewChild<ElementRef<HTMLTextAreaElement>>('entrada')
+  #cancelarEventosSugestao: (() => void)[] = []
 
   readonly busca = signal('')
   // Busca por protocolo (E5-08): "#000318" | "318" → número.
@@ -591,6 +725,21 @@ export class InboxPagina implements OnDestroy {
     //    uma resposta que não vai sair.
     void this.#verificarCanais()
     this.#timerCanais = setInterval(() => void this.#verificarCanais(), 60_000)
+
+    // P13: abriu (ou trocou de) conversa → busca a sugestão dela.
+    effect(() => {
+      const id = this.servico.selecionadaId()
+      const pronta = this.servico.estadoThread() === 'pronto'
+      if (id && pronta) untracked(() => void this.sugestao.carregar(id))
+    })
+    // ⚠️ O evento não traz conteúdo (ADR-007): só avisa que a sugestão desta conversa mudou
+    //    (turno assistido, descarte de um colega, mensagem enviada) — o texto vem pela API.
+    for (const tipo of ['agente.sugestao', 'mensagem.enviada']) {
+      this.#cancelarEventosSugestao.push(this.eventos.escutar(tipo, (ev) => {
+        const aberta = this.servico.selecionadaId()
+        if (ev.conversaId && ev.conversaId === aberta) void this.sugestao.carregar(aberta, true)
+      }))
+    }
 
     // Abrir conversa → rola até o fim. Nova mensagem (enviada/recebida) → rola
     // se o usuário já estava perto do fim. Prepender antigas não mexe no fim.
@@ -651,6 +800,7 @@ export class InboxPagina implements OnDestroy {
 
   ngOnDestroy(): void {
     clearInterval(this.#timerCanais)
+    for (const cancelar of this.#cancelarEventosSugestao) cancelar()
     // ⚠️ Apresentacional: o carregamento da lista, o ouvinte SSE e o ?abrir= agora
     //    vivem no ChatRailComponente (sempre montado). Ao recolher o rail este
     //    componente some, então sair da conversa (presença) é o certo aqui.
@@ -711,6 +861,36 @@ export class InboxPagina implements OnDestroy {
   async voltarADisponivel(): Promise<void> { await this.presenca.definir(false) }
 
   protocoloFmt(n: number | null): string { return n ? formatarProtocolo(n) : '' }
+
+  // ── Sugestão do agente (P13) ────────────────────────────────────────────
+  idade(iso: string): string { return idadeDaSugestao(iso) }
+  rotuloGravidade(g: string): string { return g === 'CRITICA' ? 'Crítico' : g === 'ALTA' ? 'Alto' : 'Atenção' }
+
+  /**
+   * "Usar": a sugestão vai para o campo de envio, para revisar e mandar (Enter). O id segue junto
+   * no envio e o servidor mede se houve edição.
+   * ⚠️ Nunca apaga o que a pessoa já digitou sem perguntar.
+   */
+  usarSugestao(s: SugestaoVigente): void {
+    const atual = this.servico.rascunho().trim()
+    if (atual && atual !== s.texto.trim() && !confirm('Substituir o que você digitou pela sugestão?')) return
+    this.servico.rascunho.set(s.texto)
+    this.servico.sugestaoEmUso.set(s.decisaoId)
+    setTimeout(() => {
+      const el = this.entradaEl()?.nativeElement
+      if (el) { this.ajustarAltura(el); el.focus() }
+    }, 0)
+  }
+
+  async descartarSugestao(conversaId: string, decisaoId: string): Promise<void> {
+    if (this.servico.sugestaoEmUso() === decisaoId) this.servico.sugestaoEmUso.set(null)
+    await this.sugestao.descartar(conversaId, decisaoId)
+  }
+
+  /** "Sugerir resposta" (copiloto): o painel mostra a sugestão; o campo só muda com "Usar". */
+  async pedirSugestao(conversaId: string): Promise<void> {
+    await this.sugestao.gerar(conversaId)
+  }
 
   subConversa(t: Thread): string {
     // Não-oficial (PlugZapi): sem janela de 24h — sempre texto livre.

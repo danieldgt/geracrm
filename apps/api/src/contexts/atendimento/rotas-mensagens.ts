@@ -12,6 +12,11 @@ import { auditar } from '../plataforma/auditoria.js'
 import { midiaHabilitada, subirMidia, urlAssinada } from './midia/armazenamento.js'
 import { ehDataUrl, decodificarMidia } from './midia/dataurl.js'
 import { registrarMetrica, avaliarEAlertarEntrega } from '../plataforma/metricas.js'
+import { registrarAvisoSeExibido } from './agente/privacidade.js'
+import {
+  registrarUsoDaSugestao, superarPendentes, registrarSimilaridadeSombra, publicarSugestaoMudou, envioBloqueadoPelaQualidade,
+  type ResultadoUso,
+} from './agente/sugestao.js'
 
 /** Recusa de mídia inválida → mensagem para a tela. */
 const MSG_MIDIA: Record<string, string> = {
@@ -55,6 +60,8 @@ interface Preparo {
   ultimaEntranteEm: Date | null
   destinoBloqueado: boolean
   remetenteNome: string | null
+  contatoId: string
+  canalId: string
 }
 
 /**
@@ -116,6 +123,18 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
         return reply.code(409).send({ ok: false, ...RECUSA_OPERADOR_AUSENTE })
       }
 
+      // ⚠️ P12 × P13: sugestão barrada pela qualidade (`nao_envie`) não sai INALTERADA — antes de
+      //    gravar qualquer coisa, pelo mesmo motivo do ausente. Editada, passa.
+      if (entrada.tipo === 'texto' && entrada.sugestaoDecisaoId) {
+        const { sugestaoDecisaoId: decisaoId, texto } = entrada
+        if (await req.comTenant((tx) => envioBloqueadoPelaQualidade(tx, { conversaId: req.params.id, decisaoId, texto }))) {
+          return reply.code(422).send({
+            ok: false, erro: 'sugestao.bloqueada',
+            mensagem: 'Esta sugestão foi barrada pela regra de qualidade — reescreva o texto antes de enviar.',
+          })
+        }
+      }
+
       // Fase 0 (E5-14): mídia sobe para o bucket ANTES da transação (S3 é rede);
       // o banco guarda só a CHAVE, nunca o base64. Sem bucket configurado,
       // degrada para o base64 antigo em vez de quebrar.
@@ -140,6 +159,8 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
                  (cc.arquivado_em IS NOT NULL) AS "canalArquivado",
                  ct.e164                 AS destino,
                  c.ultima_entrante_em    AS "ultimaEntranteEm",
+                 c.contato_id            AS "contatoId",
+                 c.canal_id              AS "canalId",
                  EXISTS (
                    -- ⚠️ INV-50: opt-out casa por chave_bloqueio (55+DDD+8 últimos),
                    --    não por e164 — vale com e sem o nono dígito.
@@ -155,7 +176,9 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
         const mensagemId = randomUUID()
         // conteudo guarda só o conteúdo (sem o discriminador `tipo`, que é coluna).
         // ⚠️ Se subiu para o bucket, o campo de mídia vira a CHAVE, não o base64.
+        // ⚠️ `sugestaoDecisaoId` (P13) é metadado do envio, não conteúdo: não entra no jsonb.
         const { tipo: _tipo, ...conteudoBase } = entrada
+        if ('sugestaoDecisaoId' in conteudoBase) delete (conteudoBase as { sugestaoDecisaoId?: string }).sugestaoDecisaoId
         const conteudo = midiaChave ? { ...conteudoBase, [entrada.tipo]: midiaChave } : conteudoBase
         await tx`
           INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem)
@@ -221,7 +244,12 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
         })
       }
 
-      if (r.ok) return reply.send({ ok: true, mensagemId: preparo.mensagemId, status: 'enviada' })
+      if (r.ok) {
+        const sugestao = entrada.tipo === 'texto'
+          ? await posEnvioHumano(tenantId, conversaId, preparo, entrada.texto, entrada.sugestaoDecisaoId, req.log)
+          : null
+        return reply.send({ ok: true, mensagemId: preparo.mensagemId, status: 'enviada', ...(sugestao ? { sugestao } : {}) })
+      }
 
       // Recusa nossa (política) → 409 com motivo nomeado; falha de transporte → 502.
       if (r.classe === 'recusa') {
@@ -367,6 +395,41 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
       return reply.send({ ok: true, estado: r.estado })
     },
   )
+}
+
+/**
+ * DEPOIS DE UM ENVIO HUMANO OK (P13), numa transação curta e própria:
+ *   1. sugestão usada (`sugestaoDecisaoId`) → enviada × editada + similaridade, comparadas no servidor;
+ *   2. as outras sugestões pendentes da conversa → `superada` (o vendedor respondeu sem elas);
+ *   3. sombra → similaridade entre o que o robô diria e esta mensagem;
+ *   4. aviso de privacidade → prova de exibição se o texto o contém (P4, origem 'humano').
+ *
+ * ⚠️ Nada disto pode desfazer o envio: a mensagem já saiu. Falha aqui vai para o log e a resposta
+ *    segue 200 — métrica perdida é ruim, envio "falhado" que chegou ao cliente é pior.
+ */
+async function posEnvioHumano(
+  tenantId: string, conversaId: string, p: Preparo, texto: string, sugestaoDecisaoId: string | undefined,
+  log: { warn: (o: object, m: string) => void },
+): Promise<ResultadoUso | null> {
+  const agora = new Date()
+  try {
+    return await comTenantServico(tenantId, async (tx) => {
+      const uso = sugestaoDecisaoId
+        ? await registrarUsoDaSugestao(tx, { conversaId, decisaoId: sugestaoDecisaoId, textoEnviado: texto, mensagemId: p.mensagemId, agora })
+        : null
+      const superadas = await superarPendentes(tx, conversaId, agora)
+      if ((uso?.registrada || superadas > 0)) await publicarSugestaoMudou(tx, conversaId, sugestaoDecisaoId ?? conversaId)
+      await registrarSimilaridadeSombra(tx, { conversaId, mensagemId: p.mensagemId, textoHumano: texto, agora })
+      await registrarAvisoSeExibido(tx, {
+        envio: { ok: true, mensagemId: p.mensagemId }, contatoId: p.contatoId, conversaId, canalId: p.canalId,
+        texto, origem: 'humano', agora,
+      })
+      return uso
+    })
+  } catch (erro) {
+    log.warn({ erro, conversaId }, 'pos-envio humano (sugestao/sombra/aviso) falhou')
+    return null
+  }
 }
 
 interface CtxMensagem {

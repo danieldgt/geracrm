@@ -206,6 +206,11 @@ export class InboxServico {
   readonly rascunho = signal('')
   readonly enviando = signal(false)
   readonly erroEnvio = signal<string | null>(null)
+  /**
+   * P13: o rascunho nasceu da sugestão do agente com este id ("Usar"). Vai no envio para a API
+   * medir enviada × editada — quem decide se editou é o servidor, comparando os textos.
+   */
+  readonly sugestaoEmUso = signal<string | null>(null)
 
   // Presença (INB-18): quem MAIS está nesta conversa agora.
   readonly presentes = signal<readonly string[]>([])
@@ -246,6 +251,7 @@ export class InboxServico {
     this.railAberto.set(true)
     // Sai da anterior antes de entrar na nova (some na hora para os colegas).
     this.pararPresenca()
+    this.sugestaoEmUso.set(null)
     this.selecionadaId.set(id)
     this.estadoThread.set('carregando')
     this.thread.set(null)
@@ -455,8 +461,10 @@ export class InboxServico {
     this.enviando.set(true)
     this.erroEnvio.set(null)
     try {
-      await firstValueFrom(this.http.post(`/v1/conversas/${id}/mensagens`, { tipo: 'texto', texto }))
+      const sugestaoDecisaoId = this.sugestaoEmUso()
+      await firstValueFrom(this.http.post(`/v1/conversas/${id}/mensagens`, { tipo: 'texto', texto, ...(sugestaoDecisaoId ? { sugestaoDecisaoId } : {}) }))
       this.rascunho.set('')
+      this.sugestaoEmUso.set(null)
       await this.atualizarThread(id)
     } catch (e) {
       this.recusa(e, 'Não foi possível enviar a mensagem.')
