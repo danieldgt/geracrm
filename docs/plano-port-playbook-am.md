@@ -8,18 +8,18 @@
 
 | Raia | Onda | Migration | Estado | Branch | Observação |
 |---|---|---|---|---|---|
-| P0 costura do pipeline | 0 | 0096 | em andamento | | dona de vendedor.ts / app.ts / server.ts / index.ts |
+| P0 costura do pipeline | 0 | 0096 | integrada (ac8d3a7, revisão aprovada na 2ª) | | dona de vendedor.ts / app.ts / server.ts / index.ts |
 | P1 ADRs 028–034 | 0 | — | integrada (d155c22) | worktree-agent-a2ffbdfdac6113d71 | |
-| P2 filtro de saída | 1 | 0097 | pendente | | |
-| P3 pergunta repetida | 1 | — | pendente | | |
-| P4 gatilhos + privacidade | 1 | 0098 | pendente | | |
-| P5 resiliência LLM | 1 | — | pendente | | |
-| P6 custo e tetos | 1 | 0099 | pendente | | |
-| P7 números ampliados | 1 | — | pendente | | |
-| P8 saúde 3 estados | 1 | — | pendente | | |
-| P9 histórico do conhecimento | 1 | 0100 | pendente | | |
-| P10 tela de números | 1 | — | pendente | | |
-| P11 webhook enxuto + ativas | 1 | 0101 | pendente | | |
+| P2 filtro de saída | 1 | 0097 | em andamento | | |
+| P3 pergunta repetida | 1 | — | em andamento | | |
+| P4 gatilhos + privacidade | 1 | 0098 | em andamento | | |
+| P5 resiliência LLM | 1 | — | em andamento | | |
+| P6 custo e tetos | 1 | 0099 | em andamento | | |
+| P7 números ampliados | 1 | — | em andamento | | |
+| P8 saúde 3 estados | 1 | — | em andamento | | |
+| P9 histórico do conhecimento | 1 | 0100 | em andamento | | |
+| P10 tela de números | 1 | — | em andamento | | |
+| P11 webhook enxuto + ativas | 1 | 0101 | em andamento | | |
 | P12 qualidade em produção | 2 | 0102 | pendente | | |
 | P13 sugestão/copiloto/edição | 2 | 0103 | pendente | | |
 | P14 modo: recorte/confirmação/auditoria | 2 | 0104 | pendente | | |
@@ -382,3 +382,12 @@ PRONTO     skills descrevem o pipeline e onde estender
   com a revisão humana.
 - If-Match no estado e Idempotency-Key em eventos: serialização pela fila e outbox no processo já resolvem.
 - CTWA: já existe na aquisição. Exclusão do titular/retenção: R10d. Throttle INV-23: R10e.
+
+## 4. Notas de integração
+- P0 (revisão, baixos não bloqueantes → raia P0b, onda 1): rede final de R$ deve rodar ANTES de `fatiarMensagem`;
+  `avisoCliente` de `handoffSemModelo`/`avisarCliente` também passa pela rede.
+- P3/P4: uma etapa pré-LLM que devolve estado e silencia no 1º turno abre sessão `ativa` com 0 turnos
+  (`sessaoParaEstado`) — conta como `sessaoAtiva` no portão seguinte.
+- P14: `exigirPapel` exige linha em `usuario`; chamar `garantirUsuarioId` antes, ou tratar na tela.
+- Paralelismo: cada raia usa o próprio banco `geracrm_pN` no Postgres 5442 (suítes concorrentes no mesmo banco
+  quebram testes de fila/sequência).
