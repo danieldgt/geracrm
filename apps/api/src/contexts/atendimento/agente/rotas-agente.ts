@@ -9,7 +9,7 @@ import {
 } from '@geracrm/shared'
 import { z } from 'zod'
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { exigirTenant } from '../../../plugins/tenant.js'
+import { exigirTenant, subDoUsuario } from '../../../plugins/tenant.js'
 import { comTenantServico } from '../../../db/index.js'
 import { exigirPapel, temPapel } from '../../plataforma/papel.js'
 import { auditar } from '../../plataforma/auditoria.js'
@@ -28,6 +28,7 @@ import {
 } from './playbook/simulacao.js'
 import { ligacoesPadrao } from './ferramentas/ligacoes.js'
 import { sincronizarPoliticas } from './conhecimento/indexador.js'
+import { acumularPlayground, atorSemCriar } from './homologacao.js'
 
 /**
  * A superfície do AGENTE VENDEDOR: configurar (modo, persona, alçada, regras,
@@ -682,6 +683,8 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
            WHERE cv.tenant_id = tenant_atual() AND cv.canal_id = ${req.params.id}
              AND ie.sistema = 'simulacao' AND ie.id_externo = ${`sim:${req.params.id}`}`
         if (!c) return 0
+        // P19: a conversa testada entra na conta da homologação ANTES de as decisões sumirem.
+        await acumularPlayground(tx, { canalId: req.params.id, conversaId: c.id, atorId: await atorSemCriar(tx, subDoUsuario(req)) })
         await tx`DELETE FROM agente_decisao WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`
         await tx`DELETE FROM agente_sessao WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`
         await tx`DELETE FROM pedido WHERE tenant_id = tenant_atual() AND conversa_id = ${c.id}`

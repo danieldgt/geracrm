@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import type { CriterioFase, GoLiveDto, MetricasAgenteDto } from '@geracrm/shared'
 import {
-  criteriosEmOrdem, indicadores, rotuloDoMotivo, situacaoDoCriterio, tempoNaFase, trilhaDeFases, vereditoDaFase,
+  corpoDasDouradas, criteriosEmOrdem, indicadores, rotuloCurtoDoModo, rotuloDoMotivo, semAtividade, situacaoDoCriterio, tempoNaFase,
+  trilhaDeFases, vereditoDaFase,
 } from './metricas.regras.js'
 
 const c = (id: string, ok: boolean | null): CriterioFase =>
@@ -9,8 +10,9 @@ const c = (id: string, ok: boolean | null): CriterioFase =>
 
 const base: GoLiveDto = {
   canalId: 'c', fase: 'sombra', rotuloFase: 'Sombra', proximaFase: 'assistido', criterios: [], podeAvancar: false,
-  recomendacao: 'manter', voltarPara: null, pendencias: { reprovados: [], indisponiveis: [] },
+  recomendacao: 'manter', voltarPara: null, pendencias: { reprovados: [], indisponiveis: [], alertas: [] },
   dias: 16, diasUteis: 12, inicioFase: '2026-10-01T00:00:00Z', inicioEstimado: false, janelaDias: 16,
+  modoNumero: 'sombra', pausadoPeloTeto: false,
   modoAgora: { modo: 'sombra', origem: 'numero', motivo: null }, alvosProposta: true,
 }
 
@@ -21,9 +23,13 @@ describe('Critérios no painel', () => {
     expect(situacaoDoCriterio(c('a', null))).toBe('indisponivel')
   })
 
+  it('cumpre com alerta vira "revisar"', () => {
+    expect(situacaoDoCriterio({ ...c('p', true), alerta: 'Revise' })).toBe('revisar')
+  })
+
   it('o que segura o avanço vem primeiro, estável dentro do grupo', () => {
-    const r = criteriosEmOrdem([c('ok1', true), c('ind', null), c('no1', false), c('ok2', true), c('no2', false)])
-    expect(r.map((x) => x.id)).toEqual(['no1', 'no2', 'ind', 'ok1', 'ok2'])
+    const r = criteriosEmOrdem([c('ok1', true), c('ind', null), c('no1', false), { ...c('rev', true), alerta: 'x' }, c('ok2', true), c('no2', false)])
+    expect(r.map((x) => x.id)).toEqual(['no1', 'no2', 'rev', 'ind', 'ok1', 'ok2'])
   })
 
   it('trilha marca feitas, atual e futuras', () => {
@@ -38,19 +44,31 @@ describe('Veredito do topo — só informa; aponta a Configuração para mudar o
     expect(v.texto).toMatch(/Configuração/)
   })
 
-  it('manter → conta reprovados e conferências à mão', () => {
-    const v = vereditoDaFase({ ...base, pendencias: { reprovados: ['a', 'b'], indisponiveis: ['c'] } })
+  it('manter → conta reprovados e sem medida, e TAMBÉM aponta a Configuração', () => {
+    const v = vereditoDaFase({ ...base, pendencias: { reprovados: ['a', 'b'], indisponiveis: ['c'], alertas: [] } })
     expect(v.tom).toBe('neutro')
-    expect(v.texto).toBe('2 critérios ainda não cumprem e 1 precisa de conferência à mão antes de Assistido.')
+    expect(v.texto).toBe('2 critérios ainda não cumprem e 1 ainda não tem medida antes de Assistido. Para mudar o modo, use a aba Configuração (pede confirmação).')
+  })
+
+  it('amplo com alerta: fase final cita a revisão pedida e a Configuração', () => {
+    const v = vereditoDaFase({ ...base, fase: 'autonomo_amplo', proximaFase: null, janelaDias: 30, pendencias: { reprovados: [], indisponiveis: [], alertas: ['pedido_errado'] } })
+    expect(v.texto).toMatch(/1 critério pede revisão\. Para mudar o modo/)
   })
 
   it('amplo violado → erro recomendando voltar', () => {
-    const v = vereditoDaFase({ ...base, fase: 'autonomo_amplo', proximaFase: null, recomendacao: 'voltar', voltarPara: 'autonomo_recorte', janelaDias: 30, pendencias: { reprovados: ['opt_out'], indisponiveis: [] } })
+    const v = vereditoDaFase({ ...base, fase: 'autonomo_amplo', proximaFase: null, recomendacao: 'voltar', voltarPara: 'autonomo_recorte', janelaDias: 30, pendencias: { reprovados: ['opt_out'], indisponiveis: [], alertas: [] } })
     expect(v).toMatchObject({ tom: 'erro', titulo: 'Critério violado — recomenda voltar para Autônomo num recorte' })
   })
 
   it('amplo em dia → fase final', () => {
     expect(vereditoDaFase({ ...base, fase: 'autonomo_amplo', proximaFase: null, janelaDias: 30 }).titulo).toBe('Fase final')
+  })
+
+  it('rótulo curto do modo e número sem atividade (vazio fora da homologação)', () => {
+    expect(rotuloCurtoDoModo('assistido')).toBe('Assistido')
+    expect(semAtividade({ ...base, inicioFase: null })).toBe(true)
+    expect(semAtividade({ ...base, inicioFase: null, fase: 'homologacao' })).toBe(false)
+    expect(semAtividade(base)).toBe(false)
   })
 
   it('tempo na fase diz quando o início é estimado', () => {
@@ -78,5 +96,15 @@ describe('Indicadores de /v1/agente/metricas', () => {
     expect(rotuloDoMotivo('opt_out')).toMatch(/não receber/)
     expect(rotuloDoMotivo('sem_motivo')).toBe('sem motivo registrado')
     expect(rotuloDoMotivo('novo_motivo')).toBe('novo_motivo')
+  })
+})
+
+describe('Conferência das douradas (mesmo schema da API)', () => {
+  const canal = '0199e000-0000-7000-8000-000000000001'
+  it('aceita inteiros; recusa texto, zero cenários e CRÍTICAs acima dos cenários', () => {
+    expect(corpoDasDouradas(canal, '25', '0')).toEqual({ ok: true, corpo: { item: 'douradas', canalId: canal, cenarios: 25, criticas: 0 } })
+    expect(corpoDasDouradas(canal, '2,5', '0')).toMatchObject({ ok: false, erro: expect.stringMatching(/inteiros/) })
+    expect(corpoDasDouradas(canal, '0', '0')).toMatchObject({ ok: false, erro: expect.stringMatching(/1 cenário/) })
+    expect(corpoDasDouradas(canal, '3', '4')).toMatchObject({ ok: false, erro: expect.stringMatching(/mais CRÍTICAs/) })
   })
 })

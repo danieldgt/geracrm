@@ -1,6 +1,6 @@
 import {
-  FASES_AGENTE, ROTULO_FASE, ROTULO_HANDOFF, formatarPct,
-  type CriterioFase, type FaseAgente, type GoLiveDto, type MetricasAgenteDto
+  FASES_AGENTE, ROTULO_FASE, ROTULO_HANDOFF, ROTULO_MODO, corpoConferenciaGoLive, formatarPct,
+  type CorpoConferenciaGoLive, type CriterioFase, type FaseAgente, type GoLiveDto, type MetricasAgenteDto, type ModoAgente,
 } from '@geracrm/shared'
 
 /**
@@ -8,27 +8,32 @@ import {
  * cumpre? pode avançar?) é do shared (`avaliarFase`); aqui só a apresentação.
  */
 
-export type SituacaoCriterio = 'cumpre' | 'nao_cumpre' | 'indisponivel'
+/** `revisar` = cumpre, mas pede revisão humana (alerta, ex.: pedido desfeito no autônomo amplo). */
+export type SituacaoCriterio = 'cumpre' | 'revisar' | 'nao_cumpre' | 'indisponivel'
 
 export function situacaoDoCriterio(c: CriterioFase): SituacaoCriterio {
-  return c.ok === true ? 'cumpre' : c.ok === false ? 'nao_cumpre' : 'indisponivel'
+  if (c.ok === false) return 'nao_cumpre'
+  if (c.ok === null) return 'indisponivel'
+  return c.alerta ? 'revisar' : 'cumpre'
 }
 
 export const ROTULO_SITUACAO: Readonly<Record<SituacaoCriterio, string>> = {
   cumpre: 'Cumpre',
+  revisar: 'Revisar',
   nao_cumpre: 'Não cumpre',
   indisponivel: 'Sem medida',
 }
 
 export const TOM_SITUACAO: Readonly<Record<SituacaoCriterio, 'sucesso' | 'erro' | 'atencao'>> = {
   cumpre: 'sucesso',
+  revisar: 'atencao',
   nao_cumpre: 'erro',
   indisponivel: 'atencao',
 }
 
-/** Ordem do painel: o que segura o avanço primeiro (não cumpre → sem medida → cumpre), estável dentro do grupo. */
+/** Ordem do painel: o que segura o avanço primeiro (não cumpre → revisar → sem medida → cumpre), estável dentro do grupo. */
 export function criteriosEmOrdem(cs: readonly CriterioFase[]): CriterioFase[] {
-  const peso: Record<SituacaoCriterio, number> = { nao_cumpre: 0, indisponivel: 1, cumpre: 2 }
+  const peso: Record<SituacaoCriterio, number> = { nao_cumpre: 0, revisar: 1, indisponivel: 2, cumpre: 3 }
   return cs.map((c, i) => ({ c, i }))
     .sort((a, b) => peso[situacaoDoCriterio(a.c)] - peso[situacaoDoCriterio(b.c)] || a.i - b.i)
     .map((x) => x.c)
@@ -66,13 +71,31 @@ export function vereditoDaFase(g: GoLiveDto): Veredito {
   if (g.podeAvancar && g.proximaFase) {
     return { tom: 'sucesso', titulo: `Pronto para ${ROTULO_FASE[g.proximaFase]}`, texto: `Todos os critérios desta fase foram cumpridos. ${onde}` }
   }
+  const alertas = g.pendencias.alertas.length
+    ? ` ${contagem(g.pendencias.alertas.length, 'critério pede revisão', 'critérios pedem revisão')}.` : ''
   if (!g.proximaFase) {
-    return { tom: 'neutro', titulo: 'Fase final', texto: `Revisão a cada ${g.janelaDias} dias: se um critério for violado, o painel recomenda voltar uma fase.` }
+    return {
+      tom: 'neutro', titulo: 'Fase final',
+      texto: `Revisão a cada ${g.janelaDias} dias: se um critério for violado, o painel recomenda voltar uma fase.${alertas} ${onde}`,
+    }
   }
   const partes: string[] = []
   if (g.pendencias.reprovados.length) partes.push(contagem(g.pendencias.reprovados.length, 'critério ainda não cumpre', 'critérios ainda não cumprem'))
-  if (g.pendencias.indisponiveis.length) partes.push(contagem(g.pendencias.indisponiveis.length, 'precisa de conferência à mão', 'precisam de conferência à mão'))
-  return { tom: 'neutro', titulo: `Ainda em ${ROTULO_FASE[g.fase]}`, texto: `${partes.join(' e ')} antes de ${ROTULO_FASE[g.proximaFase]}.` }
+  if (g.pendencias.indisponiveis.length) partes.push(contagem(g.pendencias.indisponiveis.length, 'ainda não tem medida', 'ainda não têm medida'))
+  return {
+    tom: 'neutro', titulo: `Ainda em ${ROTULO_FASE[g.fase]}`,
+    texto: `${partes.join(' e ')} antes de ${ROTULO_FASE[g.proximaFase]}.${alertas} ${onde}`,
+  }
+}
+
+/** Nome curto do modo para a tela ("Sombra", não o código). */
+export function rotuloCurtoDoModo(m: ModoAgente): string {
+  return ROTULO_MODO[m].split(' — ')[0]!
+}
+
+/** O número ainda não teve atividade nesta fase (sem início registrado nem decisão): a tela mostra o vazio. */
+export function semAtividade(g: GoLiveDto): boolean {
+  return g.inicioFase === null && g.fase !== 'homologacao'
 }
 
 /** "há 16 dias (12 úteis)" — e diz quando o início foi estimado. */
@@ -116,4 +139,22 @@ export function indicadores(m: MetricasAgenteDto): Indicador[] {
 export function rotuloDoMotivo(motivo: string): string {
   if (motivo === 'sem_motivo') return 'sem motivo registrado'
   return (ROTULO_HANDOFF as Readonly<Record<string, string>>)[motivo] ?? motivo
+}
+
+/**
+ * O corpo da conferência das douradas a partir do que foi digitado — validado
+ * pelo MESMO schema da API (`corpoConferenciaGoLive`, shared).
+ */
+export function corpoDasDouradas(
+  canalId: string, cenarios: string, criticas: string,
+): { readonly ok: true; readonly corpo: CorpoConferenciaGoLive } | { readonly ok: false; readonly erro: string } {
+  const n = (t: string) => (/^\s*\d+\s*$/.test(t) ? Number(t) : NaN)
+  const corpo = { item: 'douradas' as const, canalId, cenarios: n(cenarios), criticas: n(criticas) }
+  if (Number.isNaN(corpo.cenarios) || Number.isNaN(corpo.criticas)) return { ok: false, erro: 'Digite números inteiros em cenários e CRÍTICAs.' }
+  const p = corpoConferenciaGoLive.safeParse(corpo)
+  if (!p.success) {
+    const i = p.error.issues[0]!
+    return { ok: false, erro: i.path[0] === 'criticas' ? 'Não pode haver mais CRÍTICAs que cenários.' : 'Informe ao menos 1 cenário.' }
+  }
+  return { ok: true, corpo }
 }
