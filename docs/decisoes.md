@@ -694,6 +694,17 @@ da mensagem não pode depender do agente (AM §4.3). A tela mostra o modo **efet
 restrição (tenant, número ou recorte). `identificaComoRobo` deixa de ser opção visível: identificar-se
 como assistente é regra, não preferência (ADR-029).
 
+**Atualização (2026-10-17, integração P14/P17).**
+- O recorte ganhou **"feriado conta como: fora | dentro"** (`recorteAgente.feriado`, padrão `fora`):
+  feriado do número (`canal_configuracao.feriados`) fica fora do horário do recorte o dia inteiro, a não
+  ser que o cliente queira justamente "autônomo fora do expediente" (`dentro`).
+- **Retorno fora do recorte só por horário/feriado é ADIADO** até a próxima abertura do recorte (até 24 h
+  além do previsto, `VALIDADE_ADIAMENTO_RECORTE_MS`), com o número autônomo. Kill switch do tenant,
+  segmento fora do recorte, recorte inválido e modo do número continuam **cancelando** o retorno.
+- O modo efetivo é uma função única (`modoEfetivoDoCanal`/`modoEfetivoSeguro`, falha fechada em
+  `sombra`) e alcança também retorno, ausência e "digitando…". A lista de números mostra o modo
+  **efetivo**, com o selo "teto da conta" quando o kill switch restringe.
+
 ## ADR-029 — Pipeline determinístico antes e depois do LLM; a tela só acrescenta restrição
 
 **Data:** 2026-10-17.
@@ -823,6 +834,26 @@ validar com o primeiro cliente antes de virarem regra; painel na raia P19):
 | Autônomo num recorte | 21 dias | 0 CRÍTICA em 14 dias; p95 da 1ª resposta ≤ 6 s; handoff entre 10% e 40%; opt-out ≤ 1%; conversão não-inferior à coorte sem agente (−2 p.p.); 0 pedido confirmado errado |
 | Autônomo amplo | permanente | revisão a cada 30 dias; critério violado → volta uma fase |
 
+**Atualização (2026-10-17, integração P12/P13/P16).**
+- **Similaridade de sombra é sinal a calibrar**, não régua firme: Jaccard de palavras significativas
+  (`similaridadeTextos`), pareada pela mensagem entrante da decisão e somando as mensagens humanas até a
+  próxima entrante. O limiar 0,6 (`LIMIAR_SIMILARIDADE_SOMBRA`) continua **proposta**; o critério de
+  fase usa a similaridade junto com a concordância até haver histórico real.
+- **Cegueira no servidor**: até a 1ª revisão de quem pede, amostra, detalhe, lista da aba Qualidade e
+  CSVs omitem motivo, gravidade, notas, justificativas e regras (só o trecho das violações aparece).
+- **Primeira gravação imutável no que mede**: regravar só muda veredito, decisão, responsável, prazo e
+  observação. `POST /v1/agente/revisao` recusa avaliação fora da amostra (422 `revisao.fora_da_amostra`).
+- **Uma revisão por conversa e semana** entra na soma (a primeira comparável); o mínimo de 20 é de
+  **conversas distintas**; e **0 falso negativo crítico** (humano viu CRÍTICA, sistema não) é condição da
+  meta, ao lado de ≥ 85%.
+- Amostra semanal: todas as CRÍTICA → ALTA ou nota ≤ 3 até 8 → aleatórias estáveis por hash da semana;
+  conversa com erro do juiz não entra. **Risco aceito**: a ordem crítica-primeiro revela a gravidade pela
+  posição na lista — é o protocolo (começar pelo grave); a cegueira cobre o resto
+  (`docs/agente-revisao-semanal.md`).
+- O teto mensal do juiz é **por número** (`agente_config.qualidade_teto_mes_centavos`, padrão
+  `IA_QUALIDADE_TETO_MES_CENTAVOS` = R$ 20,00), com alerta `agente_qualidade_teto`. A rubrica tem fonte
+  única no shared (`promptJuizQualidade`, `interpretarRubrica`), usada pela produção e pelos evals.
+
 ## ADR-032 — Custo pelo catálogo `modelo_ia`, teto por sessão e alerta mensal por tenant
 
 **Data:** 2026-10-17.
@@ -857,6 +888,16 @@ tenant. Hoje não existe limite nem alerta no nível do tenant, nem por sessão.
 **Consequências.** Custo correto para modelos gratuitos e de terceiros; o painel de custo e o critério
 de fase "≤ R$ 1,50 por conversa" (ADR-031) passam a ser confiáveis. A frase "teto diário por tenant"
 no plano-mestre e nas skills é corrigida para "por número" pela raia de documentação (P20).
+
+**Atualização (2026-10-17, integração P6).**
+- Teto de sessão: padrão **R$ 3,00** (`TETO_SESSAO_PADRAO_CENTAVOS = 300`), configurável no ambiente por
+  `IA_TETO_SESSAO_CENTAVOS` (inteiro ≥ 0; **0 desliga**) e sobreposto por número em
+  `agente_config.teto_sessao_centavos`. O acumulado é a soma de `agente_decisao` da sessão, inclusive
+  turnos com falha.
+- Alertas: orçamento mensal em `agente_orcamento_80` e `agente_orcamento_100` (uma vez por mês cada);
+  `preco_desconhecido` imediato no turno. Um id `:free` do catálogo só casa com id `:free`.
+- A frase "teto diário por tenant" foi corrigida para "por número" no plano-mestre, nas skills e no
+  manual de operação (raia P20).
 
 ## ADR-033 — Playbook versionado × conhecimento × `agente_config`: o que mora onde
 
@@ -893,6 +934,16 @@ Regras de fronteira:
 `agente_config.persona` e nas instruções. Uma decisão do agente passa a poder citar exatamente qual
 versão do playbook e de cada documento de conhecimento estava em vigor.
 
+**Atualização (2026-10-17, decisão do coordenador na integração da P17) — regra 2 alinhada.**
+**Proposta e memória SÃO ações desligáveis** no playbook: é escolha de negócio se o agente envia
+proposta ou anota memória. As ações habilitáveis são `catalogo`, `pedido`, `proposta`, `memoria` e
+`conhecimento` (`ACOES_PLAYBOOK`); desligar uma tira as ferramentas dela do menu do modelo. Ficam
+**sempre ligados** e fora da tela: transferir (`atendimento_transferir`), ler o perfil do cliente,
+opt-out, pedido de humano, identificação como assistente com aviso de privacidade, filtro base, números
+só com fonte e `pedido_efetivar` fora do modelo (`SEMPRE_LIGADAS_PLAYBOOK`). Proposta exige pedido
+ligado. A memória não grava em simulação nem no copiloto. A mensagem de espera do SLA (`avisoEspera`)
+também mora no playbook (ADR-034).
+
 ## ADR-034 — SLA do handoff como fatia mínima de INB-22, já
 
 **Data:** 2026-10-17. **Antecipa** parte de INB-22 (`escopo-funcional-geracrm.md`, Onda 4).
@@ -921,3 +972,26 @@ relatórios de SLA e a métrica MO-19.
 
 **Consequências.** O handoff passa a ter medida de resultado. A migration é aditiva (tabela nova e
 colunas novas em `atendimento`) e não muda o fluxo atual de transferência.
+
+**Atualização (2026-10-17, integração da P18).**
+- **SLA por NÚMERO, não por tenant**: `atendimento_sla_config (tenant_id, canal_id)` com RLS. Sem linha
+  vale o padrão do código (`SLA_PADRAO`): **30 minutos úteis** até o SLA, **60** até liberar a
+  reatribuição e **mensagem de espera ligada**. O expediente, os feriados e o fuso são os do número/tenant
+  (`somarMinutosUteis`). `GET/PUT /v1/canais/:id/sla` (PUT só admin, auditado); cronômetro por conversa em
+  `GET /v1/conversas/:id/sla`.
+- **Aviso de espera ligado por padrão** (`aviso_espera` desliga). Texto do playbook (`avisoEspera`) com
+  fallback fixo sem prazo nem número; fora do expediente fala do próximo horário. Passa pelo filtro de
+  saída e pela rede de R$; nunca sai com opt-out (lista ou marca `possivel_opt_out`), janela de 24 h
+  fechada ou humano já respondido. O resultado fica em `atendimento.aviso_espera_resultado`.
+- **Roteamento** (`rotearHandoff`, puro): dono da carteira → pool do número em rodízio → gestor.
+  Notificação pela mesma regra (`alvosDoHandoff`: o responsável; rota `gestor` avisa todos os gestores).
+- **Reserva** até o 2º limiar, só com o responsável **ativo e disponível**; gestão (admin, gestor,
+  supervisor) **sempre assume**; depois do limiar qualquer um do número assume, inclusive de quem assumiu
+  e não respondeu (409 `atendimento.reservado` antes disso).
+- O handoff em espera volta a aparecer na fila (`fragmentoNaFila`: contador, inbox e kanban), só enquanto
+  o cliente espera.
+- Estouro: gestores notificados e alerta `sla_handoff_estourado`. Métrica em `GET /v1/performance` →
+  `slaHandoff` (`MetricaSlaHandoff`).
+- **Roteamento e reserva ficam dormentes no modo fundador** (tenant sem admin atribuído, `papel.ts`):
+  todos valem admin, então ninguém é barrado pela reserva, e sem papéis em `usuario_filial` não há
+  gestor para rotear. O SLA, o cronômetro e o aviso funcionam igual.

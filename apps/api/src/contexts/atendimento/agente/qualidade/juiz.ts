@@ -8,7 +8,9 @@ import type { PortaLlmFerramentas, ResultadoLaco, UsoDoLaco } from '../porta-llm
 /**
  * O JUIZ DE QUALIDADE EM PRODUÇÃO (ADR-031 §2, raia P12).
  *
- * Mesmo molde do juiz dos evals (`evals/juiz.ts`), mas atrás da NOSSA porta
+ * A rubrica é a do shared (`dominio/agente-qualidade.ts`: `promptJuizQualidade`,
+ * `esquemaRubricaJson`, `interpretarRubrica`) — fonte única; os evals
+ * (`evals/juiz.ts`) chamam ESTA função, não o contrário. Atrás da NOSSA porta
  * (`PortaLlmFerramentas`): sem ferramentas, uma rodada, saída estruturada pela
  * rubrica do shared. Assim herda o roteador de reserva da P5 (principal fora →
  * reserva) e o custo sai pelo catálogo (P6) com o provedor que de fato respondeu.
