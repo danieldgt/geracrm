@@ -138,6 +138,16 @@ describe('Percentual', () => {
     expect(enviados).toEqual(['No PIX à vista você tem 5% de desconto.'])
     expect(await marcasP7()).toEqual([])
   })
+  it('[3ª revisão 1] % sem palavra comercial também bloqueia ("Posso fazer 10%."); "100% original" e composição saem', async () => {
+    await configurar('autonomo')
+    await turno('consegue melhorar?', llm(['Posso fazer 10%.']))
+    expect(enviados).toEqual([AVISO_NUMERO_BLOQUEADO])
+    for (const t of ['agente_decisao', 'agente_sessao', 'atendimento', 'mensagem']) await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
+    enviados.length = 0
+    await turno('é original?', llm(['Produto 100% original, 95% algodão e 5% elastano.']))
+    expect(enviados).toEqual(['Produto 100% original, 95% algodão e 5% elastano.'])
+    expect(await marcasP7()).toEqual([])
+  })
   it('[revisão 2] número de referência do catálogo ("CAM-010") não abona "10%"', async () => {
     await configurar('autonomo')
     await turno('tem desconto na camiseta?', llm(['A camiseta está com 10% de desconto.'], [{ nome: 'catalogo_buscar', entrada: { consulta: 'camiseta', limite: null } }]))

@@ -26,9 +26,10 @@
  * - Grade (cor × tamanho): "Tamanho 42", "Numeração 40", "Tamanhos 38, 40 e 42"
  *   são atributo, mascarados; os valores de `atributos` das ferramentas são fonte
  *   de quantidade ("Temos o 42 em estoque"), nunca de percentual.
- * - Bloqueante (`bloqueante: true`, gravidade CRITICA): percentual em contexto
- *   comercial (desconto, off, juros, acréscimo, taxa, comissão, à vista…) —
- *   "100% original"/"100% à disposição" ficam ALTA;
+ * - Bloqueante (`bloqueante: true`, gravidade CRITICA): TODO percentual, por
+ *   padrão (ADR-029). A exceção é uma lista FECHADA de usos que não são negócio,
+ *   mascarados: "100% original/garantido/à disposição/natural…", composição
+ *   ("95% algodão", "Algodão 100%", "5% elastano") e "N% de umidade/álcool";
  *   quantidade afirmada como disponibilidade ("temos 12 unidades", "12 em
  *   estoque", "saldo de 12", "restam 3"); prazo num contexto de compromisso
  *   (entrega, envio, chegada, recebimento, saída, prazo, pagamento, boleto,
@@ -125,6 +126,14 @@ const L = String.raw`\p{L}`
 /** Início de palavra (Unicode): `\b` do JS não entende acento. */
 const P = String.raw`(?<![\p{L}\d])`
 const FIM = String.raw`(?![\p{L}\d])`
+const UNIDADE_QTD = String.raw`(?:unidades?|un\.?|und\.?|pe[çc]as?|p[çc]s?|pares|caixas?|cx\.?|itens|kits?|fardos?|d[úu]zias?|pacotes?|pct\.?|pcts|rolos?|sacos?|metros?|kg|quilos?|litros?|frascos?|latas?|garrafas?)(?!${L})`
+/** Fibras e composições: "95% algodão", "Algodão 100%" descrevem o produto, não negócio. */
+const FIBRA = String.raw`(?:algod[ãa]o|poli[ée]ster|elastano|viscose|linho|l[ãa]|seda|nylon|n[áa]ilon|poliamida|acr[íi]lico|couro|modal|lycra|spandex|cashmere|bambu)`
+/**
+ * Lista FECHADA de usos de % que não são negócio (ADR-029: % bloqueia por
+ * padrão; a exceção é que se enumera, nunca o contrário).
+ */
+const PCT_NAO_NEGOCIO = String.raw`(?:original|originais|garantid[oa]s?|segur[oa]s?|certeza|cert[oa]s?|[àa]\s+(?:sua\s+)?disposi[çc][ãa]o|satisfeit[oa]s?|natural|naturais|nacional|nacionais|aut[êe]ntic[oa]s?|leg[íi]tim[oa]s?|pur[oa]s?|confi[áa]ve(?:l|is)|recicl[áa]ve(?:l|is)|reciclad[oa]s?|${FIBRA})`
 const MESES = 'janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro'
 const IGNORAR: readonly RegExp[] = [
   // telefone, CPF, CNPJ, CEP, nº longo: ≥ 8 dígitos com separadores no meio
@@ -147,9 +156,13 @@ const IGNORAR: readonly RegExp[] = [
   // nº de pedido, nota, protocolo, referência, SKU, código — nunca seguido de %
   new RegExp(String.raw`(?:${P}(?:pedido|nota|nf-?e?|protocolo|ref\.?|referência|referencia|sku|código|codigo|cód\.?|cod\.?|número|numero|n[º°]\.?)|#)(?!${L})\s*(?:n[º°]\.?\s*)?[:#]?\s*[\p{L}\d_-]*\d[\p{L}\d_-]*(?![\p{L}\d_-])(?!\s*(?:%|por\s*cento))`, 'giu'),
   // grade: "Tamanho 42", "Tamanhos 38, 40 e 42", "Numeração 40", "tam. 44" — atributo, não quantidade
-  new RegExp(String.raw`${P}(?:tamanhos?|numera[çc](?:ão|ao|ões|oes)|tam\.|n[úu]meros?)\s*:?\s*(?:(?:o|a|os|as|do|da)\s+)?\d+(?:\s*(?:,|e|ou|/|a|-)\s*\d+)*${FIM}`, 'giu'),
+  new RegExp(String.raw`${P}(?:tamanhos?|numera[çc](?:ão|ao|ões|oes)|tam\.|n[úu]meros?)\s*:?\s*(?:(?:o|a|os|as|do|da)\s+)?\d+(?!\d|\s*${UNIDADE_QTD})(?:\s*(?:,|e|ou|/|a|-)\s*\d+(?!\d|\s*${UNIDADE_QTD}))*${FIM}`, 'giu'),
   // token alfanumérico com letra antes do dígito: CAM-001, AB123, V2
   new RegExp(String.raw`(?<![\p{L}\d])${L}+[-_]?\d[\p{L}\d_-]*`, 'gu'),
+  // % que não é negócio (lista fechada): "100% original", "95% algodão", "Algodão 100%", "12% de umidade"
+  new RegExp(String.raw`${P}100\s*%\s+(?:de\s+)?${PCT_NAO_NEGOCIO}${FIM}`, 'giu'),
+  new RegExp(String.raw`${P}\d+(?:[.,]\d+)?\s*%\s+(?:de\s+)?(?:${FIBRA}|umidade|[áa]lcool|cacau|gordura|prote[íi]na)${FIM}`, 'giu'),
+  new RegExp(String.raw`${P}${FIBRA}\s+\d+(?:[.,]\d+)?\s*%`, 'giu'),
   // dinheiro: fica com o guardrail de R$
   /R\$\s*\d[\d.,]*/g,
   new RegExp(String.raw`\d[\d.,]*\s*(?:reais|real)${FIM}`, 'giu'),
@@ -178,19 +191,17 @@ const NX = String.raw`(?:${ANTES}(${NUM})${DEPOIS}|(?<!${L})(${EXTENSO})(?!${L})
 /** Lista/intervalo: "3 a 5", "30/60/90", "30, 60 e 90" — todos os números do grupo contam. */
 const LISTA = String.raw`${ANTES}((?:${NUM})(?:\s*(?:/|,|e|ou|a|até|ate|-|–)\s*(?:${NUM}))+)${DEPOIS}`
 
-const UNIDADE_QTD = String.raw`(?:unidades?|un\.?|und\.?|pe[çc]as?|p[çc]s?|pares|caixas?|cx\.?|itens|kits?|fardos?|d[úu]zias?|pacotes?|pct\.?|pcts|rolos?|sacos?|metros?|kg|quilos?|litros?|frascos?|latas?|garrafas?)(?!${L})`
 const VERBO_ESTOQUE = String.raw`${P}(?:temos|tenho|restam|restaram|resta|sobraram|sobrou|possu[íi]mos|dispomos\s+de|contamos\s+com)\s+(?:(?:apenas|s[óo]|somente|mais|ainda|exatamente|cerca\s+de|as|os)\s+)*`
 const DISPONIVEL = String.raw`(?:em\s+estoque|no\s+estoque|dispon[íi]ve(?:l|is)|[àa]\s+pronta\s+entrega|pronta\s+entrega)`
-/**
- * % só é compromisso comercial com estas palavras na oração: "Produto 100%
- * original" e "Ficamos 100% à disposição" não são preço (ficam ALTA).
- */
-const COMERCIAL = /(?<!\p{L})(desconto|off|juros|acr[ée]scimo|abaixo|acima|taxa|comiss|abat|cashback|promo|margem|[àa]\s+vista|pix|pre[çc]o|valor|consigo|dou|damos|fa[çc]o|fazemos|ganha|economi)/iu
 /** O cliente quer/precisa (eco) ou nós vamos verificar (ressalva)… */
 const ECO_DESEJO = /(?<!\p{L})(?:voc[êe]|vc)\s+(?:\p{L}+\s+)?(?:precisa|quer|queria|gostaria|pediu|prefere|deseja|necessita)(?!\p{L})/iu
 const ECO_RESSALVA = /(?<!\p{L})(?:(?:verificar|confirmar|consultar)\s+se|ver\s+se\s+d[áa])(?!\p{L})/iu
-/** …desde que NÃO haja afirmação nossa no indicativo. */
-const NOSSO_INDICATIVO = /(?<!\p{L})(?:(?:vai|vão|vao|vamos|iremos|ir[áa])\s+(?:receber|chegar|sair|entregar|enviar|despachar|postar|faturar)|recebe|recebem|chega|chegam|sai|saem|entregamos|entrega|entregam|enviamos|envia|despachamos|garantimos|garanto|garante|postamos|faturamos)(?!\p{L})/iu
+/**
+ * …desde que a MENSAGEM inteira (não só a oração; "?" não corta) não tenha
+ * afirmação nossa no indicativo, verbo nosso em 1ª pessoa nem resposta
+ * afirmativa — "Você quer em 2 dias? Combinado!" é compromisso.
+ */
+const NOSSO_INDICATIVO = /(?<!\p{L})(?:(?:vai|vão|vao|vamos|iremos|ir[áa])\s+(?:receber|chegar|sair|entregar|enviar|despachar|postar|faturar)|recebe|recebem|chega|chegam|sai|saem|entregamos|entrega|entregam|enviamos|envia|despachamos|garantimos|garanto|garante|postamos|faturamos|consigo|conseguimos|d[áa]\s+sim|fechado|combinado|pode\s+deixar|sem\s+problemas?|garantido|envio|separo|despacho|mando|sim|ok)(?!\p{L})/iu
 const COMPROMISSO = /(?<!\p{L})(entreg|cheg|envi|despach|post|frete|prazo|pag|boleto|venc|fatur|produ[zçc]|separ|libera|retir|pront|transport|coleta|receb|sai(?!\p{L})|saem|sair)/iu
 
 interface Padrao {
@@ -220,7 +231,7 @@ const re = (s: string) => new RegExp(s, 'giu')
 
 // ⚠️ A ordem importa: o primeiro padrão que cobre um trecho fica com ele.
 const PADROES: readonly Padrao[] = [
-  { tipo: 'percentual', re: re(String.raw`${NX}\s*(?:%|por\s*cento(?!${L}))`), unidade: () => '%', bloqueante: null, contexto: COMERCIAL },
+  { tipo: 'percentual', re: re(String.raw`${NX}\s*(?:%|por\s*cento(?!${L}))`), unidade: () => '%', bloqueante: true },
   { tipo: 'percentual', re: re(String.raw`${NX}\s*pcts?\.?(?=\s+(?:de\s+desconto|off|de\s+abatimento)(?!${L}))`), unidade: () => '%', bloqueante: true },
   { tipo: 'percentual', re: re(String.raw`${P}metade\s+do\s+(?:pre[çc]o|valor)${FIM}`), unidade: () => '%', bloqueante: true, valorFixo: 50 },
   { tipo: 'percentual', re: re(String.raw`${P}pela\s+metade${FIM}`), unidade: () => '%', bloqueante: true, valorFixo: 50, contexto: /(?<!\p{L})(pre[çc]o|valor|desconto)/iu, exigeContexto: true },
@@ -282,8 +293,9 @@ export function extrairNumerosDeNegocio(texto: string): readonly NumeroDeNegocio
       const oracao = oracaoEmVolta(texto, ini, fim)
       const noContexto = (p.contexto ?? COMPROMISSO).test(oracao)
       if (p.exigeContexto && !noContexto) { ocupados.pop(); continue }
-      const bloqueante = p.bloqueante ?? noContexto
-      const ecoDoCliente = (ECO_DESEJO.test(oracao) || ECO_RESSALVA.test(oracao)) && !NOSSO_INDICATIVO.test(oracao)
+      // Prazo também é compromisso quando a mensagem traz afirmação nossa ("…e consigo te atender").
+      const bloqueante = p.bloqueante ?? (noContexto || (!p.contexto && NOSSO_INDICATIVO.test(texto)))
+      const ecoDoCliente = (ECO_DESEJO.test(oracao) || ECO_RESSALVA.test(oracao)) && !NOSSO_INDICATIVO.test(texto)
       for (const valor of valores) out.push({ tipo: p.tipo, valor, trecho, unidade: p.unidade(m as RegExpExecArray), bloqueante, ecoDoCliente })
     }
   }
