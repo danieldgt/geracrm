@@ -18,7 +18,7 @@
 | P7 números ampliados | 1 | — | em andamento | | |
 | P8 saúde 3 estados | 1 | — | integrada (d589e00; main verde 1323 api) | | |
 | P9 histórico do conhecimento | 1 | 0100 | em andamento | | |
-| P10 tela de números | 1 | — | em andamento | | |
+| P10 tela de números | 1 | — | integrada (15c0f85; revalidar visual no fim) | | |
 | P11 webhook enxuto + ativas | 1 | 0101 | em andamento | | |
 | P12 qualidade em produção | 2 | 0102 | pendente | | |
 | P13 sugestão/copiloto/edição | 2 | 0103 | pendente | | |
