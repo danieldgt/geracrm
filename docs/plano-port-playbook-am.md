@@ -409,3 +409,5 @@ PRONTO     skills descrevem o pipeline e onde estender
   (k) P10 follow-up: rotas-canais.ts preencher meta_waba_id/meta_telefone ao salvar credencial (hoje o worker
       da P11 preenche em até 10 min);
   (l) feriados também na ausência e na disponibilidade do agente (`disponibilidade.ts`) — P11 só aplicou nas ativas.
+- Integração P14 × P11: depois da P14 na main, `retorno.ts avaliar()` (P11) usa `modoEfetivoDoCanal` — kill switch do
+  tenant e recorte também calam o retorno. Integrar a P4 antes da P14 (identificaComoRobo ignorado na P4).
