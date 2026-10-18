@@ -30,6 +30,13 @@ const U_B = 'c0a19000-6666-4000-8000-000000000004'
 const SUB_ADMIN = 'sub-admin-go-live'
 const SUB_VENDEDOR = 'sub-vendedor-go-live'
 const DIA = 86_400_000
+/**
+ * ⚠️ P0e: todo carimbo semeado sai do relógio do PROCESSO — o mesmo `agora` que a rota passa a
+ * `coletarGoLive` e que o reinício do playground grava em `{em}`. Com `now()` do Postgres, o
+ * contêiner do Docker 15 min atrás do host (depois de uma suspensão do Mac) punha a publicação do
+ * playbook ANTES do reinício que ela devia cortar, e os "N dias na fase" perdiam um dia.
+ */
+const agoraDoProcesso = (): Date => new Date()
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
 let app: FastifyInstance
@@ -60,22 +67,22 @@ async function auditou(t: string, canal: string, dias: number, antes: Record<str
   await dono`INSERT INTO auditoria (tenant_id, id, acao, entidade, entidade_id, dados, criado_em)
              VALUES (${t}, ${crypto.randomUUID()}, 'agente.config_alterada', 'agente_config', ${canal},
                      ${JSON.stringify({ antes, depois, campos: Object.keys({ ...antes, ...depois }).sort(), criacao })}::text::jsonb,
-                     now() - make_interval(days => ${dias}))`
+                     ${agoraDoProcesso()}::timestamptz - make_interval(days => ${dias}))`
 }
 /** Mudança auditada do teto do tenant (kill switch), como o PUT /v1/agente/tenant grava. */
 async function tetoMudouHa(t: string, dias: number, antes: string, depois: string): Promise<void> {
   await dono`INSERT INTO auditoria (tenant_id, id, acao, entidade, dados, criado_em)
              VALUES (${t}, ${crypto.randomUUID()}, 'agente.config_alterada', 'agente_tenant',
                      ${JSON.stringify({ antes: { modoMaximo: antes }, depois: { modoMaximo: depois }, campos: ['modo_maximo'] })}::text::jsonb,
-                     now() - make_interval(days => ${dias}))`
+                     ${agoraDoProcesso()}::timestamptz - make_interval(days => ${dias}))`
 }
 
 /** Uma versão de playbook publicada agora para o número (P17). */
 async function publicouPlaybook(t: string, canal: string): Promise<void> {
   const [n] = await dono<{ n: number }[]>`SELECT coalesce(max(numero), 0)::int + 1 AS n FROM agente_playbook_versao WHERE tenant_id = ${t} AND canal_id = ${canal}`
-  await dono`UPDATE agente_playbook_versao SET arquivada_em = now() WHERE tenant_id = ${t} AND canal_id = ${canal} AND publicada_em IS NOT NULL AND arquivada_em IS NULL`
+  await dono`UPDATE agente_playbook_versao SET arquivada_em = ${agoraDoProcesso()}::timestamptz WHERE tenant_id = ${t} AND canal_id = ${canal} AND publicada_em IS NOT NULL AND arquivada_em IS NULL`
   await dono`INSERT INTO agente_playbook_versao (tenant_id, id, canal_id, numero, conteudo, origem, observacao, publicada_em)
-             VALUES (${t}, ${crypto.randomUUID()}, ${canal}, ${n!.n}, '{}'::jsonb, 'manual', 'nova versão do teste', now())`
+             VALUES (${t}, ${crypto.randomUUID()}, ${canal}, ${n!.n}, '{}'::jsonb, 'manual', 'nova versão do teste', ${agoraDoProcesso()}::timestamptz)`
 }
 
 /** A troca de modo auditada que inicia a fase. */
@@ -86,7 +93,7 @@ async function conversas(t: string, canal: string, n: number): Promise<string[]>
   const cts = ids.map(() => crypto.randomUUID())
   await dono`INSERT INTO contato (tenant_id, id, nome, ativo) SELECT ${t}::uuid, x, 'Cliente', true FROM unnest(${cts}::uuid[]) AS x`
   await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao, ultima_entrante_em, ultima_mensagem_em)
-             SELECT ${t}::uuid, u.c, ${canal}::uuid, u.k, 1, now() - interval '1 hour', now() - interval '1 hour'
+             SELECT ${t}::uuid, u.c, ${canal}::uuid, u.k, 1, ${agoraDoProcesso()}::timestamptz - interval '1 hour', ${agoraDoProcesso()}::timestamptz - interval '1 hour'
                FROM unnest(${ids}::uuid[], ${cts}::uuid[]) AS u(c, k)`
   return ids
 }
@@ -95,7 +102,7 @@ async function conversas(t: string, canal: string, n: number): Promise<string[]>
 async function entrante(t: string, conversa: string, horasAtras: number): Promise<string> {
   const id = crypto.randomUUID()
   await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-             VALUES (${t}, ${id}, ${conversa}, 'entrante', 'texto', '{"texto":"oi"}'::jsonb, now() - make_interval(secs => ${horasAtras * 3600}))`
+             VALUES (${t}, ${id}, ${conversa}, 'entrante', 'texto', '{"texto":"oi"}'::jsonb, ${agoraDoProcesso()}::timestamptz - make_interval(secs => ${horasAtras * 3600}))`
   return id
 }
 
@@ -103,7 +110,7 @@ async function entrante(t: string, conversa: string, horasAtras: number): Promis
 async function respostaHumana(t: string, conversa: string, horasAtras: number): Promise<void> {
   await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, enviada_por_id, criado_em)
              VALUES (${t}, ${crypto.randomUUID()}, ${conversa}, 'saliente', 'texto', '{"texto":"Olá!"}'::jsonb, ${U_GESTORA},
-                     now() - make_interval(secs => ${horasAtras * 3600}))`
+                     ${agoraDoProcesso()}::timestamptz - make_interval(secs => ${horasAtras * 3600}))`
 }
 
 interface OpcoesDecisao {
@@ -130,7 +137,7 @@ async function decidir(t: string, canal: string, convs: readonly string[], o: Op
     if (o.comSessao) {
       sessao = crypto.randomUUID()
       await dono`INSERT INTO agente_sessao (tenant_id, id, conversa_id, canal_id, modo, turnos, estado, encerrada_em, motivo_saida)
-                 VALUES (${t}, ${sessao}, ${c}, ${canal}, ${o.modo}, 1, 'entregue', now(), 'teste')`
+                 VALUES (${t}, ${sessao}, ${c}, ${canal}, ${o.modo}, 1, 'entregue', ${agoraDoProcesso()}::timestamptz, 'teste')`
     }
     for (let i = 0; i < (o.vezes ?? 1); i++) {
       const id = crypto.randomUUID()
@@ -141,7 +148,7 @@ async function decidir(t: string, canal: string, convs: readonly string[], o: Op
         entradas = [await entrante(t, c, horas + o.respostaMs / 3_600_000)]
         const s = crypto.randomUUID()
         await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-                   VALUES (${t}, ${s}, ${c}, 'saliente', 'texto', '{"texto":"Temos sim."}'::jsonb, now() - make_interval(secs => ${horas * 3600}))`
+                   VALUES (${t}, ${s}, ${c}, 'saliente', 'texto', '{"texto":"Temos sim."}'::jsonb, ${agoraDoProcesso()}::timestamptz - make_interval(secs => ${horas * 3600}))`
         saidas = [s]
       }
       await dono`
@@ -152,7 +159,7 @@ async function decidir(t: string, canal: string, convs: readonly string[], o: Op
                 ${o.custo ?? 0}, ${o.enviada ?? false},
                 ${JSON.stringify(o.guardrails ?? [])}::text::jsonb, ${JSON.stringify(o.numeros ?? [])}::text::jsonb,
                 ${o.sombra ?? null}, ${o.sugestao ?? null}, ${o.sugestao ? new Date() : null},
-                ${entradas}::uuid[], ${saidas}::uuid[], now() - make_interval(secs => ${horas * 3600}))`
+                ${entradas}::uuid[], ${saidas}::uuid[], ${agoraDoProcesso()}::timestamptz - make_interval(secs => ${horas * 3600}))`
     }
   }
   return ids
@@ -161,12 +168,12 @@ async function decidir(t: string, canal: string, convs: readonly string[], o: Op
 async function avaliacao(t: string, canal: string, decisaoId: string, conversaId: string, p: { pior?: 'CRITICA' | null; nota?: number; custo?: number }): Promise<string> {
   const id = crypto.randomUUID()
   if (p.nota !== undefined) {
-    await dono`INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, origem, tipo, gatilho, notas, nota_media, modelo, custo_centavos)
+    await dono`INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, origem, tipo, gatilho, notas, nota_media, modelo, custo_centavos, criado_em)
                VALUES (${t}, ${id}, ${decisaoId}, ${conversaId}, ${canal}, 'sugestao', 'juiz', 'fim_sessao',
-                       ${JSON.stringify(Object.fromEntries(CRITERIOS_RUBRICA.map((c) => [c, p.nota])))}::text::jsonb, ${p.nota}, 'simulado', ${p.custo ?? 0})`
+                       ${JSON.stringify(Object.fromEntries(CRITERIOS_RUBRICA.map((c) => [c, p.nota])))}::text::jsonb, ${p.nota}, 'simulado', ${p.custo ?? 0}, ${agoraDoProcesso()})`
   } else {
-    await dono`INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, origem, tipo, gatilho, violacoes, pior_gravidade, acao)
-               VALUES (${t}, ${id}, ${decisaoId}, ${conversaId}, ${canal}, 'sugestao', 'regras', 'turno', '[]'::jsonb, ${p.pior ?? null}, ${p.pior ? 'registrado' : null})`
+    await dono`INSERT INTO agente_avaliacao (tenant_id, id, decisao_id, conversa_id, canal_id, origem, tipo, gatilho, violacoes, pior_gravidade, acao, criado_em)
+               VALUES (${t}, ${id}, ${decisaoId}, ${conversaId}, ${canal}, 'sugestao', 'regras', 'turno', '[]'::jsonb, ${p.pior ?? null}, ${p.pior ? 'registrado' : null}, ${agoraDoProcesso()})`
   }
   return id
 }
@@ -215,9 +222,9 @@ async function conversaDeSimulacao(t: string, canal: string, decisoes: number, c
   const critica = [{ etapa: 'regras-qualidade', codigo: 'palavra_proibida', gravidade: 'CRITICA', acao: 'registrado' }]
   const corrigida = [{ etapa: 'filtro-saida', codigo: 'promessa', gravidade: 'CRITICA', acao: 'removido' }]
   for (let i = 0; i < decisoes; i++) {
-    await dono`INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, modo, desfecho, resposta, guardrails)
+    await dono`INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, modo, desfecho, resposta, guardrails, criado_em)
                VALUES (${t}, ${crypto.randomUUID()}, ${conv}, ${canal}, 'simulacao', 'sugeriu', '{"mensagens":["x"]}'::jsonb,
-                       ${JSON.stringify(i < criticas ? critica : corrigida)}::text::jsonb)`
+                       ${JSON.stringify(i < criticas ? critica : corrigida)}::text::jsonb, ${agoraDoProcesso()})`
   }
   return conv
 }
@@ -442,7 +449,7 @@ describe('A2 — homologação medida: conferência digitada (douradas, smoke) e
 
   it('conferência com mais de 30 dias não vale', async () => {
     await conferir(A, { item: 'smoke', canalId: CANAL_A, ok: true })
-    await dono`UPDATE agente_homologacao SET atualizado_em = now() - interval '31 days' WHERE tenant_id = ${A}`
+    await dono`UPDATE agente_homologacao SET atualizado_em = ${agoraDoProcesso()}::timestamptz - interval '31 days' WHERE tenant_id = ${A}`
     const b = (await goLive(A, CANAL_A)).json() as GoLiveDto
     expect(crit(b, 'smoke')).toMatchObject({ ok: null, motivo: expect.stringMatching(/30 dias/) })
   })
@@ -510,7 +517,7 @@ describe('A2 — homologação medida: conferência digitada (douradas, smoke) e
     await conversaDeSimulacao(A, CANAL_A, 3, 1)
     await reiniciar()
     await new Promise((r) => setTimeout(r, 20))
-    await dono`INSERT INTO auditoria (tenant_id, id, acao, entidade, entidade_id, dados) VALUES (${A}, ${crypto.randomUUID()}, 'agente.config_alterada', 'agente_config', ${CANAL_A}, '{"antes":{"persona":1},"depois":{"persona":2},"campos":["persona"]}')`
+    await dono`INSERT INTO auditoria (tenant_id, id, acao, entidade, entidade_id, dados, criado_em) VALUES (${A}, ${crypto.randomUUID()}, 'agente.config_alterada', 'agente_config', ${CANAL_A}, '{"antes":{"persona":1},"depois":{"persona":2},"campos":["persona"]}', ${agoraDoProcesso()})`
     expect(crit((await goLive(A, CANAL_A)).json() as GoLiveDto, 'playground_critica')).toMatchObject({ ok: null })
   })
 
@@ -571,7 +578,9 @@ describe('Sombra — decisões, P12 (CRÍTICA e juiz), P16 (concordância), P13 
   })
 
   it('uma CRÍTICA que escapou (P12) reprova; concordância com < 20 revisadas é "sem medida" e tira a validade da nota', async () => {
-    await config(A, CANAL_A, 'sombra'); await trocouModoHa(A, CANAL_A, 12, 'desligado', 'sombra')
+    // ⚠️ P0e: 16 dias corridos têm ≥ 10 úteis em qualquer dia da semana; com 12, rodar de domingo
+    //    dava 9 e `dias_uteis` entrava nos reprovados (o teste é sobre CRÍTICA, não sobre tempo na fase).
+    await config(A, CANAL_A, 'sombra'); await trocouModoHa(A, CANAL_A, 16, 'desligado', 'sombra')
     const convs = await conversas(A, CANAL_A, 5)
     const ds = await decidir(A, CANAL_A, convs, { modo: 'sombra', vezes: 2 })
     await avaliacao(A, CANAL_A, ds[0]!, convs[0]!, { pior: 'CRITICA' })

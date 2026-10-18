@@ -7,6 +7,7 @@ import type { PortaLlmFerramentas, ResultadoLaco } from '../porta-llm.js'
 import type { Ligacoes } from '../ferramentas/ligacoes-porta.js'
 import { etapaModoEfetivo, lerFatosDoModo, modoEfetivoDoCanal, modoEfetivoSeguro, MOTIVO_MODO_INDISPONIVEL } from './modo-efetivo.js'
 import { responderAutomaticamente } from '../../resposta-automatica.js'
+import { partesLocais } from '../../expediente.js'
 
 /**
  * O MODO EFETIVO num TURNO REAL (raia P14, ADR-028): banco de verdade, WhatsApp
@@ -47,9 +48,14 @@ const configurar = (modo: string, recorte: unknown) => dono`
   ON CONFLICT (tenant_id, canal_id) DO UPDATE SET modo = EXCLUDED.modo, ativo = EXCLUDED.ativo, recorte = EXCLUDED.recorte`
 
 /** Um horário de recorte que NÃO inclui o dia de hoje no fuso do tenant: o turno de agora está fora. */
+/**
+ * ⚠️ P0e: "hoje" pelo relógio do PROCESSO — o `agora` que o modo efetivo recebe. Pelo `now()` do
+ * contêiner, um relógio horas (ou 15 min, perto da meia-noite) fora do host escolhia o dia errado.
+ */
+const hojeLocal = () => partesLocais(new Date(), 'America/Sao_Paulo')
+
 async function horarioSemHoje(): Promise<Record<string, { de: string; ate: string }>> {
-  const [l] = await dono<{ dia: number }[]>`SELECT to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'ID')::int AS dia`
-  const amanha = DIAS[(l!.dia % 7)]!
+  const amanha = DIAS[(hojeLocal().diaIso % 7)]!
   return { [amanha]: { de: '00:00', ate: '23:59' } }
 }
 
@@ -132,12 +138,11 @@ describe('Turno real com recorte (ADR-028)', () => {
   })
 
   it('FERIADO do número (calendário da P11) conta como fora do horário do recorte', async () => {
-    const [l] = await dono<{ dia: number; data: string }[]>`
-      SELECT to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'ID')::int AS dia, to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM-DD') AS data`
-    const hoje = DIAS[l!.dia - 1]!
+    const l = { dia: hojeLocal().diaIso, data: hojeLocal().data }
+    const hoje = DIAS[l.dia - 1]!
     // O horário do recorte cobre hoje o dia todo; só o feriado o derruba.
     await configurar('autonomo', { horario: { [hoje]: { de: '00:00', ate: '23:59' } } })
-    await dono`UPDATE canal_configuracao SET feriados = ${JSON.stringify([l!.data])}::text::jsonb WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
+    await dono`UPDATE canal_configuracao SET feriados = ${JSON.stringify([l.data])}::text::jsonb WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
     try {
       const d = await comTenantServico(T, (tx) => modoEfetivoDoCanal(tx, { canalId: CANAL, contatoId: CONTATO, agora: new Date() }))
       expect(d).toMatchObject({ modo: 'sombra', motivo: 'fora_do_recorte_horario' })
@@ -254,7 +259,7 @@ describe('Fuso inválido no banco', () => {
 describe('Ausência sob o modo efetivo', () => {
   const ausenciaRecente = () => dono`
     INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-    VALUES (${T}, ${crypto.randomUUID()}, ${CONVERSA}, 'saliente', 'texto', '{"texto":"Voltamos já","automatica":"ausencia"}'::jsonb, now() - interval '1 minute')`
+    VALUES (${T}, ${crypto.randomUUID()}, ${CONVERSA}, 'saliente', 'texto', '{"texto":"Voltamos já","automatica":"ausencia"}'::jsonb, ${new Date(Date.now() - 60_000)})`
   beforeAll(async () => { await dono`UPDATE canal_configuracao SET mensagem_ausencia = 'Voltamos já' WHERE tenant_id = ${T} AND canal_id = ${CANAL}` })
 
   it('autônomo sem esperar a ausência: o agente responde (a ausência não sai)', async () => {

@@ -58,7 +58,10 @@ const passada = (agora: Date, t = A) => processarSla(dono as never, { somenteTen
 const pedir = (metodo: 'GET' | 'PUT' | 'POST', url: string, tenant = A, payload?: object) =>
   app.inject({ method: metodo, url, headers: { 'x-tenant-id': tenant }, ...(payload ? { payload } : {}) })
 
-/** Uma conversa nova (um contato por conversa) no canal, com a última entrante há `entranteHaMin`. */
+/**
+ * Uma conversa nova (um contato por conversa) no canal, com a última entrante há `entranteHaMin`.
+ * ⚠️ P0e: pelo relógio do PROCESSO — a janela de 24h é medida contra o `agora` da passada.
+ */
 async function novaConversa(p: { canal?: string; tenant?: string; entranteHaMin?: number; conduzida?: 'humano' | 'ia'; dono?: string; origem?: string } = {}) {
   const t = p.tenant ?? A
   const contato = randomUUID(), conversa = randomUUID()
@@ -68,7 +71,7 @@ async function novaConversa(p: { canal?: string; tenant?: string; entranteHaMin?
              VALUES (${t}, ${contato}, 1, ${fone}, ${fone}, true, true, 'teste')`
   await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao, conduzida_por, ultima_entrante_em, ultima_direcao, ultima_mensagem_em)
              VALUES (${t}, ${conversa}, ${p.canal ?? NAO_OFICIAL}, ${contato}, 1, ${p.conduzida ?? 'ia'},
-                     now() - make_interval(mins => ${p.entranteHaMin ?? 1}), 'entrante', now())`
+                     ${new Date(Date.now() - (p.entranteHaMin ?? 1) * 60_000)}, 'entrante', ${new Date()})`
   if (p.dono) {
     await dono`INSERT INTO carteira_atribuicao (tenant_id, id, contato_id, usuario_id, origem) VALUES (${t}, ${randomUUID()}, ${contato}, ${p.dono}, 'manual')`
   }

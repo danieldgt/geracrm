@@ -108,9 +108,10 @@ describe('confirmarPedidoPorResposta', () => {
  * dois".
  */
 describe('⚠️ Janela de 24h do "sim"', () => {
+  // ⚠️ P0e: pelo relógio do PROCESSO — o `agora` que `confirmarPedidoPorResposta` recebe.
   const envioHa = (horas: number) => dono`
     UPDATE pedido SET estado = 'aguardando_confirmacao',
-                      resumo_enviado_em = now() - make_interval(hours => ${horas})
+                      resumo_enviado_em = ${new Date(Date.now() - horas * 3_600_000)}
      WHERE id = ${PED}`
 
   it('resumo de 23 h atrás ainda confirma — quem responde de manhã é comércio normal', async () => {

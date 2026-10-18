@@ -48,6 +48,12 @@ const juizFalso: PortaLlmFerramentas = {
   },
 }
 
+/**
+ * ⚠️ P0e: carimbos semeados pelo relógio do PROCESSO — o `agora` que `processarQualidade` recebe.
+ * Com `now()` do contêiner à frente do host, a mensagem "de 1 min atrás" ficava no futuro do worker.
+ */
+const agoraDoProcesso = (): Date => new Date()
+
 const rodar = (t: string, extra: { juiz?: PortaLlmFerramentas } = {}) =>
   processarQualidade(dono as never, { juiz: juizFalso, somenteTenant: t, ...extra }, new Date())
 
@@ -64,17 +70,17 @@ async function conversaCom(t: string, canal: string, p: {
   const ativa = (p.estado ?? 'entregue') === 'ativa'
   await dono`INSERT INTO agente_sessao (tenant_id, id, conversa_id, canal_id, modo, turnos, estado, encerrada_em, motivo_saida, iniciada_em)
              VALUES (${t}, ${sessao}, ${conversa}, ${canal}, ${p.modo ?? 'sombra'}, ${p.turnos}, ${p.estado ?? 'entregue'},
-                     ${ativa ? null : new Date()}, ${ativa ? null : 'teste'}, now() - interval '1 hour')`
+                     ${ativa ? null : new Date()}, ${ativa ? null : 'teste'}, ${agoraDoProcesso()}::timestamptz - interval '1 hour')`
   const decisoes: string[] = []
   for (let i = 0; i < p.turnos; i++) {
     await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-               VALUES (${t}, ${crypto.randomUUID()}, ${conversa}, 'entrante', 'texto', ${JSON.stringify({ texto: `quero 10 caixas, meu fone 85 98888-${String(1000 + i)}` })}::text::jsonb, now() - make_interval(mins => ${50 - i}))`
+               VALUES (${t}, ${crypto.randomUUID()}, ${conversa}, 'entrante', 'texto', ${JSON.stringify({ texto: `quero 10 caixas, meu fone 85 98888-${String(1000 + i)}` })}::text::jsonb, ${agoraDoProcesso()}::timestamptz - make_interval(mins => ${50 - i}))`
     const id = crypto.randomUUID()
     decisoes.push(id)
     await dono`INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, sessao_id, modo, desfecho, resposta, guardrails, criado_em)
                VALUES (${t}, ${id}, ${conversa}, ${canal}, ${sessao}, ${p.modo ?? 'sombra'}, 'sugeriu',
                        ${JSON.stringify({ mensagens: [`Temos sim, quantas caixas? (${i})`], confianca: 0.9 })}::text::jsonb,
-                       ${JSON.stringify(i === p.turnos - 1 ? p.marcas ?? [] : [])}::text::jsonb, now() - make_interval(mins => ${49 - i}))`
+                       ${JSON.stringify(i === p.turnos - 1 ? p.marcas ?? [] : [])}::text::jsonb, ${agoraDoProcesso()}::timestamptz - make_interval(mins => ${49 - i}))`
   }
   return { conversa, sessao, decisoes }
 }
@@ -234,14 +240,14 @@ describe('worker de qualidade', () => {
     expect((await rodar(A)).julgadas).toBe(0)
     // Mais 10 turnos (uma decisão nova para julgar) → julga de novo.
     const conv = (await dono<{ conversa_id: string }[]>`SELECT conversa_id FROM agente_sessao WHERE id = ${sessao}`)[0]!.conversa_id
-    await dono`INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, sessao_id, modo, desfecho, resposta)
-               VALUES (${A}, ${crypto.randomUUID()}, ${conv}, ${CANAL_A}, ${sessao}, 'sombra', 'sugeriu', '{"mensagens":["Fechamos?"]}'::jsonb)`
+    await dono`INSERT INTO agente_decisao (tenant_id, id, conversa_id, canal_id, sessao_id, modo, desfecho, resposta, criado_em)
+               VALUES (${A}, ${crypto.randomUUID()}, ${conv}, ${CANAL_A}, ${sessao}, 'sombra', 'sugeriu', '{"mensagens":["Fechamos?"]}'::jsonb, ${agoraDoProcesso()})`
     await dono`UPDATE agente_sessao SET turnos = 20 WHERE id = ${sessao}`
     expect((await rodar(A)).julgadas).toBe(1)
     const juiz = (await avaliacoes(A)).filter((x) => x.tipo === 'juiz')
     expect(juiz.map((x) => [x.gatilho, x.turnos])).toEqual([['turnos', 10], ['turnos', 20]])
     // A sessão termina no 20º: já julgada depois do último turno → não paga de novo.
-    await dono`UPDATE agente_sessao SET estado = 'entregue', encerrada_em = now(), motivo_saida = 'teste' WHERE id = ${sessao}`
+    await dono`UPDATE agente_sessao SET estado = 'entregue', encerrada_em = ${agoraDoProcesso()}::timestamptz, motivo_saida = 'teste' WHERE id = ${sessao}`
     expect((await rodar(A)).julgadas).toBe(0)
   })
 
@@ -288,7 +294,7 @@ describe('worker de qualidade', () => {
     await dono`UPDATE agente_config SET qualidade_amostra = 1 WHERE tenant_id = ${A}`
     const { conversa } = await conversaCom(A, CANAL_A, { turnos: 1, modo: 'autonomo' })
     await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-               VALUES (${A}, ${crypto.randomUUID()}, ${conversa}, 'saliente', 'texto', '{"texto":"Enviei de verdade.","automatica":"agente"}'::jsonb, now() - interval '1 minute')`
+               VALUES (${A}, ${crypto.randomUUID()}, ${conversa}, 'saliente', 'texto', '{"texto":"Enviei de verdade.","automatica":"agente"}'::jsonb, ${agoraDoProcesso()}::timestamptz - interval '1 minute')`
     expect((await rodar(A)).julgadas).toBe(1)
     const texto = chamadas[0]!.mensagens[0]!.texto
     expect(texto).toMatch(/AGENTE: Enviei de verdade\./)

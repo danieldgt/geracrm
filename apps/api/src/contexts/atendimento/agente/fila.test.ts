@@ -161,7 +161,9 @@ describe('Falha e recuperação', () => {
   it('executando há muito tempo volta para a fila (processo morreu)', async () => {
     await agendar(CONVERSA, undefined, 0)
     const t = (await pegarProximaTarefa(workerDoTenant as never, new Date(Date.now() + 10)))!
-    await dono`UPDATE agente_tarefa SET iniciada_em = now() - interval '10 minutes' WHERE id = ${t.id}`
+    // ⚠️ P0e: `recuperarTravadas` mede contra o `agora` do processo; com `now()` do contêiner 15+ min
+    //    à frente do host, "10 min atrás" ainda não tinha passado do prazo.
+    await dono`UPDATE agente_tarefa SET iniciada_em = ${new Date(agora().getTime() - 10 * 60_000)} WHERE id = ${t.id}`
     expect(await recuperarTravadas(workerDoTenant as never, agora())).toBe(1)
     const [l] = await dono<{ estado: string }[]>`SELECT estado FROM agente_tarefa WHERE id = ${t.id}`
     expect(l!.estado).toBe('pendente')
