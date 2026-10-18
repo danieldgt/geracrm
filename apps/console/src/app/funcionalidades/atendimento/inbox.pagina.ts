@@ -300,12 +300,6 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
                     @case ('pronto') {
                       @if (sugestao.resposta(); as r) {
                         @if (r.sugestao; as s) {
-                          @if (s.optOutAConfirmar) {
-                            <div class="sug-optout" role="alert">
-                              <strong>O cliente pediu para não receber mensagens.</strong>
-                              Confirme com ele e bloqueie em <a routerLink="/bloqueios">Opt-out / Bloqueios</a> — nada foi bloqueado ainda.
-                            </div>
-                          }
                           <div class="sug-cartao" [class.critica]="s.naoEnvie" aria-live="polite">
                             <div class="sug-topo">
                               <span class="sug-titulo">{{ tituloSugestao(s) }}</span>
@@ -313,6 +307,14 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
                               <span class="selo" [title]="selo.dica">{{ selo.rotulo }}</span>
                               <span class="sug-idade">{{ idade(s.criadaEm) }}</span>
                             </div>
+                            @if (s.optOutAConfirmar) {
+                              <!-- O aviso principal do opt-out a confirmar (Pvis2): um só, no cartão — a nota de
+                                   sistema fica na conversa; nem alerta global nem item repetido na lista de avisos. -->
+                              <div class="sug-optout" role="alert">
+                                <strong>O cliente pediu para não receber mensagens.</strong>
+                                Confirme com ele e bloqueie em <a routerLink="/bloqueios">Opt-out / Bloqueios</a> — nada foi bloqueado ainda.
+                              </div>
+                            }
                             @if (s.bloqueada) {
                               <!-- P12 nao_envie: o texto inalterado não sai (a API recusa com 422). -->
                               <p class="sug-nao-envie" role="alert">

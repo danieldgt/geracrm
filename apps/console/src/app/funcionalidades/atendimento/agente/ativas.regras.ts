@@ -92,6 +92,29 @@ export function rotuloSuspensao(motivo: string): string {
 }
 
 /** Status de template da Meta → rótulo e tom do badge. */
+/**
+ * O pedido de confirmação do "Liberar agora" (Pvis2). Liberar devolve as ativas a
+ * um número que a Meta sinalizou — com a qualidade em VERMELHO, insistir é o
+ * caminho para o banimento, então o modal é de perigo e exige digitar "liberar".
+ */
+export function confirmacaoLiberar(motivo: string): {
+  titulo: string; mensagem: string; acao: string; perigo: boolean; digitar: string | null
+} {
+  const vermelho = motivo.split(':')[2] === 'RED'
+  return vermelho
+    ? {
+        titulo: 'Liberar as ativas com o número em vermelho?',
+        mensagem: 'A qualidade do número está em vermelho. Voltar a iniciar conversas agora pode levar a Meta a restringir ou banir o número. '
+          + 'Libere só se a causa já foi tratada. Digite "liberar" para confirmar.',
+        acao: 'Liberar mesmo assim', perigo: true, digitar: 'liberar',
+      }
+    : {
+        titulo: 'Liberar as ativas agora?',
+        mensagem: `${rotuloSuspensao(motivo)} Liberar faz o agente voltar a iniciar conversas neste número antes disso.`,
+        acao: 'Liberar agora', perigo: true, digitar: null,
+      }
+}
+
 export function badgeStatusTemplate(status: string): { rotulo: string; tom: 'sucesso' | 'atencao' | 'erro' | 'neutro' } {
   switch (status) {
     case 'APPROVED': return { rotulo: 'Aprovado', tom: 'sucesso' }

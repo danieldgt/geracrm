@@ -106,6 +106,10 @@ describe('Avisos por gravidade', () => {
     expect(naoEnvieAssim([m('pede_consentimento', 'ALTA')])).toBe(false)
     expect(pedeConfirmarOptOut([m('opt_out_confirmar', 'ALTA', 'registrado')])).toBe(true)
   })
+  it('opt-out a confirmar não se repete na lista de avisos (o cartão já o destaca)', () => {
+    const avisos = avisosDaSugestao([m('opt_out_confirmar', 'ALTA', 'registrado'), m('possivel_opt_out', 'MEDIA', 'registrado')])
+    expect(avisos.map((a) => a.codigo)).toEqual(['possivel_opt_out'])
+  })
 })
 
 describe('Bloqueio da qualidade (P12 nao_envie)', () => {

@@ -1,4 +1,5 @@
 import { Component, ChangeDetectionStrategy, computed, effect, inject, input, signal, untracked } from '@angular/core'
+import { FormsModule } from '@angular/forms'
 import { chaveLiteral, LIMITES_COMPLIANCE, type ComplianceExtra } from '@geracrm/shared'
 import {
   BadgeComponente, BotaoComponente, ConfirmacaoServico, EsqueletoComponente, EstadoComponente, PainelComponente, ToastServico,
@@ -45,7 +46,7 @@ function iguais(a: ComplianceExtra, b: ComplianceExtra): boolean {
 @Component({
   selector: 'app-agente-compliance',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BadgeComponente, BotaoComponente, EsqueletoComponente, EstadoComponente, PainelComponente],
+  imports: [FormsModule, BadgeComponente, BotaoComponente, EsqueletoComponente, EstadoComponente, PainelComponente],
   template: `
     @if (estado() !== 'sem_permissao') {
       <ui-painel>
@@ -106,9 +107,12 @@ function iguais(a: ComplianceExtra, b: ComplianceExtra): boolean {
                     <div class="adicionar">
                       <label class="campo">
                         <span class="txt-denso">{{ l.rotuloCampo }}</span>
-                        <input type="text" class="txt-corpo" [value]="rascunho()[l.id]" [attr.maxlength]="limites.maxCaracteres"
-                          [attr.aria-invalid]="erroItem()[l.id] ? 'true' : null"
-                          (input)="digitar(l.id, $any($event.target).value)" (keydown.enter)="adicionar(l.id)" />
+                        <!-- ⚠️ ngModel, não [value] solto: em zoneless o Enter logo depois de digitar
+                             podia zerar o signal antes de o binding ter visto o texto ('' → '' = sem
+                             mudança) e o campo não limpava. O ngModel guarda o valor da VIEW. -->
+                        <input type="text" class="txt-corpo" [ngModel]="rascunho()[l.id]" (ngModelChange)="digitar(l.id, $event)"
+                          [attr.maxlength]="limites.maxCaracteres" [attr.aria-invalid]="erroItem()[l.id] ? 'true' : null"
+                          (keydown.enter)="$event.preventDefault(); adicionar(l.id)" />
                         @if (erroItem()[l.id]; as e) { <span class="msg-erro txt-denso">{{ e }}</span> }
                       </label>
                       <ui-botao variante="secundario" (click)="adicionar(l.id)">Adicionar</ui-botao>

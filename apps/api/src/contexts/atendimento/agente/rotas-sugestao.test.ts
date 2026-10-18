@@ -181,7 +181,8 @@ describe('A sugestão do assistido chega ao vendedor', () => {
     const b = (await chamar(T, 'GET', `/v1/conversas/${CONVERSA}/sugestao`)).json() as { sugestao: { naoEnvie: boolean; optOutAConfirmar: boolean; avisos: { codigo: string; gravidade: string }[] } }
     expect(b.sugestao.naoEnvie).toBe(true)
     expect(b.sugestao.optOutAConfirmar).toBe(true)
-    expect(b.sugestao.avisos.map((a) => a.gravidade)).toEqual(['CRITICA', 'ALTA'])
+    // O opt-out a confirmar vai no destaque (`optOutAConfirmar`), não repetido nos avisos (Pvis2).
+    expect(b.sugestao.avisos.map((a) => a.codigo)).toEqual(['valor_sem_fonte'])
   })
 
   it('sombra não aparece para o vendedor; sem sugestão → null; humano respondeu depois → some', async () => {

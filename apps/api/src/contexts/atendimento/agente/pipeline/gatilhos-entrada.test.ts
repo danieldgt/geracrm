@@ -318,12 +318,12 @@ describe('Opt-out fora do autônomo — o modo diz quem age (ADR-028)', () => {
     expect(d.resposta!.mensagens).toEqual(['Certo. Não vamos mais te enviar mensagens por aqui.'])
     expect(d.guardrails).toContainEqual(expect.objectContaining({ codigo: 'opt_out_confirmar', gravidade: 'ALTA' }))
     expect((await dono`SELECT 1 FROM outbox WHERE tenant_id = ${T} AND tipo = 'agente.sugestao'`).length).toBe(1)
-    // Visível antes da P13: nota de sistema na conversa + alerta, sem bloqueio.
+    // Nota de sistema na conversa, sem bloqueio. Pvis2: SEM alerta do tenant — o
+    // destaque é o cartão da sugestão; a faixa global repetia o mesmo aviso.
     const [nota] = await dono<{ conteudo: { automatica: string; texto: string } }[]>`SELECT conteudo FROM mensagem WHERE tenant_id = ${T} AND tipo = 'sistema'`
     expect(nota!.conteudo).toMatchObject({ automatica: 'opt_out_confirmar' })
     expect(nota!.conteudo.texto).toMatch(/confirme/)
-    const [al] = await dono<{ tipo: string }[]>`SELECT tipo FROM alerta WHERE tenant_id = ${T}`
-    expect(al!.tipo).toBe('opt_out_confirmar')
+    expect(await dono`SELECT 1 FROM alerta WHERE tenant_id = ${T} AND tipo = 'opt_out_confirmar'`).toHaveLength(0)
   })
 })
 

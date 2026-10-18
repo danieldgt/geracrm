@@ -225,10 +225,10 @@ async function decidirOptOut(ctx: ContextoPipeline, exclusao: boolean, texto: st
       efeitos: [{
         nome: 'opt-out-a-confirmar',
         async executar(tx) {
-          await notaEAlerta(tx, ctx, {
-            nota: `${AVISO_CONFIRMAR_OPT_OUT} Nada foi bloqueado.`, automatica: 'opt_out_confirmar',
-            alertaTipo: 'opt_out_confirmar', alerta: 'Cliente pediu pelo WhatsApp para não receber mensagens; confirme e bloqueie em Opt-out / Bloqueios.',
-          })
+          // Pvis2: sem alerta do tenant — a faixa global repetia a nota e o destaque do
+          // cartão da sugestão (quatro avisos iguais na mesma tela). Ficam a nota na
+          // conversa e o destaque no cartão (`optOutAConfirmar`).
+          await notaEAlerta(tx, ctx, { nota: `${AVISO_CONFIRMAR_OPT_OUT} Nada foi bloqueado.`, automatica: 'opt_out_confirmar' })
           return []
         },
       }],
@@ -254,8 +254,13 @@ async function confirmacaoJaEnviada(tx: Sql, ctx: ContextoPipeline, confirmacao:
   return l?.ja ?? false
 }
 
-/** Nota de sistema na conversa (o vendedor vê no inbox) + alerta do tenant (um aberto por tipo, sem PII). */
-async function notaEAlerta(tx: Sql, ctx: ContextoPipeline, p: { nota: string; automatica: string; alertaTipo: string; alerta: string }): Promise<void> {
+/**
+ * Nota de sistema na conversa (o vendedor vê no inbox) + alerta do tenant (um aberto por tipo, sem PII).
+ * Sem `alerta`: só a nota — quando a conversa já tem destaque próprio (o cartão da sugestão).
+ */
+async function notaEAlerta(
+  tx: Sql, ctx: ContextoPipeline, p: { nota: string; automatica: string; alerta?: { tipo: string; mensagem: string } },
+): Promise<void> {
   await tx`
     INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
     VALUES (tenant_atual(), ${randomUUID()}, ${ctx.conversaId}, 'saliente', 'sistema',
@@ -266,9 +271,10 @@ async function notaEAlerta(tx: Sql, ctx: ContextoPipeline, p: { nota: string; au
     INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
     VALUES (tenant_atual(), 'mensagem.enviada', 'conversa', ${ctx.conversaId},
             ${JSON.stringify({ conversaId: ctx.conversaId, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
+  if (!p.alerta) return
   await tx`
     INSERT INTO alerta (tenant_id, id, tipo, severidade, mensagem)
-    VALUES (tenant_atual(), ${randomUUID()}, ${p.alertaTipo}, 'aviso', ${p.alerta})
+    VALUES (tenant_atual(), ${randomUUID()}, ${p.alerta.tipo}, 'aviso', ${p.alerta.mensagem})
     ON CONFLICT (tenant_id, tipo) WHERE resolvido_em IS NULL DO NOTHING`
 }
 
@@ -303,8 +309,8 @@ function efeitoBloquearOptOut(ctx: ContextoPipeline, exclusao: boolean, jaConfir
         nota: exclusao
           ? 'O cliente pediu para não receber mensagens e para EXCLUIR os dados (LGPD). Número bloqueado; conclua a exclusão.'
           : 'O cliente pediu para não receber mais mensagens. Número bloqueado (opt-out). Para desfazer, só a pedido dele, em Opt-out / Bloqueios.',
-        automatica: 'opt_out', alertaTipo: 'opt_out_cliente',
-        alerta: 'Cliente pediu pelo WhatsApp para não receber mensagens; o agente bloqueou o número. Veja Opt-out / Bloqueios.',
+        automatica: 'opt_out',
+        alerta: { tipo: 'opt_out_cliente', mensagem: 'Cliente pediu pelo WhatsApp para não receber mensagens; o agente bloqueou o número. Veja Opt-out / Bloqueios.' },
       })
       return marcas
     },

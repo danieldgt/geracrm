@@ -1,12 +1,12 @@
 import { Component, ChangeDetectionStrategy, inject, input, signal, computed, effect, untracked } from '@angular/core'
 import type { EstadoAtivas, TemplateAprovadoResumo } from '@geracrm/shared'
 import {
-  BadgeComponente, BotaoComponente, EsqueletoComponente, EstadoComponente, PainelComponente, ToastServico,
+  BadgeComponente, BotaoComponente, ConfirmacaoServico, EsqueletoComponente, EstadoComponente, PainelComponente, ToastServico,
 } from '../../../compartilhado/ui/index.js'
 import { ehSemPermissao } from './agente.servico.js'
 import { AtivasServico } from './ativas.servico.js'
 import {
-  adicionarFeriado, badgeStatusTemplate, erroDaApi, feriadoDeData, removerFeriado, rotuloFeriado, rotuloSuspensao,
+  adicionarFeriado, badgeStatusTemplate, confirmacaoLiberar, erroDaApi, feriadoDeData, removerFeriado, rotuloFeriado, rotuloSuspensao,
   formatarNoFuso, validarAtivas, type ErrosAtivas, type FormAtivas,
 } from './ativas.regras.js'
 
@@ -214,6 +214,7 @@ export class AgenteAtivasComponente {
 
   private readonly api = inject(AtivasServico)
   private readonly toast = inject(ToastServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
 
   readonly estado = signal<Estado>('carregando')
   readonly dados = signal<EstadoAtivas | null>(null)
@@ -315,6 +316,10 @@ export class AgenteAtivasComponente {
   }
 
   async liberar(): Promise<void> {
+    const motivo = this.dados()?.suspensao?.motivo
+    if (motivo === undefined) return
+    // ⚠️ Modal do console, nunca `confirm()` nativo — e com o número em vermelho, confirmação digitada.
+    if (!(await this.confirmacao.confirmar(confirmacaoLiberar(motivo)))) return
     this.liberando.set(true)
     try {
       const r = await this.api.liberar(this.canalId())

@@ -117,6 +117,8 @@ export interface AvisoSugestao {
   readonly texto: string
 }
 
+const CODIGO_OPT_OUT_CONFIRMAR = 'opt_out_confirmar'
+
 const ROTULOS: Readonly<Record<string, string>> = {
   valor_sem_fonte: 'O texto citava um valor que não veio do catálogo; o valor foi tirado. Confira o preço antes de responder.',
   numero_sem_fonte: 'Um número (percentual, quantidade ou prazo) não tinha fonte e foi barrado. Confira antes de prometer.',
@@ -157,6 +159,9 @@ export function avisosDaSugestao(marcas: readonly MarcaGuardrail[]): AvisoSugest
   const porCodigo = new Map<string, AvisoSugestao>()
   for (const m of marcas) {
     if (m.gravidade === 'INFO' || !GRAVIDADES_GUARDRAIL.includes(m.gravidade)) continue
+    // Pvis2: o opt-out a confirmar já tem destaque próprio no cartão (`optOutAConfirmar`);
+    // repetir na lista de avisos era o 3º aviso igual na mesma tela.
+    if (m.codigo === CODIGO_OPT_OUT_CONFIRMAR) continue
     const atual = porCodigo.get(m.codigo)
     if (atual && ORDEM[atual.gravidade] <= ORDEM[m.gravidade]) continue
     porCodigo.set(m.codigo, {
@@ -192,7 +197,7 @@ export function motivoDoBloqueio(marcas: readonly MarcaGuardrail[]): string | nu
 
 /** O cliente pediu opt-out e o vendedor precisa confirmar (P4, assistido). */
 export function pedeConfirmarOptOut(marcas: readonly MarcaGuardrail[]): boolean {
-  return marcas.some((m) => m.codigo === 'opt_out_confirmar')
+  return marcas.some((m) => m.codigo === CODIGO_OPT_OUT_CONFIRMAR)
 }
 
 // ── contrato HTTP ───────────────────────────────────────────────────────────
