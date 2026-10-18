@@ -90,10 +90,12 @@ const configurar = (modo: string, extra: Record<string, unknown> = {}) => dono`
   ON CONFLICT (tenant_id, canal_id) DO UPDATE SET modo = EXCLUDED.modo, ativo = EXCLUDED.ativo,
     so_quando_ninguem_disponivel = false, exigir_ausencia_antes = false, orcamento_dia_centavos = EXCLUDED.orcamento_dia_centavos`
 
+// ⚠️ P0e: carimbos pelo relógio do PROCESSO — o `agora` do turno (`conduzirTurnoVendedor`). Com `now()`
+//    do contêiner horas fora do host, a mensagem do cliente caía fora da janela do turno e ele calava.
 const mensagemDoCliente = async (texto: string): Promise<string> => {
   const id = crypto.randomUUID()
   await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-             VALUES (${T}, ${id}, ${CONVERSA}, 'entrante', 'texto', ${JSON.stringify({ texto })}::text::jsonb, now())`
+             VALUES (${T}, ${id}, ${CONVERSA}, 'entrante', 'texto', ${JSON.stringify({ texto })}::text::jsonb, ${new Date()})`
   return id
 }
 const tarefaPara = (ids: string[]): Tarefa => ({ tenant_id: T, id: crypto.randomUUID(), conversa_id: CONVERSA, canal_id: CANAL, mensagens_ids: ids, tentativas: 1, executar_em: new Date() })
@@ -255,7 +257,7 @@ describe('Portão', () => {
   it('humano assumiu a conversa → o agente cala', async () => {
     await configurar('autonomo')
     await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id, estado, assumido_em)
-               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, ${CANAL}, 1, ${USUARIO}, 'em_atendimento', now())`
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, ${CANAL}, 1, ${USUARIO}, 'em_atendimento', ${new Date()})`
     const r = await turno([await mensagemDoCliente('oi')])
     expect(r.desfecho).toBe('silencio')
     expect(r.motivo).toBe('humano_assumiu')
@@ -265,7 +267,7 @@ describe('Portão', () => {
     await dono`UPDATE agente_config SET exigir_ausencia_antes = true WHERE tenant_id = ${T}`
     const m1 = await mensagemDoCliente('oi')
     await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
-               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', '{"texto":"Ninguém disponível agora.","automatica":"ausencia"}', now())`
+               VALUES (${T}, gen_random_uuid(), ${CONVERSA}, 'saliente', 'texto', '{"texto":"Ninguém disponível agora.","automatica":"ausencia"}', ${new Date()})`
     const r1 = await turno([m1])
     expect(r1.desfecho).toBe('silencio')
     expect(r1.motivo).toBe('ausencia_recem_enviada')
@@ -288,7 +290,7 @@ describe('Alçada depois do "sim"', () => {
     await configurar('autonomo')
     const pedidoId = 'b2e20000-dddd-4000-8000-000000000001'
     await dono`INSERT INTO pedido (tenant_id, id, contato_id, conversa_id, estado, origem, total_centavos, total_pecas, confirmado_em)
-               VALUES (${T}, ${pedidoId}, ${CONTATO}, ${CONVERSA}, 'confirmado', 'agente', 9980, 2, now())`
+               VALUES (${T}, ${pedidoId}, ${CONTATO}, ${CONVERSA}, 'confirmado', 'agente', 9980, 2, ${new Date()})`
     const r = await turno([await mensagemDoCliente('sim')])
     expect(r.desfecho).toBe('handoff')
     expect(r.motivo).toBe('acima_da_alcada')
