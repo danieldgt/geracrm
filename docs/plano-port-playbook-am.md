@@ -445,3 +445,10 @@ PRONTO     skills descrevem o pipeline e onde estender
   cacheado, negaSerIa ajustado, prazo no vigia de canal.
 - Fora do escopo do port, achado na revisão da P19: partições de `auditoria` só existem até 2027-09 e nenhum job
   cria as próximas (verificar também mensagem/venda) — abrir raia própria.
+- [integrada 4e92929] Pvis — validação visual das 14 telas, 13 correções.
+- [integrada 3614e03..] Pvis2 — SLA cumprido pelo padrão, playground fora da operação, selo do modo da sugestão,
+  prévia sem [sistema], confirmação no Liberar agora, opt-out em um lugar, Enter nas Proteções, Config. do Canal e
+  Clientes a 320 px, rascunho simulado do playbook. Validação no navegador parcial (Chrome perdeu a conexão).
+- P0e (em andamento): 6 testes da API falhando em grupo de forma recorrente (ausência, 1ª resposta, sandbox,
+  homologação A2) — suspeita de dependência de horário/expediente e estado compartilhado.
+- Decisão pendente do dono: layout mobile (menu gaveta, trilho recolhível, alertas recolhíveis, container queries).
