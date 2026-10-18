@@ -59,11 +59,20 @@ const atendimento = async (t = T) => (await dono<{
 }[]>`SELECT primeira_entrante_em, primeira_resposta_em, primeira_resposta_humana_em, primeira_resposta_por_id
        FROM atendimento WHERE tenant_id = ${t} AND estado <> 'encerrado'`)[0]
 
+/**
+ * ⚠️ P0e: "há N minutos" pelo relógio do BANCO — o mesmo que carimba a resposta (`mensagem.criado_em`
+ * DEFAULT now()) e contra o qual o marco compara a chegada. Com o relógio do processo, o contêiner do
+ * Docker 15 min atrás do host deixava a chegada "depois" da resposta (primeira_entrante_em NULL) e,
+ * à frente, a espera de 2 min virava 17 (fora do SLA de 5).
+ */
+const minutosAtrasNoBanco = async (minutos: number): Promise<Date> =>
+  (await dono<{ em: Date }[]>`SELECT clock_timestamp() - make_interval(secs => ${minutos * 60}) AS em`)[0]!.em
+
 /** Cliente escreveu há `minutos`; um atendimento aberto o espera (como o handoff cria). */
 async function clienteEsperando(minutos: number, extra: { automaticaEm?: Date; t?: string } = {}): Promise<Date> {
   const t = extra.t ?? T
   const { conversa, canal } = ids(t)
-  const chegada = new Date(Date.now() - minutos * 60_000)
+  const chegada = await minutosAtrasNoBanco(minutos)
   await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
              VALUES (${t}, ${randomUUID()}, ${conversa}, 'entrante', 'texto', '{"texto":"tem sabão?"}'::jsonb, ${chegada})`
   await dono`UPDATE conversa SET ultima_entrante_em = ${chegada} WHERE tenant_id = ${t} AND id = ${conversa}`
@@ -158,7 +167,7 @@ describe('1ª resposta humana do atendimento', () => {
   })
 
   it('⚠️ a automática que já respondeu fica em primeira_resposta_em; a humana mede à parte (MC-05)', async () => {
-    const automatica = new Date(Date.now() - 4 * 60_000)
+    const automatica = await minutosAtrasNoBanco(4)
     await clienteEsperando(5, { automaticaEm: automatica })
     expect((await enviar('Oi, sou a Ana')).statusCode).toBe(200)
     const a = await atendimento()

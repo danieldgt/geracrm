@@ -81,24 +81,32 @@ afterAll(async () => {
   await encerrarBanco()
 })
 
+/**
+ * ⚠️ P0e: os carimbos semeados saem do relógio do PROCESSO — o mesmo do `agora` que
+ * `responderAusencia`/`quemAtende` recebem. Com `now()` do Postgres, o contêiner do Docker
+ * 15 min atrás do host (medido depois de uma suspensão do Mac) fazia o batimento de "1 min
+ * atrás" valer 16 min e a Ana sumir: `ja_respondida` no lugar de `tem_quem_atenda`.
+ */
+const agoraDoProcesso = (): Date => new Date()
+
 /** Atendimento aberto, assumido há `diasAtras` dias. */
 const assumirHa = (diasAtras: number) => donoA`
   INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id, estado, assumido_em)
   VALUES (${TA}, ${ATENDA}, ${CONVERSAA}, ${CANALA}, 1, ${UA}, 'em_atendimento',
-          now() - make_interval(days => ${diasAtras}))`
+          ${agoraDoProcesso()}::timestamptz - make_interval(days => ${diasAtras}))`
 
 /** Uma resposta de ausência recente — a sentinela que evita o envio de rede. */
 const ausenciaRecente = () => donoA`
   INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
   VALUES (${TA}, gen_random_uuid(), ${CONVERSAA}, 'saliente', 'texto',
-          '{"texto":"Estamos fechados.","automatica":"ausencia"}'::jsonb, now() - interval '10 minutes')`
+          '{"texto":"Estamos fechados.","automatica":"ausencia"}'::jsonb, ${agoraDoProcesso()}::timestamptz - interval '10 minutes')`
 
 /** Mensagem saliente com autor = pessoa digitou. Sem autor = sistema disparou. */
 const salienteHaMinutos = (minutos: number, autor: string | null) => donoA`
   INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, enviada_por_id, criado_em)
   VALUES (${TA}, gen_random_uuid(), ${CONVERSAA}, 'saliente', 'texto',
           '{"texto":"oi"}'::jsonb, ${autor},
-          now() - make_interval(mins => ${minutos}))`
+          ${agoraDoProcesso()}::timestamptz - make_interval(mins => ${minutos}))`
 
 describe('⚠️ Assunção esquecida NÃO é presença', () => {
   it('assumida há 14 dias e sem ninguém digitando: a ausência responde', async () => {
@@ -183,7 +191,7 @@ const vincularAoCanal = () => donoA`
 /** Último batimento do console, e se ela se marcou ausente. */
 const batimentoHaMinutos = (minutos: number, ausente: boolean) => donoA`
   UPDATE usuario
-     SET visto_em = now() - make_interval(mins => ${minutos}), ausente = ${ausente}
+     SET visto_em = ${agoraDoProcesso()}::timestamptz - make_interval(mins => ${minutos}), ausente = ${ausente}
    WHERE tenant_id = ${TA} AND id = ${UA}`
 
 describe('⚠️ Ninguém disponível é ausência, mesmo em horário comercial', () => {

@@ -25,3 +25,23 @@ process.env.DEV_TENANT_HEADER ??= 'on'
 //    configurado, e nenhum teste pode chamar fornecedor de verdade (skill
 //    geracrm-ia). Quem precisar do Claude/OpenRouter falso ajusta no próprio arquivo.
 process.env.IA_PROVEDOR ??= 'simulado'
+
+// ⚠️ P0e — DESVIO DE RELÓGIO de propósito, para provar que a suíte não depende de o relógio do
+//    processo bater com o do Postgres nem da hora do dia. O Docker no macOS deixa o relógio do
+//    contêiner MINUTOS atrás do host depois de uma suspensão (medido: 15 min) — foi a causa das
+//    falhas em grupo da P0e. `GERACRM_TESTE_DESVIO_RELOGIO_MIN=-30` faz o processo viver 30 min
+//    ATRÁS do banco; `=600`, 10 h à frente. Só o `Date` global muda (`new Date()` e `Date.now()`);
+//    timers seguem reais. Sem a variável, nada é tocado.
+const desvioMin = Number(process.env.GERACRM_TESTE_DESVIO_RELOGIO_MIN ?? 0)
+if (Number.isFinite(desvioMin) && desvioMin !== 0) {
+  const Real = Date
+  const desvioMs = desvioMin * 60_000
+  class DateDesviado extends Real {
+    constructor(...a: unknown[]) {
+      if (a.length === 0) super(Real.now() + desvioMs)
+      else super(...(a as [number]))
+    }
+    static override now(): number { return Real.now() + desvioMs }
+  }
+  globalThis.Date = DateDesviado as DateConstructor
+}

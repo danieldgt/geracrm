@@ -415,7 +415,9 @@ describe('Sandbox (simular com playbook, modo seco)', () => {
 
   it('sem rascunho, pedir o rascunho é 422; uma simulação por vez (409); 20 mensagens e acabou (422)', async () => {
     expect((await chamar(A, 'POST', `/v1/canais/${CANAL}/agente/simular`, { mensagem: 'oi', playbook: 'rascunho' })).json()).toMatchObject({ erro: 'playbook.sem_rascunho' })
-    await dono`INSERT INTO agente_simulacao_trava (tenant_id, token, ate) VALUES (${A}, ${crypto.randomUUID()}, now() + interval '1 minute')
+    // ⚠️ P0e: a trava vence pelo relógio do PROCESSO (`tomarTravaSimulacao` compara `ate < agora`);
+    //    com `now()` do contêiner 15 min atrás do host ela já nascia vencida e a simulação passava (200).
+    await dono`INSERT INTO agente_simulacao_trava (tenant_id, token, ate) VALUES (${A}, ${crypto.randomUUID()}, ${new Date(Date.now() + 60_000)})
                ON CONFLICT (tenant_id) DO UPDATE SET token = EXCLUDED.token, ate = EXCLUDED.ate`
     const ocupado = await chamar(A, 'POST', `/v1/canais/${CANAL}/agente/simular`, { mensagem: 'oi' })
     expect(ocupado.statusCode).toBe(409)
