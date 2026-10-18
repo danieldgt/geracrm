@@ -449,6 +449,10 @@ PRONTO     skills descrevem o pipeline e onde estender
 - [integrada 3614e03..] Pvis2 — SLA cumprido pelo padrão, playground fora da operação, selo do modo da sugestão,
   prévia sem [sistema], confirmação no Liberar agora, opt-out em um lugar, Enter nas Proteções, Config. do Canal e
   Clientes a 320 px, rascunho simulado do playbook. Validação no navegador parcial (Chrome perdeu a conexão).
-- P0e (em andamento): 6 testes da API falhando em grupo de forma recorrente (ausência, 1ª resposta, sandbox,
+- [integrada 1602229] P0e: 6 testes da API falhando em grupo de forma recorrente (ausência, 1ª resposta, sandbox,
   homologação A2) — suspeita de dependência de horário/expediente e estado compartilhado.
 - Decisão pendente do dono: layout mobile (menu gaveta, trilho recolhível, alertas recolhíveis, container queries).
+- **Encerramento (2026-10-18):** todas as raias integradas; main verde em `pnpm lint typecheck test --force`
+  (18/18; api 2151, shared 875, console 304, conectores 46). Causa das falhas intermitentes: relógio do contêiner
+  Docker atrás do host após suspensão do Mac — rodar a suíte com `caffeinate -i` ou reiniciar o Docker Desktop
+  quando o globalSetup avisar divergência.
