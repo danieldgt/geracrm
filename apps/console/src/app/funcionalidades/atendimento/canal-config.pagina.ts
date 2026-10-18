@@ -46,7 +46,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
               <ul class="canais">
                 @for (c of canais(); track c.id) {
                   <li class="cn" [class.on]="sel()?.id === c.id" (click)="abrir(c)">
-                    <span class="cn-nome encolhe">{{ c.nomeAmigavel }}</span>
+                    <span class="cn-nome encolhe" [title]="c.nomeAmigavel">{{ c.nomeAmigavel }}</span>
                     @if (c.riscoBanimento) { <span class="risco" title="Canal não-oficial: risco de banimento">⚠</span> }
                     <span class="cn-estado" [attr.data-e]="c.estado">{{ c.estado }}</span>
                   </li>
@@ -105,6 +105,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .grade { display: grid; grid-template-columns: 260px 1fr; gap: var(--espacamento-4); align-items: start; }
     @media (max-width: 720px) { .grade { grid-template-columns: 1fr; } }
+    @media (max-width: 480px) { :host { padding: var(--espacamento-3); } .cn { padding: var(--espacamento-3); } }
     .col { min-width: 0; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
     .esq { height: 48px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
@@ -113,7 +114,8 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .cn:last-child { border-bottom: none; }
     .cn:hover { background: var(--superficie); }
     .cn.on { background: var(--acao-suave); box-shadow: inset 3px 0 0 var(--acao); }
-    .cn-nome { flex: 1; color: var(--texto); font-size: 14px; }
+    /* Pvis2: a 320 px o nome longo (sem espaço) passava por cima de "conectado" — trunca. */
+    .cn-nome { flex: 1; color: var(--texto); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .risco { color: var(--atencao); flex: none; }
     .cn-estado { font-size: 11px; color: var(--texto-suave); flex: none; }
     .cn-estado[data-e="conectado"] { color: var(--sucesso); }

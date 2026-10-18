@@ -184,8 +184,12 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     }
   `,
   styles: `
-    :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { margin-bottom: var(--espacamento-5); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
+    /* Pvis2: a régua é a largura DA PÁGINA, não da janela — com o painel de conversas
+       aberto (empurrando o conteúdo) a viewport passava de 720 px, a grade de 7 colunas
+       (~880 px de mínimo) não cabia e a página rolava de lado. Container query resolve. */
+    :host { display: block; width: 100%; min-width: 0; padding: var(--espacamento-6); container-type: inline-size; }
+    .cabecalho { margin-bottom: var(--espacamento-5); display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
+    .acoes-topo { flex-wrap: wrap; }
     .novo-contato { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: center; margin-bottom: var(--espacamento-5); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .novo-contato input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .erro-form { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
@@ -255,10 +259,11 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .mais { text-align: center; padding: var(--espacamento-4); }
     .parcial { text-align: center; color: var(--atencao); font-size: 13px; }
 
-    @media (max-width: 720px) {
-      .linha { grid-template-columns: 1fr auto; row-gap: 2px; }
+    @container (max-width: 940px) {
+      .linha { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; }
       .explica, .acao, .compras { display: none; }
     }
+    @media (max-width: 480px) { :host { padding: var(--espacamento-3); } }
   `,
 })
 export class ClientesPagina implements OnInit {
