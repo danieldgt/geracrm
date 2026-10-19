@@ -75,6 +75,50 @@ export function acaoVoltar(temConversaAberta: boolean): AcaoVoltar {
   return temConversaAberta ? 'voltar-para-lista' : 'fechar-trilho'
 }
 
+/**
+ * Onde mora o ‹ no celular: UM por nível, nunca dois na tela.
+ * - lista à vista → ‹ no cabeçalho da LISTA do inbox, que FECHA o trilho;
+ * - conversa aberta em largura total → o ‹ do topo da conversa (o do próprio
+ *   inbox) volta à lista, e o cabeçalho da lista some junto com a lista.
+ * O trilho não desenha ‹ próprio no celular (o cabeçalho dele nem aparece:
+ * seria um segundo "Conversas"). No desktop o trilho fecha pelo ›.
+ */
+export function voltarNoCabecalhoDaLista(celular: boolean, dentroDoTrilho: boolean): AcaoVoltar | null {
+  // Fora do trilho (a rota /conversas aberta direto) não há trilho a fechar.
+  return celular && dentroDoTrilho ? 'fechar-trilho' : null
+}
+
+/**
+ * Camadas (z-index) da casca no celular, em relação aos modais das telas.
+ *
+ * ⚠️ Os modais das telas (fundo escuro + painel) usam de 40 para cima. O botão
+ * flutuante de conversas fica ABAIXO deles: com um modal aberto, o fundo escuro
+ * cobre o botão — nem tapa o canto do modal nem abre o trilho por cima de um
+ * diálogo. O trilho ABERTO (tela cheia) fica acima dos modais; a gaveta e o
+ * véu, acima de tudo da casca.
+ */
+export const CAMADA = {
+  /** Piso dos modais das telas — todo elemento fixo de tela fica em >= 40. */
+  modal: 40,
+  trilhoRecolhido: 30,
+  trilhoAberto: 60,
+  veu: 90,
+  gaveta: 100,
+} as const
+
+export function camadaTrilho(aberto: boolean): number {
+  return aberto ? CAMADA.trilhoAberto : CAMADA.trilhoRecolhido
+}
+
+/**
+ * O que fica `inert` atrás de algo que se comporta como modal no celular: a
+ * gaveta do menu aberta OU o trilho de conversas aberto em tela cheia. Sem
+ * isso o Tab leva o foco para botões escondidos atrás.
+ */
+export function conteudoInerte(celular: boolean, gavetaAberta: boolean, trilhoAberto: boolean): boolean {
+  return gavetaAberta || (celular && trilhoAberto)
+}
+
 export interface AlertaResumo {
   readonly severidade: 'aviso' | 'critico'
 }

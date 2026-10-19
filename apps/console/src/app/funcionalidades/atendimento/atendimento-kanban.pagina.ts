@@ -143,7 +143,7 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
     .col-topo { display: flex; align-items: center; justify-content: space-between; padding: var(--espacamento-3) var(--espacamento-4); }
     .col-nome { color: var(--texto); }
     .col-total { font-size: 12px; color: var(--texto-suave); background: var(--superficie); padding: 1px 8px; border-radius: var(--raio-completo); font-variant-numeric: tabular-nums; }
-    .col-cards { flex: 1; overflow-y: auto; padding: 0 var(--espacamento-3) var(--espacamento-3); display: flex; flex-direction: column; gap: var(--espacamento-2); min-height: 40px; }
+    .col-cards { flex: 1; overflow-y: auto; padding: 0 var(--espacamento-3) calc(var(--espacamento-3) + var(--folga-flutuante, 0px)); display: flex; flex-direction: column; gap: var(--espacamento-2); min-height: 40px; }
     /* ⚠️ flex:none: sem ele o flex-shrink do .col-cards ESMAGA os cards até
        caberem (10px cada) em vez de rolar. Ver cards-nao-esmagam.spec.ts. */
     .card { flex: none; display: flex; flex-direction: column; gap: 3px; padding: var(--espacamento-3);

@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, OnDestroy, computed, signal, viewChild, effect, untracked, ElementRef } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, input, OnDestroy, computed, signal, viewChild, effect, untracked, ElementRef } from '@angular/core'
 import { FormsModule } from '@angular/forms'
 import { RouterLink } from '@angular/router'
 import { HttpClient } from '@angular/common/http'
@@ -12,6 +12,8 @@ import { SugestaoServico } from './sugestao.servico.js'
 import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo, seloDaSugestao, tituloDaSugestao } from './sugestao.regras.js'
 import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.js'
 import { SlaCronometroComponente } from './sla-cronometro.componente.js'
+import { CelularServico } from '../../nucleo/celular.servico.js'
+import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
 
 /**
  * Inbox — visual inspirado no WhatsApp (tema escuro, bolhas, avatares).
@@ -29,6 +31,13 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
       <!-- ───────── Lista ───────── -->
       <aside class="lista">
         <header class="barra">
+          @if (voltarDaLista() === 'fechar-trilho') {
+            <!-- Celular: o trilho ocupa a tela e não tem cabeçalho próprio; este
+                 ‹ fecha. Com a conversa em largura total a lista some, e o ‹
+                 do topo da conversa volta para cá — um ‹ por nível. -->
+            <button class="voltar fechar-trilho" (click)="servico.fecharRail()" title="Fechar conversas"
+                    aria-label="Fechar conversas">‹</button>
+          }
           <span class="titulo">Conversas</span>
           @if (rotuloConexao()) {
             <!-- Esta bolinha é a conexão da TELA com o servidor (SSE), não o
@@ -472,6 +481,8 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
       font-size: 22px; line-height: 1; cursor: pointer; padding: 4px 8px; margin-left: -4px;
       border-radius: var(--raio-controle); flex: none; }
     .voltar:hover { background: var(--wa-hover); color: var(--wa-text); }
+    .voltar.fechar-trilho { display: inline-flex; align-items: center; min-width: 36px; min-height: 36px; }
+    .voltar:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
 
     /* ── Lista ── */
     .lista { display: flex; flex-direction: column; background: var(--wa-sidebar); border-right: 1px solid var(--wa-line); min-height: 0; }
@@ -695,6 +706,11 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
 export class InboxPagina implements OnDestroy {
   readonly servico = inject(InboxServico)
   readonly eventos = inject(EventosServico)
+  /** Montado pelo trilho de conversas (e não pela rota /conversas). */
+  readonly noTrilho = input(false)
+  /** ‹ do cabeçalho da lista: só no celular, onde o trilho é tela cheia e fecha por aqui. */
+  readonly voltarDaLista = computed(() => voltarNoCabecalhoDaLista(this.celular(), this.noTrilho()))
+  private readonly celular = inject(CelularServico).celular
   /**
    * ⚠️ O MESMO estado de presença do menu do usuário, não uma cópia. Quem se
    * marca ausente está dizendo ao produto que saiu da mesa: o agente assume o

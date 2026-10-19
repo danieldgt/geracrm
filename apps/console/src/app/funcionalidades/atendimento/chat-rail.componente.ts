@@ -4,7 +4,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { InboxPagina } from './inbox.pagina.js'
 import { CelularServico } from '../../nucleo/celular.servico.js'
-import { acaoVoltar, rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.js'
+import { rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.js'
 
 /**
  * Rail do CHAT — a funcionalidade principal, sempre à mão, ancorado À DIREITA.
@@ -26,7 +26,9 @@ import { acaoVoltar, rotuloBotaoConversas, rotuloContador } from '../../nucleo/c
   template: `
     <div class="rail" [class.aberto]="servico.railAberto()"
          [class.sobrepor]="servico.railAberto() && servico.railSobrepor()"
-         [style.--rail-w]="servico.railLargura() + 'px'">
+         [style.--rail-w]="servico.railLargura() + 'px'"
+         [attr.role]="telaCheia() ? 'dialog' : null" [attr.aria-modal]="telaCheia() ? 'true' : null"
+         [attr.aria-label]="telaCheia() ? 'Conversas' : null">
       @if (servico.railAberto()) {
         <!-- Puxador de redimensionamento na BORDA ESQUERDA do painel. -->
         <div class="puxador" (pointerdown)="iniciarResize($event)"
@@ -52,13 +54,11 @@ import { acaoVoltar, rotuloBotaoConversas, rotuloContador } from '../../nucleo/c
         </div>
         <span class="conex" [attr.data-estado]="eventos.estado()" [title]="'Conexão: ' + eventos.estado()"></span>
       } @else {
-        <!-- EXPANDIDO: cabeçalho (modo + recolher) + inbox completo -->
+        <!-- EXPANDIDO: cabeçalho (modo + recolher) + inbox completo.
+             Celular: o cabeçalho some (seria um segundo "Conversas"); o ‹ que
+             fecha mora no cabeçalho da lista do inbox, e o ‹ da conversa volta
+             à lista — um por nível (voltarNoCabecalhoDaLista). -->
         <div class="cab">
-          @if (celular.celular()) {
-            <!-- Celular: o trilho ocupa a tela; o voltar sobe UM nível
-                 (conversa → lista → fecha), nunca pula a lista. -->
-            <button class="voltar-trilho" (click)="voltar()" [attr.aria-label]="rotuloVoltar()">‹</button>
-          }
           <span class="cab-tit">Conversas</span>
           <span class="cab-acoes">
             <button class="modo" (click)="servico.alternarSobrepor()"
@@ -71,7 +71,7 @@ import { acaoVoltar, rotuloBotaoConversas, rotuloContador } from '../../nucleo/c
             <button class="recolher" (click)="servico.fecharRail()" title="Recolher chat" aria-label="Recolher chat">›</button>
           </span>
         </div>
-        <app-inbox class="corpo" />
+        <app-inbox class="corpo" [noTrilho]="true" />
       }
     </div>
   `,
@@ -129,10 +129,7 @@ import { acaoVoltar, rotuloBotaoConversas, rotuloContador } from '../../nucleo/c
       .rail.aberto { position: fixed; top: 0; right: 0; height: 100vh; z-index: 60;
                      width: min(var(--rail-w), 100vw); box-shadow: -10px 0 34px rgb(31 26 22 / .16); }
     }
-    .voltar-trilho { border: 0; background: transparent; color: var(--texto-secundario); cursor: pointer;
-                     font-size: 24px; line-height: 1; min-width: 36px; min-height: 36px; border-radius: var(--raio-controle); }
-    .voltar-trilho:hover { background: var(--superficie-hover); color: var(--texto); }
-    .voltar-trilho:focus-visible, .topo-btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+    .topo-btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
 
     /* Celular (< 720px; corte em casca.regras.ts): recolhido = botão flutuante
        redondo no canto com o contador; aberto = tela inteira. Sem puxador nem
@@ -146,10 +143,7 @@ import { acaoVoltar, rotuloBotaoConversas, rotuloContador } from '../../nucleo/c
       .badge { top: -4px; right: -4px; min-width: 20px; height: 20px; line-height: 20px; font-size: 11px; }
       .rail.aberto, .rail.aberto.sobrepor { position: fixed; inset: 0; width: 100vw; height: 100dvh; z-index: 60;
                                             border-left: 0; }
-      .puxador, .modo { display: none; }
-      .cab { height: 48px; padding: 0 var(--espacamento-2); justify-content: flex-start; gap: var(--espacamento-1); }
-      .cab-tit { flex: 1; }
-      .recolher { display: none; }
+      .puxador, .cab { display: none; }
     }
   `],
 })
@@ -159,15 +153,9 @@ export class ChatRailComponente implements OnInit, OnDestroy {
   readonly celular = inject(CelularServico)
   readonly contador = computed(() => rotuloContador(this.servico.naoLidasTotal()))
   readonly rotuloBotao = computed(() => rotuloBotaoConversas(this.servico.naoLidasTotal()))
-  readonly rotuloVoltar = computed(() =>
-    acaoVoltar(this.servico.selecionadaId() !== null) === 'voltar-para-lista' ? 'Voltar às conversas' : 'Fechar conversas')
+  /** Celular com o trilho aberto: ocupa a tela e se comporta como diálogo (o resto fica inert na casca). */
+  readonly telaCheia = computed(() => this.celular.celular() && this.servico.railAberto())
   private cancelarEscuta?: () => void
-
-  /** Voltar do trilho no celular: sobe um nível (a regra decide qual). */
-  voltar(): void {
-    if (acaoVoltar(this.servico.selecionadaId() !== null) === 'voltar-para-lista') this.servico.voltarParaLista()
-    else this.servico.fecharRail()
-  }
 
   ngOnInit(): void {
     void this.servico.carregar()

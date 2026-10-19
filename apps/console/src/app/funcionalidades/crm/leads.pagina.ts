@@ -140,6 +140,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .col-total { font-size: 12px; color: var(--texto-suave); background: var(--fundo); padding: 1px 8px; border-radius: var(--raio-completo); font-variant-numeric: tabular-nums; }
     .col-total .de { margin: 0 3px; opacity: .7; }
     .col-cards { flex: 1; overflow-y: auto; padding: var(--espacamento-2);
+      padding-bottom: calc(var(--espacamento-2) + var(--folga-flutuante, 0px));
       display: flex; flex-direction: column; gap: var(--espacamento-1); min-height: 40px; }
     /* ⚠️ flex:none NÃO é detalhe — é o defeito que fez esta tela virar um monte
        de listras de 10px com 50 cards na coluna (03/set). O .col-cards é um flex

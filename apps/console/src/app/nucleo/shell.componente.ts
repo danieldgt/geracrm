@@ -6,7 +6,9 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop'
 import { RouterOutlet, RouterLink, RouterLinkActive, Router, NavigationEnd } from '@angular/router'
 import { filter, firstValueFrom } from 'rxjs'
 import { CelularServico } from './celular.servico.js'
-import { focoPreso, proximaGaveta, resumoAlertas, separarAlertas, type EventoGaveta } from './casca.regras.js'
+import {
+  camadaTrilho, conteudoInerte, focoPreso, proximaGaveta, resumoAlertas, separarAlertas, type EventoGaveta,
+} from './casca.regras.js'
 import { VERSAO } from './versao.js'
 import { MENU } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
@@ -55,7 +57,7 @@ import { AuthServico } from './auth.servico.js'
           } @else {
             <button class="alternar" (click)="recolhida.set(!recolhida())" aria-label="Recolher menu">☰</button>
           }
-          <a routerLink="/inicio" class="logo" aria-label="Drezz Hub — ir para o início">
+          <a routerLink="/inicio" class="logo" aria-label="Drezz Hub — ir para o início" (click)="mudarGaveta('navegou')">
             <app-marca [rotulo]="!recolhidaEfetiva()" />
           </a>
         </div>
@@ -88,7 +90,7 @@ import { AuthServico } from './auth.servico.js'
                 </button>
               } @else {
                 <a [routerLink]="item.rota" routerLinkActive="ativo" class="item"
-                   [title]="item.rotulo + ' — ' + item.descricao" (click)="filtro.set('')">
+                   [title]="item.rotulo + ' — ' + item.descricao" (click)="filtro.set(''); mudarGaveta('navegou')">
                   <span class="icone">{{ item.icone }}</span>
                   @if (!recolhidaEfetiva()) {
                     <span class="rotulo">{{ item.rotulo }}</span>
@@ -123,11 +125,14 @@ import { AuthServico } from './auth.servico.js'
            expandido empurra OU sobrepõe (escolha do usuário), com largura
            redimensionável. Estado no InboxServico, sobrevive à navegação. -->
       <!-- ⚠️ Com a gaveta aberta, o resto fica inert: o foco não escapa para
-           trás do véu nem por Tab, nem por leitor de tela. -->
-      <app-chat-rail [attr.inert]="gavetaAberta() ? '' : null" />
+           trás do véu nem por Tab, nem por leitor de tela. O mesmo vale para o
+           trilho aberto em tela cheia no celular (topo e conteúdo ficam atrás).
+           A camada (z) do trilho depende de estar aberto: recolhido, o botão
+           flutuante fica ABAIXO dos modais das telas (casca.regras.ts, CAMADA). -->
+      <app-chat-rail [attr.inert]="gavetaAberta() ? '' : null" [style.--z-trilho]="zTrilho()" />
 
       <!-- Barra superior: ações do usuário no canto direito (padrão de app). -->
-      <header class="topo" [attr.inert]="gavetaAberta() ? '' : null">
+      <header class="topo" [attr.inert]="atrasInerte() ? '' : null">
         @if (celular()) {
           <button #abreMenu class="abre-menu" (click)="mudarGaveta('alternar')" aria-label="Abrir menu"
                   [attr.aria-expanded]="gavetaAberta()" aria-controls="menu-principal">☰</button>
@@ -149,7 +154,7 @@ import { AuthServico } from './auth.servico.js'
         <app-menu-usuario />
       </header>
 
-      <div class="conteudo" [attr.inert]="gavetaAberta() ? '' : null">
+      <div class="conteudo" [attr.inert]="atrasInerte() ? '' : null">
         <!-- ⚠️ Sessão de acesso do staff (PLT-05). Fica no topo do conteúdo, e não
              some: quem está dentro da casa de um cliente precisa LEMBRAR disso a
              cada tela — é o que evita confundir o dado dele com o nosso. -->
@@ -292,8 +297,11 @@ import { AuthServico } from './auth.servico.js'
       .topo { padding: 0 var(--espacamento-2); gap: var(--espacamento-1); }
       /* ⚠️ position:fixed no host cria contexto de empilhamento: sem z-index
          aqui, o z-index do trilho fica preso dentro dele e os alertas (sticky)
-         e o topo pintam POR CIMA do trilho aberto. Abaixo do véu/gaveta. */
-      app-chat-rail { position: fixed; width: 0; height: 0; z-index: 60; }
+         e o topo pintam POR CIMA do trilho aberto. Abaixo do véu/gaveta.
+         ⚠️ O valor vem de camadaTrilho(): recolhido (botão flutuante) fica
+         ABAIXO dos modais das telas (>= 40), senão tapa o canto do modal e
+         abre o trilho por cima de um diálogo; aberto fica acima deles. */
+      app-chat-rail { position: fixed; width: 0; height: 0; z-index: var(--z-trilho, 30); }
       .lateral { position: fixed; top: 0; bottom: 0; left: 0; z-index: 100; width: min(300px, 86vw);
         visibility: hidden; transform: translateX(-100%); box-shadow: var(--elevacao-modal);
         transition: transform var(--movimento-painel-duracao) var(--movimento-painel-curva),
@@ -301,9 +309,13 @@ import { AuthServico } from './auth.servico.js'
       .lateral.aberta { visibility: visible; transform: none;
         transition: transform var(--movimento-painel-duracao) var(--movimento-painel-curva); }
       .marca .alternar { min-width: 36px; min-height: 36px; }
-      /* Folga no fim do conteúdo do tamanho do botão flutuante de conversas:
-         o último botão da tela nunca fica escondido embaixo dele. */
-      .conteudo::after { content: ''; display: block; height: calc(56px + 2 * var(--espacamento-4)); }
+      /* Folga do tamanho do botão flutuante de conversas: o último botão da
+         tela nunca fica escondido embaixo dele. ⚠️ É VARIÁVEL porque herda:
+         tela com rolagem interna (colunas de kanban) aplica a mesma folga como
+         padding-bottom da sua área de rolagem — fora do celular vale 0. Guarda
+         em folga-flutuante.spec.ts. */
+      :host { --folga-flutuante: calc(56px + 2 * var(--espacamento-4)); }
+      .conteudo::after { content: ''; display: block; height: var(--folga-flutuante); }
     }
     .faixa-staff { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-3);
       flex-wrap: wrap; margin-bottom: var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-4);
@@ -333,6 +345,9 @@ export class ShellComponente implements OnInit {
   readonly gavetaAberta = signal(false)
   /** No celular a gaveta mostra o menu inteiro: "recolhido" só existe no desktop. */
   readonly recolhidaEfetiva = computed(() => !this.celular() && this.recolhida())
+  /** Topo e conteúdo ficam inert atrás da gaveta OU do trilho aberto em tela cheia. */
+  readonly atrasInerte = computed(() => conteudoInerte(this.celular(), this.gavetaAberta(), this.inbox.railAberto()))
+  readonly zTrilho = computed(() => camadaTrilho(this.inbox.railAberto()))
   readonly alertasExpandidos = signal(false)
   readonly faixaAlertas = computed(() => separarAlertas(this.alertas.abertos(), this.celular()))
   readonly resumoAlertas = computed(() => resumoAlertas(

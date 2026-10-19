@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  acaoVoltar, ehCelular, focoPreso, LARGURA_CELULAR, MQ_CELULAR, proximaGaveta, resumoAlertas,
-  rotuloBotaoConversas, rotuloContador, separarAlertas,
+  acaoVoltar, CAMADA, camadaTrilho, conteudoInerte, ehCelular, focoPreso, LARGURA_CELULAR, MQ_CELULAR,
+  proximaGaveta, resumoAlertas, rotuloBotaoConversas, rotuloContador, separarAlertas, voltarNoCabecalhoDaLista,
 } from './casca.regras.js'
 
 describe('Corte celular × desktop', () => {
@@ -83,6 +83,50 @@ describe('Voltar do trilho no celular', () => {
 
   it('dado lista à vista, então fecha o trilho', () => {
     expect(acaoVoltar(false)).toBe('fechar-trilho')
+  })
+})
+
+describe('Um ‹ só por nível no celular', () => {
+  it('dado celular, então o cabeçalho da lista tem o ‹ que FECHA o trilho', () => {
+    expect(voltarNoCabecalhoDaLista(true, true)).toBe('fechar-trilho')
+  })
+
+  it('dado o inbox aberto como rota (fora do trilho), então não — não há trilho a fechar', () => {
+    expect(voltarNoCabecalhoDaLista(true, false)).toBeNull()
+  })
+
+  it('dado desktop, então não (o trilho fecha pelo ›)', () => {
+    expect(voltarNoCabecalhoDaLista(false, true)).toBeNull()
+  })
+})
+
+describe('Camadas do trilho × modais das telas', () => {
+  it('⚠️ dado trilho recolhido (botão flutuante), então fica ABAIXO de qualquer modal de tela', () => {
+    expect(camadaTrilho(false)).toBeLessThan(CAMADA.modal)
+  })
+
+  it('dado trilho aberto em tela cheia, então fica acima dos modais e abaixo do véu/gaveta', () => {
+    expect(camadaTrilho(true)).toBeGreaterThan(CAMADA.modal)
+    expect(camadaTrilho(true)).toBeLessThan(CAMADA.veu)
+    expect(CAMADA.veu).toBeLessThan(CAMADA.gaveta)
+  })
+})
+
+describe('Conteúdo inerte atrás do que se comporta como modal', () => {
+  it('dado gaveta aberta, então inerte', () => {
+    expect(conteudoInerte(true, true, false)).toBe(true)
+  })
+
+  it('⚠️ dado trilho aberto em tela cheia no celular, então inerte — o Tab não vai para trás dele', () => {
+    expect(conteudoInerte(true, false, true)).toBe(true)
+  })
+
+  it('dado trilho aberto no desktop, então não (o trilho é coluna, não modal)', () => {
+    expect(conteudoInerte(false, false, true)).toBe(false)
+  })
+
+  it('dado nada aberto, então não', () => {
+    expect(conteudoInerte(true, false, false)).toBe(false)
   })
 })
 

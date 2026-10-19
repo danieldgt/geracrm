@@ -134,7 +134,8 @@ const ERRO_CRIAR: Record<string, string> = {
          coluna cresce junto e o overflow-y dela nunca dispara — a página
          inteira passa a rolar no lugar da coluna.
        O que sobra é a viewport menos a barra da casca. */
-    :host { display: block; height: calc(100dvh - var(--altura-barra-topo)); padding: var(--espacamento-6); overflow: auto; }
+    :host { display: block; height: calc(100dvh - var(--altura-barra-topo)); padding: var(--espacamento-6); overflow: auto;
+      padding-bottom: calc(var(--espacamento-6) + var(--folga-flutuante, 0px)); }
     .cabecalho { margin-bottom: var(--espacamento-3); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
@@ -171,7 +172,7 @@ const ERRO_CRIAR: Record<string, string> = {
     .m-topo { display: flex; align-items: center; justify-content: space-between; }
     .m-topo h2 { margin: 0; color: var(--texto); }
     .m-x { border: 0; background: transparent; color: var(--texto-secundario); font-size: 16px; }
-    @media (max-width: 640px) { :host { padding: var(--espacamento-3); } }
+    @media (max-width: 640px) { :host { padding: var(--espacamento-3); padding-bottom: calc(var(--espacamento-3) + var(--folga-flutuante, 0px)); } }
   `,
 })
 export class TemplatesPagina implements OnInit {
