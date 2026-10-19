@@ -1,8 +1,10 @@
-import { Component, ChangeDetectionStrategy, inject, OnInit, OnDestroy } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, OnInit, OnDestroy, computed } from '@angular/core'
 import { SlicePipe } from '@angular/common'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { InboxPagina } from './inbox.pagina.js'
+import { CelularServico } from '../../nucleo/celular.servico.js'
+import { acaoVoltar, rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.js'
 
 /**
  * Rail do CHAT — a funcionalidade principal, sempre à mão, ancorado À DIREITA.
@@ -33,9 +35,11 @@ import { InboxPagina } from './inbox.pagina.js'
 
       @if (!servico.railAberto()) {
         <!-- RECOLHIDO: faixa de avatares -->
-        <button class="topo-btn" (click)="servico.abrirRail()" title="Abrir chat" aria-label="Abrir chat">
-          <span class="ico">💬</span>
-          @if (servico.naoLidasTotal() > 0) { <span class="badge">{{ servico.naoLidasTotal() }}</span> }
+        <!-- No celular (< 720px) este botão é o trilho inteiro: flutua no canto,
+             com o contador de não lidas; a faixa de avatares some. -->
+        <button class="topo-btn" (click)="servico.abrirRail()" title="Abrir chat" [attr.aria-label]="rotuloBotao()">
+          <span class="ico" aria-hidden="true">💬</span>
+          @if (contador()) { <span class="badge" aria-hidden="true">{{ contador() }}</span> }
         </button>
         <div class="avs">
           @for (c of servico.conversas() | slice:0:16; track c.id) {
@@ -50,6 +54,11 @@ import { InboxPagina } from './inbox.pagina.js'
       } @else {
         <!-- EXPANDIDO: cabeçalho (modo + recolher) + inbox completo -->
         <div class="cab">
+          @if (celular.celular()) {
+            <!-- Celular: o trilho ocupa a tela; o voltar sobe UM nível
+                 (conversa → lista → fecha), nunca pula a lista. -->
+            <button class="voltar-trilho" (click)="voltar()" [attr.aria-label]="rotuloVoltar()">‹</button>
+          }
           <span class="cab-tit">Conversas</span>
           <span class="cab-acoes">
             <button class="modo" (click)="servico.alternarSobrepor()"
@@ -120,12 +129,45 @@ import { InboxPagina } from './inbox.pagina.js'
       .rail.aberto { position: fixed; top: 0; right: 0; height: 100vh; z-index: 60;
                      width: min(var(--rail-w), 100vw); box-shadow: -10px 0 34px rgb(31 26 22 / .16); }
     }
+    .voltar-trilho { border: 0; background: transparent; color: var(--texto-secundario); cursor: pointer;
+                     font-size: 24px; line-height: 1; min-width: 36px; min-height: 36px; border-radius: var(--raio-controle); }
+    .voltar-trilho:hover { background: var(--superficie-hover); color: var(--texto); }
+    .voltar-trilho:focus-visible, .topo-btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+
+    /* Celular (< 720px; corte em casca.regras.ts): recolhido = botão flutuante
+       redondo no canto com o contador; aberto = tela inteira. Sem puxador nem
+       modo (não há o que empurrar). */
+    @media (max-width: 719.98px) {
+      .rail:not(.aberto) { position: fixed; right: var(--espacamento-4); bottom: var(--espacamento-4); z-index: 60;
+                           width: 56px; height: 56px; border: 1px solid var(--borda); border-radius: var(--raio-completo);
+                           background: var(--superficie-elevada); box-shadow: var(--elevacao-modal); }
+      .rail:not(.aberto) .avs, .rail:not(.aberto) .conex { display: none; }
+      .topo-btn { height: 100%; border-bottom: 0; border-radius: var(--raio-completo); }
+      .badge { top: -4px; right: -4px; min-width: 20px; height: 20px; line-height: 20px; font-size: 11px; }
+      .rail.aberto, .rail.aberto.sobrepor { position: fixed; inset: 0; width: 100vw; height: 100dvh; z-index: 60;
+                                            border-left: 0; }
+      .puxador, .modo { display: none; }
+      .cab { height: 48px; padding: 0 var(--espacamento-2); justify-content: flex-start; gap: var(--espacamento-1); }
+      .cab-tit { flex: 1; }
+      .recolher { display: none; }
+    }
   `],
 })
 export class ChatRailComponente implements OnInit, OnDestroy {
   readonly servico = inject(InboxServico)
   readonly eventos = inject(EventosServico)
+  readonly celular = inject(CelularServico)
+  readonly contador = computed(() => rotuloContador(this.servico.naoLidasTotal()))
+  readonly rotuloBotao = computed(() => rotuloBotaoConversas(this.servico.naoLidasTotal()))
+  readonly rotuloVoltar = computed(() =>
+    acaoVoltar(this.servico.selecionadaId() !== null) === 'voltar-para-lista' ? 'Voltar às conversas' : 'Fechar conversas')
   private cancelarEscuta?: () => void
+
+  /** Voltar do trilho no celular: sobe um nível (a regra decide qual). */
+  voltar(): void {
+    if (acaoVoltar(this.servico.selecionadaId() !== null) === 'voltar-para-lista') this.servico.voltarParaLista()
+    else this.servico.fecharRail()
+  }
 
   ngOnInit(): void {
     void this.servico.carregar()

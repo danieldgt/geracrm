@@ -1,7 +1,12 @@
-import { Component, ChangeDetectionStrategy, signal, computed, inject, OnInit } from '@angular/core'
+import {
+  Component, ChangeDetectionStrategy, signal, computed, inject, OnInit, effect, untracked, viewChild, ElementRef, HostListener,
+} from '@angular/core'
 import { HttpClient } from '@angular/common/http'
-import { RouterOutlet, RouterLink, RouterLinkActive, Router } from '@angular/router'
-import { firstValueFrom } from 'rxjs'
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop'
+import { RouterOutlet, RouterLink, RouterLinkActive, Router, NavigationEnd } from '@angular/router'
+import { filter, firstValueFrom } from 'rxjs'
+import { CelularServico } from './celular.servico.js'
+import { focoPreso, proximaGaveta, resumoAlertas, separarAlertas, type EventoGaveta } from './casca.regras.js'
 import { VERSAO } from './versao.js'
 import { MENU } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
@@ -32,16 +37,30 @@ import { AuthServico } from './auth.servico.js'
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente, MarcaComponente, ChatRailComponente, ToastsComponente, ConfirmarComponente],
   template: `
-    <div class="grade">
-      <aside class="lateral" [class.recolhida]="recolhida()">
+    <div class="grade" [class.celular]="celular()">
+      <!-- Celular (< 720px): o menu sai da grade e vira GAVETA por cima do
+           conteúdo. Véu escuro atrás; clique nele fecha. Desktop não muda. -->
+      @if (gavetaAberta()) {
+        <div class="veu" (click)="mudarGaveta('clique-fora')" aria-hidden="true"></div>
+      }
+      <aside #lateral id="menu-principal" class="lateral" [class.recolhida]="recolhidaEfetiva()"
+             [class.gaveta]="celular()" [class.aberta]="gavetaAberta()"
+             [attr.role]="gavetaAberta() ? 'dialog' : null"
+             [attr.aria-modal]="gavetaAberta() ? 'true' : null"
+             [attr.aria-label]="celular() ? 'Menu' : null"
+             (keydown.tab)="prenderFoco($event)" (keydown.shift.tab)="prenderFoco($event)">
         <div class="marca">
-          <button class="alternar" (click)="recolhida.set(!recolhida())" aria-label="Recolher menu">☰</button>
+          @if (celular()) {
+            <button class="alternar" (click)="mudarGaveta('alternar')" aria-label="Fechar menu">✕</button>
+          } @else {
+            <button class="alternar" (click)="recolhida.set(!recolhida())" aria-label="Recolher menu">☰</button>
+          }
           <a routerLink="/inicio" class="logo" aria-label="Drezz Hub — ir para o início">
-            <app-marca [rotulo]="!recolhida()" />
+            <app-marca [rotulo]="!recolhidaEfetiva()" />
           </a>
         </div>
 
-        @if (!recolhida()) {
+        @if (!recolhidaEfetiva()) {
           <div class="busca">
             <span class="lupa" aria-hidden="true">⌕</span>
             <input #campo class="busca-in" type="search" [value]="filtro()"
@@ -54,15 +73,15 @@ import { AuthServico } from './auth.servico.js'
 
         <nav>
           @for (grupo of menuFiltrado(); track grupo.titulo) {
-            @if (grupo.titulo && !recolhida()) { <p class="grupo">{{ grupo.titulo }}</p> }
+            @if (grupo.titulo && !recolhidaEfetiva()) { <p class="grupo">{{ grupo.titulo }}</p> }
             @for (item of grupo.itens; track item.rota) {
               @if (item.acao === 'rail') {
                 <!-- Conversas: abre/recolhe o chat rail em vez de navegar. -->
                 <button type="button" class="item" [class.ativo]="inbox.railAberto()"
                         [title]="item.rotulo + ' — ' + item.descricao"
-                        (click)="inbox.alternarRail(); filtro.set('')">
+                        (click)="inbox.alternarRail(); filtro.set(''); mudarGaveta('navegou')">
                   <span class="icone">{{ item.icone }}</span>
-                  @if (!recolhida()) {
+                  @if (!recolhidaEfetiva()) {
                     <span class="rotulo">{{ item.rotulo }}</span>
                     @if (inbox.naoLidasTotal() > 0) { <span class="ponto" [title]="inbox.naoLidasTotal() + ' não lidas'"></span> }
                   }
@@ -71,7 +90,7 @@ import { AuthServico } from './auth.servico.js'
                 <a [routerLink]="item.rota" routerLinkActive="ativo" class="item"
                    [title]="item.rotulo + ' — ' + item.descricao" (click)="filtro.set('')">
                   <span class="icone">{{ item.icone }}</span>
-                  @if (!recolhida()) {
+                  @if (!recolhidaEfetiva()) {
                     <span class="rotulo">{{ item.rotulo }}</span>
                     @if (item.status === 'construcao') { <span class="ponto" title="Em construção"></span> }
                   }
@@ -79,7 +98,7 @@ import { AuthServico } from './auth.servico.js'
               }
             }
           }
-          @if (!recolhida() && nadaEncontrado()) {
+          @if (!recolhidaEfetiva() && nadaEncontrado()) {
             <p class="nada">Nada encontrado para “{{ filtro() }}”.</p>
           }
         </nav>
@@ -89,7 +108,7 @@ import { AuthServico } from './auth.servico.js'
              (watch path por app): quando divergem, é aqui que se vê — e essa
              divergência já explicou mais de uma "mudança que não subiu". -->
         <footer class="rodape" [title]="'Console ' + versao.commit + ' · API ' + (versaoApi() ?? '—')">
-          @if (recolhida()) {
+          @if (recolhidaEfetiva()) {
             <span class="txt-dados">{{ versao.commit }}</span>
           } @else {
             <span class="txt-dados">console {{ versao.commit }}</span>
@@ -103,10 +122,19 @@ import { AuthServico } from './auth.servico.js'
            À DIREITA (coluna 3, altura total). Recolhido = faixa de avatares;
            expandido empurra OU sobrepõe (escolha do usuário), com largura
            redimensionável. Estado no InboxServico, sobrevive à navegação. -->
-      <app-chat-rail />
+      <!-- ⚠️ Com a gaveta aberta, o resto fica inert: o foco não escapa para
+           trás do véu nem por Tab, nem por leitor de tela. -->
+      <app-chat-rail [attr.inert]="gavetaAberta() ? '' : null" />
 
       <!-- Barra superior: ações do usuário no canto direito (padrão de app). -->
-      <header class="topo">
+      <header class="topo" [attr.inert]="gavetaAberta() ? '' : null">
+        @if (celular()) {
+          <button #abreMenu class="abre-menu" (click)="mudarGaveta('alternar')" aria-label="Abrir menu"
+                  [attr.aria-expanded]="gavetaAberta()" aria-controls="menu-principal">☰</button>
+          <a routerLink="/inicio" class="logo-topo" aria-label="Drezz Hub — ir para o início">
+            <app-marca [rotulo]="false" />
+          </a>
+        }
         <span class="espaco"></span>
         <!-- ⚠️ Estado do tempo real SEMPRE visível (skill: silêncio é pior que
              aviso). A vendedora precisa saber quando parou de receber. -->
@@ -121,7 +149,7 @@ import { AuthServico } from './auth.servico.js'
         <app-menu-usuario />
       </header>
 
-      <div class="conteudo">
+      <div class="conteudo" [attr.inert]="gavetaAberta() ? '' : null">
         <!-- ⚠️ Sessão de acesso do staff (PLT-05). Fica no topo do conteúdo, e não
              some: quem está dentro da casa de um cliente precisa LEMBRAR disso a
              cada tela — é o que evita confundir o dado dele com o nosso. -->
@@ -136,12 +164,29 @@ import { AuthServico } from './auth.servico.js'
         }
 
         <!-- Alertas técnicos abertos (I-10): faixa visível, ação nomeada. -->
+        <!-- No celular, só o CRÍTICO fica sempre à vista; os demais viram uma
+             linha "N alertas" que expande ao tocar (não come a tela pequena). -->
         @if (alertas.abertos().length) {
           <div class="alertas" role="alert">
-            @for (a of alertas.abertos(); track a.id) {
+            @for (a of faixaAlertas().sempreVisiveis; track a.id) {
               <div class="alerta" [class.critico]="a.severidade === 'critico'">
                 <span class="sinal">⚠️</span> {{ a.mensagem }}
               </div>
+            }
+            @if (faixaAlertas().recolhiveis.length) {
+              <button type="button" class="alerta alertas-resumo" (click)="alertasExpandidos.set(!alertasExpandidos())"
+                      [attr.aria-expanded]="alertasExpandidos()" aria-controls="alertas-recolhiveis">
+                <span class="sinal">⚠️</span>
+                <span class="encolhe">{{ resumoAlertas() }}</span>
+                <span class="seta" aria-hidden="true">{{ alertasExpandidos() ? '▴' : '▾' }}</span>
+              </button>
+              @if (alertasExpandidos()) {
+                <div id="alertas-recolhiveis">
+                  @for (a of faixaAlertas().recolhiveis; track a.id) {
+                    <div class="alerta"><span class="sinal">⚠️</span> {{ a.mensagem }}</div>
+                  }
+                </div>
+              }
             }
           </div>
         }
@@ -229,11 +274,36 @@ import { AuthServico } from './auth.servico.js'
       color: var(--texto-suave); font-size: 11px; line-height: 1.4; }
     .rodape .divergente { color: var(--atencao); }
     .rodape .alerta-versao { color: var(--atencao); flex-basis: 100%; }
-    /* Responsivo: em telas estreitas a lateral vira trilho de ícones, sem
-       sobrepor o conteúdo (grid mantém as colunas separadas). */
-    @media (max-width: 640px) {
-      .lateral { width: 60px; }
-      .lateral .rotulo, .lateral .grupo { display: none; }
+    /* ─── Celular (abaixo de 720px; o corte mora em casca.regras.ts) ───────────
+       O menu SAI da grade e vira gaveta por cima do conteúdo; o trilho de
+       conversas vira botão flutuante (estilo no próprio chat-rail). A grade fica
+       com UMA coluna: topo em cima, conteúdo embaixo, largura inteira.
+       ⚠️ Esta media query é da CASCA, que é dona da janela. Tela usa container
+       query pela largura do próprio conteúdo. */
+    .abre-menu { border: none; background: transparent; color: var(--texto-secundario); font-size: 18px;
+      cursor: pointer; padding: var(--espacamento-1) var(--espacamento-2); border-radius: var(--raio-controle);
+      min-width: 36px; min-height: 36px; }
+    .abre-menu:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+    .logo-topo { display: inline-flex; align-items: center; text-decoration: none; --marca-tam: 24px; --marca-fonte: 15px; }
+    .veu { position: fixed; inset: 0; z-index: 90; background: var(--fundo-sobreposicao, rgb(0 0 0 / .4)); }
+    @media (max-width: 719.98px) {
+      .grade { grid-template-columns: minmax(0, 1fr); }
+      .topo, .conteudo { grid-column: 1; }
+      .topo { padding: 0 var(--espacamento-2); gap: var(--espacamento-1); }
+      /* ⚠️ position:fixed no host cria contexto de empilhamento: sem z-index
+         aqui, o z-index do trilho fica preso dentro dele e os alertas (sticky)
+         e o topo pintam POR CIMA do trilho aberto. Abaixo do véu/gaveta. */
+      app-chat-rail { position: fixed; width: 0; height: 0; z-index: 60; }
+      .lateral { position: fixed; top: 0; bottom: 0; left: 0; z-index: 100; width: min(300px, 86vw);
+        visibility: hidden; transform: translateX(-100%); box-shadow: var(--elevacao-modal);
+        transition: transform var(--movimento-painel-duracao) var(--movimento-painel-curva),
+                    visibility 0s linear var(--movimento-painel-duracao); }
+      .lateral.aberta { visibility: visible; transform: none;
+        transition: transform var(--movimento-painel-duracao) var(--movimento-painel-curva); }
+      .marca .alternar { min-width: 36px; min-height: 36px; }
+      /* Folga no fim do conteúdo do tamanho do botão flutuante de conversas:
+         o último botão da tela nunca fica escondido embaixo dele. */
+      .conteudo::after { content: ''; display: block; height: calc(56px + 2 * var(--espacamento-4)); }
     }
     .faixa-staff { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-3);
       flex-wrap: wrap; margin-bottom: var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-4);
@@ -248,11 +318,73 @@ import { AuthServico } from './auth.servico.js'
       background: var(--atencao-suave); border-bottom: 1px solid var(--borda); }
     .alerta.critico { background: var(--erro-suave); }
     .alerta .sinal { margin-right: var(--espacamento-1); }
+    .alertas-resumo { display: flex; align-items: center; gap: var(--espacamento-1); width: 100%;
+      border: 0; border-bottom: 1px solid var(--borda); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+    .alertas-resumo .sinal { margin-right: 0; }
+    .alertas-resumo .encolhe { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .alertas-resumo:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: -2px; }
   `,
 })
 export class ShellComponente implements OnInit {
   readonly recolhida = signal(false)
   readonly filtro = signal('')
+  /** Modo celular (< 720px) — a casca é dona da janela; telas usam container query. */
+  readonly celular = inject(CelularServico).celular
+  readonly gavetaAberta = signal(false)
+  /** No celular a gaveta mostra o menu inteiro: "recolhido" só existe no desktop. */
+  readonly recolhidaEfetiva = computed(() => !this.celular() && this.recolhida())
+  readonly alertasExpandidos = signal(false)
+  readonly faixaAlertas = computed(() => separarAlertas(this.alertas.abertos(), this.celular()))
+  readonly resumoAlertas = computed(() => resumoAlertas(
+    this.faixaAlertas().recolhiveis.length,
+    this.faixaAlertas().sempreVisiveis.length > 0,
+  ))
+  private readonly lateral = viewChild.required<ElementRef<HTMLElement>>('lateral')
+  private readonly abreMenu = viewChild<ElementRef<HTMLButtonElement>>('abreMenu')
+
+  constructor() {
+    // A janela cresceu para desktop: a gaveta deixa de existir e fica fechada.
+    effect(() => { if (!this.celular()) untracked(() => this.mudarGaveta('virou-desktop')) })
+    // Navegar fecha a gaveta — a pessoa escolheu para onde ir.
+    this.router.events.pipe(filter((e) => e instanceof NavigationEnd), takeUntilDestroyed())
+      .subscribe(() => this.mudarGaveta('navegou'))
+  }
+
+  @HostListener('document:keydown.escape')
+  aoEsc(): void {
+    if (this.gavetaAberta()) this.mudarGaveta('esc')
+  }
+
+  /** Única porta de mudança da gaveta: a regra decide, aqui só se move o foco. */
+  mudarGaveta(evento: EventoGaveta): void {
+    const antes = this.gavetaAberta()
+    const depois = proximaGaveta(antes, evento, this.celular())
+    if (antes === depois) return
+    this.gavetaAberta.set(depois)
+    if (depois) {
+      // Depois do render (a gaveta ainda está com visibility:hidden neste tique).
+      setTimeout(() => this.focaveis()[0]?.focus())
+    } else if (evento !== 'navegou' && evento !== 'virou-desktop') {
+      // Fechou sem escolher: o foco volta para quem abriu (o ☰).
+      setTimeout(() => this.abreMenu()?.nativeElement.focus())
+    }
+  }
+
+  /** Tab/Shift+Tab dentro da gaveta aberta dá a volta — o foco não sai por trás do véu. */
+  prenderFoco(ev: Event): void {
+    if (!this.gavetaAberta()) return
+    const k = ev as KeyboardEvent
+    const lista = this.focaveis()
+    const alvo = focoPreso(lista.indexOf(document.activeElement as HTMLElement), lista.length, k.shiftKey)
+    if (alvo === null) return
+    k.preventDefault()
+    lista[alvo]?.focus()
+  }
+
+  private focaveis(): HTMLElement[] {
+    return Array.from(this.lateral().nativeElement.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+  }
   readonly eventos = inject(EventosServico)
   readonly alertas = inject(AlertasServico)
   readonly tema = inject(TemaServico)
