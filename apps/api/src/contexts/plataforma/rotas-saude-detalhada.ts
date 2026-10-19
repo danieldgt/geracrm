@@ -7,7 +7,7 @@ import { transcricaoDoAmbiente } from '../atendimento/midia/transcricao/fabrica.
 import { embeddingDoAmbiente } from '../catalogo/porta-embedding.js'
 import { idadeDoBatimentoSeg } from './batimento.js'
 import {
-  CACHE_MEDICAO_MS, CONEXOES_SAUDE, lerEmbeddingsComo, lerFilasComo, lerTranscricaoComo, medirSaude, memorizar,
+  CACHE_MEDICAO_MS, CONEXOES_SAUDE, lerEmbeddingsComo, lerFilasComo, lerParticoesComo, lerTranscricaoComo, medirSaude, memorizar,
   pingPeloPool, type ConfiguracaoSaude, type DepsSaude,
 } from './saude-detalhada.js'
 
@@ -15,7 +15,7 @@ import {
  * GET /saude/detalhada — SAÚDE EM TRÊS ESTADOS (raia P8; playbook da AM §11.1).
  *
  *   {"status":"ok"|"degradado"|"erro","motivos":[...],"componentes":{processo, banco,
- *    workerAgente, filaAgente, llm, transcricao, embeddings, retornos}}
+ *    workerAgente, filaAgente, llm, transcricao, embeddings, retornos, particoes}}
  *
  * | status    | HTTP | quando                                                              |
  * |-----------|------|---------------------------------------------------------------------|
@@ -86,6 +86,8 @@ export async function rotasSaudeDetalhada(app: FastifyInstance, opts: Partial<De
     lerTranscricao: memorizar(opts.lerTranscricao ?? comDono((d) => lerTranscricaoComo(d, agoraReal)), CACHE_MEDICAO_MS),
     lerEmbeddings: memorizar(
       opts.lerEmbeddings ?? comDono((d) => lerEmbeddingsComo(d, configuracao.embeddingModelo ?? '')), CACHE_MEDICAO_MS),
+    // Muda uma vez por mês: o cache curto basta para a URL pública não virar consulta por chamada.
+    lerParticoes: memorizar(opts.lerParticoes ?? comDono((d) => lerParticoesComo(d, agoraReal)), CACHE_MEDICAO_MS),
     idadeBatimento: opts.idadeBatimento ?? ((nome, agora) => idadeDoBatimentoSeg(nome, agora)),
     estadoDoLlm: opts.estadoDoLlm ?? estadoDoLlm,
     configuracao,

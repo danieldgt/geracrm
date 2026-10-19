@@ -123,6 +123,8 @@ ao normalizar. Tipos ligados ao agente e à operação, com ação no `docs/agen
 Alertas **de processo** (sem tenant) não vão para a tabela: saem no log com o campo `"alerta"`
 (`llm_reserva_ativo`, `llm_reserva_encerrado`, `llm_reserva_falhou`, `modelo_bloqueado`, contexto
 `agente.llm`) e aparecem como motivo em `/saude/detalhada`.
+`particoes_horizonte_curto` (contexto `plataforma.particoes`, worker diário de partições) segue o
+mesmo molde: log `error` com `"alerta"` + motivo `particoes_curtas` na saúde (runbook §16).
 
 ## Workers: trava sem vazar
 

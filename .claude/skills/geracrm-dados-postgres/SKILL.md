@@ -73,7 +73,7 @@ buscar tudo.
 
 | Tabela | Estratégia |
 |---|---|
-| **mensagens** | ⚠️ Particionamento por período **desde o início** — barato agora, caro depois. Cursor para trás em blocos de 30 dias |
+| **mensagens** | ⚠️ Particionamento por período **desde o início** — barato agora, caro depois. Cursor para trás em blocos de 30 dias. Tabela particionada nova entra em `tabelas_particionadas_por_mes()` (0110): o worker diário `workers/particoes.ts` mantém 12 meses à frente e a saúde acusa < 3 |
 | eventos de campanha | Particionamento por período; arquivamento |
 | histórico de segmento RFV | Série temporal; consulta sempre por cliente + período |
 | outbox | Expurgo após processamento confirmado |

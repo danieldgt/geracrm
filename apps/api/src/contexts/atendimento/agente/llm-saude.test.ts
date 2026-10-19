@@ -42,6 +42,7 @@ const EM_DIA: Omit<DepsSaude, 'estadoDoLlm' | 'agora'> = {
   }),
   lerTranscricao: async () => ({ pendentes: 0, maisAntigaHaSeg: null }),
   lerEmbeddings: async () => ({ semantica: 'ligada', pendentes: 0 }),
+  lerParticoes: async () => [{ tabela: 'mensagem', mesesAFrente: 12 }],
   idadeBatimento: () => 1,
   configuracao: { workers: true, transcricao: true, embeddingModelo: 'bge-m3' },
 }

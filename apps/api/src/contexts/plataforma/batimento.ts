@@ -16,6 +16,7 @@
 export const BATIMENTOS = [
   'webhookSaida', 'automacao', 'sincronizacaoMidia', 'conversoesMidia', 'vigiaMidia', 'vigiaCanal', 'resumoMidia',
   'campanha', 'workerAgente', 'transcricao', 'retornos', 'push', 'embeddings', 'qualidade', 'sla', 'posIngestao',
+  'particoes',
 ] as const
 export type NomeBatimento = (typeof BATIMENTOS)[number]
 

@@ -47,6 +47,8 @@ export const MOTIVOS_SAUDE = [
   'retornos_desligado',
   'retornos_parado',
   'retornos_atrasados',
+  'particoes_curtas',
+  'particoes_sem_leitura',
 ] as const
 export type MotivoSaude = (typeof MOTIVOS_SAUDE)[number]
 
@@ -72,6 +74,8 @@ export const ROTULO_MOTIVO_SAUDE: Readonly<Record<MotivoSaude, string>> = {
   retornos_desligado: 'Worker de retornos desligado nesta instância',
   retornos_parado: 'Worker de retornos sem passada recente',
   retornos_atrasados: 'Retorno programado vencido sem envio',
+  particoes_curtas: 'Partições mensais acabando — o worker de partições parou?',
+  particoes_sem_leitura: 'Não foi possível ler o horizonte das partições',
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -84,6 +88,12 @@ export interface EntradaWorker {
   readonly configurado: boolean
   /** Segundos desde a última passada; null = ainda não bateu. */
   readonly batimentoHaSeg: number | null
+}
+
+export interface HorizonteParticao {
+  readonly tabela: string
+  /** Meses completos depois do mês corrente cobertos por partição; 0 = só o mês corrente (ou nem ele). */
+  readonly mesesAFrente: number
 }
 
 export interface EntradaSaude {
@@ -119,6 +129,12 @@ export interface EntradaSaude {
    */
   readonly transcricao: { readonly pendentes: number; readonly maisAntigaHaSeg: number | null } | null
   readonly embeddings: { readonly pendentes: number } | null
+  /**
+   * Horizonte das tabelas particionadas por mês: quantos meses COMPLETOS depois
+   * do mês corrente já têm partição (cobertura contínua). Nome de tabela é
+   * schema, não dado de tenant. null = sem leitura.
+   */
+  readonly particoes: readonly HorizonteParticao[] | null
   readonly llm: {
     readonly situacao: 'principal' | 'reserva'
     /** Segundos até a reserva expirar; null = no principal. */
@@ -149,6 +165,11 @@ export interface LimitesSaude {
   readonly embeddingsMaxPendentes: number
   readonly retornosMaxSeg: number
   readonly retornosMaxAtrasoSeg: number
+  /**
+   * Menos que isto de partição à frente = o worker diário (que mantém 12) parou
+   * há meses. Não é provisório: com 3 meses ainda dá tempo de agir com calma.
+   */
+  readonly particoesMinMeses: number
 }
 
 /**
@@ -170,6 +191,7 @@ export const LIMITES_SAUDE_PADRAO: LimitesSaude = {
   embeddingsMaxPendentes: 20_000,
   retornosMaxSeg: 300,
   retornosMaxAtrasoSeg: 900,
+  particoesMinMeses: 3,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,6 +242,12 @@ export interface SaudeDetalhada {
       readonly vencidos: number | null
       readonly maisAntigoHaSeg: number | null
       readonly limiteAtrasoSeg: number
+    }
+    readonly particoes: Base & {
+      readonly tabelas: readonly HorizonteParticao[] | null
+      /** O menor horizonte entre as tabelas; null = sem leitura. */
+      readonly menorMesesAFrente: number | null
+      readonly limiteMeses: number
     }
   }
 }
@@ -335,7 +363,16 @@ export function avaliarSaude(e: EntradaSaude, lim: LimitesSaude = LIMITES_SAUDE_
     limiteAtrasoSeg: lim.retornosMaxAtrasoSeg,
   }
 
-  const componentes = { processo, banco, workerAgente, filaAgente, llm, transcricao, embeddings, retornos }
+  const tabelas = e.particoes
+  const menor = tabelas && tabelas.length > 0 ? Math.min(...tabelas.map((t) => t.mesesAFrente)) : null
+  const motivosParticoes: MotivoSaude[] = tabelas === null
+    ? ['particoes_sem_leitura']
+    : menor !== null && menor < lim.particoesMinMeses ? ['particoes_curtas'] : []
+  const particoes = {
+    ...base(motivosParticoes), tabelas, menorMesesAFrente: menor, limiteMeses: lim.particoesMinMeses,
+  }
+
+  const componentes = { processo, banco, workerAgente, filaAgente, llm, transcricao, embeddings, retornos, particoes }
   const todos: readonly Base[] = Object.values(componentes)
   // Sem repetição: "filas_sem_leitura" aparece em dois componentes, mas é um problema só.
   const motivos = [...new Set(todos.flatMap((c) => c.motivos))]

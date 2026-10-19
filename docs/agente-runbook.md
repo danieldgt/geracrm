@@ -23,7 +23,7 @@ mudar o modo na tela do agente (`PUT /v1/canais/:id/agente`).
 ### 0.1 Saúde em três estados e monitor externo
 
 `GET /saude/detalhada` é pública e não carrega dado de tenant: `{status, motivos[], componentes{processo,
-banco, workerAgente, filaAgente, llm, transcricao, embeddings, retornos}}`.
+banco, workerAgente, filaAgente, llm, transcricao, embeddings, retornos, particoes}}`.
 
 | `status` | HTTP | Significa |
 |---|---|---|
@@ -45,7 +45,7 @@ Motivos possíveis (`MOTIVOS_SAUDE`, shared `agente-saude.ts`): `encerrando`, `b
 `fila_agente_acumulada`, `fila_agente_atrasada`, `fila_agente_travada`, `llm_reserva_ativo`,
 `modelo_bloqueado`, `transcricao_parada`, `transcricao_atrasada`, `transcricao_sem_leitura`,
 `embeddings_parado`, `embeddings_acumulados`, `embeddings_sem_leitura`, `retornos_desligado`,
-`retornos_parado`, `retornos_atrasados`.
+`retornos_parado`, `retornos_atrasados`, `particoes_curtas`, `particoes_sem_leitura` (§16).
 
 ⚠️ **Limiares provisórios** (`LIMITES_SAUDE_PROVISORIOS`): banco lento 1 s; worker do agente sem
 passada há 120 s; fila do agente com 50 vencidas ou a mais antiga esperando 60 s; travada há 240 s;
@@ -236,3 +236,17 @@ para acordar gente de madrugada, recalibrar com 2–4 semanas de histórico.
   de `DB_POOL_MAX`, padrão 10) protegendo o pool do inbox. Subir com cuidado e sempre abaixo do pool;
   com muitos vendedores, escalar instâncias.
 - **Volta:** passa sozinho quando as gerações em curso terminam.
+
+## 16. Partições mensais acabando
+
+- **Sintoma:** `/saude/detalhada` degradado com `particoes_curtas` (componente `particoes`,
+  `menorMesesAFrente` < 3), ou log `"alerta":"particoes_horizonte_curto"` (contexto `plataforma.particoes`).
+  Se ninguém agir, no dia 1º do mês descoberto o INSERT falha ("no partition of relation found for row"):
+  o inbox para de receber mensagem e a ingestão de venda para.
+- **Confirmar:** `SELECT t, horizonte_particoes(t) FROM tabelas_particionadas_por_mes() t;` (como dono).
+  O worker diário (`workers/particoes.ts`) mantém 12 meses à frente; 3 meses = parou há ~9 meses ou falha
+  todo dia. Ver no log `falhas[].codigo` (55P03 = `lock_timeout`: a tabela-mãe estava ocupada) e se há
+  `DATABASE_ADMIN_URL` (sem ela o worker nem é agendado).
+- **Ação:** criar à mão, fora de pico: `SELECT * FROM manter_particoes_mensais(12);` (idempotente; pega
+  ACCESS EXCLUSIVE na tabela-mãe por instantes). Depois, consertar a causa do worker.
+- **Volta:** nada a desfazer; o motivo some na próxima leitura da saúde.

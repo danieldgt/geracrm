@@ -23,6 +23,7 @@ const SAUDAVEL: EntradaSaude = {
   },
   transcricao: { pendentes: 1, maisAntigaHaSeg: 10 },
   embeddings: { pendentes: 40 },
+  particoes: [{ tabela: 'mensagem', mesesAFrente: 12 }, { tabela: 'venda', mesesAFrente: 24 }],
   llm: { situacao: 'principal', reservaRestanteSeg: null, falhasSeguidas: 0, modelosBloqueados: 0 },
 }
 
@@ -74,6 +75,12 @@ describe('avaliarSaude — tabela de estados', () => {
     ['retornos desligado', w('retornos', { configurado: false, batimentoHaSeg: null }), 'degradado', ['retornos_desligado']],
     ['retorno vencido sem envio', filas({ retornos: { vencidos: 4, maisAntigoHaSeg: L.retornosMaxAtrasoSeg + 1 } }),
       'degradado', ['retornos_atrasados']],
+    ['partições com 3 meses à frente (no limite) ainda é ok',
+      (e) => ({ ...e, particoes: [{ tabela: 'mensagem', mesesAFrente: L.particoesMinMeses }] }), 'ok', []],
+    ['partições de UMA tabela com menos de 3 meses à frente (o worker parou)',
+      (e) => ({ ...e, particoes: [{ tabela: 'mensagem', mesesAFrente: 12 }, { tabela: 'auditoria', mesesAFrente: L.particoesMinMeses - 1 }] }),
+      'degradado', ['particoes_curtas']],
+    ['partições sem leitura', (e) => ({ ...e, particoes: null }), 'degradado', ['particoes_sem_leitura']],
     ['encerrando E banco fora: erro manda, motivos somam', (e) => ({ ...e, encerrando: true, bancoLatenciaMs: null }),
       'erro', ['encerrando', 'banco_indisponivel']],
   ]
@@ -108,6 +115,14 @@ describe('avaliarSaude — tabela de estados', () => {
     expect(s.componentes.retornos.vencidos).toBeNull()
     expect(s.componentes.transcricao.estado).toBe('ok')
     expect(s.componentes.embeddings.pendentes).toBe(40)
+  })
+
+  it('dado partições curtas, então o componente traz o menor horizonte, o limite e as tabelas (sem tenant)', () => {
+    const s = avaliarSaude({ ...SAUDAVEL, particoes: [{ tabela: 'venda', mesesAFrente: 1 }, { tabela: 'mensagem', mesesAFrente: 12 }] })
+    expect(s.componentes.particoes).toEqual({
+      estado: 'degradado', motivos: ['particoes_curtas'], menorMesesAFrente: 1, limiteMeses: 3,
+      tabelas: [{ tabela: 'venda', mesesAFrente: 1 }, { tabela: 'mensagem', mesesAFrente: 12 }],
+    })
   })
 
   it('dado os limites, então estão marcados como provisórios', () => {

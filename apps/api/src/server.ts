@@ -25,6 +25,9 @@ import { batimento } from './contexts/plataforma/batimento.js'
 import { processarQualidade, INTERVALO_QUALIDADE_MS } from './workers/qualidade.js'
 import { processarSla, INTERVALO_SLA_MS } from './workers/sla.js'
 import { processarPosIngestao, INTERVALO_POS_INGESTAO_MS } from './workers/pos-ingestao.js'
+import {
+  processarParticoes, ALERTA_PARTICOES, ATRASO_PRIMEIRA_PASSADA_PARTICOES_MS, INTERVALO_PARTICOES_MS,
+} from './workers/particoes.js'
 
 const porta = Number(process.env.PORT ?? 3000)
 
@@ -270,6 +273,32 @@ if (process.env.DATABASE_ADMIN_URL) {
         .finally(() => { rodando = false; batimento(nome) })
     }, intervalo))
   }
+
+  // ⚠️ PARTIÇÕES MENSAIS (0110): sem a partição do mês seguinte, o INSERT em
+  //    `mensagem` falha no dia 1º e o inbox para. Mantém 12 meses à frente em
+  //    toda tabela particionada por mês. 1×/dia basta (a folga é de meses) — mas
+  //    a 1ª passada roda logo após o boot: com deploy mais de 1×/dia, um
+  //    intervalo de 24 h nunca chegaria a disparar.
+  let particionando = false
+  const passadaParticoes = () => {
+    if (particionando) return
+    particionando = true
+    void processarParticoes(donoAquisicao as never, {}, new Date())
+      .then((r) => {
+        const log = { contexto: 'plataforma.particoes', criadas: r.criadas, ocupadas: r.ocupadas, falhas: r.falhas, horizontes: r.horizontes }
+        if (r.curtas.length > 0) {
+          // Alerta DE PROCESSO (sem tenant): log com o campo "alerta" + motivo
+          // `particoes_curtas` no /saude/detalhada. Ação: docs/agente-runbook.md.
+          app.log.error({ ...log, alerta: ALERTA_PARTICOES, curtas: r.curtas }, 'partições mensais acabando')
+        } else if (r.processadas > 0 || r.falhas.length > 0) {
+          app.log.info(log, 'manutenção de partições mensais')
+        }
+      })
+      .catch((e) => app.log.warn({ erro: e, contexto: 'plataforma.particoes' }, 'worker de partições falhou'))
+      .finally(() => { particionando = false; batimento('particoes') })
+  }
+  intervalosAquisicao.push(setTimeout(passadaParticoes, ATRASO_PRIMEIRA_PASSADA_PARTICOES_MS))
+  intervalosAquisicao.push(setInterval(passadaParticoes, INTERVALO_PARTICOES_MS))
 
   // Push nativo (PLT-07) — a notificação que chega com o navegador fechado.
   // ⚠️ 20s: é a mesma ordem de grandeza do despachante de webhooks. Push de

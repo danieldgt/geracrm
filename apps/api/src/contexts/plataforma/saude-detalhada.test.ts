@@ -6,7 +6,7 @@ import { criarApp } from '../../app.js'
 import { encerrarBanco, sql } from '../../db/index.js'
 import { rotasSaudeDetalhada } from './rotas-saude-detalhada.js'
 import {
-  lerFilasComo, lerTranscricaoComo, lerEmbeddingsComo, memorizar, comTeto, medirSaude,
+  lerFilasComo, lerTranscricaoComo, lerEmbeddingsComo, lerParticoesComo, memorizar, comTeto, medirSaude,
   type DepsSaude, type LeituraFilas,
 } from './saude-detalhada.js'
 import { batimento, idadeDoBatimentoSeg } from './batimento.js'
@@ -45,6 +45,7 @@ const FALSO: Partial<DepsSaude> = {
   lerFilas: async () => FILAS_EM_DIA,
   lerTranscricao: async () => ({ pendentes: 0, maisAntigaHaSeg: null }),
   lerEmbeddings: async () => ({ semantica: 'ligada', pendentes: 0 }),
+  lerParticoes: async () => [{ tabela: 'mensagem', mesesAFrente: 12 }, { tabela: 'venda', mesesAFrente: 24 }],
   idadeBatimento: () => 1,
   estadoDoLlm: () => ({ situacao: 'principal', reservaAteEm: null, falhasSeguidas: 0, modelosBloqueados: [] }),
   configuracao: { workers: true, transcricao: true, embeddingModelo: 'bge-m3' },
@@ -97,14 +98,14 @@ afterAll(async () => {
 })
 
 describe('GET /saude/detalhada — estados e código HTTP', () => {
-  it('dado tudo em dia, então 200 com status ok, sem cache e os oito componentes', async () => {
+  it('dado tudo em dia, então 200 com status ok, sem cache e os nove componentes', async () => {
     const r = await pedir(FALSO)
     expect(r.code).toBe(200)
     expect(r.cache).toBe('no-store')
     expect(r.corpo.status).toBe('ok')
     expect(r.corpo.motivos).toEqual([])
     expect(Object.keys(r.corpo.componentes)).toEqual(
-      ['processo', 'banco', 'workerAgente', 'filaAgente', 'llm', 'transcricao', 'embeddings', 'retornos'])
+      ['processo', 'banco', 'workerAgente', 'filaAgente', 'llm', 'transcricao', 'embeddings', 'retornos', 'particoes'])
     // O monitor externo procura exatamente esta palavra-chave.
     expect(r.texto).toContain('"status":"ok"')
   })
@@ -217,6 +218,29 @@ describe('Leitura das filas — conexão de serviço, todos os tenants, só agre
   it('dado o pool da API (geracrm_api, sem tenant), então o RLS devolve zero — por isso a saúde usa a conexão de serviço', async () => {
     const [r] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM agente_tarefa`
     expect(r!.n).toBe(0)
+  })
+})
+
+describe('Componente "particoes" — horizonte das partições mensais', () => {
+  it('dado alguma tabela com menos de 3 meses de partição à frente, então 200 DEGRADADO com particoes_curtas', async () => {
+    const r = await pedir({ ...FALSO, lerParticoes: async () => [{ tabela: 'mensagem', mesesAFrente: 12 }, { tabela: 'auditoria', mesesAFrente: 2 }] })
+    expect(r.code).toBe(200)
+    expect(r.corpo.status).toBe('degradado')
+    expect(r.corpo.motivos).toEqual(['particoes_curtas'])
+    expect(r.corpo.componentes.particoes).toMatchObject({ estado: 'degradado', menorMesesAFrente: 2, limiteMeses: 3 })
+  })
+
+  it('dado a leitura das partições falhando, então degradado com particoes_sem_leitura e o erro não vaza', async () => {
+    const r = await pedir({ ...FALSO, lerParticoes: () => Promise.reject(new Error('permission denied senha=xyz')) })
+    expect(r.corpo.motivos).toEqual(['particoes_sem_leitura'])
+    expect(r.corpo.componentes.particoes.tabelas).toBeNull()
+    expect(r.texto).not.toContain('xyz')
+  })
+
+  it('dado o banco real depois da 0110, então as quatro tabelas mensais têm ≥ 12 meses à frente (só nomes e números)', async () => {
+    const h = await lerParticoesComo(dono as never, () => new Date())()
+    expect(h.map((x) => x.tabela).sort()).toEqual(['auditoria', 'item_venda', 'mensagem', 'venda'])
+    for (const x of h) expect(x.mesesAFrente).toBeGreaterThanOrEqual(12)
   })
 })
 
