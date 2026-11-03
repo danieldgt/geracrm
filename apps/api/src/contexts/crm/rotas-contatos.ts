@@ -8,7 +8,7 @@ import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { parseCsvContatos } from './importar-csv.js'
 import { condicaoContato, contatoNoEscopo, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
 import { validarCadastro } from './contato-cadastro.js'
-import { gravarDocumentoEEndereco } from './contato-gravacao.js'
+import { CONTATO_ANONIMIZADO, contatoAnonimizado, gravarDocumentoEEndereco } from './contato-gravacao.js'
 import { condicaoFiltros, contextoDosFiltros, lerFiltros } from './contatos-filtros.js'
 
 /** Teto de linhas por importação — evita engolir um arquivo gigante numa tx. */
@@ -213,11 +213,12 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       const d = v.dados
       const tel = normalizarTelefone(d.telefone)!
 
-      let r: { ok: true } | { erro: 'contato.nao_encontrado' | 'telefone_duplicado' | 'origem' }
+      let r: { ok: true } | { erro: 'contato.nao_encontrado' | 'telefone_duplicado' | 'origem' | 'anonimizado' }
       try {
         r = await req.comTenant(async (tx) => {
-        const [c] = await tx<{ origem_id: string | null }[]>`SELECT origem_id FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
+        const [c] = await tx<{ origem_id: string | null; anonimizado_em: Date | null }[]>`SELECT origem_id, anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
         if (!c) return { erro: 'contato.nao_encontrado' as const }
+        if (c.anonimizado_em) return { erro: 'anonimizado' as const }
 
         const [outro] = await tx`
           SELECT 1 FROM contato_telefone
@@ -247,6 +248,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       if ('erro' in r) {
         if (r.erro === 'telefone_duplicado') return respostaTelefoneDuplicado(reply)
         if (r.erro === 'origem') return respostaOrigemInvalida(reply)
+        if (r.erro === 'anonimizado') return reply.code(409).send(CONTATO_ANONIMIZADO)
         return reply.code(404).send({ erro: 'contato.nao_encontrado', mensagem: 'Contato não encontrado.' })
       }
       return reply.send({ ok: true, id })
@@ -651,6 +653,8 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       if (perfilPreco !== undefined && perfilPreco !== null && !ehPerfilPreco(perfilPreco)) {
         return reply.code(422).send({ erro: 'contato.perfil_preco_invalido', mensagem: 'Perfil de preço deve ser varejo ou atacado.' })
       }
+      const bloqueado = await req.comTenant((tx) => contatoAnonimizado(tx, req.params.id))
+      if (bloqueado) return reply.code(409).send(CONTATO_ANONIMIZADO)
       const [r] = await req.comTenant((tx) => tx`
         UPDATE contato SET
           nome  = ${nome ?? tx`nome`},
@@ -669,8 +673,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       const tel = normalizarTelefone(req.body?.telefone ?? '')
       if (!tel) return reply.code(422).send({ erro: 'telefone.invalido', mensagem: 'Telefone inválido.' })
       const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [c] = await tx<{ anonimizado_em: Date | null }[]>`SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return { erro: 404 as const }
+        if (c.anonimizado_em) return { erro: 409 as const }
         const [linhaProx] = await tx<{ prox: number }[]>`
           SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
         const prox = linhaProx!.prox
@@ -682,7 +687,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
           ON CONFLICT DO NOTHING`
         return { ok: true }
       })
-      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if ('erro' in r) return r.erro === 409 ? reply.code(409).send(CONTATO_ANONIMIZADO) : reply.code(404).send({ erro: 'contato.nao_encontrado' })
       return reply.code(201).send({ ok: true })
     },
   )
@@ -691,10 +696,13 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string; seq: string } }>(
     '/v1/contatos/:id/telefones/:seq/principal', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
-      await req.comTenant(async (tx) => {
+      const bloqueado = await req.comTenant(async (tx) => {
+        if (await contatoAnonimizado(tx, req.params.id)) return true
         await tx`UPDATE contato_telefone SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
         await tx`UPDATE contato_telefone SET principal = true WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`
+        return false
       })
+      if (bloqueado) return reply.code(409).send(CONTATO_ANONIMIZADO)
       return reply.send({ ok: true })
     },
   )
@@ -718,8 +726,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       const numero = normalizarDocumento(tipo, req.body?.numero ?? '')
       if (!numero) return reply.code(422).send({ erro: 'documento.invalido', mensagem: `${tipo.toUpperCase()} inválido (dígito verificador).` })
       const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [c] = await tx<{ anonimizado_em: Date | null }[]>`SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return { erro: 404 as const }
+        if (c.anonimizado_em) return { erro: 409 as const }
         const [linhaProx] = await tx<{ prox: number }[]>`
           SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
         const prox = linhaProx!.prox
@@ -727,7 +736,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
                  VALUES (tenant_atual(), ${req.params.id}, ${prox}, ${tipo}, ${numero}, 'manual')`
         return { ok: true }
       })
-      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if ('erro' in r) return r.erro === 409 ? reply.code(409).send(CONTATO_ANONIMIZADO) : reply.code(404).send({ erro: 'contato.nao_encontrado' })
       return reply.code(201).send({ ok: true, numero })
     },
   )
@@ -748,8 +757,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const b = req.body ?? {}
       const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [c] = await tx<{ anonimizado_em: Date | null }[]>`SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return { erro: 404 as const }
+        if (c.anonimizado_em) return { erro: 409 as const }
         await tx`
           INSERT INTO contato_endereco (tenant_id, contato_id, seq, logradouro, numero, complemento, bairro, cidade, uf, cep, principal, fonte)
           VALUES (tenant_atual(), ${req.params.id}, 1, ${b['logradouro'] ?? null}, ${b['numero'] ?? null}, ${b['complemento'] ?? null},
@@ -759,7 +769,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
             bairro = EXCLUDED.bairro, cidade = EXCLUDED.cidade, uf = EXCLUDED.uf, cep = EXCLUDED.cep`
         return { ok: true }
       })
-      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if ('erro' in r) return r.erro === 409 ? reply.code(409).send(CONTATO_ANONIMIZADO) : reply.code(404).send({ erro: 'contato.nao_encontrado' })
       return reply.send({ ok: true })
     },
   )
@@ -796,14 +806,15 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       const texto = req.body?.texto?.trim()
       if (!texto) return reply.code(422).send({ erro: 'comentario.vazio', mensagem: 'Escreva algo.' })
       const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [c] = await tx<{ anonimizado_em: Date | null }[]>`SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return { erro: 404 as const }
+        if (c.anonimizado_em) return { erro: 409 as const }
         const autorId = await garantirUsuarioId(tx, req)
         await tx`INSERT INTO comentario (tenant_id, id, contato_id, autor_id, texto)
                  VALUES (tenant_atual(), ${randomUUID()}, ${req.params.id}, ${autorId}, ${texto})`
         return { ok: true }
       })
-      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if ('erro' in r) return r.erro === 409 ? reply.code(409).send(CONTATO_ANONIMIZADO) : reply.code(404).send({ erro: 'contato.nao_encontrado' })
       return reply.code(201).send({ ok: true })
     },
   )

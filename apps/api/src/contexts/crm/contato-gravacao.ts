@@ -26,6 +26,19 @@ interface EnderecoLinha {
   principal: boolean; fonte: string
 }
 
+/** Corpo do 409 das rotas de edição: contato anonimizado (LGPD) é imutável. */
+export const CONTATO_ANONIMIZADO = {
+  erro: 'contato.anonimizado',
+  mensagem: 'Este contato foi anonimizado (LGPD) e não pode mais ser editado.',
+} as const
+
+/** O contato (do tenant atual) já foi anonimizado? Falso também se não existe — quem chama checa a existência. */
+export async function contatoAnonimizado(tx: Sql, id: string): Promise<boolean> {
+  const [c] = await tx<{ anonimizado_em: Date | null }[]>`
+    SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
+  return c?.anonimizado_em != null
+}
+
 const trimOuNull = (x: string | null | undefined) => (typeof x === 'string' && x.trim() !== '' ? x.trim() : null)
 
 export async function gravarDocumento(tx: Sql, id: string, d: Pick<ContatoCadastro, 'documento'>): Promise<void> {

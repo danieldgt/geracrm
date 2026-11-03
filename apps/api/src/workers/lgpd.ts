@@ -12,7 +12,10 @@ import {
  * Por tenant (como DONO só para listar os tenants ligados; todo o resto sob `comTenantServico`, RLS):
  *   1. lê até `LOTE` candidatos (descartados além da retenção e opt-outs com mais de 15 dias —
  *      regras em `lgpd-anonimizacao.ts`);
+ *      (a chave `lgpd_auto` é relida a cada lote: desligada no meio, a passada para);
  *   2. anonimiza CADA contato na sua própria transação (uma falha não desfaz os outros);
+ *      — e, DENTRO da transação, depois do `FOR UPDATE`, reavalia o predicado do motivo: se o contato
+ *      não casa mais, pula sem erro (`nao_elegivel`);
  *   3. contato que falha ganha `lgpd_falha` (só o CÓDIGO), sai desta passada e vai para o fim da fila
  *      nas próximas — nunca trava os demais;
  *   4. repete até `MAX_LOTES_POR_TENANT` lotes ou até estourar o orçamento de tempo (checado também
@@ -75,6 +78,10 @@ export async function processarLgpd(dono: Sql, deps: DepsLgpd = {}, agora: Date 
     const falharamNestaPassada: string[] = []
     for (let n = 0; n < MAX_LOTES_POR_TENANT; n++) {
       if (relogio() >= limite) { interrompido = true; break }
+      // O admin pode desligar a automática no meio da passada: relê a chave a CADA lote.
+      const [ligada] = await comTenantServico(t.id, (tx) => tx<{ lgpd_auto: boolean }[]>`
+        SELECT lgpd_auto FROM tenant WHERE id = tenant_atual()`)
+      if (!ligada?.lgpd_auto) break
       const candidatos = await comTenantServico(t.id, (tx) =>
         candidatosDeAnonimizacao(tx, { agora, limite: lote, excluir: falharamNestaPassada }))
       if (candidatos.length === 0) break
@@ -84,9 +91,10 @@ export async function processarLgpd(dono: Sql, deps: DepsLgpd = {}, agora: Date 
         processadas++
         let codigo: string | null = null
         try {
-          const r = await comTenantServico(t.id, (tx) => anonimizar(tx, c.id, { motivo: c.motivo, agora }))
+          const r = await comTenantServico(t.id, (tx) => anonimizar(tx, c.id, { motivo: c.motivo, agora, reavaliarSeletor: true }))
           if (r.ok && !r.jaAnonimizado) { anonimizados++; progresso++ }
-          else if (!r.ok) codigo = r.erro
+          // `nao_elegivel`: o fato mudou depois da leitura do lote (cliente voltou) — pula, sem erro.
+          else if (!r.ok && r.erro !== 'nao_elegivel') codigo = r.erro
         } catch (e) {
           codigo = codigoDoErro(e)
         }

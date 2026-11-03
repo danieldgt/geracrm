@@ -64,7 +64,9 @@ export async function processarMidiaLgpd(dono: Sql, deps: DepsLgpdMidia = {}, ag
     for (const r of reservados) {
       // ⚠️ Fora de transação: a chamada de rede não segura conexão nem trava linha.
       let codigo: string | null = null
-      try { await bucket.remover(r.chave_objeto) } catch (e) { codigo = codigoDoErro(e) }
+      // Defesa em profundidade (a tabela já tem CHECK): nunca remove objeto fora de `tenant/<T>/`.
+      if (!r.chave_objeto.startsWith(`tenant/${tenantId}/`)) codigo = 'chave_fora_do_tenant'
+      else try { await bucket.remover(r.chave_objeto) } catch (e) { codigo = codigoDoErro(e) }
       if (codigo === null) {
         removidas++
         await comTenantServico(tenantId, (tx) => tx`

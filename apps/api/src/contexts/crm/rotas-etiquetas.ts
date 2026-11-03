@@ -5,6 +5,7 @@ import { exigirPapel } from '../plataforma/papel.js'
 import { exigirNoEscopo } from '../plataforma/escopo.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { CONTATO_ANONIMIZADO } from './contato-gravacao.js'
 
 const PAGINA = 50
 const MAX_ETIQUETAS_POR_CONTATO = 50
@@ -217,8 +218,9 @@ export async function rotasEtiquetas(app: FastifyInstance): Promise<void> {
         return invalido(reply, 'etiquetas.excesso', `No máximo ${MAX_ETIQUETAS_POR_CONTATO} etiquetas por contato.`)
       }
       const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [c] = await tx<{ anonimizado_em: Date | null }[]>`SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return { tipo: 'sem_contato' as const }
+        if (c.anonimizado_em) return { tipo: 'anonimizado' as const }
         const validas = ids.length === 0 ? [] : await tx<{ id: string }[]>`
           SELECT e.id FROM etiqueta e
            WHERE e.tenant_id = tenant_atual() AND e.id = ANY(${ids}::uuid[])
@@ -256,6 +258,7 @@ export async function rotasEtiquetas(app: FastifyInstance): Promise<void> {
         return { tipo: 'ok' as const }
       })
       if (r.tipo === 'sem_contato') return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if (r.tipo === 'anonimizado') return reply.code(409).send(CONTATO_ANONIMIZADO)
       if (r.tipo === 'inexistente') {
         return reply.code(422).send({
           erro: 'etiqueta.inexistente', mensagem: 'Alguma etiqueta não existe ou está inativa.', etiquetaIds: r.faltando,

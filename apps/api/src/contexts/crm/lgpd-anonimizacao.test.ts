@@ -235,8 +235,8 @@ describe('candidatos — a regra de retenção', () => {
 
   it('C3: tarefa CONCLUÍDA depois do descarte, ou comentário recente, tira da lista', async () => {
     const concluida = await novoContato(), comentada = await novoContato()
-    await dono`INSERT INTO tarefa (tenant_id, id, contato_id, titulo, vence_em, estado, concluida_em, criado_em)
-               VALUES (${A}, ${randomUUID()}, ${concluida.id}, 'ligar', ${mesesAtras(1)}, 'concluida', ${mesesAtras(1)}, ${mesesAtras(15)})`
+    await dono`INSERT INTO tarefa (tenant_id, id, contato_id, titulo, vence_em, estado, concluida_em, criado_em, criado_por)
+               VALUES (${A}, ${randomUUID()}, ${concluida.id}, 'ligar', ${mesesAtras(1)}, 'concluida', ${mesesAtras(1)}, ${mesesAtras(15)}, ${U_ADMIN})`
     await dono`INSERT INTO comentario (tenant_id, id, contato_id, texto, criado_em) VALUES (${A}, ${randomUUID()}, ${comentada.id}, 'falou comigo ontem', ${diasAtras(1)})`
     const ids = await idsCandidatos()
     expect(ids).not.toContain(concluida.id)
@@ -252,8 +252,8 @@ describe('candidatos — a regra de retenção', () => {
     await mensagem(A, doAgente.conversa, mesesAtras(2), 'saliente', null)
     await dono`INSERT INTO pedido (tenant_id, id, contato_id, estado, origem, criado_em, atualizado_em)
                VALUES (${A}, ${randomUUID()}, ${pedido.id}, 'rascunho', 'humano', ${mesesAtras(3)}, ${mesesAtras(3)})`
-    await dono`INSERT INTO tarefa (tenant_id, id, contato_id, titulo, vence_em, estado, criado_em)
-               VALUES (${A}, ${randomUUID()}, ${tarefaAberta.id}, 'ligar', ${diasAtras(-3)}, 'aberta', ${mesesAtras(20)})`
+    await dono`INSERT INTO tarefa (tenant_id, id, contato_id, titulo, vence_em, estado, criado_em, criado_por)
+               VALUES (${A}, ${randomUUID()}, ${tarefaAberta.id}, 'ligar', ${diasAtras(-3)}, 'aberta', ${mesesAtras(20)}, ${U_ADMIN})`
     await dono`INSERT INTO oportunidade (tenant_id, id, contato_id, etapa_id, estado, motivo_perda_codigo, criado_em, fechada_em)
                VALUES (${A}, ${randomUUID()}, ${opPerdida.id}, ${await etapaGanho()}, 'perdida', 'preco', ${mesesAtras(20)}, ${mesesAtras(3)})`
     await dono`INSERT INTO contato_arquivo (tenant_id, id, contato_id, nome, tipo_mime, tamanho_bytes, chave_bucket, criado_em)
@@ -687,6 +687,192 @@ describe('rota do titular, prévia, automática e relatório', () => {
     expect((await pedir('GET', '/v1/lgpd/relatorio?de=2027-03-02&ate=2027-03-01', A)).statusCode).toBe(422)
     const direto = await comTenantServico(A, (tx) => relatorioAnonimizacao(tx, { de: new Date('2000-01-01'), ate: new Date('2001-01-01') }))
     expect(direto.total).toBe(0)
+  })
+})
+
+describe('2ª revisão: seletor reavaliado, pedidos pendentes, admin do tenant, contato imutável', () => {
+  const optOut = (id: string, quando: Date) => comTenantServico(A, (tx) => registrarOptOut(tx, { contatoId: id, origem: 'teste', agora: quando }))
+  const pedido = (contatoId: string, estado: string, extra: { confirmado?: boolean; efetivado?: boolean; numero?: boolean; quando?: Date } = {}) => {
+    const q = extra.quando ?? mesesAtras(15)
+    return dono`INSERT INTO pedido (tenant_id, id, contato_id, estado, origem, criado_em, atualizado_em, confirmado_em, efetivado_em, numero_externo)
+                VALUES (${A}, ${randomUUID()}, ${contatoId}, ${estado}, 'humano', ${q}, ${q},
+                        ${extra.confirmado ? q : null}, ${extra.efetivado ? q : null}, ${extra.numero ? 'ERP-1' : null})`
+  }
+
+  it('M1: cliente escreve entre a leitura do lote e a anonimização (retenção) → nada é apagado e não é falha', async () => {
+    await ligarAutomatica(A)
+    const c = await novoContato()
+    expect(await idsCandidatos()).toEqual([c.id])
+    await mensagem(A, c.conversa, mesesAtras(2))
+    expect(await comTenantServico(A, (tx) => anonimizarContato(tx, c.id, { motivo: 'retencao', agora: AGORA, reavaliarSeletor: true })))
+      .toEqual({ ok: false, erro: 'nao_elegivel' })
+    // pelo worker: o lote lê o contato, o cliente fala, a anonimização recusa em silêncio
+    const d = await novoContato()
+    const r = await processarLgpd(dono as never, {
+      somenteTenant: A,
+      anonimizar: async (tx, id, o) => {
+        if (id === d.id) await mensagem(A, d.conversa, mesesAtras(1))
+        return anonimizarContato(tx, id, o)
+      },
+    }, AGORA)
+    expect(r).toMatchObject({ anonimizados: 0, falhas: 0, codigosFalha: {} })
+    expect(await anonimizadoEm(c.id)).toBeNull()
+    expect(await anonimizadoEm(d.id)).toBeNull()
+    expect((await dono`SELECT 1 FROM lgpd_falha WHERE tenant_id = ${A}`).length).toBe(0)
+    expect(await contar('contato_telefone', d.id)).toBe(1)
+  })
+
+  it('M1: opt-out — o cliente volta a falar depois da leitura do lote → não anonimiza', async () => {
+    await ligarAutomatica(A)
+    const c = await novoContato({ descartadoHa: null })
+    await optOut(c.id, diasAtras(30))
+    const r = await processarLgpd(dono as never, {
+      somenteTenant: A,
+      anonimizar: async (tx, id, o) => {
+        await mensagem(A, c.conversa, diasAtras(1))
+        return anonimizarContato(tx, id, o)
+      },
+    }, AGORA)
+    expect(r).toMatchObject({ processadas: 1, anonimizados: 0, falhas: 0 })
+    expect(await anonimizadoEm(c.id)).toBeNull()
+    expect(await contar('contato_telefone', c.id)).toBe(1)
+  })
+
+  it('M1: o admin desliga a automática no meio → a passada para no próximo lote', async () => {
+    await ligarAutomatica(A)
+    const todos = [await novoContato(), await novoContato(), await novoContato()]
+    let n = 0
+    const r = await processarLgpd(dono as never, {
+      somenteTenant: A, lote: 1,
+      anonimizar: async (tx, id, o) => {
+        const res = await anonimizarContato(tx, id, o)
+        if (++n === 1) await dono`UPDATE tenant SET lgpd_auto = false WHERE id = ${A}`
+        return res
+      },
+    }, AGORA)
+    expect(r.anonimizados).toBe(1)
+    const feitos = await Promise.all(todos.map(async (c) => (await anonimizadoEm(c.id)) !== null))
+    expect(feitos.filter(Boolean)).toHaveLength(1)
+  })
+
+  it('M2: pedido confirmado/efetivado/com número do ERP (em qualquer momento) ou falhou/aguardando_confirmacao é compra — fora da retenção', async () => {
+    const casos: [string, Parameters<typeof pedido>[2]][] = [
+      ['rascunho', { confirmado: true }], ['rascunho', { efetivado: true }], ['rascunho', { numero: true }],
+      ['falhou', {}], ['aguardando_confirmacao', {}],
+    ]
+    for (const [estado, extra] of casos) {
+      const c = await novoContato()
+      await pedido(c.id, estado, extra)
+      expect(await idsCandidatos(), `${estado} ${JSON.stringify(extra)}`).not.toContain(c.id)
+      expect(await anonimizar(A, c.id, 'retencao')).toEqual({ ok: false, erro: 'contato_com_compra' })
+    }
+  })
+
+  it('M2: opt-out com oportunidade aberta ou pedido pendente → só canais; sem eles → completa', async () => {
+    const comOp = await novoContato({ descartadoHa: null }), comRascunho = await novoContato({ descartadoHa: null })
+    const comAguardando = await novoContato({ descartadoHa: null }), limpo = await novoContato({ descartadoHa: null })
+    await dono`INSERT INTO oportunidade (tenant_id, id, contato_id, etapa_id, estado, criado_em)
+               VALUES (${A}, ${randomUUID()}, ${comOp.id}, ${await etapaGanho()}, 'aberta', ${mesesAtras(2)})`
+    await pedido(comRascunho.id, 'rascunho', { quando: mesesAtras(3) })
+    await pedido(comAguardando.id, 'aguardando_confirmacao', { quando: mesesAtras(3) })
+    expect(await anonimizar(A, comOp.id, 'opt_out')).toMatchObject({ ok: true, modo: 'canais' })
+    expect(await anonimizar(A, comRascunho.id, 'opt_out')).toMatchObject({ ok: true, modo: 'canais' })
+    expect(await anonimizar(A, comAguardando.id, 'opt_out')).toMatchObject({ ok: true, modo: 'canais' })
+    expect(await anonimizar(A, limpo.id, 'opt_out')).toMatchObject({ ok: true, modo: 'completa' })
+    expect(await contar('pedido', comRascunho.id)).toBe(1)
+    expect(await contar('oportunidade', comOp.id)).toBe(1)
+  })
+
+  it('B1: opt-out de contato SEM telefone com chave não passa por vacuidade', async () => {
+    const c = await novoContato({ descartadoHa: null })
+    await optOut(c.id, diasAtras(30))
+    expect(await idsCandidatos()).toEqual([c.id])
+    await dono`DELETE FROM contato_telefone WHERE tenant_id = ${A} AND contato_id = ${c.id}`
+    expect(await idsCandidatos()).toEqual([])
+  })
+
+  it('B2: só as chaves de mídia do conteúdo viram objeto a apagar; o texto do cliente nunca', async () => {
+    const c = await novoContato({ descartadoHa: null })
+    const texto = `tenant/${A}/segredo-no-texto.jpg`
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem, criado_em) VALUES
+      (${A}, ${randomUUID()}, ${c.conversa}, 'entrante', 'texto', ${JSON.stringify({ texto, legenda: `tenant/${A}/na-legenda.jpg` })}::text::jsonb, 'lida', 3, ${MUITO_ANTES}),
+      (${A}, ${randomUUID()}, ${c.conversa}, 'entrante', 'video', ${JSON.stringify({ video: `tenant/${A}/v.mp4` })}::text::jsonb, 'lida', 3, ${MUITO_ANTES}),
+      (${A}, ${randomUUID()}, ${c.conversa}, 'entrante', 'documento', ${JSON.stringify({ documento: `tenant/${A}/d.pdf` })}::text::jsonb, 'lida', 3, ${MUITO_ANTES})`
+    await anonimizar(A, c.id, 'titular')
+    const chaves = (await dono<{ chave_objeto: string }[]>`SELECT chave_objeto FROM lgpd_midia_pendente WHERE tenant_id = ${A} AND contato_id = ${c.id}`)
+      .map((l) => l.chave_objeto).sort()
+    expect(chaves).toEqual([`tenant/${A}/${c.id}.jpg`, `tenant/${A}/d.pdf`, `tenant/${A}/v.mp4`].sort())
+  })
+
+  it('B2: o worker de mídia rechecka o prefixo do tenant e nunca remove chave de fora', async () => {
+    const c = await novoContato({ descartadoHa: null })
+    const { porta, removidos } = bucketFalso()
+    await dono`ALTER TABLE lgpd_midia_pendente DROP CONSTRAINT lgpd_midia_chave_do_tenant`
+    try {
+      await dono`INSERT INTO lgpd_midia_pendente (tenant_id, id, contato_id, chave_objeto, origem, criado_em, proxima_tentativa_em)
+                 VALUES (${A}, ${randomUUID()}, ${c.id}, ${`tenant/${B}/alheio.jpg`}, 'mensagem', ${AGORA}, ${AGORA})`
+      const r = await processarMidiaLgpd(dono as never, { somenteTenant: A, bucket: porta }, AGORA)
+      expect(r).toEqual({ removidas: 0, falhas: 1, semBucket: false })
+      expect(removidos).toEqual([])
+      expect((await dono`SELECT ultimo_erro FROM lgpd_midia_pendente WHERE tenant_id = ${A}`)[0]!.ultimo_erro).toBe('chave_fora_do_tenant')
+    } finally {
+      await dono`DELETE FROM lgpd_midia_pendente WHERE tenant_id = ${A}`
+      await dono`ALTER TABLE lgpd_midia_pendente ADD CONSTRAINT lgpd_midia_chave_do_tenant CHECK (chave_objeto LIKE 'tenant/' || tenant_id::text || '/%')`
+    }
+  })
+
+  it('B3: tarefa de automação e evento CANCELADO não seguram a retenção; tarefa e evento humanos contam', async () => {
+    const auto = await novoContato(), cancelado = await novoContato(), humana = await novoContato(), evento = await novoContato()
+    const fim = new Date(mesesAtras(2).getTime() + 3_600_000)
+    await dono`INSERT INTO tarefa (tenant_id, id, contato_id, titulo, vence_em, estado, criado_em, criado_por)
+               VALUES (${A}, ${randomUUID()}, ${auto.id}, 'cobrar', ${diasAtras(-3)}, 'aberta', ${mesesAtras(2)}, NULL),
+                      (${A}, ${randomUUID()}, ${humana.id}, 'cobrar', ${diasAtras(-3)}, 'aberta', ${mesesAtras(2)}, ${U_ADMIN})`
+    await dono`INSERT INTO evento_agenda (tenant_id, id, titulo, contato_id, responsavel_id, inicio, fim, criado_em, status)
+               VALUES (${A}, ${randomUUID()}, 'visita', ${cancelado.id}, ${U_ADMIN}, ${mesesAtras(2)}, ${fim}, ${mesesAtras(2)}, 'cancelado'),
+                      (${A}, ${randomUUID()}, 'visita', ${evento.id}, ${U_ADMIN}, ${mesesAtras(2)}, ${fim}, ${mesesAtras(2)}, 'agendado')`
+    expect((await idsCandidatos()).sort()).toEqual([auto.id, cancelado.id].sort())
+  })
+
+  it('B4: admin de UMA filial só recebe 403 acesso.admin_atribuido (rota do titular e automática); admin do tenant passa', async () => {
+    const filial = randomUUID()
+    await dono`INSERT INTO filial (tenant_id, id, nome) VALUES (${A}, ${filial}, 'Filial Norte')`
+    await dono`UPDATE usuario_filial SET filial_id = ${filial} WHERE tenant_id = ${A} AND usuario_id = ${U_CHAMADOR}`
+    const c = await novoContato()
+    const titular = await pedir('POST', `/v1/contatos/${c.id}/anonimizar`, A)
+    expect(titular.statusCode).toBe(403)
+    expect(titular.json().erro).toBe('acesso.admin_atribuido')
+    const auto = await pedir('POST', '/v1/lgpd/automatica', A, { ativar: true, confirmo: true })
+    expect(auto.statusCode).toBe(403)
+    expect(auto.json().erro).toBe('acesso.admin_atribuido')
+    expect(await anonimizadoEm(c.id)).toBeNull()
+    await dono`DELETE FROM usuario_filial WHERE tenant_id = ${A} AND usuario_id = ${U_CHAMADOR}`
+    await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${U_CHAMADOR}, NULL, 'admin')`
+    expect((await pedir('POST', `/v1/contatos/${c.id}/anonimizar`, A)).statusCode).toBe(200)
+  })
+
+  it('B5: contato anonimizado é imutável — as rotas de edição respondem 409 contato.anonimizado e nada é regravado', async () => {
+    const c = await novoContato({ descartadoHa: null })
+    await anonimizar(A, c.id, 'titular')
+    const antes = await dono`SELECT nome, email, razao_social FROM contato WHERE id = ${c.id}`
+    const url = `/v1/contatos/${c.id}`
+    const h = { 'x-tenant-id': A }
+    const respostas = [
+      app.inject({ method: 'PUT', url, headers: h, payload: { nome: 'Fulano', telefone: '85988887777', whatsapp: true } }),
+      app.inject({ method: 'PATCH', url, headers: h, payload: { nome: 'Fulano' } }),
+      app.inject({ method: 'POST', url: `${url}/telefones`, headers: h, payload: { telefone: '85988887777' } }),
+      app.inject({ method: 'POST', url: `${url}/telefones/1/principal`, headers: h }),
+      app.inject({ method: 'POST', url: `${url}/documentos`, headers: h, payload: { tipo: 'cpf', numero: '12345678909' } }),
+      app.inject({ method: 'PUT', url: `${url}/endereco`, headers: h, payload: { cidade: 'Recife' } }),
+      app.inject({ method: 'PUT', url: `${url}/etiquetas`, headers: h, payload: { etiquetaIds: [] } }),
+      app.inject({ method: 'POST', url: `${url}/comentarios`, headers: h, payload: { texto: 'oi' } }),
+    ]
+    for (const r of await Promise.all(respostas)) {
+      expect(r.statusCode).toBe(409)
+      expect(r.json().erro).toBe('contato.anonimizado')
+    }
+    expect(await dono`SELECT nome, email, razao_social FROM contato WHERE id = ${c.id}`).toEqual(antes)
+    expect(await contar('contato_telefone', c.id)).toBe(0)
+    expect(await contar('comentario', c.id)).toBe(0)
   })
 })
 
