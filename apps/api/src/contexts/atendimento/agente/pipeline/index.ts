@@ -5,6 +5,7 @@ import { etapaGatilhosEntrada } from './gatilhos-entrada.js'
 import { etapaSlotsDoCliente } from './slots-do-cliente.js'
 import { etapaTetoConversa } from './teto-conversa.js'
 import { etapaDevolucaoDaEquipe } from './devolucao-da-equipe.js'
+import { etapaPosVenda } from './pos-venda.js'
 import { etapaNumerosAmpliados } from './numeros-ampliados.js'
 import { etapaFiltroSaida } from './filtro-saida.js'
 import { etapaPerguntaRepetida } from './pergunta-repetida.js'
@@ -21,7 +22,7 @@ export * from './tipos.js'
 /**
  * O PIPELINE DO TURNO, MONTADO — a ordem é esta e só muda aqui (raia P0).
  *
- *   modoEfetivo → [portão] → gatilhos → slots → teto(pré) → devolução → LLM →
+ *   modoEfetivo → [portão] → gatilhos → slots → teto(pré) → devolução → pós-venda → LLM →
  *   [guardrail R$] → números → filtro → pergunta → qualidade → objeções → envio → teto(pós)
  *
  * Cada etapa mora no seu arquivo e tem uma raia dona; editar a etapa NÃO exige
@@ -34,6 +35,7 @@ export const PIPELINE_PADRAO: PipelineDoTurno = {
   slots: etapaSlotsDoCliente,
   teto: etapaTetoConversa,
   devolucao: etapaDevolucaoDaEquipe,
+  posVenda: etapaPosVenda,
   numeros: etapaNumerosAmpliados,
   filtro: etapaFiltroSaida,
   pergunta: etapaPerguntaRepetida,
@@ -49,10 +51,11 @@ export function montarPipeline(sobrepor: Partial<PipelineDoTurno> = {}): Pipelin
 /**
  * Etapas antes do modelo, na ordem. O teto entra pelo seu lado `antes`. A
  * devolução da equipe (G1) é a ÚLTIMA: só acrescenta instrução, e só no turno
- * que de fato chega ao modelo (ver `devolucao-da-equipe.ts`).
+ * que de fato chega ao modelo (ver `devolucao-da-equipe.ts`). O pós-venda (G3)
+ * vem depois dela pelo mesmo motivo: só acrescenta instrução.
  */
 function etapasPreLlm(p: PipelineDoTurno): readonly EtapaPreLlm[] {
-  return [p.gatilhos, p.slots, { nome: p.teto.nome, executar: (ctx) => p.teto.antes(ctx) }, p.devolucao]
+  return [p.gatilhos, p.slots, { nome: p.teto.nome, executar: (ctx) => p.teto.antes(ctx) }, p.devolucao, p.posVenda]
 }
 
 /**

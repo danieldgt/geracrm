@@ -28,7 +28,7 @@ workers/agente.ts (1 s, dono, FOR UPDATE SKIP LOCKED, serial por conversa)
 `agente/pipeline/index.ts` (`PIPELINE_PADRAO`) — a ordem só muda ali:
 
 ```
-modoEfetivo → [portão] → gatilhos → slots → teto(pré) → LLM → [guardrail R$] →
+modoEfetivo → [portão] → gatilhos → slots → teto(pré) → devolução → pós-venda → LLM → [guardrail R$] →
 números → filtro → pergunta → qualidade → envio → teto(pós)
 ```
 
@@ -38,6 +38,7 @@ números → filtro → pergunta → qualidade → envio → teto(pós)
 | gatilhos | `pipeline/gatilhos-entrada.ts` | sem token: opt-out (confirma antes de bloquear; "cancelar pedido" não é opt-out), humano, reclamação/Procon, "é robô?" (1ª fixa, 2ª handoff), áudio, abertura com identificação e aviso de privacidade |
 | slots | `pipeline/slots-do-cliente.ts` | o que o cliente já disse (volume, prazo, orçamento, tipo de compra, CNPJ) vira instrução, nunca dígito |
 | teto | `pipeline/teto-conversa.ts` | teto da sessão antes (handoff com aviso em autônomo) e depois (responde e transfere) |
+| pós-venda | `pipeline/pos-venda.ts` | roteiro aberto pela ativa de pós-venda (`estado_agente.posVenda`, G3) vira instrução: NPS → `registrar_nps`, indicação → `registrar_indicacoes`; só acrescenta |
 | números | `pipeline/numeros-ampliados.ts` | %, quantidade e prazo só com fonte no turno (ferramenta, política, conhecimento, cliente) |
 | filtro | `pipeline/filtro-saida.ts` | frases proibidas com regra de negação + compliance extra do número e do playbook |
 | pergunta | `pipeline/pergunta-repetida.ts` | Jaccard ≥ 0,7 contra a pergunta anterior; troca pela próxima pendente |
@@ -133,6 +134,12 @@ espelha `agente_config.politicas` nos dois sentidos. Capacidade e pendências de
 `GET /v1/agente/conhecimento/capacidades`; "Embutir agora" em `POST …/embutir` (409 quando a
 semântica está desligada). Regras do retrieval na skill `geracrm-catalogo`.
 
+**Prova social** (G3, #100) é o tipo `prova_social` do Conhecimento, com fonte, link, data de apuração,
+número/depoimento, consentimento (obrigatório no depoimento) e **aprovação de admin**
+(`POST …/conhecimento/:id/aprovar`; vetos de afirmação absoluta + filtro base). Editar volta a pendente.
+A busca comum NUNCA devolve prova social; só `consultar_prova_social` (aprovado, publicado, apurado há
+≤ 365 dias), e o número citado conta como fonte só se a ferramenta rodou no mesmo turno.
+
 ## Playground e auditoria
 
 `POST /v1/canais/:id/agente/simular` roda o agente REAL (ferramentas, catálogo, políticas) numa
@@ -158,7 +165,9 @@ resultado, resposta, confiança, números bloqueados, custo, latência, desfecho
 
 `agente/playbook/`, shared `agente-playbook.ts`, rotas `/v1/agente/playbook/*`. Conteúdo: estilo,
 persona, qualificação, mensagens prontas (inclui `avisoEspera` do SLA), compliance extra (só acrescenta)
-e ações habilitáveis (`catalogo`, `pedido`, `proposta`, `memoria`, `conhecimento`). Transferir, perfil
+e ações habilitáveis (`catalogo`, `pedido`, `proposta`, `memoria`, `conhecimento`, e as do pós-venda G3:
+`nps` → `registrar_nps`, `indicacoes` → `registrar_indicacoes`, `provaSocial` → `consultar_prova_social`;
+as três têm padrão ligado para que versões publicadas antes continuem válidas). Transferir, perfil
 do cliente, opt-out, humano, identificação, filtro base, números e `pedido_efetivar` ficam sempre
 ligados (`SEMPRE_LIGADAS_PLAYBOOK`). Rascunho → simular (modo seco, memória não grava) → publicar
 (admin, observação ≥ 10, auditoria) → versão imutável; restaurar cria versão nova. **Fato** vai para o

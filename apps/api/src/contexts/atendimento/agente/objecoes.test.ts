@@ -217,7 +217,7 @@ describe('Ferramenta registrar_objecao', () => {
 
 describe('Ações permitidas: a ferramenta entra no menu só com a ação ligada e objeção ativa', () => {
   const base: Ligacoes = { conhecimento: { async buscar() { return { trechos: [] } } } }
-  const todas = { catalogo: true, pedido: true, proposta: true, memoria: true, conhecimento: true, objecoes: true }
+  const todas = { catalogo: true, pedido: true, proposta: true, memoria: true, conhecimento: true, objecoes: true, nps: true, indicacoes: true, provaSocial: true }
   it.each([
     ['ligada com objeção ativa', { ...base, acoes: todas, objecoes: [CARO] }, true],
     ['desligada', { ...base, acoes: { ...todas, objecoes: false }, objecoes: [CARO] }, false],

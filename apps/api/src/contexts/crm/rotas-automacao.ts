@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto'
+import { ACOES_AUTOMACAO, GATILHOS_AUTOMACAO, MAX_TEXTO_AUTOMACAO, validarAcaoAgenteEnvia, validarGatilhoPedidoEfetivado } from '@geracrm/shared'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { executarAutomacoesDoTenant } from './automacao-motor.js'
 import { PAGINA, lerCursor, paginar } from './cursor-criado-em.js'
 
-const GATILHOS = new Set(['rfv_segmento', 'dias_sem_comprar', 'lead_frio', 'nps_detrator', 'reposicao_ritmo'])
-const ACOES = new Set(['criar_tarefa', 'aplicar_sequencia', 'adicionar_lista', 'enviar_mensagem'])
+const GATILHOS: ReadonlySet<string> = new Set(GATILHOS_AUTOMACAO)
+const ACOES: ReadonlySet<string> = new Set(ACOES_AUTOMACAO)
 /** Teto do texto da automação. Mensagem longa demais no WhatsApp não é lida. */
-const MAX_TEXTO = 900
+const MAX_TEXTO = MAX_TEXTO_AUTOMACAO
 
 /**
  * Automações (CRUD + "rodar agora"). Motor = varredura agendada, ações internas
@@ -52,6 +53,25 @@ export async function rotasAutomacao(app: FastifyInstance): Promise<void> {
       if (!nome) return reply.code(422).send({ erro: 'automacao.nome_obrigatorio', mensagem: 'Dê um nome à automação.' })
       if (!GATILHOS.has(b.gatilho ?? '')) return reply.code(422).send({ erro: 'automacao.gatilho_invalido' })
       if (!ACOES.has(b.acao ?? '')) return reply.code(422).send({ erro: 'automacao.acao_invalida' })
+      // Pós-venda (G3): o gatilho por pedido só agenda a ativa do agente, e a ativa
+      // do agente só nasce de pedido efetivado — os dois andam juntos.
+      if ((b.gatilho === 'pedido_efetivado') !== (b.acao === 'agente_envia')) {
+        return reply.code(422).send({
+          erro: 'automacao.pos_venda_combinacao',
+          mensagem: 'O gatilho "Pedido efetivado" usa a ação "Agente envia mensagem (pós-venda)", e vice-versa.',
+          campos: ['acao'],
+        })
+      }
+      let gatilhoParam: object = b.gatilhoParam ?? {}
+      let acaoParam: object = b.acaoParam ?? {}
+      if (b.gatilho === 'pedido_efetivado') {
+        const g = validarGatilhoPedidoEfetivado(b.gatilhoParam)
+        if (!g.ok) return reply.code(422).send({ erro: 'automacao.gatilho_param_invalido', mensagem: g.mensagem, campos: [g.campo] })
+        gatilhoParam = g.dados
+        const a = validarAcaoAgenteEnvia(b.acaoParam)
+        if (!a.ok) return reply.code(422).send({ erro: 'automacao.acao_param_invalido', mensagem: a.mensagem, campos: [a.campo] })
+        acaoParam = a.dados
+      }
       const id = randomUUID()
       try {
         await req.comTenant(async (tx) => {
@@ -74,10 +94,19 @@ export async function rotasAutomacao(app: FastifyInstance): Promise<void> {
             if (!texto) throw new ErroRef('mensagem')
             if (texto.length > MAX_TEXTO) throw new ErroRef('mensagem')
           }
+          // Template do pós-venda: precisa existir neste tenant (a aprovação é conferida no ENVIO —
+          // pode estar em análise agora e aprovado amanhã).
+          if (b.acao === 'agente_envia') {
+            const tid = (acaoParam as { templateId?: string | null }).templateId
+            if (tid) {
+              const [ok] = await tx`SELECT 1 FROM template WHERE tenant_id = tenant_atual() AND id = ${tid}`
+              if (!ok) throw new ErroRef('template')
+            }
+          }
           const eu = await garantirUsuarioId(tx, req)
           await tx`INSERT INTO automacao (tenant_id, id, nome, gatilho, gatilho_param, acao, acao_param, criado_por)
-                   VALUES (tenant_atual(), ${id}, ${nome}, ${b.gatilho!}, ${JSON.stringify(b.gatilhoParam ?? {})}::text::jsonb,
-                           ${b.acao!}, ${JSON.stringify(b.acaoParam ?? {})}::text::jsonb, ${eu})`
+                   VALUES (tenant_atual(), ${id}, ${nome}, ${b.gatilho!}, ${JSON.stringify(gatilhoParam)}::text::jsonb,
+                           ${b.acao!}, ${JSON.stringify(acaoParam)}::text::jsonb, ${eu})`
         })
         return reply.code(201).send({ id })
       } catch (e) {
@@ -88,6 +117,7 @@ export async function rotasAutomacao(app: FastifyInstance): Promise<void> {
             erro: `automacao.${e.tipo}_invalida`,
             mensagem: e.tipo === 'mensagem'
               ? `Escreva a mensagem que vai ser enviada (até ${MAX_TEXTO} caracteres).`
+              : e.tipo === 'template' ? 'O template escolhido não existe neste número.'
               : `A ${e.tipo} escolhida não existe.`,
           })
         }
@@ -127,5 +157,5 @@ export async function rotasAutomacao(app: FastifyInstance): Promise<void> {
 }
 
 class ErroRef extends Error {
-  constructor(readonly tipo: 'sequencia' | 'lista' | 'mensagem') { super(tipo) }
+  constructor(readonly tipo: 'sequencia' | 'lista' | 'mensagem' | 'template') { super(tipo) }
 }

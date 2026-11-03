@@ -260,6 +260,8 @@ export interface PipelineDoTurno {
   readonly teto: EtapaTetoConversa
   /** Recado de "Devolver ao agente" (G1): última etapa pré-modelo, só acrescenta instrução. */
   readonly devolucao: EtapaPreLlm
+  /** Roteiro do pós-venda aberto na sessão (G3): depois da devolução, só acrescenta instrução. */
+  readonly posVenda: EtapaPreLlm
   readonly numeros: EtapaPosResposta
   readonly filtro: EtapaPosResposta
   readonly pergunta: EtapaPosResposta

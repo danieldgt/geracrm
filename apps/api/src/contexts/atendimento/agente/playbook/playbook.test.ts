@@ -453,13 +453,13 @@ describe('Ações habilitáveis no menu (montarFerramentas)', () => {
   it('desligadas saem do menu; transferir e perfil ficam sempre', () => {
     const l: Ligacoes = {
       catalogo: {} as never, pedido: {} as never, conhecimento: { async buscar() { return { trechos: [] } } },
-      acoes: { catalogo: false, pedido: true, proposta: false, memoria: false, conhecimento: false, objecoes: false },
+      acoes: { catalogo: false, pedido: true, proposta: false, memoria: false, conhecimento: false, nps: false, indicacoes: false, provaSocial: false, objecoes: false },
     }
     const { ferramentas, capacidades } = montarFerramentas(l)
     const nomes = ferramentas.map((f) => f.nome)
     expect(nomes).toEqual(['pedido_ver', 'pedido_itens', 'atendimento_transferir', 'cliente_perfil'])
     expect(capacidades).toEqual({ catalogo: false, pedido: true, conhecimento: false, proposta: false })
-    const tudoDesligado = montarFerramentas({ ...l, acoes: { catalogo: false, pedido: false, proposta: false, memoria: false, conhecimento: false, objecoes: false } })
+    const tudoDesligado = montarFerramentas({ ...l, acoes: { catalogo: false, pedido: false, proposta: false, memoria: false, conhecimento: false, nps: false, indicacoes: false, provaSocial: false, objecoes: false } })
     expect(tudoDesligado.ferramentas.map((f) => f.nome)).toEqual(['atendimento_transferir', 'cliente_perfil'])
   })
 })

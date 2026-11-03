@@ -1,6 +1,7 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { blocoDoAgente, resumoFaixas, temNpsNoPeriodo, textoScore, type BlocoAgenteNps } from './nps.regras.js'
 
 interface Atendente {
   readonly usuarioId: string; readonly nome: string; readonly total: number
@@ -10,6 +11,8 @@ interface Nps {
   readonly dias: number
   readonly geral: { total: number; score: number | null; semAtendente: number }
   readonly porAtendente: Atendente[]
+  /** G3: notas que o AGENTE registrou no pós-venda — fora do ranking por atendente. */
+  readonly agente?: BlocoAgenteNps
 }
 interface Membro { readonly id: string; readonly nome: string }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
@@ -27,7 +30,7 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
     <header class="cabecalho">
       <div>
         <h1 class="txt-titulo">NPS por atendente</h1>
-        <p class="sub">A nota é dada depois da conversa e avalia quem atendeu.</p>
+        <p class="sub">A nota é dada depois da conversa e avalia quem atendeu. A do pós-venda feito pelo agente aparece à parte.</p>
       </div>
       <div class="dir">
         <div class="abas">
@@ -61,14 +64,36 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
       @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
         @if (d(); as n) {
-          @if (n.porAtendente.length === 0) {
-            <div class="bloco"><h2 class="txt-secao">Sem NPS por atendente no período</h2>
+          @if (!temDados(n)) {
+            <div class="bloco"><h2 class="txt-secao">Sem NPS no período</h2>
               <p>Registre uma nota acima, escolhendo quem atendeu.</p></div>
           } @else {
             <div class="geral">
               <span class="g-num" [attr.data-sinal]="sinal(n.geral.score)">{{ n.geral.score !== null && n.geral.score > 0 ? '+' : '' }}{{ n.geral.score ?? '—' }}</span>
               <span class="g-lab">NPS geral · {{ n.geral.total }} resposta{{ n.geral.total === 1 ? '' : 's' }}</span>
             </div>
+
+            <!-- G3: a nota do pós-venda feito pelo AGENTE, distinguida (não avalia vendedor). -->
+            @if (agente(n); as ag) {
+              @if (ag.total > 0) {
+                <div class="atd-linha agente">
+                  <div class="a-topo">
+                    <span class="a-nome encolhe"><span class="selo-ia">Agente</span> Pós-venda pelo agente</span>
+                    <span class="a-score txt-dados" [attr.data-sinal]="sinal(ag.score)">{{ score(ag.score) }}</span>
+                  </div>
+                  <div class="barra">
+                    <span class="seg prom" [style.flex]="ag.promotores" [title]="ag.promotores + ' promotores'"></span>
+                    <span class="seg neu"  [style.flex]="ag.neutros" [title]="ag.neutros + ' neutros'"></span>
+                    <span class="seg det"  [style.flex]="ag.detratores" [title]="ag.detratores + ' detratores'"></span>
+                  </div>
+                  <div class="a-rodape">
+                    <span>{{ faixas(ag) }}</span>
+                    <span class="a-total">{{ ag.total }} resposta{{ ag.total === 1 ? '' : 's' }}</span>
+                  </div>
+                  <p class="obs-ag">Notas coletadas pelo agente na pesquisa do pós-venda. Detrator vira tarefa do gestor.</p>
+                </div>
+              }
+            }
 
             <ul class="lista">
               @for (a of n.porAtendente; track a.usuarioId) {
@@ -132,6 +157,10 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
     .a-rodape { display: flex; justify-content: space-between; gap: var(--espacamento-3); font-size: 12px; color: var(--texto-suave); }
     .a-total { color: var(--texto-secundario); }
     .obs { margin-top: var(--espacamento-3); font-size: 12px; color: var(--texto-suave); }
+    .agente { margin-bottom: var(--espacamento-2); border-color: var(--ia); background: var(--ia-suave); }
+    .selo-ia { display: inline-block; margin-right: var(--espacamento-1); padding: 0 var(--espacamento-2); border-radius: var(--raio-completo);
+      background: var(--ia); color: var(--acao-texto); font-size: 11px; font-weight: 600; vertical-align: middle; }
+    .obs-ag { margin: var(--espacamento-1) 0 0; font-size: 12px; color: var(--texto-secundario); }
   `,
 })
 export class NpsPagina implements OnInit {
@@ -150,6 +179,10 @@ export class NpsPagina implements OnInit {
   ngOnInit(): void { void this.carregar(); void this.carregarEquipe() }
   trocar(dias: number): void { this.dias.set(dias); void this.carregar() }
   faixaDe(n: number): string { return n >= 9 ? 'promotor' : n >= 7 ? 'neutro' : 'detrator' }
+  temDados(n: Nps): boolean { return temNpsNoPeriodo(n) }
+  agente(n: Nps): BlocoAgenteNps { return blocoDoAgente(n) }
+  score(s: number | null): string { return textoScore(s) }
+  faixas(b: BlocoAgenteNps): string { return resumoFaixas(b) }
   sinal(score: number | null): string { return score === null ? 'neutro' : score >= 50 ? 'bom' : score >= 0 ? 'neutro' : 'ruim' }
 
   async carregarEquipe(): Promise<void> {

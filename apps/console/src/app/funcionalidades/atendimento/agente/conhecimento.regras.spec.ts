@@ -166,14 +166,14 @@ describe('Formulário ↔ corpo da API', () => {
     expect(formularioNovo('').alcance).toBe('global')
   })
   it('corpo: trim nos textos; canalId só quando alcance é número E há número', () => {
-    const f = { id: null, titulo: '  Frete ', tipo: 'frete' as const, alcance: 'canal' as const, conteudo: ' x ' }
+    const f = { ...formularioNovo(CANAL), titulo: '  Frete ', tipo: 'frete' as const, alcance: 'canal' as const, conteudo: ' x ' }
     expect(corpoDoDocumento(f, CANAL)).toEqual({ titulo: 'Frete', tipo: 'frete', conteudo: 'x', canalId: CANAL })
     expect(corpoDoDocumento({ ...f, alcance: 'global' }, CANAL).canalId).toBeNull()
     expect(corpoDoDocumento(f, '').canalId).toBeNull()
   })
   it('editar: carrega do documento; tipo desconhecido vira "outro" sem perder o texto', () => {
     const f = formularioDe({ id: 'd1', titulo: 'T', tipo: 'garantia', canalId: null, conteudo: 'c' })
-    expect(f).toEqual({ id: 'd1', titulo: 'T', tipo: 'outro', alcance: 'global', conteudo: 'c' })
+    expect(f).toMatchObject({ id: 'd1', titulo: 'T', tipo: 'outro', alcance: 'global', conteudo: 'c', fonte: '', provaTipo: 'numero', consentimento: false })
     expect(formularioDe({ id: 'd2', titulo: 'T', tipo: 'faq', canalId: CANAL, conteudo: 'c' }).alcance).toBe('canal')
   })
 })

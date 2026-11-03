@@ -3,6 +3,11 @@ import { DatePipe } from '@angular/common'
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { ConfirmacaoServico, ToastServico, ehStatus, mensagemDeErro, mesclarPagina, queryDeLista } from '../../compartilhado/ui/index.js'
+import { ACOES_AUTOMACAO, GATILHOS_AUTOMACAO, MAX_TEXTO_AUTOMACAO, ROTULO_ACAO_AUTOMACAO, ROTULO_GATILHO_AUTOMACAO, type RoteiroPosVenda } from '@geracrm/shared'
+import {
+  ACAO_POS_VENDA, DIAS_DEPOIS_MAX, ROTEIROS_POS_VENDA, ROTULO_ROTEIRO_POS_VENDA, acaoAoTrocarGatilho, avisoSoTemplate, descreverPosVenda,
+  gatilhoAoTrocarAcao, paramsPosVenda,
+} from './automacoes.regras.js'
 
 interface Automacao {
   readonly id: string; readonly nome: string; readonly ativa: boolean
@@ -21,10 +26,11 @@ const SEGMENTOS: Ref[] = [
   { id: 'em-risco', nome: 'Em Risco' }, { id: 'precisa-atencao', nome: 'Precisa de Atenção' },
   { id: 'semi-perdido', nome: 'Semi Perdido' }, { id: 'hibernando', nome: 'Hibernando' }, { id: 'perdido', nome: 'Perdido' },
 ]
-const GAT_ROTULO: Record<string, string> = { rfv_segmento: 'Cruzou segmento RFV', dias_sem_comprar: 'Dias sem comprar', lead_frio: 'Lead frio', nps_detrator: 'NPS detrator', reposicao_ritmo: 'Régua de recompra (ritmo do cliente)' }
-const ACAO_ROTULO: Record<string, string> = { criar_tarefa: 'Criar tarefa', aplicar_sequencia: 'Aplicar sequência', adicionar_lista: 'Adicionar à lista', enviar_mensagem: 'Enviar mensagem ao cliente' }
+const GAT_ROTULO: Readonly<Record<string, string>> = ROTULO_GATILHO_AUTOMACAO
+const ACAO_ROTULO: Readonly<Record<string, string>> = ROTULO_ACAO_AUTOMACAO
 /** Mesmo teto do servidor — mensagem longa no WhatsApp não é lida. */
-const MAX_TEXTO = 900
+const MAX_TEXTO = MAX_TEXTO_AUTOMACAO
+interface TemplateRef { readonly id: string; readonly nome: string; readonly statusMeta: string }
 
 /**
  * Automações — regras gatilho→ação (varredura agendada, ações internas; ver
@@ -39,7 +45,7 @@ const MAX_TEXTO = 900
     <header class="cabecalho">
       <div>
         <h1 class="txt-titulo">Automações</h1>
-        <p class="sub">Quando um cliente cruzar uma condição, o sistema cria a tarefa. Nada é enviado ao cliente sozinho.</p>
+        <p class="sub">Quando um cliente cruzar uma condição, o sistema cria a tarefa. Mensagem ao cliente só nas ações que dizem isso — e pelas mesmas regras de envio.</p>
       </div>
       <div class="dir">
         <button class="btn btn--secundario" (click)="rodar()" [disabled]="rodando()">{{ rodando() ? 'Rodando…' : 'Rodar agora' }}</button>
@@ -58,7 +64,7 @@ const MAX_TEXTO = 900
 
         <div class="dupla">
           <label class="campo">Gatilho (quando)
-            <select [value]="gatilho()" (change)="gatilho.set($any($event.target).value)">
+            <select [value]="gatilho()" (change)="trocarGatilho($any($event.target).value)">
               @for (g of gatilhos; track g) { <option [value]="g">{{ rotuloGat(g) }}</option> }
             </select>
           </label>
@@ -71,6 +77,11 @@ const MAX_TEXTO = 900
               @case ('dias_sem_comprar') { <label class="campo">Dias sem comprar ></label><input class="num" type="number" min="1" [value]="dias()" (input)="dias.set(+$any($event.target).value)" /> }
               @case ('lead_frio') { <label class="campo">Sem 1ª compra há > (dias)</label><input class="num" type="number" min="1" [value]="dias()" (input)="dias.set(+$any($event.target).value)" /> }
               @case ('nps_detrator') { <label class="campo">Nota ≤</label><input class="num" type="number" min="0" max="10" [value]="notaMax()" (input)="notaMax.set(+$any($event.target).value)" /> }
+              @case ('pedido_efetivado') {
+                <label class="campo">Dias depois da efetivação</label>
+                <input class="num" type="number" min="0" [attr.max]="DIAS_DEPOIS_MAX" [value]="diasDepois()" (input)="diasDepois.set(+$any($event.target).value)" />
+                <span class="ajuda-g">0 = no mesmo dia. Age por PEDIDO: cada compra efetivada recebe a sua mensagem, uma vez.</span>
+              }
               @case ('reposicao_ritmo') {
                 <label class="campo">Antecipação (× o ritmo do cliente)</label>
                 <input class="num" type="number" min="0.1" max="1.2" step="0.05" [value]="fator()" (input)="fator.set(+$any($event.target).value)" />
@@ -82,7 +93,7 @@ const MAX_TEXTO = 900
 
         <div class="dupla">
           <label class="campo">Ação (faça)
-            <select [value]="acao()" (change)="acao.set($any($event.target).value)">
+            <select [value]="acao()" (change)="trocarAcao($any($event.target).value)">
               @for (a of acoes; track a) { <option [value]="a">{{ rotuloAcao(a) }}</option> }
             </select>
           </label>
@@ -99,6 +110,32 @@ const MAX_TEXTO = 900
               @case ('adicionar_lista') {
                 <label class="campo">Lista<select [value]="listaId()" (change)="listaId.set($any($event.target).value)">
                   <option value="">Escolha…</option>@for (l of listas(); track l.id) { <option [value]="l.id">{{ l.nome }}</option> }</select></label>
+              }
+              @case ('agente_envia') {
+                <label class="campo">Roteiro
+                  <select [value]="roteiro()" (change)="roteiro.set($any($event.target).value)">
+                    @for (r of roteiros; track r) { <option [value]="r">{{ rotuloRoteiro[r] }}</option> }
+                  </select>
+                </label>
+                <label class="campo">Mensagem (dentro de 24h e no não-oficial)
+                  <textarea class="pt" rows="3" [value]="textoPosVenda()" (input)="textoPosVenda.set($any($event.target).value)"
+                            [attr.maxlength]="MAX_TEXTO" placeholder="Oi {{ '{' }}nome{{ '}' }}! De 0 a 10, que nota você dá para a sua compra?"></textarea>
+                </label>
+                <label class="campo">Template aprovado (oficial fora de 24h)
+                  <select [value]="templateId()" (change)="templateId.set($any($event.target).value)">
+                    <option value="">Sem template</option>
+                    @for (t of templates(); track t.id) { <option [value]="t.id">{{ t.nome }}</option> }
+                  </select>
+                </label>
+                @if (avisoTemplate(); as av) { <p class="aviso-envio">{{ av }}</p> }
+                <!-- ⚠️ Fala com o cliente em nome do agente: a política das ativas vale inteira. -->
+                <p class="aviso-envio">
+                  O agente envia como <strong>mensagem ativa</strong>: só com o agente em <strong>autônomo</strong> no número,
+                  dentro do <strong>expediente</strong> e dos <strong>limites</strong> do dia/semana; respeita opt-out e
+                  “não receber automações”. No oficial, fora da janela de 24h, só o <strong>template aprovado</strong>; no
+                  não-oficial, só texto e dentro da cota de <strong>aquecimento</strong>. Com atendimento humano aberto, não envia.
+                  No roteiro NPS a resposta do cliente vira nota no painel de NPS; no de indicação, contatos com origem “Indicação”.
+                </p>
               }
               @case ('enviar_mensagem') {
                 <label class="campo">Mensagem
@@ -216,8 +253,11 @@ export class AutomacoesPagina implements OnInit {
   private readonly http = inject(HttpClient)
   private readonly toast = inject(ToastServico)
   private readonly confirmacao = inject(ConfirmacaoServico)
-  readonly gatilhos = ['rfv_segmento', 'dias_sem_comprar', 'lead_frio', 'nps_detrator', 'reposicao_ritmo']
-  readonly acoes = ['criar_tarefa', 'aplicar_sequencia', 'adicionar_lista', 'enviar_mensagem']
+  readonly gatilhos: readonly string[] = GATILHOS_AUTOMACAO
+  readonly acoes: readonly string[] = ACOES_AUTOMACAO
+  readonly roteiros = ROTEIROS_POS_VENDA
+  readonly rotuloRoteiro = ROTULO_ROTEIRO_POS_VENDA
+  readonly DIAS_DEPOIS_MAX = DIAS_DEPOIS_MAX
   readonly segmentos = SEGMENTOS
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Automacao[]>([])
@@ -233,6 +273,16 @@ export class AutomacoesPagina implements OnInit {
   readonly fator = signal(0.8) // régua de recompra: × o ritmo do cliente
   readonly titulo = signal(''); readonly paraDono = signal(true); readonly sequenciaId = signal(''); readonly listaId = signal('')
   readonly texto = signal('')
+  // Pós-venda (G3)
+  readonly diasDepois = signal(0)
+  readonly roteiro = signal<RoteiroPosVenda>('agradecimento')
+  readonly textoPosVenda = signal('')
+  readonly templateId = signal('')
+  readonly templates = signal<readonly TemplateRef[]>([])
+  avisoTemplate(): string | null { return avisoSoTemplate({ texto: this.textoPosVenda(), templateId: this.templateId() }) }
+  /** O par gatilho/ação do pós-venda anda junto (a API recusa um sem o outro). */
+  trocarGatilho(g: string): void { this.gatilho.set(g); this.acao.set(acaoAoTrocarGatilho(g, this.acao())) }
+  trocarAcao(a: string): void { this.acao.set(a); this.gatilho.set(gatilhoAoTrocarAcao(a, this.gatilho())) }
   readonly MAX_TEXTO = MAX_TEXTO
   readonly salvando = signal(false); readonly erroForm = signal<string | null>(null)
 
@@ -241,6 +291,7 @@ export class AutomacoesPagina implements OnInit {
   rotuloAcao(a: string): string { return ACAO_ROTULO[a] ?? a }
 
   descreve(a: Automacao): string {
+    if (a.acao === ACAO_POS_VENDA) return descreverPosVenda(a.gatilhoParam, a.acaoParam)
     const g = a.gatilhoParam, ap = a.acaoParam
     const quando =
       a.gatilho === 'rfv_segmento' ? `virou ${this.segNome(String(g['segmento'] ?? ''))}`
@@ -269,6 +320,14 @@ export class AutomacoesPagina implements OnInit {
       this.sequencias.set(seq); this.listas.set(lis)
     } catch (e) {
       this.erroRefs.set(mensagemDeErro(e, 'Não foi possível carregar as sequências e listas para o seletor.'))
+    }
+    // Templates à parte: sem eles o pós-venda ainda funciona por texto (parcial, não quebra o resto).
+    try {
+      const tpl = await this.todasAsPaginas('/v1/templates')
+      // Só os aprovados pela Meta servem ao pós-venda (o envio confere de novo).
+      this.templates.set((tpl as unknown as TemplateRef[]).filter((t) => t.statusMeta === 'APPROVED'))
+    } catch {
+      this.templates.set([])
     }
   }
   private async todasAsPaginas(base: string): Promise<Ref[]> {
@@ -336,13 +395,19 @@ export class AutomacoesPagina implements OnInit {
     if (this.acao() === 'aplicar_sequencia' && !this.sequenciaId()) { this.erroForm.set('Escolha a sequência.'); return }
     if (this.acao() === 'enviar_mensagem' && !this.texto().trim()) { this.erroForm.set('Escreva a mensagem que vai ser enviada.'); return }
     if (this.acao() === 'adicionar_lista' && !this.listaId()) { this.erroForm.set('Escolha a lista.'); return }
+    let gatilhoParam: object = this.montarGatilhoParam()
+    let acaoParam: object = this.montarAcaoParam()
+    if (this.acao() === ACAO_POS_VENDA) {
+      const pv = paramsPosVenda({ diasDepois: this.diasDepois(), roteiro: this.roteiro(), texto: this.textoPosVenda(), templateId: this.templateId() })
+      if (!pv.ok) { this.erroForm.set(pv.erro); return }
+      gatilhoParam = pv.params.gatilhoParam; acaoParam = pv.params.acaoParam
+    }
     this.salvando.set(true); this.erroForm.set(null)
     try {
       await firstValueFrom(this.http.post('/v1/automacoes', {
-        nome: this.nome().trim(), gatilho: this.gatilho(), gatilhoParam: this.montarGatilhoParam(),
-        acao: this.acao(), acaoParam: this.montarAcaoParam(),
+        nome: this.nome().trim(), gatilho: this.gatilho(), gatilhoParam, acao: this.acao(), acaoParam,
       }))
-      this.nome.set(''); this.titulo.set(''); this.texto.set(''); this.mostrarNova.set(false)
+      this.nome.set(''); this.titulo.set(''); this.texto.set(''); this.textoPosVenda.set(''); this.templateId.set(''); this.mostrarNova.set(false)
       this.toast.sucesso('Regra criada')
       await this.carregar()
     } catch (e) {

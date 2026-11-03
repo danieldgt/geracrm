@@ -8,6 +8,9 @@ import { modoEfetivoDoCanal, lerFatosDoModo } from './pipeline/modo-efetivo.js'
 import { proximaAbertura, partesLocais, instanteLocal, ehFeriado, type Feriados, type HorarioAtendimento } from '../expediente.js'
 import { fusoSeguro } from '../../plataforma/fuso.js'
 import { reativacoesEnviadasHoje, statusAquecimento } from '../aquecimento.js'
+import { contatoBloqueado } from '../../crm/opt-out.js'
+import type { RoteiroPosVenda } from '@geracrm/shared'
+import { abrirRoteiroNaSessao } from './pos-venda.js'
 import {
   executarDescarte, instanteDoMarco, lerConfigAtivasDoCanal, motivoParaNaoReativar, motivoTransitorio, prazoDoDescarte,
   proximoMarcoDaReativacao, travarConversaEContato, MOTIVO_DESCARTE, MOTIVO_REATIVACAO,
@@ -34,9 +37,14 @@ import {
  * `recusado` com o motivo nomeado (`sem_template`, `template_indisponivel`).
  */
 
-export type MotivoRetorno = 'proposta_sem_resposta' | 'carrinho_abandonado' | 'combinado' | 'descarte_sem_resposta' | 'reativacao'
-/** Os motivos que são MENSAGEM da cadência de retorno (3 passos); os outros dois são o fim dela (G5). */
-type MotivoDeCadencia = Exclude<MotivoRetorno, 'descarte_sem_resposta' | 'reativacao'>
+export type MotivoRetorno = 'proposta_sem_resposta' | 'carrinho_abandonado' | 'combinado' | 'descarte_sem_resposta' | 'reativacao' | 'pos_venda'
+/**
+ * Os motivos que são MENSAGEM da cadência de retorno (3 passos); descarte e
+ * reativação são o fim dela (G5); o pós-venda (G3) é uma ativa avulsa, sem cadência.
+ */
+type MotivoDeCadencia = Exclude<MotivoRetorno, 'descarte_sem_resposta' | 'reativacao' | 'pos_venda'>
+/** Pós-venda (G3): agendado pelo motor de automações (`pedido_efetivado` → `agente_envia`). */
+export const MOTIVO_POS_VENDA = 'pos_venda' as const
 export type EstadoRetorno = 'pendente' | 'enviado' | 'cancelado' | 'recusado'
 
 /** Quando cada passo sai, contado a partir do passo anterior: 1h → 24h → 72h. */
@@ -67,6 +75,8 @@ export function textoDoRetorno(motivo: MotivoRetorno, tentativa: number, texto: 
   if (motivo === 'combinado') return texto?.trim() || TEXTO_COMBINADO
   // Reativação: o texto é o CONFIGURADO (não-oficial); o motor nunca chega aqui sem ele.
   if (motivo === 'reativacao') return texto?.trim() ?? ''
+  // Pós-venda: o texto da automação, já com o nome resolvido no agendamento.
+  if (motivo === 'pos_venda') return texto?.trim() ?? ''
   if (motivo === 'descarte_sem_resposta') return ''
   const passo = Math.min(Math.max(tentativa, 1), MAX_TENTATIVAS_RETORNO) - 1
   return TEXTOS[motivo][passo]!
@@ -163,6 +173,10 @@ interface RetornoVencido {
   /** Quando o retorno estava previsto (antes de qualquer adiamento desta passada). */
   readonly executar_em: Date
   readonly falhas_transporte: number
+  /** Pós-venda (G3): pedido, roteiro e template da automação; nulos nos outros motivos. */
+  readonly pedido_id: string | null
+  readonly roteiro: RoteiroPosVenda | null
+  readonly template_id: string | null
 }
 
 /**
@@ -187,7 +201,8 @@ export async function processarRetornos(
   if (!travou) return r
   try {
     const vencidos = await dono<RetornoVencido[]>`
-      SELECT tenant_id, id, conversa_id, canal_id, motivo, tentativa, texto, criado_em, executar_em, falhas_transporte
+      SELECT tenant_id, id, conversa_id, canal_id, motivo, tentativa, texto, criado_em, executar_em, falhas_transporte,
+             pedido_id, roteiro, template_id
         FROM agente_retorno
        WHERE estado = 'pendente' AND executar_em <= ${agora}
          ${deps.somenteTenant ? dono`AND tenant_id = ${deps.somenteTenant}` : dono``}
@@ -258,6 +273,7 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
     const ctx = await lerContextoAtiva(tx, { conversaId: v.conversa_id, agora })
     if (!ctx) return { tipo: 'cancelar', motivo: 'conversa_inexistente' }
     if (v.motivo === MOTIVO_REATIVACAO) return decidirReativacao(tx, v, ctx, agora)
+    if (v.motivo === MOTIVO_POS_VENDA) return decidirPosVenda(tx, v, ctx, agora)
     return { tipo: 'politica', decisao: decidirAtiva(ctx, agora) }
   })
   if (veredito.tipo === 'cancelar') {
@@ -307,6 +323,16 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
       // Reativação: o próximo marco (90 d, contado do DESCARTE) é agendado por `encerrar`.
       await encerrar(tx, v, 'enviado', null, agora)
       if (v.motivo === MOTIVO_REATIVACAO) return 'enviado'
+      // Pós-venda: sem cadência. NPS e indicação abrem o roteiro na sessão do agente —
+      // é o que libera `registrar_nps` e orienta o próximo turno (etapa `pos-venda`).
+      if (v.motivo === MOTIVO_POS_VENDA) {
+        if (v.pedido_id && (v.roteiro === 'nps' || v.roteiro === 'indicacao')) {
+          await abrirRoteiroNaSessao(tx, {
+            conversaId: v.conversa_id, canalId: v.canal_id, modo: 'autonomo', roteiro: v.roteiro, pedidoId: v.pedido_id, agora,
+          })
+        }
+        return 'enviado'
+      }
       if (v.tentativa < MAX_TENTATIVAS_RETORNO) {
         await agendarRetorno(tx, {
           conversaId: v.conversa_id, canalId: v.canal_id, motivo: v.motivo, texto: v.texto,
@@ -378,6 +404,33 @@ async function decidirReativacao(tx: Sql, v: RetornoVencido, ctx: ContextoAtiva,
   const aq = await statusAquecimento(tx, v.canal_id, agora)
   if (aq.emAquecimento && aq.restante <= 0) return { tipo: 'adiar', ate: amanha, motivo: 'aquecimento_do_numero' }
   return decisao.acao === 'texto' && r.texto ? { tipo: 'politica', decisao, texto: r.texto } : { tipo: 'politica', decisao }
+}
+
+/**
+ * O pós-venda (G3) é uma ativa como as outras (suspensão, expediente, limites do
+ * dia/semana), com o conteúdo da AUTOMAÇÃO:
+ *   - oficial dentro da janela de 24h → o texto; sem texto, o template (se aprovado);
+ *   - oficial fora da janela → SÓ o template aprovado da automação (nunca texto livre);
+ *     sem template → `recusado` (`sem_template`), como o retorno;
+ *   - não-oficial → SÓ texto (template é do oficial; sem texto → `sem_texto_pos_venda`)
+ *     e dentro da cota do AQUECIMENTO do número (acabou → adia para amanhã; ADR-021).
+ */
+async function decidirPosVenda(tx: Sql, v: RetornoVencido, ctx: ContextoAtiva, agora: Date): Promise<Veredito> {
+  const oficial = ctx.tipoCanal === 'whatsapp_oficial'
+  const template = oficial && v.template_id ? await lerTemplate(tx, v.template_id) : null
+  const decisao = decidirAtiva({ ...ctx, config: { ...ctx.config, templateRetorno: oficial ? v.template_id : null }, template }, agora)
+  if (decisao.acao !== 'texto' && decisao.acao !== 'template') return { tipo: 'politica', decisao }
+  if (decisao.acao === 'texto' && !v.texto?.trim()) {
+    if (oficial && template && template.status === 'APPROVED' && template.compativel) {
+      return { tipo: 'politica', decisao: { acao: 'template', templateId: template.id } }
+    }
+    return { tipo: 'recusar', motivo: 'sem_texto_pos_venda' }
+  }
+  if (!oficial) {
+    const aq = await statusAquecimento(tx, v.canal_id, agora)
+    if (aq.emAquecimento && aq.restante <= 0) return { tipo: 'adiar', ate: inicioDoProximoDia(agora, ctx.fuso), motivo: 'aquecimento_do_numero' }
+  }
+  return { tipo: 'politica', decisao }
 }
 
 /** 00:00 de hoje no fuso do tenant. */
@@ -464,6 +517,15 @@ async function avaliar(tx: Sql, v: RetornoVencido, agora: Date): Promise<'envia'
   if (v.motivo === MOTIVO_REATIVACAO) {
     const nao = await motivoParaNaoReativar(tx, { conversaId: v.conversa_id, canalId: v.canal_id, criadoEm: v.criado_em })
     if (nao) return nao
+  }
+
+  // Pós-venda (G3): mensagem AUTOMÁTICA — opt-out (lista de bloqueio/consentimento) e
+  // "não receber automações" valem aqui, além do gateway (cinto e suspensório).
+  if (v.motivo === MOTIVO_POS_VENDA) {
+    if (await contatoBloqueado(tx, conv.contato_id)) return 'opt_out'
+    const [c] = await tx<{ recebe: boolean; ativo: boolean }[]>`
+      SELECT recebe_automacoes AS recebe, ativo FROM contato WHERE tenant_id = tenant_atual() AND id = ${conv.contato_id}`
+    if (!c?.recebe || !c.ativo) return 'contato_nao_recebe'
   }
 
   const modo = await vereditoDoModo(tx, v, conv.contato_id, agora)

@@ -4,7 +4,7 @@ import { firstValueFrom } from 'rxjs'
 import { queryDeLista } from '../../../compartilhado/ui/cursor.js'
 import { falhaDe, type Pagina } from './agente.servico.js'
 import type { ErroApi } from './agente.regras.js'
-import type { CapacidadesBusca, TipoArquivo, TipoDocumento } from './conhecimento.regras.js'
+import type { CapacidadesBusca, CorpoProvaSocial, TipoArquivo, TipoDocumento } from './conhecimento.regras.js'
 
 /**
  * A porta HTTP da base de conhecimento (`/v1/agente/conhecimento`) — tipos da
@@ -29,6 +29,14 @@ export interface Documento {
   readonly trechos: number
   readonly atualizadoEm: string
   readonly criadoEm: string
+  /** Prova social (G3): nulos/false nos outros tipos. API antiga pode não mandar — opcionais. */
+  readonly fonte?: string | null
+  readonly link?: string | null
+  readonly apuradoEm?: string | null
+  readonly provaTipo?: string | null
+  readonly consentimento?: boolean
+  readonly aprovado?: boolean
+  readonly aprovadoEm?: string | null
 }
 
 export interface TrechoBusca {
@@ -104,7 +112,7 @@ export interface PaginaVersoes {
   readonly proximoCursor: string | null
 }
 
-export interface CorpoDocumento {
+export interface CorpoDocumento extends Partial<CorpoProvaSocial> {
   readonly titulo: string
   readonly tipo: TipoDocumento
   readonly conteudo: string
@@ -116,9 +124,11 @@ export class ConhecimentoServico {
   private readonly http = inject(HttpClient)
 
   /** Com `canalId`, vêm os globais e os desse número. Lança em falha (403 → sem permissão). */
-  listar(p: { readonly cursor: string | null; readonly canalId: string; readonly incluirDespublicados: boolean }): Promise<Pagina<Documento>> {
+  listar(p: {
+    readonly cursor: string | null; readonly canalId: string; readonly incluirDespublicados: boolean; readonly tipo?: TipoDocumento | null
+  }): Promise<Pagina<Documento>> {
     const q = queryDeLista({
-      cursor: p.cursor, canalId: p.canalId || null, incluirDespublicados: p.incluirDespublicados ? 'true' : null,
+      cursor: p.cursor, canalId: p.canalId || null, incluirDespublicados: p.incluirDespublicados ? 'true' : null, tipo: p.tipo ?? null,
     })
     return firstValueFrom(this.http.get<Pagina<Documento>>(`/v1/agente/conhecimento${q}`))
   }
@@ -155,6 +165,17 @@ export class ConhecimentoServico {
   async editar(id: string, corpo: Partial<CorpoDocumento> & { readonly publicado?: boolean; readonly observacao?: string }): Promise<Resultado<{ documento: Documento }>> {
     try {
       const d = await firstValueFrom(this.http.patch<Documento>(`/v1/agente/conhecimento/${id}`, corpo))
+      return { ok: true, documento: d }
+    } catch (e) { return falha(e) }
+  }
+
+  /**
+   * Aprovar (ou revogar) uma prova social — só admin (403 para os outros). 422
+   * `conhecimento.prova_social_incompleta` traz `campos` e a mensagem do que falta.
+   */
+  async aprovar(id: string, aprovado: boolean): Promise<Resultado<{ documento: Documento }>> {
+    try {
+      const d = await firstValueFrom(this.http.post<Documento>(`/v1/agente/conhecimento/${id}/aprovar`, { aprovado }))
       return { ok: true, documento: d }
     } catch (e) { return falha(e) }
   }
