@@ -79,10 +79,13 @@ const agendar = async (conversaId: string, canalId: string, executarEm = new Dat
 const retornos = (conversaId: string) => dono<{ estado: string; detalhe: string | null; executar_em: Date; tentativa: number }[]>`
   SELECT estado, detalhe, executar_em, tentativa FROM agente_retorno WHERE tenant_id = ${T} AND conversa_id = ${conversaId}
    ORDER BY criado_em, tentativa`
+// ⚠️ `criado_em` no relógio do teste (AGORA), não o default now(): `retornos` ordena por
+//    criado_em, e com o relógio real o "enviado há 2h" ficava DEPOIS do retorno agendado —
+//    o teste passou enquanto o relógio real coincidia com AGORA e quebrou depois.
 const enviadoHa = (conversaId: string, canalId: string, ms: number) => dono`
-  INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, executar_em, estado, tentativa, concluido_em)
+  INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, executar_em, estado, tentativa, concluido_em, criado_em)
   VALUES (${T}, ${randomUUID()}, ${conversaId}, ${canalId}, 'carrinho_abandonado', ${new Date(AGORA.getTime() - ms)}, 'enviado', 1,
-          ${new Date(AGORA.getTime() - ms)})`
+          ${new Date(AGORA.getTime() - ms)}, ${new Date(AGORA.getTime() - ms)})`
 const processar = (agora = AGORA) => processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T }, agora)
 const template = (status: string, corpo = 'Oi, {{1}}! Seu pedido continua salvo por aqui.') =>
   dono`UPDATE template_versao SET status_meta = ${status}, motivo_rejeicao = ${status === 'REJECTED' ? 'teste' : null},
