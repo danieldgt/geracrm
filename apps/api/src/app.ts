@@ -54,6 +54,10 @@ import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
 import { rotasLpPublica } from './contexts/aquisicao/rotas-lp-publica.js'
 import { rotasPush } from './contexts/plataforma/rotas-push.js'
 import { rotasAuth } from './contexts/identidade/rotas-auth.js'
+import { rotasUsuarios } from './contexts/identidade/rotas-usuarios.js'
+import { rotasFiliais } from './contexts/identidade/rotas-filiais.js'
+import { provedorIdentidadeCognito } from './contexts/identidade/provedor-identidade-cognito.js'
+import type { ProvedorIdentidade } from './contexts/identidade/provedor-identidade.js'
 // Raias do plano-port-playbook-am: registradas pela P0, preenchidas cada uma no seu arquivo.
 import { rotasCompliance } from './contexts/atendimento/agente/rotas-compliance.js'
 import { rotasCusto } from './contexts/atendimento/agente/rotas-custo.js'
@@ -70,8 +74,13 @@ import { rotasSla } from './contexts/atendimento/rotas-sla.js'
 /**
  * Builds the app without listening — so tests can use `app.inject()`
  * without opening a port.
+ *
+ * `provedorIdentidade`: a porta do cadastro de usuários (D3). Produção usa o
+ * Cognito; os testes passam o falso — nenhum teste chama a AWS.
  */
-export async function criarApp(): Promise<FastifyInstance> {
+export async function criarApp(
+  opcoes: { provedorIdentidade?: ProvedorIdentidade } = {},
+): Promise<FastifyInstance> {
   const app = Fastify({
     logger:
       process.env.NODE_ENV === 'test'
@@ -161,6 +170,9 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasLpPublica)
   await app.register(rotasPush)
   await app.register(rotasAuth)
+  // Cadastro de usuários e filiais (D3) — admin; o login nasce atrás da porta.
+  await app.register(rotasUsuarios, { provedor: opcoes.provedorIdentidade ?? provedorIdentidadeCognito() })
+  await app.register(rotasFiliais)
   // ⚠️ Pontos de extensão das raias P2–P19 (plano-port-playbook-am, P0): cada
   //    plugin começa vazio e a raia dona preenche o seu arquivo — ninguém mais
   //    precisa editar este bloco.

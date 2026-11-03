@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { comTenantServico } from '../../db/index.js'
 
 /**
  * Login server-side — porque o app client do Cognito é CONFIDENCIAL (tem secret).
@@ -63,6 +64,31 @@ function traduzErro(r: RespostaCognito): string {
   return r.message ?? tipo ?? 'Falha ao entrar.'
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Carimba `usuario.ultimo_login_em` (0111) — a coluna "último acesso" da lista
+ * de usuários.
+ *
+ * ⚠️ O ID token acabou de chegar DO Cognito, nesta chamada, por TLS: não veio do
+ *    cliente. Por isso o `sub` e o `custom:tenant_id` dele são lidos sem
+ *    revalidar a assinatura — o tenant continua vindo de um token (ADR-001).
+ * ⚠️ Melhor esforço: falhar aqui NUNCA derruba o login (é carimbo de exibição).
+ *    Usuário que ainda não tem linha (antes do 1º batimento) não é criado aqui.
+ */
+async function registrarLogin(idToken: string, log: FastifyInstance['log']): Promise<void> {
+  try {
+    const payload = JSON.parse(Buffer.from(idToken.split('.')[1] ?? '', 'base64url').toString('utf8')) as Record<string, unknown>
+    const sub = payload['sub']
+    const tenantId = payload['custom:tenant_id']
+    if (typeof sub !== 'string' || typeof tenantId !== 'string' || !UUID.test(tenantId)) return
+    await comTenantServico(tenantId, (tx) => tx`
+      UPDATE usuario SET ultimo_login_em = now() WHERE tenant_id = tenant_atual() AND cognito_sub = ${sub}`)
+  } catch (erro) {
+    log.debug({ erro: erro instanceof Error ? erro.message : String(erro) }, 'ultimo_login_em nao gravado')
+  }
+}
+
 export async function rotasAuth(app: FastifyInstance): Promise<void> {
   const clientId = process.env.COGNITO_CLIENT_ID
   const secret = process.env.COGNITO_CLIENT_SECRET
@@ -81,7 +107,10 @@ export async function rotasAuth(app: FastifyInstance): Promise<void> {
     })
 
     const idToken = corpo.AuthenticationResult?.IdToken
-    if (idToken) return reply.send(respostaOk(corpo.AuthenticationResult, Date.now()))
+    if (idToken) {
+      await registrarLogin(idToken, req.log)
+      return reply.send(respostaOk(corpo.AuthenticationResult, Date.now()))
+    }
     // Usuário criado pelo admin no primeiro acesso.
     if (corpo.ChallengeName === 'NEW_PASSWORD_REQUIRED' && corpo.Session) {
       return reply.send({ tipo: 'nova_senha', session: corpo.Session })
@@ -105,7 +134,10 @@ export async function rotasAuth(app: FastifyInstance): Promise<void> {
     })
 
     const idToken = corpo.AuthenticationResult?.IdToken
-    if (idToken) return reply.send(respostaOk(corpo.AuthenticationResult, Date.now()))
+    if (idToken) {
+      await registrarLogin(idToken, req.log)
+      return reply.send(respostaOk(corpo.AuthenticationResult, Date.now()))
+    }
     return reply.code(status === 200 ? 400 : status).send({ tipo: 'erro', mensagem: traduzErro(corpo) })
   })
 
