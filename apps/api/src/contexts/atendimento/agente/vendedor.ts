@@ -599,6 +599,8 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     mensagens: resposta.mensagens, handoff, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
     saldoBaixoVisto: registro.saldoBaixoVisto, mensagensFixas: pre.prefixo, numerosDoCliente: numerosDaMemoria,
     falasAnterioresDoAgente: historico.filter((h) => h.de === 'nos').map((h) => h.texto),
+    // G2: o que `registrar_objecao` registrou no laço — a etapa `objecoes-seguidas` decide a entrega.
+    objecoesDoTurno: registro.efeitos.objecoes,
   })
   guardrails.push(...cadeia.guardrails)
   if (cadeia.bloqueio) handoff = { motivo: cadeia.bloqueio.motivo, resumo: cadeia.bloqueio.resumo }

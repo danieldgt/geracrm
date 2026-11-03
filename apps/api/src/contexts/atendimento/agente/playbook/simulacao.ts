@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   personaDoPlaybook, slotsDoPlaybook,
-  type AcoesPlaybook, type ConteudoPlaybook, type PlaybookVigente,
+  type AcoesPlaybook, type ConteudoPlaybook, type ObjecaoPlaybook, type PlaybookVigente,
 } from '@geracrm/shared'
 import { comTenantServico } from '../../../../db/index.js'
 import type { PortaLlmFerramentas } from '../porta-llm.js'
@@ -20,9 +20,10 @@ import { PIPELINE_PADRAO, type ContextoPipeline, type EtapaPosResposta, type Eta
  *     persona do rascunho (`DepsTurno.pipeline`);
  *   - o LLM recebe o `<persona>`/`<objetivo>`/`<playbook>` do rascunho no bloco do tenant
  *     (`DepsTurno.llm`, envolvendo o modelo do número);
- *   - as LIGAÇÕES levam as ações do rascunho (o menu de ferramentas muda).
+ *   - as LIGAÇÕES levam as ações e as objeções do rascunho (o menu de ferramentas muda).
  * Ferramentas de escrita já são secas em simulação: pedido em carrinho de
- * ensaio, proposta sem envio, memória sem gravar, transferência sem fila.
+ * ensaio, proposta sem envio, memória sem gravar, transferência sem fila,
+ * objeção só no estado da simulação (nada em `agente_objecao`).
  */
 
 export function espelhoDoConteudo(conteudo: ConteudoPlaybook, meta: { versaoId: string; numero: number | null; escopo: 'numero' | 'tenant' }): PlaybookVigente {
@@ -50,6 +51,7 @@ export function pipelineComPlaybook(espelho: PlaybookVigente, base: PipelineDoTu
     filtro: pos(base.filtro, espelho),
     pergunta: pos(base.pergunta, espelho),
     qualidade: pos(base.qualidade, espelho),
+    objecoes: pos(base.objecoes, espelho),
     falha: { nome: base.falha.nome, decidir: (ctx, e) => base.falha.decidir(comPlaybook(ctx, espelho), e) },
   }
 }
@@ -65,11 +67,18 @@ export function llmComPlaybook(llm: PortaLlmFerramentas, conteudo: ConteudoPlayb
   }
 }
 
-/** Ligações do número com as ações do playbook dado (ou as do espelho, quando `acoes` é null). */
-export function ligacoesDoSandbox(base: DepsTurno['ligacoes'], canalId: string, acoes: AcoesPlaybook | null): DepsTurno['ligacoes'] {
+/**
+ * Ligações do número com as ações e as objeções ATIVAS do playbook dado (ou as do
+ * espelho, quando `acoes` é null).
+ */
+export function ligacoesDoSandbox(
+  base: DepsTurno['ligacoes'], canalId: string, acoes: AcoesPlaybook | null, objecoes?: readonly ObjecaoPlaybook[] | undefined,
+): DepsTurno['ligacoes'] {
   return async (cfg) => {
     const l = await base({ ...cfg, canalId })
-    return acoes ? { ...l, acoes } : l
+    if (!acoes) return l
+    const { objecoes: _doEspelho, ...resto } = l
+    return { ...resto, acoes, ...(objecoes?.length ? { objecoes } : {}) }
   }
 }
 

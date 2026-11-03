@@ -174,6 +174,7 @@ export function aplicarPlaybookAoSistema(
  */
 export function instrucoesDoPlaybook(c: ConteudoPlaybook, numero: number | null): string {
   const ativos = c.qualificacao.filter((q) => q.ativo)
+  const objecoes = blocoObjecoes(c)
   const ref = (['despedida'] as const).flatMap((k) => (c.mensagens[k] ? [`${k}: "${c.mensagens[k]}"`] : []))
   const linhas = [
     `<playbook${numero ? ` versao="v${numero}"` : ''}>`,
@@ -184,10 +185,33 @@ export function instrucoesDoPlaybook(c: ConteudoPlaybook, numero: number | null)
     ativos.length
       ? `Roteiro de qualificação (nesta ordem, uma coisa por vez, pule o que já sabe):\n${ativos.map((q, i) => `${i + 1}. ${q.slot}${q.obrigatorio ? ' (obrigatório antes de propor)' : ''}: "${q.pergunta}"`).join('\n')}`
       : '',
+    objecoes,
     ref.length ? `Mensagens de referência — ${ref.join('; ')}` : '',
     '</playbook>',
   ]
   return linhas.filter(Boolean).join('\n')
+}
+
+/**
+ * `<objecoes>` do playbook (G2): as objeções ATIVAS, uma por linha — código,
+ * objeção, gatilhos e a resposta de referência. Fica DENTRO do `<playbook>` (bloco
+ * estável, cacheado; o sandbox troca o bloco inteiro). Com a ação "Registrar
+ * objeções" desligada, a lista continua como referência, sem a ferramenta.
+ * ⚠️ A referência já foi validada sem número (publicação), e a resposta do modelo
+ *    passa pelo filtro e pelo guardrail numérico como qualquer texto.
+ */
+export function blocoObjecoes(c: ConteudoPlaybook): string {
+  const ativas = c.objecoes.filter((o) => o.ativo)
+  if (ativas.length === 0) return ''
+  const registrar = c.acoes.objecoes
+    ? ' Ao tratar uma delas, chame registrar_objecao com o código e se foi revertida (o cliente aceitou e seguiu).'
+    : ''
+  return [
+    '<objecoes>',
+    `Objeções conhecidas do negócio. Reconheça pelo sentido (os gatilhos são exemplos), pergunte o que preocupa e responda no espírito da referência, com as suas palavras — sem número que não veio de ferramenta.${registrar}`,
+    ...ativas.map((o) => `${o.codigo} · ${o.objecao}${o.gatilhos.length ? ` · gatilhos: ${o.gatilhos.join(' | ')}` : ''} · referência: "${o.resposta}"`),
+    '</objecoes>',
+  ].join('\n')
 }
 
 export function montarSistema(p: Parameters<typeof blocoTenant>[0]): BlocoSistema[] {

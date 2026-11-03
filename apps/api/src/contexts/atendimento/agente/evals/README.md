@@ -9,7 +9,7 @@ Comandos a partir da raiz do monorepo. Os evals precisam de um Postgres migrado 
 # Determinístico (é o que o CI roda dentro de `pnpm test`): modelo e juiz simulados, custo zero
 pnpm --filter @geracrm/api exec vitest run src/contexts/atendimento/agente/evals
 
-# Modelo REAL + juiz REAL. É manual e custa dinheiro: 39 cenários (32 B2B e 7 douradas), cada um com 1 a 3 turnos e uma chamada ao juiz
+# Modelo REAL + juiz REAL. É manual e custa dinheiro: 41 cenários (34 B2B e 7 douradas), cada um com 1 a 3 turnos e uma chamada ao juiz
 IA_E2E=1 IA_PROVEDOR=claude ANTHROPIC_API_KEY=... \
   IA_MODELO=claude-opus-5-5 IA_QUALIDADE_MODELO=claude-haiku-4-5 EVALS_DETALHE=1 \
   pnpm --filter @geracrm/api exec vitest run src/contexts/atendimento/agente/evals/evals.test.ts

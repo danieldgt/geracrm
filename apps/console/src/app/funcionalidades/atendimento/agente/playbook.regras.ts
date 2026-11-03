@@ -1,6 +1,7 @@
 import {
-  LIMITES_PLAYBOOK, SLOTS_QUALIFICACAO,
-  type ConteudoPlaybook, type ErroCampoPlaybook, type GravidadeGuardrail, type ItemQualificacao, type SlotQualificacao,
+  LIMITES_PLAYBOOK, SLOTS_QUALIFICACAO, normalizarGatilho, proximoCodigoObjecao,
+  type ConteudoPlaybook, type ErroCampoPlaybook, type GravidadeGuardrail, type ItemQualificacao, type ObjecaoPlaybook, type ResumoObjecaoDto,
+  type SlotQualificacao,
 } from '@geracrm/shared'
 
 /**
@@ -124,6 +125,57 @@ export function textoDaFalhaDoDocumento(erro: string | undefined, mensagem: stri
     return 'A IA não conseguiu transformar este documento num playbook válido. Tente de novo ou envie só o trecho que muda a conduta.'
   }
   return mensagem
+}
+
+// ── objeções (G2) ─────────────────────────────────────────────────────────
+
+/** Uma objeção nova no fim da lista, com o próximo código livre (OBJ-NN). null = sem espaço (60 itens ou OBJ-99). */
+export function novaObjecao(lista: readonly ObjecaoPlaybook[]): ObjecaoPlaybook | null {
+  if (lista.length >= LIMITES_PLAYBOOK.objecoesMax) return null
+  const codigo = proximoCodigoObjecao(lista)
+  return codigo ? { codigo, ativo: true, objecao: '', gatilhos: [], resposta: '' } : null
+}
+
+/**
+ * Índices das objeções que a busca encontra (código, objeção, gatilho ou resposta; sem acento/caixa).
+ * Devolve ÍNDICES: editar, mover e remover continuam valendo sobre a lista inteira.
+ */
+export function indicesDaBusca(lista: readonly ObjecaoPlaybook[], busca: string): readonly number[] {
+  const q = normalizarGatilho(busca)
+  return lista.flatMap((o, i) => {
+    if (!q) return [i]
+    const alvo = normalizarGatilho([o.codigo, o.objecao, o.resposta, ...o.gatilhos].join(' '))
+    return alvo.includes(q) ? [i] : []
+  })
+}
+
+/** Chip de gatilho: texto livre de 2–60, sem repetir (sem acento/caixa/pontuação), até 10. */
+export function adicionarGatilho(lista: readonly string[], valor: string): { lista: readonly string[]; erro: string | null } {
+  const v = valor.replace(/\s+/g, ' ').trim()
+  if (v.length < LIMITES_PLAYBOOK.gatilhoMin) return { lista, erro: `Use ao menos ${LIMITES_PLAYBOOK.gatilhoMin} caracteres.` }
+  if (v.length > LIMITES_PLAYBOOK.gatilho) return { lista, erro: `Use no máximo ${LIMITES_PLAYBOOK.gatilho} caracteres.` }
+  if (!normalizarGatilho(v)) return { lista, erro: 'O gatilho precisa ter letras ou números.' }
+  if (lista.some((x) => normalizarGatilho(x) === normalizarGatilho(v))) return { lista, erro: 'Esse gatilho já está na lista.' }
+  if (lista.length >= LIMITES_PLAYBOOK.gatilhosMax) return { lista, erro: `No máximo ${LIMITES_PLAYBOOK.gatilhosMax} gatilhos por objeção.` }
+  return { lista: [...lista, v], erro: null }
+}
+
+/** Contador da resposta ("312/1200") e se passou do limite. */
+export function contadorDaResposta(texto: string): { texto: string; excedeu: boolean } {
+  const max = LIMITES_PLAYBOOK.respostaObjecao
+  return { texto: `${texto.length}/${max}`, excedeu: texto.length > max }
+}
+
+/** "33%" ou "—" (sem registro). */
+export function textoPercentual(p: number | null): string {
+  return p === null ? '—' : `${p}%`
+}
+
+/** Linhas da tabela "Objeções" da aba Métricas (a API já ordena por vezes). */
+export function linhasDoResumoObjecoes(itens: readonly ResumoObjecaoDto[]): { id: string; codigo: string; objecao: string; vezes: string; revertida: string }[] {
+  return itens.map((i) => ({
+    id: i.codigo, codigo: i.codigo, objecao: i.objecao, vezes: i.vezes.toLocaleString('pt-BR'), revertida: textoPercentual(i.percentualRevertida),
+  }))
 }
 
 /** Erros do sandbox com ação corretiva. */

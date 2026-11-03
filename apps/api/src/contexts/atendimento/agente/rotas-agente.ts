@@ -4,7 +4,7 @@ import {
   REGRAS_AGENTE_PADRAO, validarRegrasAgente, MODOS_AGENTE, OBJETIVOS_AGENTE, SLOTS_QUALIFICACAO,
   persona as personaSchema, alcadaAgente, ALCADA_PADRAO, PERSONA_PADRAO,
   recorteAgente, exigeConfirmacao, confirmacaoConfere, textoDeConfirmacao, decidirModoEfetivo, ehModoAgente,
-  lerPlaybookVigente, personaDoPlaybook, slotsDoPlaybook, PLAYBOOK_SIMULACAO, LIMITE_MENSAGENS_SIMULACAO, FERRAMENTAS_DE_ESCRITA,
+  lerPlaybookVigente, personaDoPlaybook, slotsDoPlaybook, PLAYBOOK_SIMULACAO, LIMITE_MENSAGENS_SIMULACAO, FERRAMENTAS_DE_ESCRITA, objecoesAtivas,
   type RegrasDoAgente, type ModoAgente,
 } from '@geracrm/shared'
 import { z } from 'zod'
@@ -619,7 +619,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         const espelho = r ? espelhoDoConteudo(r.conteudo, { versaoId: r.id, numero: null, escopo: escopoRascunho }) : null
         const deps: DepsTurno = espelho && r
           ? {
-            ligacoes: ligacoesDoSandbox(ligacoesPadrao, canalId, r.conteudo.acoes), simulacao: true,
+            ligacoes: ligacoesDoSandbox(ligacoesPadrao, canalId, r.conteudo.acoes, objecoesAtivas(r.conteudo)), simulacao: true,
             pipeline: pipelineComPlaybook(espelho),
             llm: llmComPlaybook(preparo.modelo ? criarLlmDoCatalogo(preparo.modelo) : llmFerramentasDoAmbiente(), r.conteudo, preparo.cfg.objetivo),
           }

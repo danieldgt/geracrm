@@ -2,17 +2,19 @@ import { Component, ChangeDetectionStrategy, computed, input, output, signal } f
 import {
   LIMITES_COMPLIANCE, LIMITES_PLAYBOOK, MENSAGENS_PLAYBOOK, PLACEHOLDERS_PLAYBOOK, ROTULO_MENSAGEM, TONS,
   type AcaoPlaybook, type ChaveMensagemPlaybook, type ComplianceExtra, type ConteudoPlaybook, type ItemQualificacao,
-  type SlotQualificacao,
+  type ObjecaoPlaybook, type SlotQualificacao,
 } from '@geracrm/shared'
 import { BadgeComponente, BotaoComponente } from '../../../compartilhado/ui/index.js'
 import type { EstadoPlaybookApi } from './playbook.servico.js'
+import { PlaybookObjecoesComponente } from './playbook-objecoes.componente.js'
 import { ROTULO_SLOT, adicionarChip, erroDoPrefixo, moverItem, numeroOuNulo, slotsLivres } from './playbook.regras.js'
 
 type Base = EstadoPlaybookApi['base']
 type Lista = 'frasesProibidas' | 'gatilhosHandoff'
 
 /**
- * EDITOR DO PLAYBOOK (P17) — as seis seções do conteúdo. Sem estado próprio de
+ * EDITOR DO PLAYBOOK (P17) — as sete seções do conteúdo (objeções: G2, em
+ * `playbook-objecoes.componente.ts`). Sem estado próprio de
  * dados: recebe o conteúdo e emite o conteúdo inteiro a cada mudança (o pai
  * guarda o rascunho editado e sabe se há alteração não salva).
  *
@@ -22,7 +24,7 @@ type Lista = 'frasesProibidas' | 'gatilhosHandoff'
 @Component({
   selector: 'app-playbook-editor',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BadgeComponente, BotaoComponente],
+  imports: [BadgeComponente, BotaoComponente, PlaybookObjecoesComponente],
   template: `
     @let c = conteudo();
     <fieldset class="secoes" [disabled]="!editavel()">
@@ -114,6 +116,10 @@ type Lista = 'frasesProibidas' | 'gatilhosHandoff'
           </div>
         }
       </section>
+
+      <!-- Objeções (G2) -->
+      <app-playbook-objecoes [objecoes]="c.objecoes" [editavel]="editavel()" [erros]="erros()" [acaoLigada]="c.acoes.objecoes"
+                             (mudou)="objecoes($event)" />
 
       <!-- Mensagens prontas -->
       <section class="secao" id="pb-mensagens">
@@ -294,6 +300,9 @@ export class PlaybookEditorComponente {
   }
   tirarChip(l: Lista, v: string): void {
     this.emitir((c) => ({ ...c, compliance: { ...c.compliance, [l]: c.compliance[l].filter((x) => x !== v) } }))
+  }
+  objecoes(lista: ObjecaoPlaybook[]): void {
+    this.emitir((c) => ({ ...c, objecoes: lista }))
   }
   acao(a: AcaoPlaybook, v: boolean): void {
     this.emitir((c) => ({ ...c, acoes: { ...c.acoes, [a]: v } }))

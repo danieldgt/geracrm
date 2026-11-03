@@ -69,6 +69,7 @@ import { rotasQualidade } from './contexts/atendimento/agente/rotas-qualidade.js
 import { rotasRevisao } from './contexts/atendimento/agente/rotas-revisao.js'
 import { rotasSugestao } from './contexts/atendimento/agente/rotas-sugestao.js'
 import { rotasPlaybook } from './contexts/atendimento/agente/rotas-playbook.js'
+import { rotasObjecoes } from './contexts/atendimento/agente/rotas-objecoes.js'
 import { rotasGoLive } from './contexts/atendimento/agente/rotas-go-live.js'
 import { rotasSaudeDetalhada } from './contexts/plataforma/rotas-saude-detalhada.js'
 import { rotasSla } from './contexts/atendimento/rotas-sla.js'
@@ -184,6 +185,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasRevisao)
   await app.register(rotasSugestao)
   await app.register(rotasPlaybook)
+  await app.register(rotasObjecoes)
   await app.register(rotasGoLive)
   await app.register(rotasSaudeDetalhada)
   await app.register(rotasSla)

@@ -14,7 +14,7 @@ import type { EstadoAgente } from '../estado-agente.js'
  * do modelo. A ordem é código, não configuração:
  *
  *   modoEfetivo → [portão] → gatilhos → slots → teto(pré) → devolução → LLM →
- *   [guardrail R$] → números → filtro → pergunta → qualidade → envio → teto(pós)
+ *   [guardrail R$] → números → filtro → pergunta → qualidade → objeções → envio → teto(pós)
  *
  * Os colchetes são etapas que já existiam em `vendedor.ts` e continuam lá. As
  * demais são pontos de extensão com dono (uma raia por arquivo em `pipeline/`).
@@ -173,6 +173,12 @@ export interface EntradaPosResposta {
    * guardrail pela tela (revisão P17). Isenção pela ORIGEM, nunca pelo texto.
    */
   readonly prefixo?: boolean | undefined
+  /**
+   * Objeções que `registrar_objecao` registrou NESTE turno, na ordem (G2). A
+   * etapa `objecoes-seguidas` as acumula no estado e decide a entrega; as regras
+   * de qualidade sabem se o turno registrou. Ausente = nenhuma.
+   */
+  readonly objecoesDoTurno?: readonly { readonly codigo: string; readonly revertida: boolean }[] | undefined
 }
 
 export interface ResultadoPosResposta {
@@ -258,6 +264,8 @@ export interface PipelineDoTurno {
   readonly filtro: EtapaPosResposta
   readonly pergunta: EtapaPosResposta
   readonly qualidade: EtapaPosResposta
+  /** 3ª objeção não revertida seguida → entrega ao humano (G2). Última etapa depois do modelo. */
+  readonly objecoes: EtapaPosResposta
   readonly falha: PoliticaFalha
 }
 

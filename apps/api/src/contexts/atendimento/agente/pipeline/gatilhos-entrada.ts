@@ -100,7 +100,7 @@ function handoffComAviso(ctx: ContextoPipeline, motivo: MotivoHandoff, codigo: s
  * Aviso de transferência: a mensagem pronta do playbook (no expediente ou fora
  * dele), se ainda passar no filtro de hoje e sem valor/prazo; senão, a do código.
  */
-function textoDoHandoff(ctx: ContextoPipeline, playbook: ConteudoPlaybook | null): string {
+export function textoDoHandoff(ctx: ContextoPipeline, playbook: ConteudoPlaybook | null): string {
   const valores = { assistente: ctx.persona.nome, empresa: ctx.persona.loja }
   const doPlaybook = ctx.foraDoExpediente
     ? mensagemProntaSegura(playbook, 'foraDoHorario', valores)
