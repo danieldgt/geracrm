@@ -7,8 +7,8 @@ import { firstValueFrom } from 'rxjs'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { PresencaServico } from '../../nucleo/presenca.servico.js'
 import {
-  MOTIVOS_DEVOLUCAO, TETO_TEXTO, corpoDevolucao, erroDevolucao, erroReatribuicao, podeDevolver, podeReatribuir,
-  type MotivoDevolucao,
+  MOTIVOS_DEVOLUCAO, TETO_TEXTO, corpoDevolucao, erroDevolucao, erroReatribuicao, pedeRecarregar, podeDevolver, podeReatribuir,
+  type AtendimentoDaThread, type MotivoDevolucao,
 } from '../../nucleo/devolucao.regras.js'
 
 interface Membro { readonly id: string; readonly nome: string }
@@ -18,8 +18,13 @@ type Aberto = 'nenhum' | 'devolver' | 'reatribuir'
  * "Devolver ao agente" e "Reatribuir" no cabeçalho da conversa (G1).
  *
  * ⚠️ Devolver nem sempre entrega ao robô: se o agente do número não fala sozinho
- * (sombra/assistido/desligado), o servidor devolve a conversa à FILA e diz isso —
- * o aviso aparece aqui, não some em silêncio.
+ * agora (sombra/assistido/desligado, fora do recorte), o servidor devolve a conversa
+ * à FILA e diz por quê — o aviso aparece NO CORPO do diálogo, que só fecha quando a
+ * pessoa confirma que leu ("Entendi"); não some em silêncio.
+ * ⚠️ "Devolver" só aparece para quem conduz o atendimento ou para a gestão (o
+ * servidor barra os demais com 403 de qualquer jeito).
+ * ⚠️ Estado velho (409 sem atendimento/conflito, 403 não é seu): o erro vem com
+ * "Recarregar", que traz a conversa como ela está agora.
  *
  * // L1: trocar por ui-modal (modal simples local enquanto a biblioteca não o tem).
  */
@@ -45,20 +50,30 @@ type Aberto = 'nenhum' | 'devolver' | 'reatribuir'
              (click)="$event.stopPropagation()" (keydown.escape)="fechar()">
           @if (aberto() === 'devolver') {
             <h2 id="acoes-conversa-titulo">Devolver ao agente</h2>
-            <p class="ajuda">O agente volta a conduzir esta conversa e lê o motivo no próximo turno.</p>
-            <fieldset>
-              <legend class="so-leitor">Motivo</legend>
-              @for (m of motivos; track m.id) {
-                <label class="radio">
-                  <input type="radio" name="motivo-devolucao" [value]="m.id"
-                         [checked]="motivo() === m.id" (change)="motivo.set(m.id)" />
-                  <span>{{ m.rotulo }}</span>
-                </label>
-              }
-            </fieldset>
-            @if (motivo() === 'outro') {
-              <textarea rows="3" [attr.maxlength]="teto" placeholder="Descreva o motivo"
-                        [ngModel]="texto()" (ngModelChange)="texto.set($event)"></textarea>
+            @if (avisoFila(); as a) {
+              <p class="aviso-fila" role="status">{{ a }}</p>
+            } @else {
+              <p class="ajuda">
+                Se o agente deste número responde sozinho agora, ele retoma a conversa e lê o motivo e a
+                observação na próxima resposta. Se não (sombra, assistido ou fora do horário dele), a
+                conversa volta para a fila da equipe.
+              </p>
+              <fieldset>
+                <legend class="so-leitor">Motivo</legend>
+                @for (m of motivos; track m.id) {
+                  <label class="radio">
+                    <input type="radio" name="motivo-devolucao" [value]="m.id"
+                           [checked]="motivo() === m.id" (change)="motivo.set(m.id)" />
+                    <span>{{ m.rotulo }}</span>
+                  </label>
+                }
+              </fieldset>
+              <label class="campo">
+                <span>{{ motivo() === 'outro' ? 'Descreva o motivo' : 'Observação (opcional)' }}</span>
+                <textarea rows="3" [attr.maxlength]="teto"
+                          [placeholder]="motivo() === 'outro' ? 'Obrigatório em “Outro”' : 'Ex.: já combinei a entrega para sexta'"
+                          [ngModel]="texto()" (ngModelChange)="texto.set($event)"></textarea>
+              </label>
             }
           } @else {
             <h2 id="acoes-conversa-titulo">Reatribuir atendimento</h2>
@@ -75,13 +90,26 @@ type Aberto = 'nenhum' | 'devolver' | 'reatribuir'
                         [ngModel]="texto()" (ngModelChange)="texto.set($event)"></textarea>
             </label>
           }
-          @if (erroServidor(); as e) { <p class="erro" role="alert">{{ e }}</p> }
+          @if (erroServidor(); as e) {
+            <div class="erro-linha">
+              <p class="erro" role="alert">{{ e }}</p>
+              @if (recarregavel()) {
+                <button type="button" class="btn secundario" [disabled]="recarregando()" (click)="recarregar()">
+                  {{ recarregando() ? 'Recarregando…' : 'Recarregar' }}
+                </button>
+              }
+            </div>
+          }
           <div class="acoes">
-            <button type="button" class="btn secundario" (click)="fechar()">Cancelar</button>
-            <button type="button" class="btn primario" [disabled]="enviando() || !!erroDoFormulario()"
-                    [title]="erroDoFormulario() ?? ''" (click)="confirmar()">
-              {{ enviando() ? 'Enviando…' : (aberto() === 'devolver' ? 'Devolver' : 'Reatribuir') }}
-            </button>
+            @if (avisoFila()) {
+              <button type="button" class="btn primario" (click)="fechar()">Entendi</button>
+            } @else {
+              <button type="button" class="btn secundario" (click)="fechar()">Cancelar</button>
+              <button type="button" class="btn primario" [disabled]="enviando() || !!erroDoFormulario()"
+                      [title]="erroDoFormulario() ?? ''" (click)="confirmar()">
+                {{ enviando() ? 'Enviando…' : (aberto() === 'devolver' ? 'Devolver' : 'Reatribuir') }}
+              </button>
+            }
           </div>
         </div>
       </div>
@@ -110,6 +138,9 @@ type Aberto = 'nenhum' | 'devolver' | 'reatribuir'
     textarea { resize: vertical; }
     select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--borda-foco); box-shadow: 0 0 0 2px var(--borda-foco); }
     .erro { margin: 0; color: var(--erro); }
+    .erro-linha { display: flex; gap: var(--espacamento-2); align-items: center; justify-content: space-between; flex-wrap: wrap; }
+    .aviso-fila { margin: 0; padding: var(--espacamento-3); border-radius: var(--raio-controle);
+      border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); line-height: 1.4; }
     .acoes { display: flex; justify-content: flex-end; gap: var(--espacamento-2); flex-wrap: wrap; }
     .btn { min-height: var(--densidade-alvo-clique-console); padding: var(--espacamento-2) var(--espacamento-4);
       border-radius: var(--raio-controle); border: 1px solid transparent; font: inherit; font-weight: 600; cursor: pointer; }
@@ -126,11 +157,11 @@ export class AcoesConversaComponente {
   private readonly http = inject(HttpClient)
 
   readonly conversaId = input.required<string>()
-  readonly atendimento = input<{ readonly estado: string } | null>(null)
+  readonly atendimento = input<AtendimentoDaThread | null>(null)
 
   readonly motivos = MOTIVOS_DEVOLUCAO
   readonly teto = TETO_TEXTO
-  readonly mostrarDevolver = computed(() => podeDevolver(this.atendimento()))
+  readonly mostrarDevolver = computed(() => podeDevolver(this.atendimento(), this.presenca.gestao()))
   readonly mostrarReatribuir = computed(() => podeReatribuir(this.atendimento(), this.presenca.gestao()))
 
   readonly aberto = signal<Aberto>('nenhum')
@@ -141,6 +172,11 @@ export class AcoesConversaComponente {
   readonly enviando = signal(false)
   readonly erroServidor = signal<string | null>(null)
   readonly aviso = signal<string | null>(null)
+  /** Devolvida à FILA: o porquê fica no corpo do diálogo até a pessoa confirmar. */
+  readonly avisoFila = signal<string | null>(null)
+  /** O erro é de estado velho (409/403): oferece "Recarregar". */
+  readonly recarregavel = signal(false)
+  readonly recarregando = signal(false)
 
   readonly erroDoFormulario = computed(() => this.aberto() === 'devolver'
     ? erroDevolucao({ motivo: this.motivo(), observacao: this.texto() })
@@ -158,7 +194,7 @@ export class AcoesConversaComponente {
 
   private zerar(aberto: Aberto): void {
     this.motivo.set(null); this.texto.set(''); this.destino.set(null)
-    this.erroServidor.set(null); this.aviso.set(null)
+    this.erroServidor.set(null); this.aviso.set(null); this.avisoFila.set(null); this.recarregavel.set(false)
     this.aberto.set(aberto)
   }
 
@@ -178,19 +214,41 @@ export class AcoesConversaComponente {
   async confirmar(): Promise<void> {
     if (this.erroDoFormulario() || this.enviando()) return
     this.enviando.set(true)
-    this.erroServidor.set(null)
+    this.erroServidor.set(null); this.recarregavel.set(false)
     const id = this.conversaId()
     if (this.aberto() === 'devolver') {
       const r = await this.servico.devolverAoAgente(id, corpoDevolucao({ motivo: this.motivo()!, observacao: this.texto() }))
       this.enviando.set(false)
-      if (!r.ok) { this.erroServidor.set(r.erro); return }
+      if (!r.ok) { this.falhou(r); return }
+      if (r.destino === 'fila') {
+        // Fica aberto: a pessoa precisa LER que o agente não assumiu e por quê.
+        this.avisoFila.set(r.aviso ?? 'O agente não responde sozinho neste número agora: a conversa voltou para a fila.')
+        return
+      }
       this.aberto.set('nenhum')
-      this.aviso.set(r.aviso)
+      this.aviso.set('Conversa devolvida ao agente.')
     } else {
       const r = await this.servico.reatribuir(id, { usuarioId: this.destino()!, motivo: this.texto().trim() })
       this.enviando.set(false)
-      if (!r.ok) { this.erroServidor.set(r.erro); return }
+      if (!r.ok) { this.falhou(r); return }
       this.aberto.set('nenhum')
     }
+  }
+
+  private falhou(r: { erro: string; codigo: string | null }): void {
+    this.erroServidor.set(r.erro)
+    this.recarregavel.set(pedeRecarregar(r.codigo))
+  }
+
+  async recarregar(): Promise<void> {
+    if (this.recarregando()) return
+    this.recarregando.set(true)
+    try {
+      await this.servico.recarregarConversa(this.conversaId())
+    } finally {
+      this.recarregando.set(false)
+    }
+    // A conversa já mostra o estado atual (sem atendimento, outra pessoa…): o diálogo não vale mais.
+    this.aberto.set('nenhum')
   }
 }
