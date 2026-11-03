@@ -19,9 +19,9 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D3 escopo por papel + usuários + filiais | 0 | 🔄 | Opus, worktree — só API (D3.1–D3.3); telas D3.4 depois de L0 |
 | G1 devolver ao agente / reatribuir / filtro | 0 | 🔍 | revisão REPROVOU (motivo sem leitor, sem guarda de concorrência); correção Opus em curso |
 | H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
-| A1 cadastro do contato | 1 | ✅ | integrada (0112); revisão conjunta onda 1 pendente |
-| A4 etiquetas e origens | 1 | ✅ | integrada (0113); revisão conjunta onda 1 pendente |
-| C1 tarefas v2 | 1 | ✅ | integrada (0114); `situacao=hoje` não inclui mais atrasadas; revisão conjunta pendente |
+| A1 cadastro do contato | 1 | 🔍 | revisão REPROVOU (PUT pisa endereço/telefone do ERP, 500 em 23505, origem); correção Sonnet em curso |
+| A4 etiquetas e origens | 1 | ✅ | integrada (0113); revisão aprovou |
+| C1 tarefas v2 | 1 | 🔍 | revisão aprovou com correções (validação, cursor µs, responsável nulo, autorização, NOT VALID); correção Sonnet em curso |
 | A5 pedidos em lista | 1 | ✅ | integrada; API não tem busca/período/contadores — cards e busca só no carregado |
 | A2 lista de contatos + massa | 1 | ⬜ | |
 | B2 modais do funil + ganho | 1 | 🔄 | Sonnet; ganho = CNPJ, razão social, fantasia, endereço |
@@ -52,6 +52,8 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | 🔄 | Opus (etapa de pipeline + concorrência) |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
+
+> Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.
 
 ## 1. Política de modelos
 
