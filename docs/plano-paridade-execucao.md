@@ -35,7 +35,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D4 notificações, perfil, esqueci a senha | 2 | ⬜ | |
 | D6 auditoria v2 | 2 | ✅ | integrada; cursor com µs corrigido; pendente: login/logout (vai com D4), janela padrão da busca `q` |
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
-| D2 higienização da carteira | 2 | 🔄 | Sonnet |
+| D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
 | F1 campanhas v2 | 3 | 🔄 | F1a API+despachante (Opus, migration 0134) em curso; F1b wizard (Sonnet) depois |
 | F3 formulários públicos | 3 | 🔍 | revisão de segurança: aprovado com correções (upload fora da transação, IP real, contato existente intocado); correção Opus em curso — não divulgar link antes |
