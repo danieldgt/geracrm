@@ -28,13 +28,26 @@ export const MAX_FERIADOS = 60
 /** "AAAA-MM-DD" vale só naquele dia; "MM-DD" vale todo ano (feriado fixo). */
 export const FERIADO = /^(\d{4}-)?(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
 
-export const DESCARTE_APOS_HORAS_PADRAO = 72
+/**
+ * ⚠️ O descarte automático é DESLIGADO por padrão (0): é o agente mexendo no CRM
+ * sozinho, e só acontece no número em que o dono o ligou explicitamente.
+ * `DESCARTE_APOS_HORAS_SUGERIDO` é só a sugestão mostrada na tela.
+ */
+export const DESCARTE_APOS_HORAS_PADRAO = 0
+export const DESCARTE_APOS_HORAS_SUGERIDO = 72
 export const DESCARTE_APOS_HORAS_MAX = 720
 export const REATIVACAO_DIAS_PADRAO: readonly number[] = [30, 90]
 export const REATIVACAO_DIAS_MIN = 7
 export const REATIVACAO_DIAS_MAX = 365
 export const REATIVACAO_MAX_PASSOS = 3
 export const REATIVACAO_TEXTO_MAX = 500
+/**
+ * Teto de reativações ENVIADAS por número por dia (fuso do tenant). Conservador:
+ * a reativação fala com quem não respondeu — no não-oficial é o tipo de envio que
+ * mais leva a denúncia e banimento (ADR-021). Soma-se à cota do aquecimento.
+ */
+export const REATIVACAO_LIMITE_DIA_PADRAO = 30
+export const REATIVACAO_LIMITE_DIA_MAX = 200
 
 /**
  * Reativação do contato descartado por `sem_resposta` (raia G5): uma ativa por
@@ -49,13 +62,16 @@ export const reativacaoAtivas = z.object({
     .min(1, 'Informe ao menos um prazo.').max(REATIVACAO_MAX_PASSOS, `No máximo ${REATIVACAO_MAX_PASSOS} prazos.`),
   templateId: z.string().uuid().nullable(),
   texto: z.string().trim().max(REATIVACAO_TEXTO_MAX).nullable().default(null),
+  /** Máximo de reativações enviadas por ESTE número por dia; acabou a cota, a próxima espera o dia seguinte. */
+  limiteDia: z.number().int().min(1, `Use de 1 a ${REATIVACAO_LIMITE_DIA_MAX} por dia.`)
+    .max(REATIVACAO_LIMITE_DIA_MAX, `Use de 1 a ${REATIVACAO_LIMITE_DIA_MAX} por dia.`).default(REATIVACAO_LIMITE_DIA_PADRAO),
 }).refine((r) => r.dias.every((d, i) => i === 0 || d > r.dias[i - 1]!), {
   message: 'Os prazos da reativação devem ser crescentes.', path: ['dias'],
 })
 export type ReativacaoAtivas = z.infer<typeof reativacaoAtivas>
 
 export const REATIVACAO_PADRAO: ReativacaoAtivas = {
-  ativa: false, dias: [...REATIVACAO_DIAS_PADRAO], templateId: null, texto: null,
+  ativa: false, dias: [...REATIVACAO_DIAS_PADRAO], templateId: null, texto: null, limiteDia: REATIVACAO_LIMITE_DIA_PADRAO,
 }
 
 export const configAtivas = z.object({
@@ -63,7 +79,7 @@ export const configAtivas = z.object({
   limiteSemana: z.number().int().min(1).max(LIMITE_ATIVAS_MAX_SEMANA),
   /** Id do template usado no OFICIAL fora da janela de 24h. `null` = nenhum. */
   templateRetorno: z.string().uuid().nullable(),
-  /** Horas após o ÚLTIMO retorno sem resposta até descartar o contato (`sem_resposta`). 0 = não descarta. */
+  /** Horas após o ÚLTIMO retorno sem resposta até descartar o contato (`sem_resposta`). 0 = não descarta (padrão). */
   descarteAposHoras: z.number().int().min(0).max(DESCARTE_APOS_HORAS_MAX),
   reativacao: reativacaoAtivas,
 }).refine((c) => c.limiteSemana >= c.limiteDia, {
@@ -90,6 +106,11 @@ export const corpoAtivas = z.object({
   templateRetorno: z.string().uuid().nullable(),
   descarteAposHoras: z.number().int().min(0).max(DESCARTE_APOS_HORAS_MAX).optional(),
   reativacao: reativacaoAtivas.optional(),
+  /**
+   * Ligar a reativação num número NÃO-OFICIAL exige este `true`: a pessoa leu e
+   * confirmou (digitando) o risco de banimento (ADR-021). Sem ele, 422 tipificado.
+   */
+  confirmaRiscoBanimento: z.boolean().optional(),
   feriados: z.array(z.string().regex(FERIADO)).max(MAX_FERIADOS),
 }).refine((c) => c.limiteSemana >= c.limiteDia, {
   message: 'O limite da semana não pode ser menor que o do dia.', path: ['limiteSemana'],
@@ -116,6 +137,11 @@ export function lerConfigAtivas(bruto: unknown): ConfigAtivas {
 export function lerReativacao(bruto: unknown): ReativacaoAtivas {
   const r = reativacaoAtivas.safeParse(bruto)
   return r.success ? r.data : { ...REATIVACAO_PADRAO, dias: [...REATIVACAO_DIAS_PADRAO] }
+}
+
+/** A reativação só existe nos canais de WhatsApp (oficial e não-oficial); Instagram e TikTok não. */
+export function canalAceitaReativacao(tipoCanal: string): boolean {
+  return tipoCanal === 'whatsapp_oficial' || tipoCanal === 'whatsapp_nao_oficial'
 }
 
 /** Normaliza a lista de feriados: só formatos válidos, sem repetição, ordenada. */

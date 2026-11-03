@@ -52,10 +52,11 @@ export async function rotasLeads(app: FastifyInstance): Promise<void> {
 
       const linhas = await req.comTenant((tx) => tx<{
         id: string; nome: string; qtd_vendas: number; ultimo_toque_em: Date | null
+        descarte_motivo: string | null
         criado_em: Date; telefone: string | null; uf: string | null
         responsavel: string | null; conversa_id: string | null
       }[]>`
-        SELECT c.id, c.nome, c.qtd_vendas, c.ultimo_toque_em, c.criado_em,
+        SELECT c.id, c.nome, c.qtd_vendas, c.ultimo_toque_em, c.criado_em, c.descarte_motivo,
                (SELECT t.e164 FROM contato_telefone t
                  WHERE t.tenant_id = c.tenant_id AND t.contato_id = c.id
                  ORDER BY t.principal DESC, t.seq LIMIT 1) AS telefone,
@@ -90,6 +91,8 @@ export async function rotasLeads(app: FastifyInstance): Promise<void> {
           contatoId: l.id, nome: l.nome, telefone: l.telefone, uf: l.uf,
           responsavel: l.responsavel, qtdVendas: l.qtd_vendas,
           ultimoToqueEm: l.ultimo_toque_em, conversaId: l.conversa_id,
+          // "sem_resposta" = descartado pelo sistema no fim da cadência (G5); o card mostra o selo.
+          descarteMotivo: l.descarte_motivo,
         })),
         proximoCursor,
       })

@@ -1,6 +1,7 @@
 import {
   DESCARTE_APOS_HORAS_MAX, FERIADO, LIMITE_ATIVAS_MAX_DIA, LIMITE_ATIVAS_MAX_SEMANA, MAX_FERIADOS, REATIVACAO_DIAS_MAX,
-  REATIVACAO_DIAS_MIN, REATIVACAO_MAX_PASSOS, REATIVACAO_TEXTO_MAX, normalizarFeriados, type ReativacaoAtivas,
+  REATIVACAO_DIAS_MIN, REATIVACAO_LIMITE_DIA_MAX, REATIVACAO_MAX_PASSOS, REATIVACAO_TEXTO_MAX, normalizarFeriados,
+  type ReativacaoAtivas,
 } from '@geracrm/shared'
 
 /**
@@ -44,9 +45,32 @@ export function validarAtivas(f: FormAtivas): ErrosAtivas {
     e.reativacao = 'Os prazos devem ser crescentes (ex.: 30, 90).'
   } else if ((f.reativacao.texto ?? '').length > REATIVACAO_TEXTO_MAX) {
     e.reativacao = `O texto aceita até ${REATIVACAO_TEXTO_MAX} caracteres.`
+  } else if (!Number.isInteger(f.reativacao.limiteDia) || f.reativacao.limiteDia < 1 || f.reativacao.limiteDia > REATIVACAO_LIMITE_DIA_MAX) {
+    e.reativacao = `O máximo de reativações por dia vai de 1 a ${REATIVACAO_LIMITE_DIA_MAX}.`
   }
   if (f.feriados.length > MAX_FERIADOS) e.feriados = `No máximo ${MAX_FERIADOS} feriados.`
   return e
+}
+
+/**
+ * Ligar a reativação num número NÃO-OFICIAL pede a confirmação digitada do risco
+ * de banimento (ADR-021) — e a API recusa sem ela. Só ao LIGAR: editar a
+ * reativação já ligada não pergunta de novo.
+ */
+export function exigeConfirmarRiscoReativacao(tipoCanal: string, antes: FormAtivas | null, depois: FormAtivas): boolean {
+  return tipoCanal === 'whatsapp_nao_oficial' && depois.reativacao.ativa && !(antes?.reativacao.ativa ?? false)
+}
+
+export function confirmacaoRiscoReativacao(): {
+  titulo: string; mensagem: string; acao: string; perigo: boolean; digitar: string
+} {
+  return {
+    titulo: 'Ligar a reativação neste número não-oficial?',
+    mensagem: 'A reativação escreve para quem parou de responder. Num número não-oficial, mensagem não solicitada é o que mais '
+      + 'leva a denúncias, e o WhatsApp pode BANIR o número sem aviso. O teto diário e o aquecimento reduzem o risco, '
+      + 'mas não o eliminam. Digite "reativar" para confirmar que você assume esse risco.',
+    acao: 'Ligar mesmo assim', perigo: true, digitar: 'reativar',
+  }
 }
 
 /** "30, 90" → [30, 90]; qualquer item que não seja inteiro vira NaN (a validação aponta). */
