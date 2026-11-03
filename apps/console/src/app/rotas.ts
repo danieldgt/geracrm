@@ -73,6 +73,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/analitico/bi.pagina.js').then((m) => m.BiPagina),
   performance: () =>
     import('./funcionalidades/analitico/performance.pagina.js').then((m) => m.PerformancePagina),
+  relatorios: () =>
+    import('./funcionalidades/analitico/relatorios.pagina.js').then((m) => m.RelatoriosPagina),
   mercado: () =>
     import('./funcionalidades/analitico/mercado.pagina.js').then((m) => m.MercadoPagina),
   mapa: () =>
