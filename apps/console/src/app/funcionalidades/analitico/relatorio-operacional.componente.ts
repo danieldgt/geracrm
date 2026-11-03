@@ -35,7 +35,7 @@ const SETA: Readonly<Record<Tendencia, string>> = { alta: '▲', queda: '▼', e
       @if (c.dados(); as d) {
         <p class="txt-denso nota">
           Mês atual: {{ d.mesAtual.inicio }} a {{ d.mesAtual.fim }}. Mês anterior: {{ d.mesAnterior.inicio }} a {{ d.mesAnterior.fim }}
-          (mesmo dia do mês). O mês de referência é o do fim do período.
+          (mesmo dia do mês). O mês de referência é o do fim do período. Contatos novos, conversões e valor vêm dos contatos criados no mês; o funil é a situação de agora, não do período.
         </p>
       }
       <div class="cartoes">

@@ -122,6 +122,8 @@ beforeAll(async () => {
   await contato(12, '2026-08-06T12:00:00Z', VB)
   await contato(13, '2026-08-05T12:00:00Z', VB)
   await contato(14, '2026-08-02T12:00:00Z', VB)
+  await contato(15, '2026-07-02T12:00:00Z', VB)
+  await dono`UPDATE contato SET primeira_venda_em = '2026-01-01T12:00:00Z' WHERE tenant_id = ${T} AND id = ${c(15)}`
   await contato(99, '2026-09-05T12:00:00Z', null, { simulacao: true })
 
   await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado) VALUES
@@ -152,6 +154,7 @@ beforeAll(async () => {
     [16, 12, '2026-10-05T12:00:00Z'], [17, 13, '2026-10-05T12:00:00Z'],
   ]
   for (const [n, ct, q] of out) await pedido(n, c(ct), null, 1000, q)
+  await pedido(19, c(15), null, 1000, '2026-10-06T12:00:00Z')   // cliente antigo do ERP: não é conversão rápida
   await pedido(18, c(14), null, 4000, '2026-08-10T12:00:00Z')
 
   // Tarefas: VA concluiu 2 em setembro; a de VB foi concluída 30/09 23:30 local sem registrar quem (conta o responsável).
@@ -183,10 +186,11 @@ beforeAll(async () => {
     (${T}, ${x(50)}, ${CV1}, ${CAN}, 1, 'encerrado', '2026-09-10T12:00:00Z', '2026-09-10T12:00:00Z', '2026-09-10T12:00:30Z', '2026-09-10T12:03:00Z'),
     (${T}, ${x(51)}, ${CV1}, ${CAN}, 2, 'encerrado', '2026-09-11T12:00:00Z', '2026-09-11T12:00:00Z', '2026-09-11T12:10:00Z', '2026-09-11T12:10:00Z'),
     (${T}, ${x(52)}, ${CV2}, ${CAN}, 3, 'encerrado', '2026-10-01T02:30:00Z', '2026-10-01T02:30:00Z', NULL, NULL),
+    (${T}, ${x(54)}, ${CV1}, ${CAN}, 5, 'encerrado', '2026-09-12T12:00:00Z', '2026-09-12T12:00:00Z', '2026-09-12T11:59:00Z', '2026-09-12T11:59:00Z'),
     (${T}, ${x(53)}, ${CVI}, ${CANI}, 4, 'encerrado', '2026-09-12T12:00:00Z', '2026-09-12T12:00:00Z', '2026-09-12T12:01:00Z', '2026-09-12T12:01:00Z')`
-  const msg = (n: number, conv: string, dir: string, quando: string, autor: string | null) =>
-    dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em, enviada_por_id)
-         VALUES (${T}, ${x(60 + n)}, ${conv}, ${dir}, 'texto', '{"texto":"oi"}'::jsonb, ${quando}, ${autor})`
+  const msg = (n: number, conv: string, dir: string, quando: string, autor: string | null, tipo = 'texto', status: string | null = null) =>
+    dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, status, conteudo, criado_em, enviada_por_id)
+         VALUES (${T}, ${x(60 + n)}, ${conv}, ${dir}, ${tipo}, ${status}, '{"texto":"oi"}'::jsonb, ${quando}, ${autor})`
   await msg(1, CV1, 'entrante', '2026-09-10T12:00:00Z', null)
   await msg(2, CV1, 'entrante', '2026-09-11T12:00:00Z', null)
   await msg(3, CV2, 'entrante', '2026-10-01T02:30:00Z', null)
@@ -195,6 +199,8 @@ beforeAll(async () => {
   await msg(6, CV1, 'saliente', '2026-09-01T03:00:00Z', null)
   await msg(7, CV1, 'saliente', '2026-09-01T02:59:00Z', null)
   await msg(8, CVI, 'entrante', '2026-09-12T12:00:00Z', null)
+  await msg(9, CV1, 'saliente', '2026-09-10T12:05:00Z', null, 'sistema')            // aviso de handoff: não é mensagem
+  await msg(10, CV1, 'saliente', '2026-09-10T13:00:00Z', VA, 'texto', 'falhou')    // não chegou: vai em "falhas"
 
   // Tenant O: 12 vendedores com um contato novo em setembro; um deles com nome que nunca pode vazar para T.
   for (let i = 1; i <= 12; i++) {
@@ -369,6 +375,29 @@ describe('vendedores', () => {
     const gx = (await chamar(GX, `/v1/relatorios/vendedores?${SET}`)).corpo
     expect(gx.itens.map((i: any) => i.usuarioId)).toEqual([VA])
   })
+  it('escopo carteira: "em atendimento comigo" e tarefa que eu criei não trazem colegas para o ranking', async () => {
+    // VA atende agora a conversa de c3 (carteira de VB) e criou uma tarefa concluída por VB.
+    await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, estado, atendente_id, criado_em)
+               VALUES (${T}, ${x(70)}, ${CV2}, ${CAN}, 90, 'em_atendimento', ${VA}, '2026-11-01T12:00:00Z')`
+    await dono`INSERT INTO tarefa (tenant_id, id, titulo, vence_em, estado, concluida_em, concluida_por, responsavel_id, criado_por)
+               VALUES (${T}, ${x(71)}, 'T6', now(), 'concluida', '2026-09-14T12:00:00Z', ${VB}, ${VB}, ${VA})`
+    try {
+      const va = (await chamar(VA, `/v1/relatorios/vendedores?${SET}`)).corpo
+      expect(va.itens.map((i: any) => i.usuarioId)).toEqual([VA])
+      expect(va.totalVendedores).toBe(1)
+      const adm = (await chamar(ADM, `/v1/relatorios/vendedores?${SET}`)).corpo
+      expect(adm.totalVendedores).toBe(2)
+      expect(adm.itens.find((i: any) => i.usuarioId === VB).tarefasConcluidas).toBe(2)
+    } finally {
+      await dono`DELETE FROM tarefa WHERE tenant_id = ${T} AND id = ${x(71)}`
+      await dono`DELETE FROM atendimento WHERE tenant_id = ${T} AND id = ${x(70)}`
+    }
+  })
+  it('escopo filial: só quem tem papel na filial do gestor', async () => {
+    const gx = (await chamar(GX, `/v1/relatorios/vendedores?${SET}`)).corpo
+    expect(gx.itens.map((i: any) => i.usuarioId)).toEqual([VA])
+    expect(gx.totalVendedores).toBe(1)
+  })
   it('top 10: corta em 10 e informa o total; nunca mistura tenants', async () => {
     const o = (await chamar(OU, `/v1/relatorios/vendedores?${SET}`, O)).corpo
     expect(o.itens).toHaveLength(10)
@@ -411,7 +440,7 @@ describe('whatsapp', () => {
   it('cards e série diária: só canais WhatsApp, fronteira local, dia sem mensagem = 0', async () => {
     const r = (await chamar(ADM, `/v1/relatorios/whatsapp?${SET}`)).corpo
     expect(r.limiteMin).toBe(5)
-    expect(r.cartoes).toMatchObject({ recebidas: 3, enviadas: 3, enviadasHumanas: 1, enviadasAutomaticas: 2, conversasIniciadas: 2 })
+    expect(r.cartoes).toMatchObject({ recebidas: 3, enviadas: 3, enviadasHumanas: 1, enviadasAutomaticas: 2, falhas: 1, conversasIniciadas: 2 })
     expect(r.porDia).toHaveLength(30)
     const dia = (d: string) => r.porDia.find((x: any) => x.dia === d)
     expect(dia('2026-09-10')).toEqual({ dia: '2026-09-10', recebidas: 1, enviadas: 2 })
@@ -425,9 +454,9 @@ describe('whatsapp', () => {
       { autor: 'humano', atendimentos: 2, p50Seg: 390, p95Seg: 579 },
       { autor: 'automatico', atendimentos: 1, p50Seg: 30, p95Seg: 30 },
     ])
-    expect(r.cartoes).toMatchObject({ atendimentos: 3, respondidasNoLimite: 1, pctNoLimite: 0.3333 })
+    expect(r.cartoes).toMatchObject({ atendimentos: 4, respondidasNoLimite: 1, pctNoLimite: 0.25 })
     const dez = (await chamar(ADM, `/v1/relatorios/whatsapp?${SET}&limiteMin=10`)).corpo
-    expect(dez.cartoes).toMatchObject({ respondidasNoLimite: 2, pctNoLimite: 0.6667 })
+    expect(dez.cartoes).toMatchObject({ respondidasNoLimite: 2, pctNoLimite: 0.5 })
   })
   it('período sem dados: zeros e percentuais nulos', async () => {
     const r = (await chamar(ADM, `/v1/relatorios/whatsapp?inicio=2020-01-01&fim=2020-01-03`)).corpo
@@ -439,7 +468,7 @@ describe('whatsapp', () => {
   })
   it('escopo: vendedor só as conversas dos contatos dele; outro tenant isolado', async () => {
     const r = (await chamar(VA, `/v1/relatorios/whatsapp?${SET}`)).corpo
-    expect(r.cartoes).toMatchObject({ recebidas: 2, enviadas: 3, conversasIniciadas: 1, atendimentos: 2 })
+    expect(r.cartoes).toMatchObject({ recebidas: 2, enviadas: 3, conversasIniciadas: 1, atendimentos: 3 })
     const o = (await chamar(OU, `/v1/relatorios/whatsapp?${SET}`, O)).corpo
     expect(o.cartoes).toMatchObject({ recebidas: 0, enviadas: 0, atendimentos: 0 })
   })
