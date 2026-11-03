@@ -1,7 +1,11 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
-import { ConfirmacaoServico, ToastServico, mensagemDeErro, reaisParaCentavos } from '../../compartilhado/ui/index.js'
+import {
+  BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente,
+  GradeFormComponente, IconeComponente, ModalComponente, SelectComponente, TabelaComponente, ToastServico, mensagemDeErro,
+  reaisParaCentavos, type ColunaTabela, type LinhaTabela, type OpcaoSelect,
+} from '../../compartilhado/ui/index.js'
 
 interface Meta {
   readonly id: string
@@ -26,128 +30,129 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
 @Component({
   selector: 'app-metas',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [
+    BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, GradeFormComponente,
+    IconeComponente, ModalComponente, SelectComponente, TabelaComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1 class="txt-titulo">Metas</h1>
-        <p class="sub">Alvo do mês contra o que já foi vendido.</p>
-      </div>
+    <ui-cabecalho-tela titulo="Metas" subtitulo="Alvo do mês contra o que já foi vendido.">
       <div class="periodo">
-        <button class="nav" (click)="mudarMes(-1)" aria-label="Mês anterior">‹</button>
+        <button type="button" class="nav" (click)="mudarMes(-1)" aria-label="Mês anterior">‹</button>
         <span class="mes txt-dados">{{ rotuloMes() }}</span>
-        <button class="nav" (click)="mudarMes(1)" aria-label="Próximo mês">›</button>
+        <button type="button" class="nav" (click)="mudarMes(1)" aria-label="Próximo mês">›</button>
       </div>
-    </header>
-
-    <form class="nova" (submit)="salvar($event)">
-      <label class="campo rotulado">
-        <span>De quem é a meta</span>
-        <select [value]="alvoUsuario()" (change)="alvoUsuario.set($any($event.target).value)">
-          <option value="">Equipe (todos)</option>
-          @for (m of equipe(); track m.id) { <option [value]="m.id">{{ m.nome }}</option> }
-        </select>
-      </label>
-      <label class="campo rotulado alvo">
-        <span>Alvo do mês</span>
-        <!-- ⚠️ O "R$" é UNIDADE, não rótulo: quem lê só ele não sabe se o campo é
-             alvo, realizado ou saldo. -->
-        <span class="campo-valor">
-          <span class="prefixo">R$</span>
-          <input inputmode="numeric" [value]="valor()" (input)="valor.set($any($event.target).value)" placeholder="0,00" />
-        </span>
-      </label>
-      <button class="btn btn--primario" type="submit" [disabled]="salvando() || !valorNumerico()">
-        {{ salvando() ? 'Salvando…' : 'Definir meta' }}
+      <button type="button" class="btn btn--primario" (click)="novaAberta.set(true)">
+        <ui-icone nome="plus" />Nova meta
       </button>
-      @if (erroForm()) { <p class="erro" role="alert">{{ erroForm() }}</p> }
-      @if (erroEquipe(); as e) { <p class="aviso-parcial" role="status">{{ e }}</p> }
-    </form>
+    </ui-cabecalho-tela>
 
-    @switch (estado()) {
-      @case ('carregando') { <div class="lista"><div class="esq"></div><div class="esq"></div></div> }
-      @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
-      @case ('pronto') {
-        @if (itens().length === 0) {
-          <div class="bloco"><h2 class="txt-secao">Sem metas neste mês</h2>
-            <p>Defina uma meta acima — da equipe ou de um vendedor.</p></div>
-        } @else {
-          <ul class="lista">
-            @for (m of itens(); track m.id) {
-              <li class="meta" [class.equipe]="m.usuarioId === null">
-                <div class="topo">
-                  <strong class="nome encolhe">{{ m.usuario }}</strong>
+    <div class="corpo">
+      @switch (estado()) {
+        @case ('carregando') {
+          <ui-tabela [colunas]="colunas" [linhas]="[]" [carregando]="true" />
+        }
+        @case ('sem_permissao') {
+          <ui-estado tipo="sem-permissao" titulo="Sem acesso às metas" descricao="Peça acesso a um administrador." />
+        }
+        @case ('erro') {
+          <ui-estado tipo="erro" titulo="Não foi possível carregar as metas" descricao="Verifique a conexão e tente de novo.">
+            <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+          </ui-estado>
+        }
+        @case ('pronto') {
+          @if (itens().length === 0) {
+            <ui-estado titulo="Sem metas neste mês" descricao="Defina uma meta — da equipe ou de um vendedor.">
+              <button type="button" class="btn btn--primario" (click)="novaAberta.set(true)">Nova meta</button>
+            </ui-estado>
+          } @else {
+            <ui-tabela [colunas]="colunas" [linhas]="linhas()">
+              <ng-template uiCelula="usuario" let-m>
+                <span class="nome">{{ m.usuario }}</span>
+                @if (m.usuarioId === null) { <ui-badge tom="info">Equipe</ui-badge> }
+              </ng-template>
+              <ng-template uiCelula="progresso" let-m>
+                <div class="progresso">
                   @if (m.realizadoDisponivel) {
                     <span class="pct txt-dados" [class.bateu]="m.pct >= 100">{{ m.pct }}%</span>
                   } @else {
                     <span class="pct-indisp">sem cálculo</span>
                   }
-                  <button class="x" (click)="excluir(m.id)" title="Remover meta">×</button>
+                  <span class="barra" aria-hidden="true">
+                    <span class="preenche" [class.bateu]="m.pct >= 100" [style.width.%]="min(m.pct, 100)"></span>
+                  </span>
                 </div>
-                <div class="barra"><span class="preenche" [class.bateu]="m.pct >= 100" [style.width.%]="min(m.pct, 100)"></span></div>
-                <div class="rodape">
-                  <span class="realizado txt-dados">{{ reais(m.realizado) }}</span>
-                  <span class="de">de {{ reais(m.alvo) }}</span>
-                </div>
-              </li>
-            }
-          </ul>
+              </ng-template>
+              <ng-template uiCelula="acoes" let-m>
+                <button type="button" class="btn btn--secundario btn--pequeno" (click)="excluir(m.id)">Remover</button>
+              </ng-template>
+            </ui-tabela>
+          }
         }
       }
-    }
+    </div>
+
+    <ui-modal [aberto]="novaAberta()" titulo="Nova meta" largura="p" (fechar)="fecharNova()">
+      <form id="form-meta" (submit)="salvar($event)">
+        <ui-grade-form>
+          <ui-select class="largo" rotulo="De quem é a meta" placeholder="Equipe (todos)" [opcoes]="opcoesEquipe()"
+            [dica]="erroEquipe() ?? 'Sem escolha, a meta é da equipe.'" [(valor)]="alvoUsuario" />
+          <ui-campo class="largo" rotulo="Alvo do mês (R$)" tipo="dinheiro" placeholder="0,00" [obrigatorio]="true"
+            dica="Valor em reais. Precisa ser maior que zero." [(valor)]="valor" [erro]="erroValor()" />
+        </ui-grade-form>
+        @if (erroForm()) { <p class="erro" role="alert">{{ erroForm() }}</p> }
+      </form>
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharNova()">Cancelar</button>
+        <button type="submit" form="form-meta" class="btn btn--primario" [disabled]="salvando()">
+          {{ salvando() ? 'Salvando…' : 'Definir meta' }}
+        </button>
+      </div>
+    </ui-modal>
   `,
   styles: `
-    :host { display: block; width: 100%; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
-    .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-4); flex-wrap: wrap; }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
+    :host { display: block; width: 100%; padding: var(--espacamento-6); }
+    .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-2); min-width: 0; }
     .periodo { display: flex; align-items: center; gap: var(--espacamento-2); }
-    .nav { width: 32px; height: 32px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font-size: 18px; cursor: pointer; }
+    .nav { width: 32px; height: 32px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
+      background: var(--superficie-elevada); color: var(--texto); font-size: 18px; cursor: pointer; }
     .mes { min-width: 92px; text-align: center; color: var(--texto); }
-    .nova { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: center; margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .nova select { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .nova .campo.rotulado { flex-direction: column; gap: 4px; }
-    .nova .campo.rotulado > span:first-child { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
-    .nova .alvo { flex: 1; min-width: 160px; }
-    .campo-valor { display: flex; align-items: center; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); padding-left: var(--espacamento-3); flex: 1; min-width: 160px; }
-    .prefixo { color: var(--texto-suave); font-size: 14px; }
-    .campo-valor input { flex: 1; padding: var(--espacamento-2) var(--espacamento-3); border: 0; background: transparent; color: var(--texto); font: inherit; }
-    .campo-valor input:focus { outline: none; }
-    .erro { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
-    .aviso-parcial { width: 100%; margin: 0; color: var(--atencao); font-size: 12px; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
-    .esq { height: 76px; border-radius: var(--raio-painel); background: var(--superficie); margin-bottom: var(--espacamento-2); }
-    .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }
-    .meta { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .meta.equipe { border-left: 3px solid var(--acao); }
-    .topo { display: flex; align-items: center; gap: var(--espacamento-2); }
-    .nome { flex: 1; color: var(--texto); font-size: 14px; }
-    .pct { color: var(--texto-secundario); font-weight: 600; }
+    .nome { color: var(--texto); margin-right: var(--espacamento-2); }
+    .progresso { display: flex; align-items: center; gap: var(--espacamento-2); min-width: 140px; }
+    .pct { color: var(--texto-secundario); font-weight: 600; min-width: 44px; text-align: right; }
     .pct.bateu { color: var(--sucesso); }
     .pct-indisp { font-size: 12px; color: var(--texto-suave); }
-    .x { border: 0; background: transparent; color: var(--texto-suave); font-size: 16px; padding: 0 4px; cursor: pointer; flex: none; }
-    .x:hover { color: var(--erro); }
-    .barra { height: 8px; border-radius: var(--raio-completo); background: var(--superficie); margin: var(--espacamento-2) 0; overflow: hidden; }
+    .barra { display: block; flex: 1; height: 8px; border-radius: var(--raio-completo); background: var(--superficie); overflow: hidden; }
     .preenche { display: block; height: 100%; background: var(--acao); }
     .preenche.bateu { background: var(--sucesso); }
-    .rodape { display: flex; gap: var(--espacamento-2); align-items: baseline; }
-    .realizado { color: var(--texto); }
-    .de { font-size: 12px; color: var(--texto-suave); }
+    .erro { margin: var(--espacamento-3) 0 0; color: var(--erro); font-size: 13px; }
   `,
 })
 export class MetasPagina implements OnInit {
   private readonly http = inject(HttpClient)
   private readonly confirmacao = inject(ConfirmacaoServico)
   private readonly toast = inject(ToastServico)
+
+  protected readonly colunas: ColunaTabela[] = [
+    { chave: 'usuario', rotulo: 'Responsável' },
+    { chave: 'realizado', rotulo: 'Realizado', alinhamento: 'dir', mono: true, largura: '130px' },
+    { chave: 'alvo', rotulo: 'Alvo', alinhamento: 'dir', mono: true, largura: '130px' },
+    { chave: 'progresso', rotulo: 'Progresso', largura: '220px' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '120px' },
+  ]
+
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Meta[]>([])
+  protected readonly linhas = computed(() => this.itens() as unknown as readonly LinhaTabela[])
   readonly equipe = signal<readonly Membro[]>([])
+  protected readonly opcoesEquipe = computed<OpcaoSelect[]>(() => this.equipe().map((m) => ({ valor: m.id, rotulo: m.nome })))
   readonly erroEquipe = signal<string | null>(null)
   private readonly hoje = new Date()
   readonly ano = signal(this.hoje.getUTCFullYear())
   readonly mes = signal(this.hoje.getUTCMonth() + 1)
   readonly alvoUsuario = signal(''); readonly valor = signal('')
   readonly salvando = signal(false); readonly erroForm = signal<string | null>(null)
+  readonly erroValor = signal<string | null>(null)
+  readonly novaAberta = signal(false)
 
   readonly rotuloMes = computed(() => `${MESES[this.mes() - 1]} ${this.ano()}`)
   readonly valorNumerico = computed(() => this.parseReais(this.valor()))
@@ -189,16 +194,21 @@ export class MetasPagina implements OnInit {
     } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
   }
 
+  fecharNova(): void { if (!this.salvando()) this.novaAberta.set(false) }
+
   async salvar(ev: Event): Promise<void> {
     ev.preventDefault()
+    if (this.salvando()) return
     const alvo = this.valorNumerico()
-    if (this.salvando() || alvo === null) return
+    if (alvo === null) { this.erroValor.set('Informe um valor maior que zero.'); return }
+    this.erroValor.set(null)
     this.salvando.set(true); this.erroForm.set(null)
     try {
       await firstValueFrom(this.http.post('/v1/metas', {
         usuarioId: this.alvoUsuario() || null, ano: this.ano(), mes: this.mes(), alvoCentavos: alvo,
       }))
       this.valor.set('')
+      this.novaAberta.set(false)
       this.toast.sucesso('Meta definida')
       await this.carregar()
     } catch (e) { this.erroForm.set(mensagemDeErro(e, 'Não foi possível salvar a meta.')) }
