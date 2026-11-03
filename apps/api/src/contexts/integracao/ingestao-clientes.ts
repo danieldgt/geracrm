@@ -22,6 +22,11 @@ export interface RelatorioIngestao {
   ambiguos: number
   /** Salespeople the ERP mentioned that match no user here. */
   vendedoresPendentes: number
+  /** ⚠️ LGPD (H2): ERP customers that resolve to an ANONYMISED contact. Skipped entirely — no name,
+   *  phone or document comes back, and no new contact is born for the same external id. */
+  anonimizadosIgnorados: number
+  /** Phones not written because their key carries an LGPD block (the holder asked to be forgotten). */
+  telefonesBloqueadosLgpd: number
   /** Sample WITH the reason. */
   rejeicoes: { idExterno: string; motivo: string }[]
 }
@@ -37,7 +42,7 @@ export async function ingerirClientes(
 ): Promise<RelatorioIngestao> {
   const r: RelatorioIngestao = {
     lidos: 0, criados: 0, vinculados: 0, rejeitados: 0,
-    ambiguos: 0, vendedoresPendentes: 0, rejeicoes: [],
+    ambiguos: 0, vendedoresPendentes: 0, anonimizadosIgnorados: 0, telefonesBloqueadosLgpd: 0, rejeicoes: [],
   }
 
   const sistema = `erp:${conexaoId}`
@@ -94,6 +99,7 @@ async function ingerirUm(
     por_documento: boolean
     por_telefone_principal: boolean
     tem_algum_documento: boolean
+    anonimizado: boolean
   }[]>`
     WITH por_id AS (
       SELECT contato_id FROM contato_identidade_externa
@@ -118,13 +124,23 @@ async function ingerirUm(
            (c.id IN (SELECT contato_id FROM por_id))  AS por_identidade,
            (c.id IN (SELECT contato_id FROM por_doc)) AS por_documento,
            (c.id IN (SELECT contato_id FROM por_tel WHERE principal)) AS por_telefone_principal,
-           (c.id IN (SELECT contato_id FROM com_doc)) AS tem_algum_documento
+           (c.id IN (SELECT contato_id FROM com_doc)) AS tem_algum_documento,
+           (c.anonimizado_em IS NOT NULL) AS anonimizado
       FROM contato c
      WHERE c.tenant_id = ${tenantId}
        AND (c.id IN (SELECT contato_id FROM por_id)
          OR c.id IN (SELECT contato_id FROM por_doc)
          OR c.id IN (SELECT contato_id FROM por_tel))
   `
+
+  // ⚠️ LGPD (H2): any signal that lands on an ANONYMISED contact stops here. The ERP identity of an
+  // anonymised customer is kept on purpose (`canais` mode) so this lookup finds it: rewriting the
+  // name/phone/document would undo the erasure, and creating a fresh contact for the same external
+  // id would resurrect the person under a new id.
+  if (achados.some((a) => a.anonimizado)) {
+    r.anonimizadosIgnorados += 1
+    return
+  }
 
   const candidatos: Candidato[] = achados.map((a) => ({
     contatoId: a.contato_id,
@@ -181,7 +197,16 @@ async function ingerirUm(
     ON CONFLICT DO NOTHING
   `
 
+  const bloqueadosLgpd = new Set(
+    telefones.length === 0 ? [] : (await tx<{ chave_bloqueio: string }[]>`
+      SELECT chave_bloqueio FROM lista_bloqueio
+       WHERE tenant_id = ${tenantId} AND lgpd_em IS NOT NULL
+         AND chave_bloqueio = ANY(${telefones.map((t) => t.chaveBloqueio)}::text[])`).map((b) => b.chave_bloqueio),
+  )
+
   for (const tel of telefones) {
+    // ⚠️ LGPD (H2): a number whose holder asked to be forgotten is never re-imported.
+    if (bloqueadosLgpd.has(tel.chaveBloqueio)) { r.telefonesBloqueadosLgpd += 1; continue }
     // ⚠️ The first phone of a NEW contact becomes primary; on an existing one it
     // does not — the phone the salesperson chose outranks whatever the ERP has.
     const querPrincipal = decisao.acao === 'criar' && tel === telefones[0]

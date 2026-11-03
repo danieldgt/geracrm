@@ -5,6 +5,7 @@ import { textoAvisoPrivacidade } from '@geracrm/shared'
 import {
   CampoComponente, GradeFormComponente, PainelComponente, ToastServico,
 } from '../../compartilhado/ui/index.js'
+import { AnonimizacoesComponente } from './anonimizacoes.componente.js'
 import { mensagemFalhaAoSalvar } from './config.regras.js'
 import {
   corpoDaLgpd, errosDoCorpo, errosDoServidor, formDaLgpd, resumoDosErros, FORM_LGPD_VAZIO,
@@ -34,7 +35,7 @@ type Estado = 'carregando' | 'pronto' | 'erro'
 @Component({
   selector: 'app-privacidade',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CampoComponente, GradeFormComponente, PainelComponente],
+  imports: [AnonimizacoesComponente, CampoComponente, GradeFormComponente, PainelComponente],
   template: `
     <ui-painel>
       <h2 class="txt-secao">Privacidade e LGPD</h2>
@@ -62,7 +63,7 @@ type Estado = 'carregando' | 'pronto' | 'erro'
               <ui-campo rotulo="Encarregado (DPO): e-mail" tipo="email" [valor]="lgpd().dpoEmail" [erro]="erros()['dpoEmail'] ?? null"
                         [desabilitado]="leitura()" (valorChange)="mudar('dpoEmail', $event)" />
               <ui-campo rotulo="Retenção (meses)" tipo="text" [valor]="lgpd().retencaoMeses" [erro]="erros()['retencaoMeses'] ?? null"
-                        dica="De 6 a 120. Depois disso os dados pessoais de contatos descartados são anonimizados."
+                        dica="De 6 a 120. Prazo da anonimização automática de descartados (abaixo), que é desligada por padrão."
                         [desabilitado]="leitura()" (valorChange)="mudar('retencaoMeses', $event)" />
               <ui-campo class="largo" rotulo="Texto de consentimento" tipo="textarea" [valor]="lgpd().textoConsentimento"
                         [erro]="erros()['textoConsentimento'] ?? null" placeholder="Autorizo receber mensagens da empresa pelo WhatsApp."
@@ -79,6 +80,7 @@ type Estado = 'carregando' | 'pronto' | 'erro'
               </div>
             }
           </form>
+          @if (!leitura()) { <app-anonimizacoes /> }
         }
       }
     </ui-painel>

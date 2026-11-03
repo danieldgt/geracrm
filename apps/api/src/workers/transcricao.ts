@@ -74,6 +74,8 @@ export async function processarTranscricoes(
          AND m.criado_em > ${desde}
          ${deps.somenteTenant ? dono`AND m.tenant_id = ${deps.somenteTenant}` : dono``}
          AND NOT (m.conteudo ? 'transcricao')
+         -- ⚠️ LGPD (H2): mensagem anonimizada não volta a ganhar texto.
+         AND NOT (m.conteudo ? 'removido_lgpd')
          AND coalesce((m.conteudo->>'transcricao_tentativas')::int, 0) < ${MAX_TENTATIVAS_TRANSCRICAO}
          AND (m.conteudo->>'transcricao_tentada_em' IS NULL
               OR (m.conteudo->>'transcricao_tentada_em')::timestamptz < ${limiteTentativa})
@@ -120,10 +122,14 @@ async function transcreverUma(
       ...(t.idioma ? { transcricao_idioma: t.idioma } : {}),
       ...(typeof t.duracaoS === 'number' ? { transcricao_duracao_s: t.duracaoS } : {}),
     }
-    await tx`
+    // ⚠️ LGPD (H2): o contato pode ter sido anonimizado enquanto o áudio era transcrito (a chamada ao
+    //    provedor é fora de transação). Mensagem com `removido_lgpd` não é regravada — e nada é avisado.
+    const gravou = await tx`
       UPDATE mensagem
          SET conteudo = (conteudo - 'transcricao_erro' - 'transcricao_tentada_em') || ${JSON.stringify(novo)}::text::jsonb
-       WHERE tenant_id = tenant_atual() AND id = ${m.id} AND criado_em = ${m.criado_em}`
+       WHERE tenant_id = tenant_atual() AND id = ${m.id} AND criado_em = ${m.criado_em}
+         AND NOT (conteudo ? 'removido_lgpd')`
+    if (gravou.count === 0) return { ok: true, reagendouAgente: false }
     const [conv] = await tx<{ versao: string }[]>`
       UPDATE conversa SET versao = versao + 1 WHERE tenant_id = tenant_atual() AND id = ${m.conversa_id} RETURNING versao`
     // ⚠️ Payload só com ids (defesa em profundidade): a tela busca o texto por API.
@@ -163,7 +169,8 @@ async function registrarFalha(m: Candidata, motivo: string, tentativas: number, 
   return comTenantServico(m.tenant_id, async (tx) => {
     await tx`
       UPDATE mensagem SET conteudo = conteudo || ${JSON.stringify(novo)}::text::jsonb
-       WHERE tenant_id = tenant_atual() AND id = ${m.id} AND criado_em = ${m.criado_em}`
+       WHERE tenant_id = tenant_atual() AND id = ${m.id} AND criado_em = ${m.criado_em}
+         AND NOT (conteudo ? 'removido_lgpd')`
     return desistiu ? reagendarAgente(tx, m, agora) : false
   })
 }
