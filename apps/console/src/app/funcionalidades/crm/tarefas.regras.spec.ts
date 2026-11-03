@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  FILTROS_VAZIOS, abaDaSituacao, parametrosDaLista, payloadConcluir, payloadTarefa, rotuloTipoTarefa,
+  FILTROS_VAZIOS, abaDaSituacao, errosDoServidor, parametrosDaLista, payloadConcluir, payloadTarefa, rotuloTipoTarefa,
   situacaoDoCartao, temFiltroAtivo, validarTarefa, venceEmIso, type FormTarefa,
 } from './tarefas.regras.js'
 
@@ -56,6 +56,15 @@ describe('validarTarefa / payloadTarefa', () => {
     })
     expect(validarTarefa({ ...form, contatoId: '' })).toEqual({})
     expect(validarTarefa({ ...form, contatoId: '' }, true)).toEqual({ contatoId: 'Escolha o contato.' })
+  })
+  it('título acima de 200 caracteres é recusado', () => {
+    expect(validarTarefa({ ...form, titulo: 'x'.repeat(201) })).toEqual({ titulo: 'Use até 200 caracteres.' })
+  })
+  it('leva os campos do 422 da API para o formulário', () => {
+    expect(errosDoServidor(['contatoId', 'venceEm', 'outro'])).toEqual({
+      contatoId: 'Contato não encontrado.', data: 'Data ou hora inválida.',
+    })
+    expect(errosDoServidor(undefined)).toEqual({})
   })
   it('monta o payload sem campos vazios', () => {
     const p = payloadTarefa(form)!
