@@ -10,7 +10,12 @@ export interface ItemRelatorio {
   readonly valorCentavos: number
 }
 
-export interface BarraEscalada { readonly chave: string; readonly rotulo: string; readonly valor: number; readonly largura: number }
+export interface BarraEscalada {
+  readonly chave: string; readonly rotulo: string; readonly valor: number
+  /** Texto do valor à direita da barra (ex.: "R$ 10,00 (12%)"); sem ele, o próprio número. */
+  readonly texto?: string
+  readonly largura: number
+}
 
 /** Largura mínima (em %) de uma barra com valor maior que zero: some-e-aparece é pior que exagerar 2%. */
 export const LARGURA_MINIMA = 2
@@ -19,7 +24,7 @@ export const LARGURA_MINIMA = 2
  * Escala das barras: o MAIOR valor ocupa 100% e os demais são proporcionais. Zero fica em 0 (sem barra);
  * qualquer valor positivo tem ao menos LARGURA_MINIMA. Sem valores positivos, todas em 0.
  */
-export function escalarBarras(itens: readonly { chave: string; rotulo: string; valor: number }[]): BarraEscalada[] {
+export function escalarBarras(itens: readonly { chave: string; rotulo: string; valor: number; texto?: string }[]): BarraEscalada[] {
   const maior = itens.reduce((m, i) => Math.max(m, i.valor), 0)
   return itens.map((i) => ({
     ...i,
