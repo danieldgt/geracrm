@@ -48,8 +48,9 @@ export async function buscarConhecimento(tx: Sql, opcoes: OpcoesBuscaConheciment
 
   const candidatos = Math.min(limite * 3, 30)
   // Documento publicado e visível para o canal — aplicado em TODAS as pernas.
+  // ⚠️ Prova social NUNCA sai por aqui (G3): só pela ferramenta própria, e só aprovada.
   const visivel = tx`
-    d.publicado
+    d.publicado AND d.tipo <> 'prova_social'
     AND ${opcoes.canalId ? tx`(d.canal_id IS NULL OR d.canal_id = ${opcoes.canalId})` : tx`true`}`
   const pernas: { fonte: FonteConhecimento; linhas: Ranqueado[] }[] = []
 

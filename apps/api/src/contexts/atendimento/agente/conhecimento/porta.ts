@@ -11,7 +11,8 @@
  *    para o texto exato, na versão exata, que o dono escreveu.
  */
 
-export const TIPOS_DOCUMENTO = ['politicas', 'faq', 'frete', 'pagamento', 'troca', 'produto', 'outro'] as const
+/** `prova_social` (G3): só chega ao agente aprovada, pela ferramenta `consultar_prova_social` — nunca pela busca comum. */
+export const TIPOS_DOCUMENTO = ['politicas', 'faq', 'frete', 'pagamento', 'troca', 'produto', 'outro', 'prova_social'] as const
 export type TipoDocumento = (typeof TIPOS_DOCUMENTO)[number]
 
 /** Título fixo do documento que espelha `agente_config.politicas` de um canal. */

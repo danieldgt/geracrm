@@ -1,4 +1,4 @@
-import { classificarRfv } from '@geracrm/shared'
+import { classificarRfv, validarAcaoAgenteEnvia, validarGatilhoPedidoEfetivado } from '@geracrm/shared'
 import postgres from 'postgres'
 import type { Sql } from '../../db/index.js'
 import { enviarTextoNaConversa } from '../atendimento/envio-conversa.js'
@@ -25,7 +25,81 @@ const CAP_POR_REGRA = 200 // teto por regra por passada — não explode em raja
 
 interface Automacao {
   id: string; nome: string; gatilho: string; gatilho_param: Record<string, unknown>
-  acao: string; acao_param: Record<string, unknown>
+  acao: string; acao_param: Record<string, unknown>; criado_em: Date
+}
+
+/**
+ * Até quantos dias DEPOIS do dia previsto o pós-venda ainda é agendado. Cobre o
+ * worker parado e a conversa ocupada por outro pós-venda pendente (o índice
+ * `agente_retorno_um_pendente` deixa um por conversa: o próximo espera a vez).
+ * Passado isso, a mensagem já não é "pós-venda" — fica sem enviar.
+ */
+export const JANELA_POS_VENDA_DIAS = 7
+
+/**
+ * PÓS-VENDA POR PEDIDO (G3): gatilho `pedido_efetivado` + ação `agente_envia`.
+ *
+ * Diferente das outras regras, age POR PEDIDO (o mesmo cliente compra de novo e
+ * recebe de novo), e não executa nada aqui: AGENDA uma ativa na fila do agente
+ * (`agente_retorno`, motivo `pos_venda`), que o worker de retornos envia com a
+ * política das ativas (expediente, limites, opt-out, suspensão, janela/template,
+ * aquecimento) e só no modo efetivo autônomo.
+ *
+ * ⚠️ Idempotência por pedido + roteiro: o índice único `agente_retorno_pos_venda_unico`
+ *    + `ON CONFLICT DO NOTHING`. Conflito com outro pós-venda PENDENTE na mesma
+ *    conversa também não insere — o pedido continua candidato e entra na próxima passada.
+ * ⚠️ Não é retroativo: só pedidos efetivados DEPOIS de a regra existir.
+ * ⚠️ Não agenda com atendimento humano aberto (a pessoa conduz); tenta de novo na
+ *    próxima passada, dentro da janela. Sem conversa do cliente, não agenda (não
+ *    inventa conversa fria).
+ */
+async function agendarPosVenda(sql: Sql, tid: string, a: Automacao, agora: Date): Promise<number> {
+  const g = validarGatilhoPedidoEfetivado(a.gatilho_param)
+  const ac = validarAcaoAgenteEnvia(a.acao_param)
+  if (!g.ok || !ac.ok) return 0
+  const dias = g.dados.diasDepois
+  const { roteiro, texto, templateId } = ac.dados
+  const candidatos = await sql<{ pedido_id: string; contato_id: string; nome: string; conversa_id: string; canal_id: string }[]>`
+    SELECT p.id AS pedido_id, p.contato_id, c.nome, cv.id AS conversa_id, cv.canal_id
+      FROM pedido p
+      JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
+      JOIN LATERAL (
+        SELECT x.id, x.canal_id FROM conversa x
+         WHERE x.tenant_id = p.tenant_id AND (x.id = p.conversa_id OR x.contato_id = p.contato_id)
+         ORDER BY (x.id = p.conversa_id) DESC NULLS LAST, x.ultima_mensagem_em DESC NULLS LAST
+         LIMIT 1) cv ON true
+     WHERE p.tenant_id = ${tid} AND p.estado = 'efetivado' AND p.efetivado_em IS NOT NULL
+       AND p.efetivado_em >= ${a.criado_em}
+       AND p.efetivado_em <= ${agora}::timestamptz - (${dias} || ' days')::interval
+       AND p.efetivado_em >= ${agora}::timestamptz - (${dias + JANELA_POS_VENDA_DIAS} || ' days')::interval
+       AND c.ativo AND c.recebe_automacoes
+       AND NOT EXISTS (SELECT 1 FROM agente_retorno r
+                        WHERE r.tenant_id = p.tenant_id AND r.pedido_id = p.id AND r.roteiro = ${roteiro})
+       AND NOT EXISTS (SELECT 1 FROM atendimento at
+                        WHERE at.tenant_id = p.tenant_id AND at.conversa_id = cv.id AND at.estado <> 'encerrado')
+     ORDER BY p.efetivado_em
+     LIMIT ${CAP_POR_REGRA}`
+  let agendados = 0
+  for (const cand of candidatos) {
+    // ⚠️ O texto é resolvido AQUI (nome do contato) e viaja pronto, como no `enviar_mensagem`.
+    const pronto = texto ? aplicarMarcadores(texto, cand.nome) : null
+    const feito = await sql.begin(async (tx) => {
+      const [linha] = await tx<{ id: string }[]>`
+        INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, executar_em, estado, tentativa, texto, criado_em,
+                                    pedido_id, roteiro, template_id, automacao_id)
+        VALUES (${tid}, gen_random_uuid(), ${cand.conversa_id}, ${cand.canal_id}, 'pos_venda', ${agora}, 'pendente', 1, ${pronto}, ${agora},
+                ${cand.pedido_id}, ${roteiro}, ${templateId}, ${a.id})
+        ON CONFLICT DO NOTHING
+        RETURNING id`
+      if (!linha) return false
+      await tx`INSERT INTO automacao_execucao (tenant_id, automacao_id, contato_id)
+               VALUES (${tid}, ${a.id}, ${cand.contato_id})
+               ON CONFLICT (tenant_id, automacao_id, contato_id) DO UPDATE SET executado_em = now()`
+      return true
+    })
+    if (feito) agendados += 1
+  }
+  return agendados
 }
 
 /** contato_ids que casam o gatilho e ainda NÃO foram atendidos por esta regra. */
@@ -247,12 +321,20 @@ async function enviarDaAutomacao(
 
 /** Roda TODAS as automações ativas de UM tenant. Devolve quantas ações executou. */
 export async function executarNoTenant(sql: Sql, tid: string, agora: Date): Promise<number> {
-  void agora
   const regras = await sql<Automacao[]>`
-    SELECT id, nome, gatilho, gatilho_param, acao, acao_param
+    SELECT id, nome, gatilho, gatilho_param, acao, acao_param, criado_em
       FROM automacao WHERE tenant_id = ${tid} AND ativa`
   let total = 0
   for (const a of regras) {
+    // Pós-venda (G3): por PEDIDO, agendando a ativa do agente — caminho próprio.
+    if (a.gatilho === 'pedido_efetivado') {
+      if (a.acao !== 'agente_envia') continue
+      const n = await agendarPosVenda(sql, tid, a, agora)
+      total += n
+      if (n > 0) await sql`UPDATE automacao SET ultima_execucao_em = now() WHERE tenant_id = ${tid} AND id = ${a.id}`
+      continue
+    }
+    if (a.acao === 'agente_envia') continue
     let ids = await candidatos(sql, tid, a)
 
     // ⚠️ `recebe_automacoes` é um opt-out DIFERENTE da lista de bloqueio: é o

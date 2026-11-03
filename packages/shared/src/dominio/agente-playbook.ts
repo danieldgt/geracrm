@@ -124,13 +124,21 @@ export const compliancePlaybook = z.object({
  *    (opt-out, pedido de humano, "é robô?") NÃO aparecem aqui: ficam sempre
  *    ligados. `.strict()` recusa qualquer chave fora desta lista.
  */
-export const ACOES_PLAYBOOK = ['catalogo', 'pedido', 'proposta', 'memoria', 'conhecimento'] as const
+export const ACOES_PLAYBOOK = ['catalogo', 'pedido', 'proposta', 'memoria', 'conhecimento', 'nps', 'indicacoes', 'provaSocial'] as const
 export type AcaoPlaybook = (typeof ACOES_PLAYBOOK)[number]
+/**
+ * ⚠️ `nps`, `indicacoes` e `provaSocial` (G3) nasceram depois das primeiras versões
+ *    publicadas: têm PADRÃO (ligadas) para que versão antiga, imutável, continue
+ *    válida — sem o padrão, o `.strict()` recusaria o playbook vigente inteiro.
+ */
 export const acoesPlaybook = z.object({
   catalogo: z.boolean(), pedido: z.boolean(), proposta: z.boolean(), memoria: z.boolean(), conhecimento: z.boolean(),
+  nps: z.boolean().default(true), indicacoes: z.boolean().default(true), provaSocial: z.boolean().default(true),
 }).strict()
 export type AcoesPlaybook = z.output<typeof acoesPlaybook>
-export const ACOES_TODAS_LIGADAS: AcoesPlaybook = { catalogo: true, pedido: true, proposta: true, memoria: true, conhecimento: true }
+export const ACOES_TODAS_LIGADAS: AcoesPlaybook = {
+  catalogo: true, pedido: true, proposta: true, memoria: true, conhecimento: true, nps: true, indicacoes: true, provaSocial: true,
+}
 
 export const ROTULO_ACAO: Readonly<Record<AcaoPlaybook, { rotulo: string; descricao: string; ferramentas: readonly string[] }>> = {
   catalogo: { rotulo: 'Consultar catálogo', descricao: 'Buscar produtos, ver variações, preço e estoque.', ferramentas: ['catalogo_buscar', 'catalogo_detalhar', 'catalogo_preco_estoque'] },
@@ -138,6 +146,9 @@ export const ROTULO_ACAO: Readonly<Record<AcaoPlaybook, { rotulo: string; descri
   proposta: { rotulo: 'Enviar proposta', descricao: 'Mandar o resumo do pedido e pedir a confirmação do cliente (a efetivação nunca é do modelo).', ferramentas: ['pedido_propor'] },
   memoria: { rotulo: 'Anotar memória do cliente', descricao: 'Guardar preferências e objeções para as próximas conversas (nunca dado pessoal).', ferramentas: ['memoria_anotar'] },
   conhecimento: { rotulo: 'Consultar a base de conhecimento', descricao: 'Buscar políticas, prazos e condições nos documentos da loja.', ferramentas: ['conhecimento_buscar'] },
+  nps: { rotulo: 'Registrar NPS do pós-venda', descricao: 'Gravar a nota (0 a 10) quando o cliente responde à pesquisa do pós-venda; detrator vira tarefa do gestor.', ferramentas: ['registrar_nps'] },
+  indicacoes: { rotulo: 'Registrar indicações', descricao: 'Cadastrar até 5 contatos indicados pelo cliente (origem "Indicação"), sem duplicar telefone.', ferramentas: ['registrar_indicacoes'] },
+  provaSocial: { rotulo: 'Citar prova social aprovada', descricao: 'Consultar depoimentos e números APROVADOS no Conhecimento, sempre com fonte e data.', ferramentas: ['consultar_prova_social'] },
 }
 
 /** O que fica SEMPRE ligado e não aparece como opção — mostrado na tela, somente leitura. */
