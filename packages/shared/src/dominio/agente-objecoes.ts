@@ -32,6 +32,8 @@ export const LIMITES_OBJECOES = {
   respostaObjecao: 1200,
   respostaObjecaoMin: 10,
   observacaoObjecao: 200,
+  /** Soma de caracteres (objeção + gatilhos + resposta) das objeções ATIVAS na seção. */
+  secaoMax: 20_000,
 } as const
 
 /** "OBJ-01" … "OBJ-99". */

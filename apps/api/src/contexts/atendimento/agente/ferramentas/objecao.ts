@@ -1,7 +1,5 @@
 import { z } from 'zod'
 import { LIMITES_OBJECOES, type ObjecaoPlaybook } from '@geracrm/shared'
-import { comTenantServico } from '../../../../db/index.js'
-import { gravarObjecao } from '../objecoes.js'
 import type { Ferramenta } from './porta.js'
 
 /**
@@ -14,18 +12,21 @@ import type { Ferramenta } from './porta.js'
  *    saída e chega à etapa pelo registro de ferramentas.
  * ⚠️ Código fora das objeções ATIVAS do playbook → erro tipificado
  *    `codigo_desconhecido` (volta ao modelo como erro de ferramenta).
- * ⚠️ MODOS: autônomo e assistido gravam o fato em `agente_objecao` (relatório).
- *    Sombra, simulação e copiloto respondem em modo seco — o registro fica só no
- *    estado da sessão (sombra) ou da simulação.
+ * ⚠️ NÃO GRAVA no banco: o fato em `agente_objecao` (relatório) é gravado pelo
+ *    `concluir` do turno, na transação da decisão, só se o turno se confirma
+ *    (`gravarObjecoesDoTurno`, em autônomo/assistido). Turno superado, falho ou
+ *    refeito não deixa fato. Sombra, simulação e copiloto respondem em modo seco.
+ * ⚠️ UMA vez por código por turno: repetir o mesmo código no turno é ok
+ *    idempotente (não empilha de novo no registro do turno).
  * ⚠️ Descrição FIXA (sem os códigos do tenant): a lista de ferramentas é o começo
  *    do prefixo cacheado; os códigos vão no bloco do playbook.
  */
 export const NOME_FERRAMENTA_OBJECAO = 'registrar_objecao'
 
-const MODOS_QUE_GRAVAM: ReadonlySet<string> = new Set(['autonomo', 'assistido'])
-
 export function ferramentaRegistrarObjecao(objecoes: readonly ObjecaoPlaybook[]): Ferramenta<never> {
   const ativas = objecoes.filter((o) => o.ativo)
+  /** A ferramenta é montada por turno: o que já foi registrado neste turno. */
+  const jaNoTurno = new Set<string>()
   const f: Ferramenta<{ codigo: string; revertida: boolean; observacao: string | null }> = {
     nome: NOME_FERRAMENTA_OBJECAO,
     descricao: 'Registra uma objeção do cliente pelo CÓDIGO do playbook (lista em <objecoes> do playbook, ex.: OBJ-01) e se ela foi revertida: revertida=true quando o cliente aceitou o argumento e seguiu na conversa; false quando manteve a objeção. Chame no turno em que tratar a objeção. Só registra — não envia nada ao cliente nem transfere. Código fora da lista volta como erro.',
@@ -41,15 +42,11 @@ export function ferramentaRegistrarObjecao(objecoes: readonly ObjecaoPlaybook[])
         const validos = ativas.map((x) => x.codigo).join(', ') || 'nenhum'
         return { ok: false, erro: `codigo_desconhecido: ${codigo} não está nas objeções do playbook. Códigos válidos: ${validos}.` }
       }
-      const registro = { codigo, revertida: e.revertida }
-      if (!MODOS_QUE_GRAVAM.has(ctx.modo)) {
-        return { ok: true, saida: { registrada: true, codigo, revertida: e.revertida, modoSeco: true }, objecao: registro }
-      }
-      await comTenantServico(ctx.tenantId, (tx) => gravarObjecao(tx, {
-        canalId: ctx.canalId, conversaId: ctx.conversaId, contatoId: ctx.contatoId, sessaoId: ctx.sessaoId,
-        codigo, objecao: o.objecao, revertida: e.revertida, observacao: e.observacao, agora: ctx.agora,
-      }))
-      return { ok: true, saida: { registrada: true, codigo, revertida: e.revertida }, objecao: registro }
+      const modoSeco = ctx.modo === 'sombra' || ctx.modo === 'simulacao' || ctx.modo === 'copiloto'
+      const saida = { registrada: true, codigo, revertida: e.revertida, ...(modoSeco ? { modoSeco: true } : {}) }
+      if (jaNoTurno.has(codigo)) return { ok: true, saida }
+      jaNoTurno.add(codigo)
+      return { ok: true, saida, objecao: { codigo, revertida: e.revertida, objecao: o.objecao, observacao: e.observacao } }
     },
   }
   return f as Ferramenta<never>

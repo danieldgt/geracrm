@@ -3,12 +3,13 @@ import postgres from 'postgres'
 import type { FastifyInstance } from 'fastify'
 import { playbookPadrao, type ConteudoPlaybook, type ObjecaoPlaybook } from '@geracrm/shared'
 import { criarApp } from '../../../app.js'
-import { encerrarBanco } from '../../../db/index.js'
+import { comTenantServico, encerrarBanco } from '../../../db/index.js'
 import { conduzirTurnoVendedor } from './vendedor.js'
 import { ligacoesPadrao } from './ferramentas/ligacoes.js'
 import { montarFerramentas } from './ferramentas/montar.js'
+import { gravarObjecoesDoTurno } from './objecoes.js'
 import { ferramentaRegistrarObjecao } from './ferramentas/objecao.js'
-import type { ContextoFerramenta } from './ferramentas/porta.js'
+import { registroDeFerramentas, type ContextoFerramenta } from './ferramentas/porta.js'
 import type { Ligacoes } from './ferramentas/ligacoes-porta.js'
 import type { ChamadaRegistrada, PedidoDeLaco, PortaLlmFerramentas, ResultadoLaco } from './porta-llm.js'
 import { blocoObjecoes, instrucoesDoPlaybook } from './instrucao-vendedor.js'
@@ -35,11 +36,13 @@ const PLANO = 'a6200000-3333-4000-8000-000000000001'
 const MODELO = 'a6200000-4444-4000-8000-000000000001'
 const CANAL = 'a6200000-5555-4000-8000-000000000001'
 const CANAL_SOMBRA = 'a6200000-5555-4000-8000-000000000002'
+const CANAL_ASSIST = 'a6200000-5555-4000-8000-000000000003'
 const CANAL_B = 'a6200000-5555-4000-8000-000000000009'
 const CONTATO = 'a6200000-6666-4000-8000-000000000001'
 const CONTATO_B = 'a6200000-6666-4000-8000-000000000009'
 const CONVERSA = 'a6200000-7777-4000-8000-000000000001'
 const CONVERSA_SOMBRA = 'a6200000-7777-4000-8000-000000000002'
+const CONVERSA_ASSIST = 'a6200000-7777-4000-8000-000000000003'
 const CONVERSA_B = 'a6200000-7777-4000-8000-000000000009'
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
@@ -123,7 +126,7 @@ beforeAll(async () => {
     })
   }
   const fechado = JSON.stringify({ seg: null, ter: null, qua: null, qui: null, sex: null, sab: null, dom: null })
-  for (const [t, c, modo] of [[A, CANAL, 'autonomo'], [A, CANAL_SOMBRA, 'sombra'], [B, CANAL_B, 'autonomo']] as const) {
+  for (const [t, c, modo] of [[A, CANAL, 'autonomo'], [A, CANAL_SOMBRA, 'sombra'], [A, CANAL_ASSIST, 'assistido'], [B, CANAL_B, 'autonomo']] as const) {
     await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado) VALUES (${t}, ${c}, 'whatsapp_nao_oficial', 'Loja', 'conectado')`
     await dono`INSERT INTO canal_configuracao (tenant_id, canal_id, horario_atendimento) VALUES (${t}, ${c}, ${fechado}::text::jsonb)`
     await dono`
@@ -131,7 +134,7 @@ beforeAll(async () => {
       VALUES (${t}, ${c}, true, ${modo}, 'Vendemos confecção no atacado.', false, false,
               ${JSON.stringify({ nome: 'Lia', loja: 'Atacado Sol', tom: 'neutro', usaEmojis: false })}::text::jsonb)`
   }
-  for (const [t, contato, conversa, canal] of [[A, CONTATO, CONVERSA, CANAL], [A, CONTATO, CONVERSA_SOMBRA, CANAL_SOMBRA], [B, CONTATO_B, CONVERSA_B, CANAL_B]] as const) {
+  for (const [t, contato, conversa, canal] of [[A, CONTATO, CONVERSA, CANAL], [A, CONTATO, CONVERSA_SOMBRA, CANAL_SOMBRA], [A, CONTATO, CONVERSA_ASSIST, CANAL_ASSIST], [B, CONTATO_B, CONVERSA_B, CANAL_B]] as const) {
     await dono`INSERT INTO contato (tenant_id, id, nome, ativo) VALUES (${t}, ${contato}, 'Ana Cliente', true) ON CONFLICT DO NOTHING`
     await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${t}, ${conversa}, ${canal}, ${contato}, 1)`
     await dono`INSERT INTO aviso_privacidade (tenant_id, id, contato_id, conversa_id, canal_id, mensagem_id, texto, versao, origem)
@@ -139,6 +142,7 @@ beforeAll(async () => {
   }
   await publicarNoEspelho(CANAL, conteudo())
   await publicarNoEspelho(CANAL_SOMBRA, conteudo())
+  await publicarNoEspelho(CANAL_ASSIST, conteudo())
   app = await criarApp(); await app.ready()
 })
 
@@ -160,13 +164,34 @@ afterAll(async () => {
 describe('Ferramenta registrar_objecao', () => {
   beforeEach(async () => { await dono`DELETE FROM agente_objecao WHERE tenant_id = ${A}` })
 
-  it('dado código ativo em turno autônomo, então grava o fato com o texto da objeção e a observação mascarada', async () => {
+  it('dado código ativo, então devolve o registro do turno (com texto e observação) e NÃO grava: a gravação é do turno confirmado', async () => {
     const f = ferramentaRegistrarObjecao([CARO, PENSAR])
-    const r = await f.executar(ctxFerr('autonomo'), { codigo: 'obj-01', revertida: false, observacao: 'cliente do 5585988887777 achou caro' } as never)
-    expect(r).toMatchObject({ ok: true, saida: { registrada: true, codigo: 'OBJ-01', revertida: false }, objecao: { codigo: 'OBJ-01', revertida: false } })
-    const [l] = await dono<{ codigo: string; objecao: string; revertida: boolean; observacao: string; sessao_id: string | null }[]>`
-      SELECT codigo, objecao, revertida, observacao, sessao_id FROM agente_objecao WHERE tenant_id = ${A}`
-    expect(l).toMatchObject({ codigo: 'OBJ-01', objecao: 'Achou caro', revertida: false, sessao_id: null })
+    const r = await f.executar(ctxFerr('autonomo'), { codigo: 'obj-01', revertida: false, observacao: 'achou caro' } as never)
+    expect(r).toMatchObject({ ok: true, saida: { registrada: true, codigo: 'OBJ-01', revertida: false }, objecao: { codigo: 'OBJ-01', revertida: false, objecao: 'Achou caro', observacao: 'achou caro' } })
+    expect(await contarFatos()).toBe(0)
+  })
+
+  it('dado o mesmo código duas vezes no turno, então a 2ª é ok idempotente e não empilha de novo nos efeitos', async () => {
+    const reg = registroDeFerramentas(ctxFerr('autonomo'), [ferramentaRegistrarObjecao([CARO, PENSAR])])
+    const a = await reg.executar('registrar_objecao', { codigo: 'OBJ-01', revertida: false, observacao: null })
+    const b = await reg.executar('registrar_objecao', { codigo: 'OBJ-01', revertida: false, observacao: null })
+    expect(a).toMatchObject({ ok: true }); expect(b).toMatchObject({ ok: true, saida: { registrada: true, codigo: 'OBJ-01' } })
+    await reg.executar('registrar_objecao', { codigo: 'OBJ-02', revertida: true, observacao: null })
+    expect(reg.efeitos.objecoes.map((o) => o.codigo)).toEqual(['OBJ-01', 'OBJ-02'])
+  })
+
+  it('gravarObjecoesDoTurno: autônomo e assistido gravam (observação mascarada), um fato por código; sombra/simulação/copiloto não', async () => {
+    const objecoes = [
+      { codigo: 'OBJ-01', revertida: false, objecao: 'Achou caro', observacao: 'cliente do 5585988887777 achou caro' },
+      { codigo: 'OBJ-01', revertida: false, objecao: 'Achou caro' },
+    ]
+    const base = { canalId: CANAL, conversaId: CONVERSA, contatoId: CONTATO, sessaoId: null, agora: new Date(), objecoes }
+    for (const modo of ['sombra', 'simulacao', 'copiloto']) await comTenantServico(A, (tx) => gravarObjecoesDoTurno(tx, { ...base, modo }))
+    expect(await contarFatos()).toBe(0)
+    await comTenantServico(A, (tx) => gravarObjecoesDoTurno(tx, { ...base, modo: 'assistido' }))
+    expect(await contarFatos()).toBe(1)
+    const [l] = await dono<{ objecao: string; observacao: string }[]>`SELECT objecao, observacao FROM agente_objecao WHERE tenant_id = ${A}`
+    expect(l!.objecao).toBe('Achou caro')
     expect(l!.observacao).not.toContain('5585988887777')
   })
 
@@ -187,11 +212,6 @@ describe('Ferramenta registrar_objecao', () => {
     const r = await ferramentaRegistrarObjecao([CARO]).executar(ctxFerr(modo), { codigo: 'OBJ-01', revertida: true, observacao: null } as never)
     expect(r).toMatchObject({ ok: true, saida: { modoSeco: true }, objecao: { codigo: 'OBJ-01', revertida: true } })
     expect(await contarFatos()).toBe(0)
-  })
-
-  it('dado modo assistido, então grava (a objeção do cliente é real)', async () => {
-    await ferramentaRegistrarObjecao([CARO]).executar(ctxFerr('assistido'), { codigo: 'OBJ-01', revertida: true, observacao: null } as never)
-    expect(await contarFatos()).toBe(1)
   })
 })
 
@@ -272,9 +292,25 @@ describe('Etapa objecoes-seguidas (pura, turno injetado)', () => {
     expect(r.bloquear).toBeUndefined()
   })
 
-  it('dado três não revertidas no MESMO turno, então transfere', async () => {
-    const r = await etapa.executar(ctx(), entrada([1, 2, 3].map(() => ({ codigo: 'OBJ-02', revertida: false }))))
-    expect(r.bloquear?.motivo).toBe('objecoes_seguidas')
+  it('dado três chamadas no MESMO turno, então contam UMA (não transfere); três turnos seguidos transferem', async () => {
+    const tres = [1, 2, 3].map(() => ({ codigo: 'OBJ-02', revertida: false }))
+    const r = await etapa.executar(ctx(), entrada(tres))
+    expect(r.bloquear).toBeUndefined()
+    const estado = (r.estado as { objecoes: unknown[] }).objecoes
+    expect(estado).toHaveLength(1)
+    // turnos seguidos: o estado de cada turno alimenta o seguinte.
+    const t2 = await etapa.executar(ctx({ objecoes: estado }), entrada(tres))
+    expect(t2.bloquear).toBeUndefined()
+    const t3 = await etapa.executar(ctx({ objecoes: (t2.estado as { objecoes: unknown[] }).objecoes }), entrada(tres))
+    expect(t3.bloquear?.motivo).toBe('objecoes_seguidas')
+  })
+
+  it('dado revertida e não revertida no mesmo turno, então prevalece a revertida (zera a contagem)', async () => {
+    const r = await etapa.executar(ctx(doEstado([false, false])), entrada([{ codigo: 'OBJ-01', revertida: false }, { codigo: 'OBJ-02', revertida: true }]))
+    expect(r.bloquear).toBeUndefined()
+    const l = (r.estado as { objecoes: { codigo: string; revertida: boolean }[] }).objecoes
+    expect(l).toHaveLength(3)
+    expect(l.at(-1)).toMatchObject({ codigo: 'OBJ-02', revertida: true })
   })
 
   it('dado handoff já decidido por outro motivo, ou copiloto, então só registra', async () => {
@@ -322,6 +358,57 @@ describe('Turno real: 3 objeções seguidas sem reverter → handoff', () => {
     expect(at!.estado).toBe('na_fila')
     // A última mensagem é o aviso de transferência, não a 3ª tentativa de convencer.
     expect(enviados.at(-1)).not.toContain('outra linha')
+  })
+
+  it('autônomo: o modelo chama o mesmo código três vezes no turno — conta uma, um fato, sem transferir', async () => {
+    const m = llmQueRegistra(Array.from({ length: 3 }, () => ({ codigo: 'OBJ-01', revertida: false })), ['Entendo. Quer ver opções mais em conta?'])
+    const r = await turno(CONVERSA, CANAL, [await msg(A, CONVERSA, 'achei caro')], m.porta)
+    expect(r.desfecho).toBe('respondeu')
+    expect(await contarFatos()).toBe(1)
+    const [s] = await dono<{ estado_agente: { objecoes: unknown[] } }[]>`SELECT estado_agente FROM agente_sessao WHERE tenant_id = ${A} AND conversa_id = ${CONVERSA}`
+    expect(s!.estado_agente.objecoes).toHaveLength(1)
+  })
+
+  it('turno superado (chegou mensagem nova): não grava o fato nem soma no estado', async () => {
+    const m = llmQueRegistra([{ codigo: 'OBJ-01', revertida: false }], ['Entendo. Quer ver opções?'])
+    const rodar = m.porta.rodar.bind(m.porta)
+    const porta: PortaLlmFerramentas = { ...m.porta, async rodar(p) { const r = await rodar(p); await msg(A, CONVERSA, 'outra coisa'); return r } }
+    const r = await turno(CONVERSA, CANAL, [await msg(A, CONVERSA, 'achei caro')], porta)
+    expect(r.desfecho).toBe('superada')
+    expect(await contarFatos()).toBe(0)
+    expect(enviados).toHaveLength(0)
+  })
+
+  it('retry: envio recusado não grava; o turno refeito grava uma vez só', async () => {
+    const ids = [await msg(A, CONVERSA, 'achei caro')]
+    const recusa = (async () => ({ ok: false as const, motivo: 'fora_da_janela' })) as never
+    const m1 = llmQueRegistra([{ codigo: 'OBJ-01', revertida: false }], ['Entendo. Quer ver opções?'])
+    const r1 = await conduzirTurnoVendedor(
+      { tenant_id: A, id: crypto.randomUUID(), conversa_id: CONVERSA, canal_id: CANAL, mensagens_ids: ids, tentativas: 1, executar_em: new Date() },
+      { llm: m1.porta, ligacoes: ligacoesPadrao, enviar: recusa })
+    expect(r1.desfecho).toBe('falha')
+    expect(await contarFatos()).toBe(0)
+    const m2 = llmQueRegistra([{ codigo: 'OBJ-01', revertida: false }], ['Entendo. Quer ver opções?'])
+    const r2 = await turno(CONVERSA, CANAL, ids, m2.porta)
+    expect(r2.desfecho).toBe('respondeu')
+    expect(await contarFatos()).toBe(1)
+  })
+
+  it('assistido: a 3ª objeção seguida vira handoff SEM envio (encerra a sessão sem entrega) e grava os fatos', async () => {
+    const codigos = ['OBJ-01', 'OBJ-02', 'OBJ-01']
+    const desfechos: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const m = llmQueRegistra([{ codigo: codigos[i]!, revertida: false }], [`Entendo, resposta ${i}.`])
+      const r = await turno(CONVERSA_ASSIST, CANAL_ASSIST, [await msg(A, CONVERSA_ASSIST, 'achei caro')], m.porta)
+      desfechos.push(r.desfecho)
+    }
+    expect(desfechos).toEqual(['sugeriu', 'sugeriu', 'handoff'])
+    expect(enviados).toHaveLength(0)
+    expect(await contarFatos()).toBe(3)
+    const [s] = await dono<{ estado: string }[]>`SELECT estado FROM agente_sessao WHERE tenant_id = ${A} AND conversa_id = ${CONVERSA_ASSIST}`
+    expect(s!.estado).not.toBe('ativa')
+    const [d] = await dono<{ handoff_motivo: string }[]>`SELECT handoff_motivo FROM agente_decisao WHERE tenant_id = ${A} AND conversa_id = ${CONVERSA_ASSIST} ORDER BY criado_em DESC LIMIT 1`
+    expect(d!.handoff_motivo).toBe('objecoes_seguidas')
   })
 
   it('autônomo: uma revertida no meio zera — três registros não transferem', async () => {

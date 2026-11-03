@@ -371,8 +371,13 @@ export function negaSerIa(texto: string): boolean {
 }
 
 const NUMERO_EXTENSO = String.raw`(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|cento|duzent[oa]s|trezent[oa]s|quinhent[oa]s|mil|meia\s+d[uú]zia|d[uú]zia)`
-/** Número por extenso com unidade de negócio ("dez por cento", "dois dias úteis", "cinco peças"). */
-const NUMERO_EXTENSO_RE = new RegExp(String.raw`(?:^|[^\p{L}])${NUMERO_EXTENSO}(?:\s+e\s+${NUMERO_EXTENSO})*\s+(?:por\s+cento|reais|real|centavos|dias?|horas?|semanas?|meses|m[eê]s|unidades?|pe[cç]as?|caixas?|pares|fardos?|pacotes?|kg|quilos?|metros?)(?![\p{L}])`, 'iu')
+const UNIDADE_EXTENSO = String.raw`(?:por\s+cento|reais|real|centavos|dias?|horas?|semanas?|meses|m[eê]s|anos?|vezes|parcelas?|minutos?|litros?|toneladas?|unidades?|pe[cç]as?|caixas?|pares|fardos?|pacotes?|kg|quilos?|metros?)`
+const ORDINAL_PARCELA = String.raw`(?:primeir[oa]|segund[oa]|terceir[oa]|quart[oa]|quint[oa]|sext[oa]|s[eé]tim[oa]|oitav[oa]|non[oa]|d[eé]cim[oa])\s+parcelas?`
+/**
+ * Número por extenso com unidade de negócio ("dez por cento", "dois dias úteis", "cinco peças",
+ * "em doze vezes", "dez anos", "primeira parcela"), mais "metade" e "meio por cento".
+ */
+export const NUMERO_EXTENSO_RE = new RegExp(String.raw`(?:^|[^\p{L}])(?:${NUMERO_EXTENSO}(?:\s+e\s+${NUMERO_EXTENSO})*\s+${UNIDADE_EXTENSO}|${ORDINAL_PARCELA}|meio\s+por\s+cento|metade)(?![\p{L}])`, 'iu')
 
 /** Verbo de entrega/envio/chegada/saída/expedição (texto normalizado sem acento). */
 const VERBO_ENTREGA_RE = /(?:^|[^\p{L}])(?:entreg\p{L}*|envi\p{L}*|mand\p{L}*|cheg\p{L}*|sai|saem|sair|saiu|sairá|saira|despach\p{L}*|exped\p{L}*|lev\p{L}*|post\p{L}*|recebe\p{L}*)(?![\p{L}])/iu
@@ -462,6 +467,11 @@ export function errosDaRespostaObjecao(texto: string): string | null {
 /** Regras da seção de objeções que o schema não expressa. Campos no formato `objecoes[2].resposta`. */
 export function errosDasObjecoes(objecoes: readonly ObjecaoPlaybook[]): ErroCampoPlaybook[] {
   const erros: ErroCampoPlaybook[] = []
+  // Teto agregado: a seção entra inteira no prompt, então o conjunto das ATIVAS tem limite.
+  const total = objecoes.filter((o) => o.ativo).reduce((n, o) => n + o.objecao.length + o.gatilhos.reduce((m, g) => m + g.length, 0) + o.resposta.length, 0)
+  if (total > LIMITES_OBJECOES.secaoMax) {
+    erros.push({ campo: 'objecoes', mensagem: `A seção de objeções ativas tem ${total} caracteres (objeção, gatilhos e resposta somados); o máximo é ${LIMITES_OBJECOES.secaoMax}. Encurte as respostas ou desative objeções.` })
+  }
   const codigos = new Set<string>()
   /** gatilho normalizado → código da objeção ATIVA que o usa primeiro. */
   const gatilhoDe = new Map<string, { readonly codigo: string; readonly i: number }>()
