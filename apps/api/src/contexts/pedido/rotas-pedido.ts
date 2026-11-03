@@ -11,6 +11,7 @@ import {
   adicionarItemPorSku, alterarQuantidade, obterOuCriarRascunho, recalcularTotais, removerItem,
 } from './montagem.js'
 import { proporPedido } from './proposta.js'
+import { lerCursor } from '../crm/cursor-criado-em.js'
 
 /**
  * Pedido assistido — o tira-pedido que nasce na conversa (ADR-005).
@@ -439,29 +440,28 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { estado?: string; contatoId?: string; cursor?: string } }>(
     '/v1/pedidos', { preHandler: exigirTenant },
     async (req, reply) => {
-      let curEm: string | null = null, curId: string | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
-        curEm = em; curId = id
-      }
+      const cur = lerCursor(req.query.cursor)
+      if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
       const { estado, contatoId } = req.query
       const linhas = await req.comTenant(async (tx) => {
         const escopo = await escopoDaRequisicao(tx, req)
         return tx<{
         id: string; estado: string; total_centavos: string; total_pecas: string
         contato_id: string | null; contato: string | null; rotulo: string | null
-        numero_externo: string | null; criado_em: Date; itens: number; origem: string; desconto_pct: string
+        numero_externo: string | null; criado_em: Date; criado_em_txt: string; itens: number; origem: string; desconto_pct: string
       }[]>`
         SELECT p.id, p.estado, p.total_centavos::text, p.total_pecas::text, p.contato_id,
                c.nome AS contato, p.nome AS rotulo, p.numero_externo, p.criado_em, p.origem, p.desconto_pct::text,
+               -- Microssegundos como texto: o cursor carrega este valor, não o Date (que corta em ms).
+               p.criado_em::text AS criado_em_txt,
                (SELECT count(*)::int FROM pedido_item i WHERE i.tenant_id = p.tenant_id AND i.pedido_id = p.id) AS itens
           FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
          WHERE p.tenant_id = tenant_atual()
            AND ${estado ? tx`p.estado = ${estado}` : tx`true`}
            AND ${contatoId ? tx`p.contato_id = ${contatoId}` : tx`true`}
            AND ${condicaoPedido(tx, escopo, 'p')}
-           AND ${curEm === null ? tx`true` : tx`(p.criado_em, p.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+           -- ⚠️ ::text::timestamptz — um ::timestamptz direto faz o driver virar Date e cortar µs.
+           AND ${cur === null ? tx`true` : tx`(p.criado_em, p.id) < (${cur.em}::text::timestamptz, ${cur.id}::uuid)`}
          ORDER BY p.criado_em DESC, p.id DESC LIMIT 31`
       })
       const temMais = linhas.length > 30
@@ -475,7 +475,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
           numeroExterno: l.numero_externo, criadoEm: l.criado_em,
         })),
         proximoCursor: temMais && ultimo
-          ? Buffer.from(`${ultimo.criado_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
+          ? Buffer.from(`${ultimo.criado_em_txt}§${ultimo.id}`).toString('base64url') : null,
       })
     },
   )

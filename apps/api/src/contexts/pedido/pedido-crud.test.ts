@@ -147,3 +147,55 @@ describe('POST /v1/pedidos/:id/reabrir', () => {
     expect(corpo.mensagem).toContain('cancelado')
   })
 })
+
+/**
+ * ⚠️ Cursor de /v1/pedidos guarda `criado_em` em MICROSSEGUNDOS (texto do banco). Com cursor em
+ * `toISOString()`, as linhas do mesmo milissegundo repetiam ou sumiam na virada de página.
+ */
+describe('GET /v1/pedidos — cursor preserva microssegundos', () => {
+  const percorrer = async (url: string): Promise<string[]> => {
+    const ids: string[] = []
+    let cursor: string | null = null
+    for (let pagina = 0; pagina < 10; pagina++) {
+      const sep = url.includes('?') ? '&' : '?'
+      const r = await chamar('GET', cursor ? `${url}${sep}cursor=${cursor}` : url)
+      expect(r.statusCode).toBe(200)
+      const corpo = r.json() as { itens: { id: string }[]; proximoCursor: string | null }
+      ids.push(...corpo.itens.map((i) => i.id))
+      cursor = corpo.proximoCursor
+      if (cursor === null) return ids
+    }
+    throw new Error('paginação não terminou em 10 páginas')
+  }
+
+  it('35 pedidos no mesmo milissegundo: nenhum id repete e nenhum falta', async () => {
+    const criados: string[] = []
+    for (let i = 0; i < 35; i++) {
+      const id = randomUUID()
+      criados.push(id)
+      // ⚠️ ::text::timestamptz — com ::timestamptz direto o driver serializa via Date e zera os µs.
+      const micro = String(123001 + i).padStart(6, '0')
+      await dono`INSERT INTO pedido (tenant_id, id, contato_id, estado, criado_em)
+                 VALUES (${T}, ${id}, ${CONTATO}, 'rascunho', ${`2026-10-20 15:00:00.${micro}+00`}::text::timestamptz)`
+    }
+    const ids = await percorrer('/v1/pedidos')
+    expect(ids.length).toBe(35)
+    expect(new Set(ids).size).toBe(35)
+    expect([...ids].sort()).toEqual([...criados].sort())
+  })
+
+  it('cursor malformado → 422 cursor.invalido', async () => {
+    const cursor = (bruto: string) => Buffer.from(bruto).toString('base64url')
+    const uuid = randomUUID()
+    for (const ruim of [
+      `nao-e-data§${uuid}`,
+      `2026-02-30 10:00:00.123001+00§${uuid}`,
+      `2026-10-20 15:00:00.123001+00§id-que-nao-e-uuid`,
+      '2026-10-20 15:00:00.123001+00',
+    ]) {
+      const r = await chamar('GET', `/v1/pedidos?cursor=${cursor(ruim)}`)
+      expect(r.statusCode, ruim).toBe(422)
+      expect((r.json() as { erro: string }).erro).toBe('cursor.invalido')
+    }
+  })
+})
