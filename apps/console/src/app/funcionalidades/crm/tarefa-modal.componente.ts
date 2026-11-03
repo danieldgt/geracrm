@@ -98,12 +98,13 @@ export class TarefaModalComponente {
     } catch { /* o select fica só com o padrão; criar a tarefa continua possível */ }
   }
 
-  protected readonly buscarContatos: CarregarOpcoes = async (_pagina, termo) => {
-    if (termo.trim().length < 2) return { itens: [], temMais: false }
+  protected readonly buscarContatos: CarregarOpcoes = async (_cursor, termo) => {
+    // A busca de contatos devolve os 20 melhores (sem cursor): uma página só.
+    if (termo.trim().length < 2) return { itens: [], proximoCursor: null }
     const r = await firstValueFrom(this.http.get<{ itens: { id: string; nome: string; telefone: string | null }[] }>(
       `/v1/contatos/busca${queryDeLista({ q: termo.trim() })}`))
     const itens: OpcaoPaginada[] = r.itens.map((c) => ({ valor: c.id, rotulo: c.nome, ...(c.telefone ? { dica: c.telefone } : {}) }))
-    return { itens, temMais: false }
+    return { itens, proximoCursor: null }
   }
 
   protected async salvar(ev: Event): Promise<void> {
