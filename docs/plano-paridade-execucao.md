@@ -27,7 +27,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | B2 modais do funil + ganho | 1 | ✅ | integrada com correções (0122 corrigida no lugar) |
 | A3 ficha 2+1 | 1 | ✅ | integrada (0115); feed lê a auditoria de `qualificarContato`; 'Enviar no WhatsApp' do arquivo fica para quando o inbox enviar mídia por id |
 | D5 configurações com abas + módulos | 2 | ✅ | integrada (0116); `exigirModulo('agenda')` e `ModulosServico` prontos |
-| H2 LGPD retenção/anonimização | 2 | 🔍 | revisão Opus REPROVOU (falsos positivos confirmados, ressurreição pelo ERP, bloqueio irremovível na retenção, mídia sem remoção); correção Opus em curso — automática desligada por padrão com prévia |
+| H2 LGPD retenção/anonimização | 2 | 🔍 | integrada com correções (0125 corrigida no lugar; automática desligada por padrão com prévia; worker de mídia); 2ª revisão Sonnet do seletor em curso |
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
 | B1 panorama do funil | 2 | ✅ | integrada (0131) |
 | C2 agenda (módulo) | 2 | ✅ | integrada (0117); pendente: trocar escopo por papéis pelo `escopo.ts` e montar `app-agenda-contato` na ficha |
