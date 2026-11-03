@@ -44,7 +44,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | G4 roteamento e rodízio | 3 | ⬜ | |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
 | H1 importador | 3 | ⬜ | |
-| H4 e2e no CI | 3 | 🔄 | Sonnet |
+| H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
 | E2 relatórios 1ª leva | 3 | ⬜ | |
 | E3 relatórios 2ª leva | 3 | ⬜ | |
 | L1 retrofit das telas restantes | 4 | ⬜ | |
