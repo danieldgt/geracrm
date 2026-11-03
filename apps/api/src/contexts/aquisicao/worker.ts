@@ -42,17 +42,24 @@ type FabricaAdaptador = (plataforma: string) => PortaPlataformaMidia
  *
  * ⚠️ Guardada por advisory lock: duas instâncias sincronizando em paralelo
  * gastariam cota em dobro e disputariam os mesmos UPSERTs.
+ *
+ * `somenteTenant` restringe a passada a um tenant (testes contra o banco
+ * compartilhado: sem ele a varredura conta as contas de TODOS os arquivos em
+ * paralelo). Ausente, o comportamento de produção é o mesmo de sempre.
  */
 export async function varrerSincronizacaoMidia(
   sql: Sql,
-  opcoes: { agora: Date; adaptadorPara?: FabricaAdaptador; env?: NodeJS.ProcessEnv } = { agora: new Date() },
+  opcoes: { agora: Date; adaptadorPara?: FabricaAdaptador; env?: NodeJS.ProcessEnv; somenteTenant?: string } = { agora: new Date() },
 ): Promise<ResumoVarreduraMidia> {
   const vazio: ResumoVarreduraMidia = {
     contas: 0, ignoradasPorSeremGerenciador: 0, chamadas: 0, porConta: [],
   }
 
+  // Trava por tenant quando restrito: a passada de um arquivo de teste não pode
+  // "tomar" a trava da passada de outro (mesmo padrão de `vigiarConexaoCanais`).
+  const chaveTrava = `midia_sincronizacao${opcoes.somenteTenant ? `:${opcoes.somenteTenant}` : ''}`
   const [trava] = await sql<{ ok: boolean }[]>`
-    SELECT pg_try_advisory_lock(hashtext('midia_sincronizacao')) AS ok`
+    SELECT pg_try_advisory_lock(hashtext(${chaveTrava})) AS ok`
   if (!trava?.ok) return vazio
 
   try {
@@ -75,6 +82,7 @@ export async function varrerSincronizacaoMidia(
     }[]>`
       SELECT tenant_id, id, plataforma, id_externo
         FROM midia_conta WHERE ativo
+         ${opcoes.somenteTenant ? sql`AND tenant_id = ${opcoes.somenteTenant}` : sql``}
        ORDER BY tenant_id, criado_em`
 
     let ignoradas = 0
@@ -99,7 +107,7 @@ export async function varrerSincronizacaoMidia(
 
     return { contas: porConta.length, ignoradasPorSeremGerenciador: ignoradas, chamadas, porConta }
   } finally {
-    await sql`SELECT pg_advisory_unlock(hashtext('midia_sincronizacao'))`
+    await sql`SELECT pg_advisory_unlock(hashtext(${chaveTrava}))`
   }
 }
 

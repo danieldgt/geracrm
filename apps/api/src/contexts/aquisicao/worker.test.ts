@@ -84,7 +84,7 @@ describe('Varredura de sincronização', () => {
     await dono`INSERT INTO midia_conta (tenant_id, id, plataforma, id_externo, nome)
                VALUES (${T}, ${CONTA}, 'google', '997-075-4431', 'Drezz')`
     const p = falsa()
-    const r = await varrerSincronizacaoMidia(sql, { agora: AGORA, adaptadorPara: () => p, env: ENV })
+    const r = await varrerSincronizacaoMidia(sql, { agora: AGORA, adaptadorPara: () => p, env: ENV, somenteTenant: T })
 
     expect(r.contas).toBe(1)
     expect(r.chamadas).toBe(4)                        // 3 estrutura + 1 métrica
@@ -101,7 +101,7 @@ describe('Varredura de sincronização', () => {
     await dono`INSERT INTO midia_conta (tenant_id, id, plataforma, id_externo, nome)
                VALUES (${T}, ${CONTA_MCC}, 'google', '123-276-0756', 'MCC por engano')`
     const p = falsa()
-    const r = await varrerSincronizacaoMidia(sql, { agora: AGORA, adaptadorPara: () => p, env: ENV })
+    const r = await varrerSincronizacaoMidia(sql, { agora: AGORA, adaptadorPara: () => p, env: ENV, somenteTenant: T })
 
     expect(r.ignoradasPorSeremGerenciador).toBe(1)
     expect(r.contas).toBe(0)
@@ -112,12 +112,12 @@ describe('Varredura de sincronização', () => {
   it('conta inativa não é sincronizada', async () => {
     await dono`INSERT INTO midia_conta (tenant_id, id, plataforma, id_externo, nome, ativo)
                VALUES (${T}, ${CONTA}, 'google', '997-075-4431', 'Drezz', false)`
-    const r = await varrerSincronizacaoMidia(sql, { agora: AGORA, adaptadorPara: () => falsa(), env: ENV })
+    const r = await varrerSincronizacaoMidia(sql, { agora: AGORA, adaptadorPara: () => falsa(), env: ENV, somenteTenant: T })
     expect(r.contas).toBe(0)
   })
 
   it('sem contas, a passada é inócua', async () => {
-    const r = await varrerSincronizacaoMidia(sql, { agora: AGORA, adaptadorPara: () => falsa(), env: ENV })
+    const r = await varrerSincronizacaoMidia(sql, { agora: AGORA, adaptadorPara: () => falsa(), env: ENV, somenteTenant: T })
     expect(r).toMatchObject({ contas: 0, chamadas: 0 })
   })
 })
