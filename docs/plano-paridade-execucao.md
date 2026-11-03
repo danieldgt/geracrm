@@ -16,7 +16,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | L0c lista (tabela, filtros, paginação) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
 | L0d ícones Lucide | 0 | ✅ | integrada; desenhos de memória — revisão aponta os suspeitos |
 | L0e docs e skill de formulários | 0 | ✅ | integrada; skill `geracrm-formularios` criada; docs ajustados ao contrato por cursor |
-| D3 escopo por papel + usuários + filiais | 0 | 🔄 | API pronta (0111); devolvida para trazer feat/paridade-am e escopar as rotas novas antes de integrar |
+| D3 escopo por papel + usuários + filiais | 0 | 🔄 | 2º merge de feat em curso (6 conflitos + escopar feed/arquivos/ganho/agregados); integrações de API seguradas até ela entrar |
 | G1 devolver ao agente / reatribuir / filtro | 0 | ✅ | integrada com correções (etapa `devolucao-da-equipe` no pipeline, guarda de concorrência, turno enfileirado) |
 | H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
 | A1 cadastro do contato | 1 | ✅ | integrada com correções (ERP preservado, 422 no telefone, origem validada); 0112 corrigida no lugar |
