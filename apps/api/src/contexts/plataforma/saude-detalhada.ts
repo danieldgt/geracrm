@@ -41,6 +41,7 @@ import type { NomeBatimento } from './batimento.js'
 export type LeituraFilas = NonNullable<EntradaSaude['filas']>
 export type LeituraTranscricao = NonNullable<EntradaSaude['transcricao']>
 export type LeituraParticoes = NonNullable<EntradaSaude['particoes']>
+export type LeituraEntrada = NonNullable<EntradaSaude['entrada']>
 /** `sem_pgvector`: há chave de embedding, mas o servidor não tem a coluna — a semântica não está ligada. */
 export type LeituraEmbeddings =
   | { readonly semantica: 'ligada'; readonly pendentes: number }
@@ -50,10 +51,12 @@ export type LeituraEmbeddings =
 export const CACHE_MEDICAO_MS = 10_000
 /** Teto de cada medição: a rota responde mesmo com o banco pendurado. */
 export const TETO_MEDICAO_MS = 2_500
-/** Conexões do pool de serviço da rota: uma por leitura (crítica, áudio, embeddings, partições). */
-export const CONEXOES_SAUDE = 4
+/** Conexões do pool de serviço da rota: uma por leitura (crítica, áudio, embeddings, partições, entrada). */
+export const CONEXOES_SAUDE = 5
 /** Janela de áudio pendente olhada pela saúde (o worker olha 7 dias; aqui só o que importa agora). */
 const JANELA_AUDIO_H = 6
+/** Janela da última mensagem de entrada (monitor "webhook parado"): cobre um fim de semana. */
+const JANELA_ENTRADA_H = 48
 
 export interface ConfiguracaoSaude {
   /** Workers obrigatórios (agente, retornos) agendados — exigem `DATABASE_ADMIN_URL` em `server.ts`. */
@@ -78,6 +81,8 @@ export interface DepsSaude {
   readonly lerEmbeddings: () => Promise<LeituraEmbeddings>
   /** Horizonte das partições mensais (só catálogo). Rejeita = sem leitura. */
   readonly lerParticoes: () => Promise<LeituraParticoes>
+  /** Última mensagem de entrada (máximo global, só o instante). Rejeita = sem leitura. */
+  readonly lerEntrada: () => Promise<LeituraEntrada>
   readonly idadeBatimento: (nome: NomeBatimento, agora: Date) => number | null
   readonly estadoDoLlm: () => EstadoDoLlm
   readonly configuracao: ConfiguracaoSaude
@@ -215,18 +220,34 @@ export function lerParticoesComo(dono: Sql, agora: () => Date): () => Promise<Le
   return () => lendo(dono, (tx) => lerHorizontes(tx, agora()))
 }
 
+/**
+ * Instante da última mensagem de ENTRADA de qualquer tenant — só `max(criado_em)`, nenhuma
+ * coluna de linha. Janela curta para podar partições; sem mensagem na janela = `null`.
+ */
+export function lerEntradaComo(dono: Sql, agora: () => Date, o: OpcoesLeitura = {}): () => Promise<LeituraEntrada> {
+  return () => lendo(dono, async (tx) => {
+    const desde = new Date(agora().getTime() - JANELA_ENTRADA_H * 3_600_000)
+    const recorte = o.somenteTenants ? tx`AND tenant_id IN ${tx(o.somenteTenants as string[])}` : tx``
+    const [r] = await tx<{ ultima: Date | null }[]>`
+      SELECT max(criado_em) AS ultima FROM mensagem
+       WHERE direcao = 'entrante' AND criado_em > ${desde} ${recorte}`
+    return { ultimaMensagemEntradaEm: r?.ultima ?? null }
+  })
+}
+
 const valor = <T>(r: PromiseSettledResult<T> | null): T | null => (r?.status === 'fulfilled' ? r.value : null)
 
 /** Fotografia → veredito. Nunca rejeita: o que não deu para medir vira `null` e motivo. */
 export async function medirSaude(d: DepsSaude): Promise<SaudeDetalhada> {
   const cfg = d.configuracao
   const teto = <T>(p: () => Promise<T>) => comTeto(p(), TETO_MEDICAO_MS)
-  const [ping, filas, audio, emb, part] = await Promise.allSettled([
+  const [ping, filas, audio, emb, part, ent] = await Promise.allSettled([
     teto(d.pingBanco),
     teto(d.lerFilas),
     cfg.workers && cfg.transcricao ? teto(d.lerTranscricao) : Promise.resolve(null),
     cfg.workers && cfg.embeddingModelo !== null ? teto(d.lerEmbeddings) : Promise.resolve(null),
     teto(d.lerParticoes),
+    teto(d.lerEntrada),
   ])
   const agora = d.agora()
   const llm = d.estadoDoLlm()
@@ -249,6 +270,7 @@ export async function medirSaude(d: DepsSaude): Promise<SaudeDetalhada> {
     transcricao: valor(audio),
     embeddings: leituraEmb?.semantica === 'ligada' ? { pendentes: leituraEmb.pendentes } : null,
     particoes: valor(part),
+    entrada: valor(ent),
     llm: {
       situacao: llm.situacao,
       reservaRestanteSeg: llm.situacao === 'reserva' && llm.reservaAteEm ? seg(llm.reservaAteEm.getTime() - agora.getTime()) : null,

@@ -135,6 +135,13 @@ export interface EntradaSaude {
    * schema, não dado de tenant. null = sem leitura.
    */
   readonly particoes: readonly HorizonteParticao[] | null
+  /**
+   * Última mensagem de ENTRADA já recebida, o MÁXIMO GLOBAL entre todos os tenants
+   * (só um instante — sem id, sem nome, sem contagem por cliente: a rota é pública).
+   * Alimenta o monitor externo ("webhook parado"). Informativo: não gera motivo.
+   * Ausente/null = sem leitura.
+   */
+  readonly entrada?: { readonly ultimaMensagemEntradaEm: Date | null } | null
   readonly llm: {
     readonly situacao: 'principal' | 'reserva'
     /** Segundos até a reserva expirar; null = no principal. */
@@ -249,6 +256,11 @@ export interface SaudeDetalhada {
       readonly menorMesesAFrente: number | null
       readonly limiteMeses: number
     }
+    /**
+     * Informativo (nunca vira motivo): quando chegou a última mensagem de entrada, máximo
+     * global em ISO-8601. `lido:false` = sem leitura (o monitor não alerta). Sem dado de tenant.
+     */
+    readonly entrada: Base & { readonly lido: boolean; readonly ultimaMensagemEntradaEm: string | null }
   }
 }
 
@@ -372,7 +384,13 @@ export function avaliarSaude(e: EntradaSaude, lim: LimitesSaude = LIMITES_SAUDE_
     ...base(motivosParticoes), tabelas, menorMesesAFrente: menor, limiteMeses: lim.particoesMinMeses,
   }
 
-  const componentes = { processo, banco, workerAgente, filaAgente, llm, transcricao, embeddings, retornos, particoes }
+  const entrada = {
+    ...base([]),
+    lido: Boolean(e.entrada),
+    ultimaMensagemEntradaEm: e.entrada?.ultimaMensagemEntradaEm ? new Date(e.entrada.ultimaMensagemEntradaEm).toISOString() : null,
+  }
+
+  const componentes = { processo, banco, workerAgente, filaAgente, llm, transcricao, embeddings, retornos, particoes, entrada }
   const todos: readonly Base[] = Object.values(componentes)
   // Sem repetição: "filas_sem_leitura" aparece em dois componentes, mas é um problema só.
   const motivos = [...new Set(todos.flatMap((c) => c.motivos))]

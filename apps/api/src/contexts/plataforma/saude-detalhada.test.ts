@@ -6,7 +6,7 @@ import { criarApp } from '../../app.js'
 import { encerrarBanco, sql } from '../../db/index.js'
 import { rotasSaudeDetalhada } from './rotas-saude-detalhada.js'
 import {
-  lerFilasComo, lerTranscricaoComo, lerEmbeddingsComo, lerParticoesComo, memorizar, comTeto, medirSaude,
+  lerFilasComo, lerTranscricaoComo, lerEmbeddingsComo, lerParticoesComo, lerEntradaComo, memorizar, comTeto, medirSaude,
   type DepsSaude, type LeituraFilas,
 } from './saude-detalhada.js'
 import { batimento, idadeDoBatimentoSeg } from './batimento.js'
@@ -46,6 +46,7 @@ const FALSO: Partial<DepsSaude> = {
   lerTranscricao: async () => ({ pendentes: 0, maisAntigaHaSeg: null }),
   lerEmbeddings: async () => ({ semantica: 'ligada', pendentes: 0 }),
   lerParticoes: async () => [{ tabela: 'mensagem', mesesAFrente: 12 }, { tabela: 'venda', mesesAFrente: 24 }],
+  lerEntrada: async () => ({ ultimaMensagemEntradaEm: new Date('2026-11-02T14:00:00.000Z') }),
   idadeBatimento: () => 1,
   estadoDoLlm: () => ({ situacao: 'principal', reservaAteEm: null, falhasSeguidas: 0, modelosBloqueados: [] }),
   configuracao: { workers: true, transcricao: true, embeddingModelo: 'bge-m3' },
@@ -98,14 +99,14 @@ afterAll(async () => {
 })
 
 describe('GET /saude/detalhada — estados e código HTTP', () => {
-  it('dado tudo em dia, então 200 com status ok, sem cache e os nove componentes', async () => {
+  it('dado tudo em dia, então 200 com status ok, sem cache e os dez componentes', async () => {
     const r = await pedir(FALSO)
     expect(r.code).toBe(200)
     expect(r.cache).toBe('no-store')
     expect(r.corpo.status).toBe('ok')
     expect(r.corpo.motivos).toEqual([])
     expect(Object.keys(r.corpo.componentes)).toEqual(
-      ['processo', 'banco', 'workerAgente', 'filaAgente', 'llm', 'transcricao', 'embeddings', 'retornos', 'particoes'])
+      ['processo', 'banco', 'workerAgente', 'filaAgente', 'llm', 'transcricao', 'embeddings', 'retornos', 'particoes', 'entrada'])
     // O monitor externo procura exatamente esta palavra-chave.
     expect(r.texto).toContain('"status":"ok"')
   })
@@ -244,6 +245,51 @@ describe('Componente "particoes" — horizonte das partições mensais', () => {
   })
 })
 
+describe('Componente "entrada" — última mensagem de entrada para o monitor externo', () => {
+  const T_A = new Date(Date.now() - 20 * 60_000)
+  const T_B = new Date(Date.now() - 5 * 60_000)
+
+  it('dado entrada lida, então o corpo traz só o instante ISO e o status segue ok (informativo)', async () => {
+    const r = await pedir(FALSO)
+    expect(r.corpo.status).toBe('ok')
+    expect(r.corpo.componentes.entrada).toEqual({
+      estado: 'ok', motivos: [], lido: true, ultimaMensagemEntradaEm: '2026-11-02T14:00:00.000Z',
+    })
+  })
+
+  it('dado a leitura falhando, então lido:false, sem motivo novo e o erro não vaza', async () => {
+    const r = await pedir({ ...FALSO, lerEntrada: () => Promise.reject(new Error('boom senha=xyz')) })
+    expect(r.corpo.status).toBe('ok')
+    expect(r.corpo.componentes.entrada).toMatchObject({ lido: false, ultimaMensagemEntradaEm: null })
+    expect(r.texto).not.toContain('xyz')
+  })
+
+  it('dado mensagens de DOIS tenants, então o máximo global sai sem id nem nome de tenant e saliente não conta', async () => {
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, criado_em) VALUES
+      (${A}, ${'c8a50000-8888-4000-8000-00000000000a'}, ${conversa(A)}, 'entrante', 'texto', ${T_A}),
+      (${B}, ${'c8a50000-8888-4000-8000-00000000000b'}, ${conversa(B)}, 'entrante', 'texto', ${T_B}),
+      (${A}, ${'c8a50000-8888-4000-8000-00000000000c'}, ${conversa(A)}, 'saliente', 'texto', now())`
+    try {
+      // Restringido aos dois tenants do teste (o banco da suíte é compartilhado entre arquivos).
+      const l = await lerEntradaComo(dono as never, () => new Date(), { somenteTenants: [A, B] })()
+      expect(l.ultimaMensagemEntradaEm?.getTime()).toBe(T_B.getTime())
+      // E pela rota: nenhum dos ids/nomes do teste no corpo público.
+      const app = await criarApp()
+      try {
+        const r = await app.inject({ method: 'GET', url: '/saude/detalhada' })
+        const e = (r.json() as SaudeDetalhada).componentes.entrada
+        expect(e.lido).toBe(true)
+        expect(Object.keys(e).sort()).toEqual(['estado', 'lido', 'motivos', 'ultimaMensagemEntradaEm'])
+        for (const t of [A, B, PV_A, PV_B, canal(A), contato(A), conversa(A)]) expect(r.body).not.toContain(t)
+        expect(r.body).not.toContain(CONTATO_NOME)
+        expect(r.body).not.toMatch(UUID)
+      } finally { await app.close() }
+    } finally {
+      await dono`DELETE FROM mensagem WHERE tenant_id IN (${A}, ${B})`
+    }
+  })
+})
+
 describe('Leituras independentes e semântica de fato ligada', () => {
   it('dado a leitura de áudio pendurada, então a fila crítica segue lida e só a transcrição acusa', async () => {
     const s = await medirSaude({ ...(FALSO as DepsSaude), agora: () => new Date(), lerTranscricao: () => new Promise(() => {}) })
@@ -288,7 +334,7 @@ describe('Resposta pública — sem id, sem segredo, sem dado pessoal', () => {
       // Só números, booleanos, null e códigos curtos — nenhum texto livre.
       const textos: string[] = []
       JSON.stringify(corpo, (_k, v: unknown) => { if (typeof v === 'string') textos.push(v); return v })
-      for (const t of textos) expect(t).toMatch(/^[a-z_]+$/)
+      for (const t of textos) expect(t).toMatch(/^([a-z_]+|\d{4}-\d{2}-\d{2}T[\d:.]+Z)$/)
     } finally { await app.close() }
   })
 
