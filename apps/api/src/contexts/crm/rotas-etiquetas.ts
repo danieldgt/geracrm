@@ -4,7 +4,7 @@ import { exigirTenant } from '../../plugins/tenant.js'
 import { exigirPapel } from '../plataforma/papel.js'
 import { exigirNoEscopo } from '../plataforma/escopo.js'
 import { auditar } from '../plataforma/auditoria.js'
-import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { atorDaRequisicao } from '../atendimento/rotas-fila.js'
 
 const PAGINA = 50
 const MAX_ETIQUETAS_POR_CONTATO = 50
@@ -249,7 +249,7 @@ export async function rotasEtiquetas(app: FastifyInstance): Promise<void> {
           const partes = [add.length ? `adicionou ${add.join(', ')}` : '', rem.length ? `removeu ${rem.join(', ')}` : ''].filter(Boolean)
           const resumo = `Etiquetas: ${partes.join('; ')}`
           await auditar(tx, {
-            atorId: await garantirUsuarioId(tx, req), acao: 'contato.etiquetas_alteradas', entidade: 'contato',
+            atorId: await atorDaRequisicao(tx, req), acao: 'contato.etiquetas_alteradas', entidade: 'contato',
             entidadeId: req.params.id, dados: { resumo, adicionadas: add, removidas: rem },
           })
         }

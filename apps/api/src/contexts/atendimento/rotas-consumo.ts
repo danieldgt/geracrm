@@ -5,7 +5,7 @@ import { exigirTenant } from '../../plugins/tenant.js'
 import { exigirPapel } from '../plataforma/papel.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
-import { garantirUsuarioId } from './rotas-fila.js'
+import { atorDaRequisicao, garantirUsuarioId } from './rotas-fila.js'
 import {
   CATEGORIAS_WHATSAPP, CAMBIO_PADRAO_MILESIMOS, custoTranscricao, custoWhatsapp,
   limitesDoMes, mesValido, precosEfetivos,
@@ -39,7 +39,7 @@ const corpoPrecos = z.object({
 
 /** `exigirPapel` lê o papel pela linha de `usuario`; garantir a linha antes evita 403 a quem abriu a tela direto. */
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
-  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+  if (req.tenantId && !req.atorStaff) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 
 function invalido(reply: FastifyReply, e: z.ZodError): FastifyReply {
@@ -80,7 +80,7 @@ export async function rotasConsumo(app: FastifyInstance): Promise<void> {
       if (!p.success) return invalido(reply, p.error)
       const { precos, cambioUsdBrlMilesimos } = p.data
       await req.comTenant(async (tx) => {
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         const antes = await tx<{ categoria: string; centavos: number }[]>`
           SELECT categoria, centavos_por_mensagem AS centavos FROM preco_whatsapp WHERE tenant_id = tenant_atual()`
         for (const categoria of CATEGORIAS_WHATSAPP) {

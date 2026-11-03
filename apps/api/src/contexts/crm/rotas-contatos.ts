@@ -9,6 +9,7 @@ import { parseCsvContatos } from './importar-csv.js'
 import { condicaoContato, contatoNoEscopo, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
 import { validarCadastro } from './contato-cadastro.js'
 import { gravarDocumentoEEndereco } from './contato-gravacao.js'
+import { exigirPapel } from '../plataforma/papel.js'
 import { condicaoFiltros, contextoDosFiltros, lerFiltros } from './contatos-filtros.js'
 
 /** Teto de linhas por importação — evita engolir um arquivo gigante numa tx. */
@@ -161,13 +162,18 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       const d = v.dados
       const tel = normalizarTelefone(d.telefone)!
 
-      let r: { id: string; novo: boolean } | { erro: 'origem' }
+      let r: { id: string; novo: boolean } | { erro: 'origem' | 'ja_existe_fora' }
       try {
         r = await req.comTenant(async (tx) => {
         const [existe] = await tx<{ contato_id: string }[]>`
           SELECT contato_id FROM contato_telefone
            WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal
            LIMIT 1`
+        // ⚠️ Escopo (D3): o existente FORA do escopo não devolve o id (seria a
+        //    porta para a ficha alheia) — 409 sem id.
+        if (existe && !(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), existe.contato_id))) {
+          return { erro: 'ja_existe_fora' as const }
+        }
         if (existe) return { id: existe.contato_id, novo: false }
         if (d.origemId && !(await origemValida(tx, d.origemId, null))) return { erro: 'origem' as const }
 
@@ -188,7 +194,12 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         if (ehTelefonePrincipalDuplicado(err)) return respostaTelefoneDuplicado(reply)
         throw err
       }
-      if ('erro' in r) return respostaOrigemInvalida(reply)
+      if ('erro' in r) {
+        if (r.erro === 'ja_existe_fora') {
+          return reply.code(409).send({ erro: 'contato.ja_existe', mensagem: 'Já existe um contato com este telefone. Peça ao gestor para atribuí-lo a você.' })
+        }
+        return respostaOrigemInvalida(reply)
+      }
 
       return reply.code(r.novo ? 201 : 200).send({ id: r.id, nome: d.nome, novo: r.novo })
     },
@@ -272,7 +283,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Body: { csv?: string } }>(
     '/v1/contatos/importar',
-    { preHandler: exigirTenant },
+    // ⚠️ Importar em massa é ação de GESTÃO (revisão D3, M5): o vendedor não
+    //    despeja base no tenant.
+    { preHandler: [exigirTenant, exigirPapel('gestor', 'supervisor')] },
     async (req, reply) => {
       const csv = req.body?.csv
       if (typeof csv !== 'string' || !csv.trim()) {

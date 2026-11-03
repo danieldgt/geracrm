@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { condicaoContato, contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
-import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { atorDaRequisicao } from '../atendimento/rotas-fila.js'
 import { qualificarContato } from './qualificacao.js'
 
 const PAGINA = 50 // cards por página de coluna (kanban paginado por coluna, ADR)
@@ -121,7 +121,7 @@ export async function rotasLeads(app: FastifyInstance): Promise<void> {
       const r = await req.comTenant(async (tx) => {
         // ⚠️ Fora do escopo (D3) = 404, como inexistente.
         if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), req.params.contatoId))) return { tipo: 'nao_encontrado' as const }
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         return qualificarContato(tx, { contatoId: req.params.contatoId, estado, atorId, atorStaff: req.atorStaff === true })
       })
       if (r.tipo === 'nao_encontrado') return reply.code(404).send({ erro: 'contato.nao_encontrado' })

@@ -6,7 +6,7 @@ import {
 import { exigirTenant } from '../../../plugins/tenant.js'
 import { exigirPapel } from '../../plataforma/papel.js'
 import { auditar } from '../../plataforma/auditoria.js'
-import { garantirUsuarioId } from '../rotas-fila.js'
+import { atorDaRequisicao } from '../rotas-fila.js'
 import { proximaAbertura, situacaoDoExpediente, type HorarioAtendimento } from '../expediente.js'
 import { liberarAtivas } from '../qualidade-numero.js'
 
@@ -152,7 +152,7 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
           INSERT INTO canal_configuracao (tenant_id, canal_id, feriados)
           VALUES (tenant_atual(), ${req.params.id}, ${JSON.stringify(feriados)}::text::jsonb)
           ON CONFLICT (tenant_id, canal_id) DO UPDATE SET feriados = EXCLUDED.feriados`
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         await auditar(tx, {
           atorId, atorStaff: req.atorStaff === true, acao: 'agente.ativas_alteradas', entidade: 'canal_conectado',
           entidadeId: req.params.id,
@@ -218,7 +218,7 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return 'nao_encontrado' as const
         if (!(await liberarAtivas(tx, req.params.id, new Date()))) return 'nao_suspensa' as const
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         await auditar(tx, {
           atorId, atorStaff: req.atorStaff === true, acao: 'agente.ativas_liberadas', entidade: 'canal_conectado',
           entidadeId: req.params.id, dados: { motivoDaSuspensao: c.motivo },

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { classificarRfv } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import type { Sql } from '../../db/index.js'
+import { condicaoContato, escopoDaRequisicao } from '../plataforma/escopo.js'
 
 const PAGINA = 50 // cards por página de coluna (kanban paginado por coluna, ADR)
 
@@ -45,15 +46,17 @@ function predicado(tx: Sql, chave: Chave) {
 export async function rotasCrmAvancado(app: FastifyInstance): Promise<void> {
   /** As colunas + contagem de cada balde (base ativa). */
   app.get('/v1/crm-avancado/colunas', { preHandler: exigirTenant }, async (req, reply) => {
-    const [c] = await req.comTenant((tx) => tx<Record<Chave, number>[]>`
-      SELECT count(*) FILTER (WHERE qualificado IS FALSE) ::int AS descartados,
-             count(*) FILTER (WHERE representante AND qualificado IS DISTINCT FROM FALSE) ::int AS representantes,
-             count(*) FILTER (WHERE qtd_vendas = 0 AND NOT representante AND qualificado IS DISTINCT FROM FALSE) ::int AS leads,
-             count(*) FILTER (WHERE qtd_vendas = 1 AND NOT representante AND qualificado IS DISTINCT FROM FALSE) ::int AS p1,
-             count(*) FILTER (WHERE qtd_vendas = 2 AND NOT representante AND qualificado IS DISTINCT FROM FALSE) ::int AS p2,
-             count(*) FILTER (WHERE qtd_vendas >= 3 AND NOT representante AND qualificado IS DISTINCT FROM FALSE) ::int AS p3
-        FROM contato
-       WHERE tenant_id = tenant_atual() AND ativo`)
+    // ⚠️ Escopo (D3): o total de cada coluna conta o que a coluna MOSTRA.
+    const [c] = await req.comTenant(async (tx) => tx<Record<Chave, number>[]>`
+      SELECT count(*) FILTER (WHERE c.qualificado IS FALSE) ::int AS descartados,
+             count(*) FILTER (WHERE c.representante AND c.qualificado IS DISTINCT FROM FALSE) ::int AS representantes,
+             count(*) FILTER (WHERE c.qtd_vendas = 0 AND NOT c.representante AND c.qualificado IS DISTINCT FROM FALSE) ::int AS leads,
+             count(*) FILTER (WHERE c.qtd_vendas = 1 AND NOT c.representante AND c.qualificado IS DISTINCT FROM FALSE) ::int AS p1,
+             count(*) FILTER (WHERE c.qtd_vendas = 2 AND NOT c.representante AND c.qualificado IS DISTINCT FROM FALSE) ::int AS p2,
+             count(*) FILTER (WHERE c.qtd_vendas >= 3 AND NOT c.representante AND c.qualificado IS DISTINCT FROM FALSE) ::int AS p3
+        FROM contato c
+       WHERE c.tenant_id = tenant_atual() AND c.ativo
+         AND ${condicaoContato(tx, await escopoDaRequisicao(tx, req), 'c')}`)
     return reply.send({ colunas: COLUNAS.map((col) => ({ ...col, total: c ? c[col.chave] : 0 })) })
   })
 
@@ -73,7 +76,7 @@ export async function rotasCrmAvancado(app: FastifyInstance): Promise<void> {
         curOrd = o; curId = id
       }
 
-      const linhas = await req.comTenant((tx) => tx<{
+      const linhas = await req.comTenant(async (tx) => tx<{
         id: string; nome: string; qtd_vendas: number; total_vendas_centavos: string
         ultima_venda_em: Date | null; ultimo_toque_em: Date | null; representante: boolean
         ordem: Date; telefone: string | null; uf: string | null; responsavel: string | null
@@ -99,6 +102,7 @@ export async function rotasCrmAvancado(app: FastifyInstance): Promise<void> {
           FROM contato c
           LEFT JOIN metricas_contato mc ON mc.contato_id = c.id
          WHERE c.tenant_id = tenant_atual() AND c.ativo AND ${predicado(tx, chave)}
+           AND ${condicaoContato(tx, await escopoDaRequisicao(tx, req), 'c')}
            AND ${curOrd === null ? tx`true`
                 : tx`(coalesce(c.ultima_venda_em, c.criado_em), c.id) < (${curOrd}::timestamptz, ${curId}::uuid)`}
          ORDER BY coalesce(c.ultima_venda_em, c.criado_em) DESC, c.id DESC

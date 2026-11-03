@@ -63,7 +63,7 @@ const corpoConfig = z.object({
 const corpoAvaliar = z.object({ conversaId: z.string().regex(UUID), decisaoId: z.string().regex(UUID).optional() }).strict()
 
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
-  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+  if (req.tenantId && !req.atorStaff) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 
 function invalido(reply: FastifyReply, e: z.ZodError): FastifyReply {

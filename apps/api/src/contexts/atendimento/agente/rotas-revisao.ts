@@ -26,7 +26,7 @@ import { celulaCsv } from './rotas-qualidade.js'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
-  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+  if (req.tenantId && !req.atorStaff) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 
 const GESTOR = [exigirTenant, garantirUsuario, exigirPapel('admin', 'gestor')]

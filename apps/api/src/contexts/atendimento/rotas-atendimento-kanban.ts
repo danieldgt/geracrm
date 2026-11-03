@@ -4,7 +4,7 @@ import type { Sql } from '../../db/index.js'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import { fragmentoForaDaSimulacao, fragmentoNaFila } from './sla-handoff.js'
-import { condicaoConversa, escopoDaRequisicao } from '../plataforma/escopo.js'
+import { condicaoConversa, conversaNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 
 /**
  * Kanban de ATENDIMENTOS com etapas configuráveis por empresa (a visão do gestor).
@@ -200,6 +200,8 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
           SELECT conversa_id, estado, versao::text, etapa_id FROM atendimento
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!a) return { erro: 'nao_encontrado' as const }
+        // ⚠️ Escopo (D3): card de conversa fora do escopo = inexistente.
+        if (!(await conversaNoEscopo(tx, await escopoDaRequisicao(tx, req), a.conversa_id))) return { erro: 'nao_encontrado' as const }
         if (versao !== undefined && Number(a.versao) !== versao) return { erro: 'conflito' as const }
         const [etapa] = await tx<{ tipo: string }[]>`
           SELECT tipo FROM atendimento_etapa WHERE tenant_id = tenant_atual() AND id = ${etapaId} AND ativo`

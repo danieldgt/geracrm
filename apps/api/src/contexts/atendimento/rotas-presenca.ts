@@ -26,12 +26,16 @@ export async function rotasPresenca(app: FastifyInstance): Promise<void> {
         const [c] = await tx`SELECT 1 FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
         if (!c) return null
 
-        const usuarioId = await garantirUsuarioId(tx, req)
+        // ⚠️ Sessão de staff não tem `usuario` no cliente: vê quem está aqui, mas
+        //    não bate coração (não aparece para a equipe do cliente).
+        const usuarioId = req.atorStaff ? null : await garantirUsuarioId(tx, req)
         // Bate o próprio coração (upsert).
-        await tx`
-          INSERT INTO presenca_conversa (tenant_id, conversa_id, usuario_id, visto_em)
-          VALUES (tenant_atual(), ${conversaId}, ${usuarioId}, now())
-          ON CONFLICT (tenant_id, conversa_id, usuario_id) DO UPDATE SET visto_em = now()`
+        if (usuarioId) {
+          await tx`
+            INSERT INTO presenca_conversa (tenant_id, conversa_id, usuario_id, visto_em)
+            VALUES (tenant_atual(), ${conversaId}, ${usuarioId}, now())
+            ON CONFLICT (tenant_id, conversa_id, usuario_id) DO UPDATE SET visto_em = now()`
+        }
 
         // Limpeza oportunista: tira os expirados desta conversa (tabela minúscula).
         await tx`
@@ -45,7 +49,7 @@ export async function rotasPresenca(app: FastifyInstance): Promise<void> {
             FROM presenca_conversa p
             JOIN usuario u ON u.tenant_id = p.tenant_id AND u.id = p.usuario_id
            WHERE p.tenant_id = tenant_atual() AND p.conversa_id = ${conversaId}
-             AND p.usuario_id <> ${usuarioId}
+             AND p.usuario_id IS DISTINCT FROM ${usuarioId}::uuid
              AND p.visto_em > now() - make_interval(secs => ${TTL_SEGUNDOS})
            ORDER BY u.nome`
         return { outros }
@@ -61,7 +65,7 @@ export async function rotasPresenca(app: FastifyInstance): Promise<void> {
     { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       const conversaId = req.params.id
-      await req.comTenant(async (tx) => {
+      if (!req.atorStaff) await req.comTenant(async (tx) => {
         const usuarioId = await garantirUsuarioId(tx, req)
         await tx`
           DELETE FROM presenca_conversa

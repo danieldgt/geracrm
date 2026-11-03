@@ -28,6 +28,10 @@ beforeAll(async () => {
     await tx`INSERT INTO tenant (id, nome, plano_id, perfil_vertical_id) VALUES (${T}, 'Loja Imp', ${PLANO}, ${PV}) ON CONFLICT DO NOTHING`
     await tx`INSERT INTO perfil_vertical (tenant_id, id, modelo_id, nome) VALUES (${T}, ${PV}, ${MODELO}, 'Varejo') ON CONFLICT DO NOTHING`
   })
+  // ⚠️ Importar exige gestão (revisão D3, M5): quem chama pelo header de dev existe —
+  //    sem admin no tenant, o modo fundador o faz admin.
+  await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
+             VALUES (${T}, gen_random_uuid(), ${`dev-${T}`}, 'Quem importa', 'importa@t.local') ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
   app = await criarApp(); await app.ready()
 })
 
@@ -41,6 +45,7 @@ afterAll(async () => {
   await dono`DELETE FROM contato_documento WHERE tenant_id = ${T}`
   await dono`DELETE FROM contato_telefone WHERE tenant_id = ${T}`
   await dono`DELETE FROM contato WHERE tenant_id = ${T}`
+  await dono`DELETE FROM usuario WHERE tenant_id = ${T}`
   await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${T}`
   await dono`DELETE FROM perfil_vertical WHERE tenant_id = ${T}`
   await dono`DELETE FROM tenant WHERE id = ${T}`

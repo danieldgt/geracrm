@@ -4,6 +4,7 @@ import { atendePapel, exigirPapel, papeisDoUsuario } from './papel.js'
 import { fusoValido } from './fuso.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { auditar } from './auditoria.js'
+import { naoEhLinhaDeStaff } from '../identidade/linha-staff.js'
 import { listarModulos, moduloAtivo } from './modulos.js'
 import { ehModulo, validarEmpresa, type CorpoEmpresa, type EmpresaContatoLgpd } from '@geracrm/shared'
 import type { Sql } from '../../db/index.js'
@@ -33,7 +34,7 @@ async function lerEmpresa(tx: Sql): Promise<EmpresaLida | null> {
 
 /** A linha de `usuario` nasce no batimento; garantir antes de `exigirPapel` (mesmo padrão das rotas do agente). */
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
-  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+  if (req.tenantId && !req.atorStaff) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 
 /**
@@ -140,7 +141,7 @@ export async function rotasConfig(app: FastifyInstance): Promise<void> {
         FROM usuario u
         LEFT JOIN usuario_filial uf ON uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id
         LEFT JOIN filial f ON f.tenant_id = uf.tenant_id AND f.id = uf.filial_id
-       WHERE u.tenant_id = tenant_atual()
+       WHERE u.tenant_id = tenant_atual() AND ${naoEhLinhaDeStaff(tx, 'u')}
        GROUP BY u.id, u.nome, u.email, u.ativo, u.ausente, u.visto_em
        ORDER BY u.ativo DESC, u.nome ASC
        LIMIT 200`)

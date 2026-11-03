@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 import { PAGINA, lerCursor, paginar } from './cursor-criado-em.js'
 
 /**
@@ -143,7 +144,8 @@ export async function rotasSequencia(app: FastifyInstance): Promise<void> {
         const [seqExiste] = await tx<{ id: string }[]>`SELECT id FROM sequencia WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!seqExiste) return { erro: 'sequencia' as const }
         const [contExiste] = await tx<{ id: string }[]>`SELECT id FROM contato WHERE tenant_id = tenant_atual() AND id = ${contatoId}`
-        if (!contExiste) return { erro: 'contato' as const }
+        // ⚠️ Escopo (D3): contato fora do escopo = o MESMO 422 de inexistente.
+        if (!contExiste || !(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), contatoId))) return { erro: 'contato' as const }
         const passos = await tx<{ offset_dias: number; titulo: string; descricao: string | null }[]>`
           SELECT offset_dias, titulo, descricao FROM sequencia_passo
            WHERE tenant_id = tenant_atual() AND sequencia_id = ${req.params.id} ORDER BY seq ASC`

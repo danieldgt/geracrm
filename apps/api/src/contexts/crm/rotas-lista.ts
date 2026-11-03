@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
-import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { atorDaRequisicao, garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { condicaoContato, contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 
 const PAGINA = 30
 
@@ -65,11 +66,14 @@ export async function rotasLista(app: FastifyInstance): Promise<void> {
         if (!nome || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curNome = nome; curId = id
       }
-      const linhas = await req.comTenant((tx) => tx<{ id: string; nome: string }[]>`
+      // ⚠️ Escopo (D3): a lista é do tenant, mas os MEMBROS listados são só os
+      //    contatos que quem pede enxerga.
+      const linhas = await req.comTenant(async (tx) => tx<{ id: string; nome: string }[]>`
         SELECT c.id, c.nome
           FROM lista_membro m
           JOIN contato c ON c.tenant_id = m.tenant_id AND c.id = m.contato_id
          WHERE m.tenant_id = tenant_atual() AND m.lista_id = ${req.params.id}
+           AND ${condicaoContato(tx, await escopoDaRequisicao(tx, req), 'c')}
            AND ${curNome === null ? tx`true` : tx`(c.nome, c.id) > (${curNome}, ${curId}::uuid)`}
          ORDER BY c.nome ASC, c.id ASC LIMIT ${PAGINA + 1}`)
       const temMais = linhas.length > PAGINA
@@ -89,12 +93,16 @@ export async function rotasLista(app: FastifyInstance): Promise<void> {
       const contatoId = req.body?.contatoId
       if (!contatoId) return reply.code(422).send({ erro: 'lista.contato_obrigatorio' })
       try {
-        await req.comTenant(async (tx) => {
-          const eu = await garantirUsuarioId(tx, req)
+        const ok = await req.comTenant(async (tx) => {
+          // ⚠️ Escopo (D3): contato fora do escopo = o MESMO 422 de inexistente.
+          if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), contatoId))) return false
+          const eu = await atorDaRequisicao(tx, req)
           await tx`INSERT INTO lista_membro (tenant_id, lista_id, contato_id, adicionado_por)
                    VALUES (tenant_atual(), ${req.params.id}, ${contatoId}, ${eu})
                    ON CONFLICT (tenant_id, lista_id, contato_id) DO NOTHING`
+          return true
         })
+        if (!ok) return reply.code(422).send({ erro: 'lista.contato_invalido' })
         return reply.code(201).send({ ok: true })
       } catch (e) {
         // FK: lista ou contato inexistente neste tenant.

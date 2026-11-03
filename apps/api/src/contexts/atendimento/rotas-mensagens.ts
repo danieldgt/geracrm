@@ -3,11 +3,11 @@ import type { FastifyInstance } from 'fastify'
 import { enviarMensagemEntrada, criarAcaoEntrada } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../../db/index.js'
 import { exigirTenant } from '../../plugins/tenant.js'
-import { exigirNoEscopo } from '../plataforma/escopo.js'
+import { conversaNoEscopo, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
 import { decifrar } from '../integracao/cofre.js'
 import { criarCanal } from './canais/fabrica.js'
 import { enviarPeloGateway, type ContextoEnvio } from './canais/gateway.js'
-import { garantirUsuarioId } from './rotas-fila.js'
+import { atorDaRequisicao, garantirUsuarioId } from './rotas-fila.js'
 import { operadorAusente, RECUSA_OPERADOR_AUSENTE } from './presenca-operador.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { midiaHabilitada, subirMidia, urlAssinada } from './midia/armazenamento.js'
@@ -291,7 +291,7 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
         await tx`UPDATE mensagem SET apagada_em = now(), apagada_para_todos = ${recall}
                   WHERE tenant_id = tenant_atual() AND id = ${mid}`
         await eventoConversa(tx, conversaId)
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         await auditar(tx, { atorId, acao: 'mensagem.apagada', entidade: 'mensagem', entidadeId: mid, dados: { paraTodos: recall } })
       })
       return reply.send({ ok: true, paraTodos: recall })
@@ -323,7 +323,7 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
         await tx`UPDATE mensagem SET conteudo = ${JSON.stringify({ texto })}::text::jsonb, editada_em = now()
                   WHERE tenant_id = tenant_atual() AND id = ${mid}`
         await eventoConversa(tx, conversaId)
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         await auditar(tx, { atorId, acao: 'mensagem.editada', entidade: 'mensagem', entidadeId: mid })
       })
       return reply.send({ ok: true })
@@ -382,6 +382,8 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
           SELECT conversa_id, conteudo FROM mensagem
            WHERE tenant_id = tenant_atual() AND id = ${mid} AND tipo = 'acao'`
         if (!m) return null
+        // ⚠️ Escopo (D3): mensagem de conversa fora do escopo = inexistente.
+        if (!(await conversaNoEscopo(tx, await escopoDaRequisicao(tx, req), m.conversa_id))) return null
         if (m.conteudo.estado && m.conteudo.estado !== 'pendente') return { erro: 'ja_resolvida' as const }
         const opcao = (m.conteudo.opcoes ?? []).find((o) => o.id === opcaoId)
         if (!opcao) return { erro: 'opcao_invalida' as const }

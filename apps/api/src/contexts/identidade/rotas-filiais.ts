@@ -1,16 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
-import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { atorDaRequisicao, garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { auditar } from '../plataforma/auditoria.js'
-import { exigirPapel } from '../plataforma/papel.js'
+import { exigirAdminAtribuido } from '../plataforma/papel.js'
 
 /**
  * CADASTRO DE FILIAIS (raia D3, #98) — só ADMIN.
  *
  * A filial é a unidade do escopo de gestor/supervisor (`escopo.ts`): quem tem
  * papel numa filial vê os clientes dos vendedores dela. Desativar uma filial
- * (`ativa = false`) NÃO apaga vínculo nem muda escopo — é cadastro, a tela
+ * (`ativa = false`) NÃO apaga vínculo, mas o vínculo nela deixa de valer para
+ * papel e escopo (`papel.ts`/`escopo.ts`) enquanto estiver desativada; a tela
  * deixa de oferecê-la para novos vínculos.
  *
  * ⚠️ `tipo`: 'matriz' | 'filial'; no máximo UMA matriz por tenant (índice
@@ -46,11 +47,11 @@ const MATRIZ_DUPLICADA = { erro: 'filial.matriz_duplicada', mensagem: 'Já exist
 const texto = (v: string | null | undefined) => (v === undefined ? undefined : (v?.trim() || null))
 
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
-  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+  if (req.tenantId && !req.atorStaff) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 
 export async function rotasFiliais(app: FastifyInstance): Promise<void> {
-  const SO_ADMIN = { preHandler: [exigirTenant, garantirUsuario, exigirPapel('admin')] }
+  const SO_ADMIN = { preHandler: [exigirTenant, garantirUsuario, exigirAdminAtribuido()] }
 
   /** Lista por cursor `(nome, id)`, com quantos usuários têm papel em cada uma. */
   app.get<{ Querystring: { cursor?: string } }>('/v1/filiais', SO_ADMIN, async (req, reply) => {
@@ -91,7 +92,7 @@ export async function rotasFiliais(app: FastifyInstance): Promise<void> {
                  VALUES (tenant_atual(), ${id}, ${b.nome!.trim()}, ${texto(b.cidade) ?? null},
                          ${texto(b.uf)?.toUpperCase() ?? null}, ${b.tipo ?? 'filial'}, ${b.cor ?? null}, ${b.ativa ?? true})`
         await auditar(tx, {
-          atorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+          atorId: await atorDaRequisicao(tx, req), atorStaff: req.atorStaff ?? false,
           acao: 'filial.criada', entidade: 'filial', entidadeId: id, dados: { nome: b.nome!.trim(), tipo: b.tipo ?? 'filial' },
         })
       })
@@ -126,7 +127,7 @@ export async function rotasFiliais(app: FastifyInstance): Promise<void> {
            WHERE tenant_id = tenant_atual() AND id = ${id} RETURNING id`
         if (!r) return false
         await auditar(tx, {
-          atorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+          atorId: await atorDaRequisicao(tx, req), atorStaff: req.atorStaff ?? false,
           acao: 'filial.alterada', entidade: 'filial', entidadeId: id, dados: { campos: Object.keys(b) },
         })
         return true

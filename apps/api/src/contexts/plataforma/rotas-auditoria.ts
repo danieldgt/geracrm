@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import type { Sql } from '../../db/index.js'
+import { exigirPapel } from './papel.js'
 
 const PAGINA = 50
 const BUSCA_MAX = 80
@@ -124,7 +125,7 @@ export async function rotasAuditoria(app: FastifyInstance): Promise<void> {
       FROM auditoria a
       LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.ator_id`
 
-  app.get('/v1/auditoria', { preHandler: exigirTenant }, async (req, reply) => {
+  app.get('/v1/auditoria', { preHandler: [exigirTenant, exigirPapel('gestor')] }, async (req, reply) => {
     const q = (req.query ?? {}) as Record<string, unknown>
 
     const v = validarFiltros(q)
@@ -166,7 +167,7 @@ export async function rotasAuditoria(app: FastifyInstance): Promise<void> {
 
   // Detalhe de UM evento, com o JSON completo. A chave é a PK `(tenant_id, criado_em, id)`:
   // `criado_em` no caminho deixa o planner podar as partições.
-  app.get('/v1/auditoria/:criadoEm/:id', { preHandler: exigirTenant }, async (req, reply) => {
+  app.get('/v1/auditoria/:criadoEm/:id', { preHandler: [exigirTenant, exigirPapel('gestor')] }, async (req, reply) => {
     const { criadoEm, id } = req.params as { criadoEm: string; id: string }
     if (!isoValido(criadoEm) || !REGEX_UUID.test(id)) {
       return reply.code(422).send({ erro: 'auditoria.chave_invalida', mensagem: 'Chave de evento inválida.', campos: ['criadoEm', 'id'] })

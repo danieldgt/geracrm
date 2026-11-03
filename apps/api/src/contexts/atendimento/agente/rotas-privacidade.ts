@@ -47,7 +47,7 @@ export function validarPrivacidade(b: CorpoPrivacidade | undefined): Validacao {
 
 /** A linha de `usuario` nasce no batimento; garantir antes de `exigirPapel` (sem ela, o papel não resolve). */
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
-  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+  if (req.tenantId && !req.atorStaff) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 
 export async function rotasPrivacidade(app: FastifyInstance): Promise<void> {

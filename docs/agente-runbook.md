@@ -260,3 +260,24 @@ para acordar gente de madrugada, recalibrar com 2–4 semanas de histórico.
 - **Quando um alerta chega:** o texto traz o motivo (código de `/saude/detalhada`); siga a seção deste
   runbook do motivo (§1 LLM, §4 fila, §11 webhook parado, §16 partições…).
 - **Operar/configurar:** variáveis, criação do serviço e teste local em `infra/monitor/README.md`.
+
+## 18. Cliente sem administrador (cadastro de usuários e filiais trancado)
+
+- **Sintoma:** o dono do cliente abre Configurações → Usuários (ou Filiais) e recebe 403
+  `acesso.papel_insuficiente` com "Esta empresa ainda não tem administrador definido".
+- **Por quê:** desde a revisão de segurança da D3, o cadastro de usuários e filiais exige admin **atribuído**
+  (`usuario_filial.papel = 'admin'`). O modo fundador (tenant sem admin: todo usuário ativo vale admin)
+  continua valendo para as **demais** configurações, mas não para o cadastro — senão o primeiro a abrir a tela
+  se daria admin e escolheria quem entra. ⚠️ Risco aceito e registrado: enquanto o cliente estiver em modo
+  fundador, qualquer usuário ativo configura agente, números e custo.
+- **Ação (todo cliente atual sem admin precisa disto, uma vez):** o staff semeia o admin pelo próprio login
+  (grupo `staff`, fora da sessão de acesso): `POST /v1/plataforma/clientes/:id/admin` com `{ "usuarioId": "…" }`
+  — um usuário **ativo** que já existe no cliente (nasce no primeiro login). Fica auditado no cliente
+  (`usuario.admin_semeado`, `ator_staff`) e no tenant do staff (`cliente.admin_semeado`). Alternativa: abrir a
+  sessão de acesso (PLT-05) e definir o papel pela tela de Usuários — a sessão de staff passa no cadastro.
+- **Conferir:** `SELECT t.nome FROM tenant t WHERE NOT EXISTS (SELECT 1 FROM usuario_filial uf JOIN usuario u
+  ON u.tenant_id = uf.tenant_id AND u.id = uf.usuario_id WHERE uf.tenant_id = t.id AND uf.papel = 'admin' AND u.ativo);`
+  (como dono) lista os clientes ainda em modo fundador.
+- **Nunca:** a sessão de staff não grava mais linha em `usuario` do cliente (era a porta para o admin do cliente
+  redefinir a senha da conta do staff). Ação que exige um usuário do cliente como dono (assumir conversa, ser
+  responsável) responde 403 `acesso.staff_sem_usuario` na sessão de staff — peça a alguém da empresa.

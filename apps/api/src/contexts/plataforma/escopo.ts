@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { Sql } from '../../db/index.js'
 import { subDoUsuario } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
-import { fragmentoNaFila } from '../atendimento/sla-handoff.js'
+import { fragmentoNaFila, respostaHumanaDoAtendimento } from '../atendimento/sla-handoff.js'
 
 /**
  * ESCOPO DO USUÁRIO — O QUE uma pessoa enxerga dentro do tenant (raia D3).
@@ -58,7 +58,9 @@ import { fragmentoNaFila } from '../atendimento/sla-handoff.js'
  *                atende — `usuario_canal` com ele, ou número SEM ninguém
  *                vinculado (o mesmo fallback "todos atendem" da notificação).
  *                ⚠️ É o que preserva o fluxo de assumir: a fila continua visível
- *                a quem atende o número.
+ *                a quem atende o número — EXCETO (M7, revisão D3) o cliente
+ *                com dono vigente ativo que não é ele, até o SLA do handoff
+ *                liberar a reatribuição (`reatribuicao_liberada_em`).
  *     filial   → o mesmo, mais: conversa de número (`canal_conectado.filial_id`)
  *                de uma das filiais, e a fila desses números.
  *   TAREFA     → responsável OU criador = o usuário (quem delega acompanha); filial:
@@ -138,9 +140,14 @@ async function lerEDecidir(tx: Sql, filtroUsuario: ReturnType<Sql>): Promise<Esc
            EXISTS (SELECT 1 FROM usuario_filial uf
                      JOIN usuario ua ON ua.tenant_id = uf.tenant_id AND ua.id = uf.usuario_id
                     WHERE uf.tenant_id = tenant_atual() AND uf.papel = 'admin' AND ua.ativo) AS tenant_tem_admin,
+           -- ⚠️ Vínculo numa filial DESATIVADA não vale (nem papel nem escopo).
+           --    tenant_tem_admin acima conta todos de propósito: desativar uma
+           --    filial nunca reabre o modo fundador.
            coalesce((SELECT json_agg(json_build_object('papel', uf.papel, 'filialId', uf.filial_id))
                        FROM usuario_filial uf
-                      WHERE uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id), '[]'::json) AS vinculos
+                       LEFT JOIN filial esc_f ON esc_f.tenant_id = uf.tenant_id AND esc_f.id = uf.filial_id
+                      WHERE uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id
+                        AND (uf.filial_id IS NULL OR esc_f.ativa)), '[]'::json) AS vinculos
       FROM usuario u
      WHERE u.tenant_id = tenant_atual() AND ${filtroUsuario}`
   return decidirEscopo({
@@ -236,6 +243,31 @@ export function condicaoConversa(tx: Sql, escopo: Escopo) {
                   WHERE esc_cc.tenant_id = cv.tenant_id AND esc_cc.id = cv.canal_id
                     AND esc_cc.filial_id = ANY(${[...escopo.filialIds]}::uuid[]))`
     : tx`false`
+  // ⚠️ M7 (revisão D3) — na régua CARTEIRA, a fila do número NÃO mostra o
+  //    cliente que tem DONO VIGENTE (ativo) diferente do usuário: o cliente é do
+  //    colega, e a fila não pode virar o atalho para a carteira alheia. Volta a
+  //    aparecer quando o SLA do handoff (P18) LIBERA a reatribuição
+  //    (`reatribuicao_liberada_em`) — aí qualquer um do número pode assumir.
+  //    Pedido "pela conversa" herda (condicaoPedido usa esta mesma régua).
+  const naoEDeOutroDono = escopo.tipo === 'carteira'
+    ? tx`(NOT EXISTS (SELECT 1 FROM carteira_atribuicao esc_ca
+                        JOIN usuario esc_du ON esc_du.tenant_id = esc_ca.tenant_id AND esc_du.id = esc_ca.usuario_id
+                       WHERE esc_ca.tenant_id = cv.tenant_id AND esc_ca.contato_id = cv.contato_id
+                         AND esc_ca.ate IS NULL AND esc_ca.usuario_id <> ${u}::uuid
+                         -- Dono AUSENTE (ou inativo) não prende o cliente — a mesma
+                         -- régua da reserva do handoff no assumir.
+                         AND esc_du.ativo AND NOT esc_du.ausente)
+          OR EXISTS (SELECT 1 FROM atendimento esc_al
+                      WHERE esc_al.tenant_id = cv.tenant_id AND esc_al.conversa_id = cv.id
+                        AND esc_al.estado <> 'encerrado' AND esc_al.reatribuicao_liberada_em IS NOT NULL))`
+    : tx`true`
+  // P18: depois do 2º limiar, o atendimento de quem assumiu e NÃO respondeu fica
+  //    aberto a quem atende o número (a REATRIBUIÇÃO do assumir). Sem isto, o
+  //    escopo trancaria a reatribuição que o SLA libera.
+  const reatribuivel = tx`EXISTS (SELECT 1 FROM atendimento a
+                                   WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id
+                                     AND a.estado <> 'encerrado' AND a.reatribuicao_liberada_em IS NOT NULL
+                                     AND ${respostaHumanaDoAtendimento(tx)} IS NULL)`
   return tx`(
     EXISTS (SELECT 1 FROM contato esc_ct
              WHERE esc_ct.tenant_id = cv.tenant_id AND esc_ct.id = cv.contato_id
@@ -245,7 +277,7 @@ export function condicaoConversa(tx: Sql, escopo: Escopo) {
                   AND esc_at.estado <> 'encerrado'
                   AND (esc_at.atendente_id = ${u}::uuid OR esc_at.responsavel_id = ${u}::uuid))
     OR ${doNumeroDaFilial}
-    OR (${fragmentoNaFila(tx)} AND (
+    OR (((${fragmentoNaFila(tx)} AND ${naoEDeOutroDono}) OR ${reatribuivel}) AND (
           EXISTS (SELECT 1 FROM usuario_canal esc_uc
                    WHERE esc_uc.tenant_id = cv.tenant_id AND esc_uc.canal_id = cv.canal_id
                      AND esc_uc.usuario_id = ${u}::uuid)

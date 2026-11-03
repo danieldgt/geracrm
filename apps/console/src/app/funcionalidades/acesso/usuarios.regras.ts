@@ -93,7 +93,9 @@ const ERROS_USUARIO: Record<string, ErroMapeado> = {
   'usuario.nome_obrigatorio': { campo: 'nome', mensagem: 'Informe o nome.' },
   'usuario.email_invalido': { campo: 'email', mensagem: 'E-mail inválido.' },
   'usuario.email_duplicado': { campo: 'email', mensagem: 'Já existe um usuário com este e-mail.' },
-  'usuario.email_em_uso': { campo: 'email', mensagem: 'Este e-mail já está em uso em outra empresa.' },
+  // ⚠️ A API não diz DE QUEM é o login existente (outra empresa, suporte): 409 genérico.
+  'usuario.email_indisponivel': { campo: 'email', mensagem: 'Não é possível usar este e-mail. Use outro endereço.' },
+  'usuario.email_em_uso': { campo: 'email', mensagem: 'Não é possível usar este e-mail. Use outro endereço.' },
   'usuario.papeis_invalidos': { campo: 'papeis', mensagem: 'Papéis inválidos. Revise a lista.' },
   'usuario.papel_invalido': { campo: 'papeis', mensagem: 'Escolha um papel válido em cada linha.' },
   'usuario.papeis_duplicados': { campo: 'papeis', mensagem: 'Há papel repetido para a mesma filial.' },
@@ -105,6 +107,10 @@ const ERROS_USUARIO: Record<string, ErroMapeado> = {
   },
   'usuario.nada_a_mudar': { campo: null, mensagem: 'Nada foi alterado.' },
   'usuario.ativo_invalido': { campo: 'ativo', mensagem: 'Situação inválida.' },
+  'identidade.login_de_outra_conta': {
+    campo: null,
+    mensagem: 'O login deste usuário não pertence a esta empresa. Nada foi alterado; fale com o suporte.',
+  },
   'identidade.indisponivel': {
     campo: null,
     mensagem: 'O provedor de login está indisponível agora. Nada foi salvo; tente de novo em instantes.',
