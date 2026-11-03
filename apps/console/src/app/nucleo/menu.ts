@@ -145,6 +145,8 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Vendas, ranking, top produtos, exportações.' },
       { rota: 'automacoes', rotulo: 'Automações', icone: 'workflow', status: 'pronto', onda: 'O2',
         descricao: 'Gatilhos e ações automáticas.' },
+      { rota: 'etiquetas-origens', rotulo: 'Etiquetas e origens', icone: 'tag', status: 'pronto', onda: 'O2',
+        descricao: 'Etiquetas coloridas e origens dos contatos.' },
       { rota: 'auditoria', rotulo: 'Auditoria', icone: 'search', status: 'pronto', onda: 'O1',
         descricao: 'Quem fez o quê e quando — assunção, edição e remoção de mensagens.' },
       { rota: 'config', rotulo: 'Configurações Gerais', icone: 'wrench', status: 'pronto', onda: 'O1',

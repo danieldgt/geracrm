@@ -35,6 +35,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/plataforma/auditoria.pagina.js').then((m) => m.AuditoriaPagina),
   bloqueios: () =>
     import('./funcionalidades/crm/bloqueios.pagina.js').then((m) => m.BloqueiosPagina),
+  'etiquetas-origens': () =>
+    import('./funcionalidades/crm/etiquetas-origens.pagina.js').then((m) => m.EtiquetasOrigensPagina),
   webhooks: () =>
     import('./funcionalidades/integracao/webhooks.pagina.js').then((m) => m.WebhooksPagina),
   funil: () =>
