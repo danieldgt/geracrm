@@ -19,3 +19,14 @@ export {
   agruparPorPreco, badgesDoModelo, permitidosDe, alternarCodigo, codigosParaSalvar, mudouPermissao,
   type ModeloIa, type ModeloComPermissao, type ProvedorIa,
 } from './modelos-ia.regras.js'
+export { FormPaginaComponente } from './form-pagina.componente.js'
+export { SecaoFormComponente } from './secao-form.componente.js'
+export { GradeFormComponente } from './grade-form.componente.js'
+export { BreadcrumbComponente } from './breadcrumb.componente.js'
+export { itensDaTrilha, type ItemTrilha, type ItemTrilhaVista } from './breadcrumb.regras.js'
+export { ModalComponente, type LarguraModal } from './modal.componente.js'
+export { AbasComponente } from './abas.componente.js'
+export { abaAtiva, proximaAba, type Aba } from './abas.regras.js'
+export { ListaDefinicaoComponente, valorDefinicao, type ItemDefinicao } from './lista-definicao.componente.js'
+export { ChipsEtiquetaComponente, alternarChip, type OpcaoChip } from './chips-etiqueta.componente.js'
+export { focaveisDe, primeiroAlvoDeFoco, prenderTab, devolverFoco } from './foco.js'
