@@ -1,15 +1,17 @@
 import { randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import {
   JANELA_AGENDA_MAX_DIAS, ehCorEvento, ehLembreteEvento, ehModalidadeEvento, ehStatusEvento, ehTipoEvento,
   type CorEvento, type LembreteEventoMin, type ModalidadeEvento, type StatusEvento, type TipoEvento,
 } from '@geracrm/shared'
 import type { Sql } from '../../db/index.js'
-import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
+import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import { exigirModulo } from '../plataforma/modulos.js'
-import { atendePapel, papeisDoUsuario } from '../plataforma/papel.js'
+import {
+  condicaoContato, condicaoEvento, contatoNoEscopo, escopoDaRequisicao, responsavelNoEscopo, type Escopo,
+} from '../plataforma/escopo.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DIA = /^\d{4}-\d{2}-\d{2}$/
@@ -32,20 +34,35 @@ const evento = (l: Linha) => ({
   versao: l.versao,
 })
 
-const COLUNAS = (tx: Sql) => tx`
-  e.id, e.titulo, e.descricao, e.contato_id, c.nome AS contato, e.responsavel_id, u.nome AS responsavel,
+/** Contato fora do escopo de quem lê vira null (id e nome): o evento aparece, o cliente não. */
+const COLUNAS = (tx: Sql, escopo: Escopo) => tx`
+  e.id, e.titulo, e.descricao,
+  CASE WHEN ${condicaoContato(tx, escopo, 'c')} THEN e.contato_id END AS contato_id,
+  CASE WHEN ${condicaoContato(tx, escopo, 'c')} THEN c.nome END AS contato,
+  e.responsavel_id, u.nome AS responsavel,
   e.inicio, e.fim, e.tipo, e.modalidade, e.local, e.link, e.lembrete_min, e.cor, e.status, e.versao`
 const JUNCOES = (tx: Sql) => tx`
   FROM evento_agenda e
   LEFT JOIN contato c ON c.tenant_id = e.tenant_id AND c.id = e.contato_id
   LEFT JOIN usuario u ON u.tenant_id = e.tenant_id AND u.id = e.responsavel_id`
 
-/** Quem chama e o que enxerga. TODO(D3): trocar por `escopoDoUsuario` de `plataforma/escopo.ts` quando a raia D3 integrar. */
-async function escopo(tx: Sql, req: Parameters<typeof subDoUsuario>[0]): Promise<{ eu: string; veTudo: boolean }> {
+/** Quem chama (`eu`) e o que enxerga (escopo comum, `plataforma/escopo.ts`). Chamar DENTRO do `comTenant`. */
+async function quemEVe(tx: Sql, req: FastifyRequest): Promise<{ eu: string; escopo: Escopo }> {
   const eu = await garantirUsuarioId(tx, req)
-  const acesso = await papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff })
-  return { eu, veTudo: atendePapel(acesso, ['gestor', 'supervisor']) }
+  return { eu, escopo: await escopoDaRequisicao(tx, req) }
 }
+
+/**
+ * Contato existe NO TENANT e está no escopo de quem escreve. Fora do escopo responde
+ * igual a inexistente (422 agenda.contato_invalido): não revela que o cliente existe.
+ */
+async function contatoAlcancavel(tx: Sql, escopo: Escopo, contatoId: string): Promise<boolean> {
+  const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${contatoId}`
+  return Boolean(c) && (await contatoNoEscopo(tx, escopo, contatoId))
+}
+
+/** 403 de responsável fora do alcance de quem agenda (mesmo código para gestão e para quem só agenda para si). */
+const RESPONSAVEL_PROIBIDO = { erro: 'agenda.responsavel_proibido', mensagem: 'Você só pode agendar para você ou para quem está no seu escopo.' }
 
 interface Corpo {
   titulo?: unknown; descricao?: unknown; contatoId?: unknown; responsavelId?: unknown; inicio?: unknown; fim?: unknown
@@ -127,8 +144,10 @@ const conflito409 = (c: NonNullable<Awaited<ReturnType<typeof acharConflito>>>) 
 
 /**
  * AGENDA — módulo opcional por tenant (0116/0117). Todas as rotas passam por `exigirModulo('agenda')`
- * (404 com o módulo desligado). Escopo: vendedor/atendente só enxergam e mexem no que é deles;
- * gestor, supervisor e admin veem todos. Cancelar é status, nunca DELETE.
+ * (404 com o módulo desligado). Escopo (D3, `condicaoEvento`): `tudo` vê todos; `filial`, os eventos
+ * de responsáveis da filial; `carteira` (vendedor/atendente), só os próprios. Fora do escopo = 404.
+ * Quem agenda para outra pessoa precisa de escopo `tudo` ou `filial` (`responsavelNoEscopo`).
+ * Cancelar é status, nunca DELETE.
  *
  * ⚠️ `GET /v1/agenda/eventos` NÃO é lista ilimitada: é uma JANELA DE CALENDÁRIO — `de` e `ate`
  *    obrigatórios, no máximo 62 dias (um mês de 6 semanas cabe), ordenada por início, com teto
@@ -152,26 +171,26 @@ export async function rotasAgenda(app: FastifyInstance): Promise<void> {
       if ((responsavelId && !UUID.test(responsavelId)) || (contatoId && !UUID.test(contatoId))) {
         return reply.code(422).send({ erro: 'agenda.id_invalido' })
       }
-      const { linhas, veTudo } = await req.comTenant(async (tx) => {
-        const { eu, veTudo } = await escopo(tx, req)
+      const { linhas, tipoEscopo } = await req.comTenant(async (tx) => {
+        const { escopo } = await quemEVe(tx, req)
         const [t] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
         const fuso = fusoSeguro(t?.fuso)
-        const dono = veTudo ? (responsavelId ?? null) : eu
         const linhas = await tx<Linha[]>`
-          SELECT ${COLUNAS(tx)} ${JUNCOES(tx)}
+          SELECT ${COLUNAS(tx, escopo)} ${JUNCOES(tx)}
            WHERE e.tenant_id = tenant_atual()
              AND e.inicio < ((${ate}::date + 1)::timestamp AT TIME ZONE ${fuso}::text)
              AND e.fim > (${de}::date::timestamp AT TIME ZONE ${fuso}::text)
-             AND ${dono ? tx`e.responsavel_id = ${dono}` : tx`true`}
+             AND ${condicaoEvento(tx, escopo, 'e')}
+             AND ${responsavelId ? tx`e.responsavel_id = ${responsavelId}` : tx`true`}
              AND ${contatoId ? tx`e.contato_id = ${contatoId}` : tx`true`}
            ORDER BY e.inicio, e.id LIMIT ${JANELA_LINHAS_MAX + 1}`
-        return { linhas, veTudo }
+        return { linhas, tipoEscopo: escopo.tipo }
       })
       const truncado = linhas.length > JANELA_LINHAS_MAX
-      // `escopo` diz à tela se o filtro de responsável faz sentido (gestor/admin veem todos).
+      // `escopo` diz à tela se o filtro de responsável faz sentido: 'proprio' só para carteira.
       return reply.send({
         itens: (truncado ? linhas.slice(0, JANELA_LINHAS_MAX) : linhas).map(evento), truncado,
-        escopo: veTudo ? 'todos' : 'proprio',
+        escopo: tipoEscopo === 'carteira' ? 'proprio' : 'todos',
       })
     },
   )
@@ -179,11 +198,11 @@ export async function rotasAgenda(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/v1/agenda/eventos/:id', { preHandler: pre }, async (req, reply) => {
     if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'agenda.nao_encontrado' })
     const l = await req.comTenant(async (tx) => {
-      const { eu, veTudo } = await escopo(tx, req)
+      const { escopo } = await quemEVe(tx, req)
       const [x] = await tx<Linha[]>`
-        SELECT ${COLUNAS(tx)} ${JUNCOES(tx)}
+        SELECT ${COLUNAS(tx, escopo)} ${JUNCOES(tx)}
          WHERE e.tenant_id = tenant_atual() AND e.id = ${req.params.id}
-           AND ${veTudo ? tx`true` : tx`e.responsavel_id = ${eu}`}`
+           AND ${condicaoEvento(tx, escopo, 'e')}`
       return x
     })
     return l ? reply.send(evento(l)) : reply.code(404).send({ erro: 'agenda.nao_encontrado' })
@@ -195,15 +214,12 @@ export async function rotasAgenda(app: FastifyInstance): Promise<void> {
     const v = r.v
     const id = randomUUID()
     const res = await req.comTenant(async (tx) => {
-      const { eu, veTudo } = await escopo(tx, req)
+      const { eu, escopo } = await quemEVe(tx, req)
       const responsavelId = v.responsavelId ?? eu
-      if (!veTudo && responsavelId !== eu) return { tipo: 'proibido' as const }
+      if (!(await responsavelNoEscopo(tx, escopo, responsavelId))) return { tipo: 'proibido' as const }
       const [u] = await tx`SELECT 1 FROM usuario WHERE tenant_id = tenant_atual() AND id = ${responsavelId} AND ativo`
       if (!u) return { tipo: 'responsavel' as const }
-      if (v.contatoId) {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${v.contatoId}`
-        if (!c) return { tipo: 'contato' as const }
-      }
+      if (v.contatoId && !(await contatoAlcancavel(tx, escopo, v.contatoId))) return { tipo: 'contato' as const }
       const c = await acharConflito(tx, responsavelId, v.inicio, v.fim, null)
       if (c) return { tipo: 'conflito' as const, c }
       await tx`
@@ -213,7 +229,7 @@ export async function rotasAgenda(app: FastifyInstance): Promise<void> {
                 ${v.tipo}, ${v.modalidade}, ${v.local}, ${v.link}, ${v.lembreteMin}, ${v.cor}, ${eu})`
       return { tipo: 'ok' as const }
     })
-    if (res.tipo === 'proibido') return reply.code(403).send({ erro: 'agenda.responsavel_proibido', mensagem: 'Você só agenda para você mesmo.' })
+    if (res.tipo === 'proibido') return reply.code(403).send(RESPONSAVEL_PROIBIDO)
     if (res.tipo === 'responsavel') return reply.code(422).send({ erro: 'agenda.responsavel_invalido', mensagem: 'Responsável não encontrado.' })
     if (res.tipo === 'contato') return reply.code(422).send({ erro: 'agenda.contato_invalido', mensagem: 'Contato não encontrado.' })
     if (res.tipo === 'conflito') return reply.code(409).send(conflito409(res.c))
@@ -230,24 +246,21 @@ export async function rotasAgenda(app: FastifyInstance): Promise<void> {
     }
     const v = r.v
     const res = await req.comTenant(async (tx) => {
-      const { eu, veTudo } = await escopo(tx, req)
+      const { escopo } = await quemEVe(tx, req)
       const [atual] = await tx<{ responsavel_id: string; inicio: Date; fim: Date; status: string; versao: number }[]>`
         SELECT responsavel_id, inicio, fim, status, versao FROM evento_agenda
          WHERE tenant_id = tenant_atual() AND id = ${req.params.id}
-           AND ${veTudo ? tx`true` : tx`responsavel_id = ${eu}`}
+           AND ${condicaoEvento(tx, escopo, 'evento_agenda')}
          FOR UPDATE`
       if (!atual) return { tipo: 'nao_encontrado' as const }
       if (atual.versao !== versao) return { tipo: 'versao' as const, atual: atual.versao }
       const responsavelId = v.responsavelId ?? atual.responsavel_id
-      if (!veTudo && responsavelId !== eu) return { tipo: 'proibido' as const }
+      if (!(await responsavelNoEscopo(tx, escopo, responsavelId))) return { tipo: 'proibido' as const }
       if (responsavelId !== atual.responsavel_id) {
         const [u] = await tx`SELECT 1 FROM usuario WHERE tenant_id = tenant_atual() AND id = ${responsavelId} AND ativo`
         if (!u) return { tipo: 'responsavel' as const }
       }
-      if (v.contatoId) {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${v.contatoId}`
-        if (!c) return { tipo: 'contato' as const }
-      }
+      if (v.contatoId && !(await contatoAlcancavel(tx, escopo, v.contatoId))) return { tipo: 'contato' as const }
       // Reagendar (mudou início ou fim) volta para "agendado" e rearma o lembrete.
       const reagendou = atual.inicio.getTime() !== v.inicio.getTime() || atual.fim.getTime() !== v.fim.getTime()
       const status = reagendou ? 'agendado' : atual.status
@@ -269,7 +282,7 @@ export async function rotasAgenda(app: FastifyInstance): Promise<void> {
     if (res.tipo === 'versao') {
       return reply.code(409).send({ erro: 'agenda.versao_desatualizada', mensagem: 'Alguém alterou este evento. Recarregue.', versaoAtual: res.atual })
     }
-    if (res.tipo === 'proibido') return reply.code(403).send({ erro: 'agenda.responsavel_proibido', mensagem: 'Você só agenda para você mesmo.' })
+    if (res.tipo === 'proibido') return reply.code(403).send(RESPONSAVEL_PROIBIDO)
     if (res.tipo === 'responsavel') return reply.code(422).send({ erro: 'agenda.responsavel_invalido', mensagem: 'Responsável não encontrado.' })
     if (res.tipo === 'contato') return reply.code(422).send({ erro: 'agenda.contato_invalido', mensagem: 'Contato não encontrado.' })
     if (res.tipo === 'conflito') return reply.code(409).send(conflito409(res.c))
@@ -278,13 +291,13 @@ export async function rotasAgenda(app: FastifyInstance): Promise<void> {
 
   /** Muda o status. Voltar a "agendado" (desfazer) confere conflito de novo. */
   const mudarStatus = async (
-    req: Parameters<typeof escopo>[1] & { comTenant: <T>(fn: (tx: Sql) => Promise<T>) => Promise<T> },
+    req: FastifyRequest & { comTenant: <T>(fn: (tx: Sql) => Promise<T>) => Promise<T> },
     id: string, status: StatusEvento,
   ) => req.comTenant(async (tx) => {
-    const { eu, veTudo } = await escopo(tx, req)
+    const { escopo } = await quemEVe(tx, req)
     const [atual] = await tx<{ responsavel_id: string; inicio: Date; fim: Date; status: string }[]>`
       SELECT responsavel_id, inicio, fim, status FROM evento_agenda
-       WHERE tenant_id = tenant_atual() AND id = ${id} AND ${veTudo ? tx`true` : tx`responsavel_id = ${eu}`}
+       WHERE tenant_id = tenant_atual() AND id = ${id} AND ${condicaoEvento(tx, escopo, 'evento_agenda')}
        FOR UPDATE`
     if (!atual) return { tipo: 'nao_encontrado' as const }
     if (atual.status === status) return { tipo: 'ok' as const }

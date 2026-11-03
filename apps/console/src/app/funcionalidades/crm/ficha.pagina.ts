@@ -5,6 +5,10 @@ import { rotuloSegmento } from '@geracrm/shared'
 import { FichaServico, type FichaContato } from './ficha.servico.js'
 import { FichaBlocosServico } from './ficha-blocos.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
+import { ModulosServico } from '../../nucleo/modulos.servico.js'
+import { AgendaContatoComponente } from '../agenda/agenda-contato.componente.js'
+import { AgendaEventoModalComponente } from '../agenda/agenda-evento-modal.componente.js'
+import { diaIso } from '../agenda/agenda.regras.js'
 import {
   AbasComponente, BadgeComponente, BotaoComponente, BreadcrumbComponente, CabecalhoTelaComponente, ConfirmacaoServico,
   EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, PainelComponente, ToastServico, mensagemDeErro,
@@ -40,6 +44,7 @@ import {
     EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, PainelComponente,
     AvisosPrivacidadeComponente, EtiquetasContatoComponente, TarefaModalComponente, FichaFeedComponente,
     FichaPerfilCompraComponente, FichaArquivosComponente, FichaPedidosComponente, FichaTarefasComponente, FichaWhatsappComponente,
+    AgendaContatoComponente, AgendaEventoModalComponente,
   ],
   template: `
     @switch (servico.estado()) {
@@ -105,6 +110,10 @@ import {
                 </div>
                 @if (dicaDesabilitada(); as d) { <p class="txt-denso dica">{{ d }}</p> }
                 @if (erroAcao(); as e) { <p class="txt-denso erro" role="alert">{{ e }}</p> }
+                @if (modulos.agendaAtiva()) {
+                  <app-agenda-evento-modal [aberto]="modalAgenda()" [contatoId]="f.id" [contatoNome]="f.nome"
+                    [dataInicial]="hoje" (fechar)="modalAgenda.set(false)" />
+                }
               </ui-painel>
 
               <app-ficha-perfil-compra [contatoId]="f.id" />
@@ -172,7 +181,11 @@ import {
                     @case ('tarefas') { <app-ficha-tarefas [contatoId]="f.id" [versao]="tarefasVersao()" (nova)="novaTarefa.set(true)" /> }
                     @case ('whatsapp') { <app-ficha-whatsapp [contatoId]="f.id" (abrir)="abrirConversa(f)" /> }
                     @case ('agenda') {
-                      <ui-estado titulo="Agenda ainda não está ligada" descricao="Os compromissos deste contato aparecem aqui quando o módulo Agenda estiver ativo no seu plano." icone="calendar" />
+                      @if (modulos.agendaAtiva()) {
+                        <app-agenda-contato [contatoId]="f.id" [contatoNome]="f.nome" />
+                      } @else {
+                        <ui-estado titulo="Agenda ainda não está ligada" descricao="Os compromissos deste contato aparecem aqui quando o módulo Agenda estiver ativo no seu plano." icone="calendar" />
+                      }
                     }
                   }
                 </div>
@@ -304,6 +317,10 @@ export class FichaContatoPagina {
   readonly aba = signal<string>('feed')
   readonly trilhaCarregando: readonly ItemTrilha[] = [{ rotulo: 'Contatos', rota: '/contatos' }, { rotulo: 'Contato' }]
 
+  readonly modulos = inject(ModulosServico)
+  readonly modalAgenda = signal(false)
+  readonly hoje = diaIso(new Date())
+
   readonly abrindoConversa = signal(false)
   readonly qualificando = signal<IdAcao | null>(null)
   readonly novaTarefa = signal(false)
@@ -316,7 +333,7 @@ export class FichaContatoPagina {
     { rotulo: 'Contatos', rota: '/contatos' }, { rotulo: this.servico.ficha()?.nome ?? 'Contato' },
   ])
   readonly selos = computed(() => { const f = this.servico.ficha(); return f ? selosDaFicha(f) : [] })
-  readonly acoes = computed(() => { const f = this.servico.ficha(); return f ? acoesVisiveis(f) : [] })
+  readonly acoes = computed(() => { const f = this.servico.ficha(); return f ? acoesVisiveis(f, this.modulos.agendaAtiva()) : [] })
   readonly dicaDesabilitada = computed(() => this.acoes().find((a) => a.desabilitada)?.dica ?? null)
   readonly cadastro = computed(() => { const f = this.servico.ficha(); return f ? camposDeCadastro(f) : [] })
   readonly informacoes = computed(() => { const f = this.servico.ficha(); return f ? camposDeInformacao(f) : [] })
@@ -347,6 +364,7 @@ export class FichaContatoPagina {
     switch (acao) {
       case 'conversar': await this.abrirConversa(f); return
       case 'nova-tarefa': this.novaTarefa.set(true); return
+      case 'agendar': if (this.modulos.agendaAtiva()) this.modalAgenda.set(true); return
       case 'qualificar': case 'descartar': await this.qualificar(f, acao); return
       default: return
     }

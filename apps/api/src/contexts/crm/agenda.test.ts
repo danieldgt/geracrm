@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
 import { criarApp } from '../../app.js'
@@ -274,5 +274,107 @@ describe('Agenda — sem próximo passo (C1)', () => {
     const [e] = await dono<{ id: string }[]>`SELECT id FROM evento_agenda WHERE tenant_id = ${A} AND contato_id = ${CA}`
     await chamar(A, 'DELETE', `/v1/agenda/eventos/${e!.id}`)
     expect((await consulta(A, CA)).json()).toMatchObject({ itens: [{ semProximoPasso: true }] })
+  })
+})
+
+describe('Agenda — escopo comum por papel (D3)', () => {
+  const F1 = 'a9e00000-8800-4000-8000-000000000001'
+  const F2 = 'a9e00000-8800-4000-8000-000000000002'
+  const TERC_V = 'a9e00000-6666-4000-8000-000000000004' // vendedor da filial 2
+  const EV_VEND = 'a9e00000-7777-4000-8000-000000000011' // de VEND_V (o usuário do header)
+  const EV_OUTRO = 'a9e00000-7777-4000-8000-000000000012' // de OUTRO_V (filial 1)
+  const EV_TERC = 'a9e00000-7777-4000-8000-000000000013' // de TERC_V (filial 2)
+  type Papel = [string, string | null, string]
+  const BASE: Papel[] = [[ADMIN_V, null, 'admin'], [VEND_V, null, 'vendedor'], [OUTRO_V, null, 'vendedor']]
+  /** Refaz os vínculos de papel do tenant V (o usuário do header é VEND_V). */
+  const papeis = async (linhas: Papel[]) => {
+    await dono`DELETE FROM usuario_filial WHERE tenant_id = ${V}`
+    for (const [u, f, p] of linhas) {
+      await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${V}, ${u}, ${f}, ${p})`
+    }
+  }
+
+  beforeAll(async () => {
+    await dono`INSERT INTO filial (tenant_id, id, nome) VALUES (${V}, ${F1}, 'Filial 1'), (${V}, ${F2}, 'Filial 2') ON CONFLICT DO NOTHING`
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES
+      (${V}, ${TERC_V}, 'sub-terc-v', 'Terceira', 'terc@v.local') ON CONFLICT DO NOTHING`
+  })
+  beforeEach(async () => {
+    await dono`DELETE FROM evento_agenda WHERE tenant_id = ${V}`
+    await dono`INSERT INTO evento_agenda (tenant_id, id, titulo, responsavel_id, inicio, fim) VALUES
+      (${V}, ${EV_VEND}, 'Meu', ${VEND_V}, ${h(9)}, ${h(10)}),
+      (${V}, ${EV_OUTRO}, 'Da filial 1', ${OUTRO_V}, ${h(11)}, ${h(12)}),
+      (${V}, ${EV_TERC}, 'Da filial 2', ${TERC_V}, ${h(15)}, ${h(16)})`
+  })
+  afterEach(async () => { await papeis(BASE) })
+  afterAll(async () => { await dono`DELETE FROM carteira_atribuicao WHERE tenant_id = ${V}` })
+
+  it('contato fora do escopo: evento não aceita (422 contato_invalido, como inexistente) e a leitura não mostra o nome', async () => {
+    const CV_ALHEIO = 'a9e00000-5555-4000-8000-000000000011' // carteira de OUTRO_V
+    const CV_MEU = 'a9e00000-5555-4000-8000-000000000012' // carteira de VEND_V
+    const EV_COM_ALHEIO = 'a9e00000-7777-4000-8000-000000000014'
+    await dono`INSERT INTO contato (tenant_id, id, nome) VALUES (${V}, ${CV_ALHEIO}, 'Cliente Alheio'), (${V}, ${CV_MEU}, 'Cliente Meu') ON CONFLICT DO NOTHING`
+    await dono`INSERT INTO carteira_atribuicao (tenant_id, id, contato_id, usuario_id) VALUES
+      (${V}, 'a9e00000-5555-4000-8000-000000000021', ${CV_ALHEIO}, ${OUTRO_V}),
+      (${V}, 'a9e00000-5555-4000-8000-000000000022', ${CV_MEU}, ${VEND_V})`
+    await papeis(BASE)
+
+    const fora = await chamar(V, 'POST', '/v1/agenda/eventos', novo({ contatoId: CV_ALHEIO, inicio: h(20), fim: h(21) }))
+    expect(fora.statusCode).toBe(422)
+    expect(fora.json()).toMatchObject({ erro: 'agenda.contato_invalido' })
+    expect((await chamar(V, 'POST', '/v1/agenda/eventos', novo({ contatoId: CV_MEU, inicio: h(20), fim: h(21) }))).statusCode).toBe(201)
+    const { id: ev } = await criarEvento(V, { contatoId: CV_MEU, inicio: h(22), fim: h(23) })
+    const alterar = await chamar(V, 'PUT', `/v1/agenda/eventos/${ev}`, { ...novo({ contatoId: CV_ALHEIO, inicio: h(22), fim: h(23) }), versao: 1 })
+    expect(alterar.statusCode).toBe(422)
+    expect(alterar.json()).toMatchObject({ erro: 'agenda.contato_invalido' })
+
+    // Evento do próprio vendedor ligado a cliente alheio: aparece, sem contato.
+    await dono`INSERT INTO evento_agenda (tenant_id, id, titulo, responsavel_id, contato_id, inicio, fim)
+               VALUES (${V}, ${EV_COM_ALHEIO}, 'Com alheio', ${VEND_V}, ${CV_ALHEIO}, ${h(13)}, ${h(14)})`
+    const lista = (await chamar(V, 'GET', JANELA)).json() as { itens: { id: string; contato: string | null; contatoId: string | null }[] }
+    const linha = lista.itens.find((i) => i.id === EV_COM_ALHEIO)
+    expect(linha).toMatchObject({ contato: null, contatoId: null })
+    expect((await chamar(V, 'GET', `/v1/agenda/eventos/${EV_COM_ALHEIO}`)).json()).toMatchObject({ contato: null, contatoId: null })
+    const meu = (await chamar(V, 'GET', `/v1/agenda/eventos/${ev}`)).json() as { contato: string | null }
+    expect(meu.contato).toBe('Cliente Meu')
+  })
+
+  it('vendedor (carteira): só os eventos em que é o responsável; escopo "proprio"', async () => {
+    await papeis(BASE)
+    const r = (await chamar(V, 'GET', JANELA)).json() as { itens: { titulo: string }[]; escopo: string }
+    expect(r.itens.map((i) => i.titulo)).toEqual(['Meu'])
+    expect(r.escopo).toBe('proprio')
+    expect((await chamar(V, 'GET', `/v1/agenda/eventos/${EV_OUTRO}`)).statusCode).toBe(404)
+  })
+
+  it('gestor de filial: vê os eventos de quem tem papel na sua filial, não os de outra; escopo "todos"', async () => {
+    await papeis([[ADMIN_V, null, 'admin'], [VEND_V, F1, 'gestor'], [OUTRO_V, F1, 'vendedor'], [TERC_V, F2, 'vendedor']])
+    const r = (await chamar(V, 'GET', JANELA)).json() as { itens: { titulo: string }[]; escopo: string }
+    expect(r.itens.map((i) => i.titulo).sort()).toEqual(['Da filial 1', 'Meu'])
+    expect(r.escopo).toBe('todos')
+    expect((await chamar(V, 'GET', `/v1/agenda/eventos/${EV_OUTRO}`)).statusCode).toBe(200)
+    expect((await chamar(V, 'GET', `/v1/agenda/eventos/${EV_TERC}`)).statusCode).toBe(404)
+    expect((await chamar(V, 'PATCH', `/v1/agenda/eventos/${EV_TERC}/status`, { status: 'realizado' })).statusCode).toBe(404)
+    expect((await chamar(V, 'PUT', `/v1/agenda/eventos/${EV_TERC}`, { ...novo(), versao: 1 })).statusCode).toBe(404)
+  })
+
+  it('gestor de filial agenda para alguém da filial dele; para fora dela → 403 agenda.responsavel_proibido', async () => {
+    await papeis([[ADMIN_V, null, 'admin'], [VEND_V, F1, 'gestor'], [OUTRO_V, F1, 'vendedor'], [TERC_V, F2, 'vendedor']])
+    expect((await chamar(V, 'POST', '/v1/agenda/eventos', novo({ inicio: h(20), fim: h(21), responsavelId: OUTRO_V }))).statusCode).toBe(201)
+    const fora = await chamar(V, 'POST', '/v1/agenda/eventos', novo({ inicio: h(22), fim: h(23), responsavelId: TERC_V }))
+    expect(fora.statusCode).toBe(403)
+    expect(fora.json()).toMatchObject({ erro: 'agenda.responsavel_proibido' })
+    const mover = await chamar(V, 'PUT', `/v1/agenda/eventos/${EV_OUTRO}`, { ...novo({ responsavelId: TERC_V }), versao: 1 })
+    expect(mover.statusCode).toBe(403)
+    expect(mover.json()).toMatchObject({ erro: 'agenda.responsavel_proibido' })
+  })
+
+  it('admin vê tudo e agenda para qualquer responsável; escopo "todos"', async () => {
+    await papeis([[ADMIN_V, null, 'admin'], [VEND_V, null, 'admin'], [OUTRO_V, F1, 'vendedor'], [TERC_V, F2, 'vendedor']])
+    const r = (await chamar(V, 'GET', JANELA)).json() as { itens: { titulo: string }[]; escopo: string }
+    expect(r.itens.map((i) => i.titulo).sort()).toEqual(['Da filial 1', 'Da filial 2', 'Meu'])
+    expect(r.escopo).toBe('todos')
+    expect((await chamar(V, 'GET', `/v1/agenda/eventos/${EV_TERC}`)).statusCode).toBe(200)
+    expect((await chamar(V, 'POST', '/v1/agenda/eventos', novo({ inicio: h(20), fim: h(21), responsavelId: TERC_V }))).statusCode).toBe(201)
   })
 })
