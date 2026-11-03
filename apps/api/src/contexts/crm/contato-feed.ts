@@ -4,7 +4,7 @@ import type { Sql } from '../../db/index.js'
  * Feed do contato (A3): linha do tempo unificada, mais novo primeiro.
  *
  * ⚠️ NUNCA conteúdo de mensagem do WhatsApp. Só fatos de gestão: observação interna, mudança de
- * etapa/qualificação, tarefa, pedido, handoff, etiqueta, arquivo. O texto do item é montado aqui,
+ * etapa/qualificação, tarefa, pedido, handoff, etiqueta, arquivo, resposta de formulário. O texto do item é montado aqui,
  * a partir de colunas escolhidas uma a uma — não de `mensagem.conteudo` nem de `motivo_saida` do
  * agente (que carrega resumo da conversa).
  *
@@ -19,7 +19,7 @@ import type { Sql } from '../../db/index.js'
 
 export const TIPOS_FEED = [
   'comentario', 'funil', 'qualificacao', 'tarefa_criada', 'tarefa_concluida', 'pedido_criado',
-  'pedido_efetivado', 'handoff', 'etiquetas', 'arquivo',
+  'pedido_efetivado', 'handoff', 'etiquetas', 'arquivo', 'formulario',
 ] as const
 export type TipoFeed = (typeof TIPOS_FEED)[number]
 
@@ -74,6 +74,11 @@ export function textoDoItem(l: Pick<LinhaFeed, 'tipo' | 'a' | 'b' | 'c'>): strin
       }
     case 'etiquetas': return l.a ?? 'Etiquetas alteradas'
     case 'arquivo': return l.a === 'contato.arquivo_removido' ? `Arquivo removido: ${l.b ?? ''}` : `Arquivo anexado: ${l.b ?? ''}`
+    // ⚠️ Pendente = telefone já cadastrado preenchido por um anônimo: nada foi aplicado à ficha.
+    case 'formulario':
+      if (l.b === 'pendente') return `Resposta não verificada do formulário "${l.a ?? ''}" — confirme antes de usar`
+      if (l.b === 'aplicada') return `Resposta do formulário "${l.a ?? ''}" aplicada ao contato`
+      return `Contato criado pelo formulário "${l.a ?? ''}"`
   }
 }
 
@@ -189,6 +194,14 @@ export async function lerFeedDoContato(
           AND a.acao IN ('contato.arquivo_enviado', 'contato.arquivo_removido')
           AND ${ate(tx`a.criado_em`)} AND ${cur(tx`a.criado_em`, tx`'arquivo:' || a.id`)}
         ORDER BY a.criado_em DESC, a.id DESC LIMIT ${n})
+      UNION ALL
+      (SELECT 'formulario:' || r.id, 'formulario', r.criado_em, NULL, NULL,
+              CASE WHEN r.verificacao = 'pendente' THEN 'formulario_resposta_pendente' ELSE 'formulario_resposta' END,
+              r.id::text, f.nome, r.verificacao, NULL
+         FROM formulario_resposta r JOIN formulario f ON f.tenant_id = r.tenant_id AND f.id = r.formulario_id
+        WHERE r.tenant_id = tenant_atual() AND r.contato_id = ${contatoId}
+          AND ${cur(tx`r.criado_em`, tx`'formulario:' || r.id`)}
+        ORDER BY r.criado_em DESC, r.id DESC LIMIT ${n})
     ) feed
     ORDER BY em DESC, id COLLATE "C" DESC
     LIMIT ${n}`

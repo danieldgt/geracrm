@@ -38,6 +38,12 @@ export interface OpcoesLimite {
  * Escolhi contagem por balde em vez de token bucket porque o que interessa aqui
  * é "quantas sessões este IP criou no último minuto", e o balde responde isso
  * sem guardar timestamp por evento.
+ *
+ * ⚠️ Mapa cheio descarta a entrada MAIS ANTIGA (LRU simples: o `Map` guarda a
+ * ordem de inserção e cada uso reinsere a chave no fim). Recusar quando cheio
+ * fazia de um scanner com milhares de IPs um bloqueio de TODOS os legítimos — o
+ * limitador virava a negação de serviço que devia impedir. Descartar o mais
+ * antigo, no pior caso, devolve a cota a quem estava parado havia mais tempo.
  */
 export function criarLimiteTaxa(opcoes: OpcoesLimite): LimiteTaxa {
   const maxChaves = opcoes.maxChaves ?? 10_000
@@ -49,17 +55,20 @@ export function criarLimiteTaxa(opcoes: OpcoesLimite): LimiteTaxa {
       const atual = contagem.get(chave)
 
       if (!atual || atual.balde !== balde) {
+        if (atual) contagem.delete(chave)
         // ⚠️ Poda antes de crescer, nunca por temporizador: um `setInterval` de
         //    limpeza sobrevive ao processo de teste e segura o encerramento.
-        if (contagem.size >= maxChaves) {
-          for (const [k, v] of contagem) if (v.balde !== balde) contagem.delete(k)
-          // Ainda cheio (todos no balde atual): é rajada real. Recusa.
-          if (contagem.size >= maxChaves) return false
+        while (contagem.size >= maxChaves) {
+          const maisAntiga = contagem.keys().next().value as string
+          contagem.delete(maisAntiga)
         }
         contagem.set(chave, { balde, usos: 1 })
         return true
       }
 
+      // Uso recente vai para o fim da fila: o descarte pega quem está parado.
+      contagem.delete(chave)
+      contagem.set(chave, atual)
       if (atual.usos >= opcoes.teto) return false
       atual.usos++
       return true

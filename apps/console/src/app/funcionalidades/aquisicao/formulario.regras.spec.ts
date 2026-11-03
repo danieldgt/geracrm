@@ -60,6 +60,17 @@ describe('render: condicionais e envio', () => {
     expect(ok.ok).toBe(true)
     if (ok.ok) expect(ok.respostas[id(4)]).toBeUndefined()
   })
+  it('anexo acima de 10 MB, ou soma acima de 20 MB, é barrado antes de enviar', () => {
+    const a1 = { ...novoCampo('anexo', id(7)) }
+    const a2 = { ...novoCampo('anexo', id(8)) }
+    const a3 = { ...novoCampo('anexo', id(9)) }
+    const arq = (mb: number) => ({ size: mb * 1024 * 1024 }) as File
+    const grande = prepararEnvio([tel, a1], { [id(1)]: '81999991111' }, new Map([[id(7), arq(11)]]), true, reais)
+    expect(!grande.ok && grande.erros[id(7)]).toMatch(/10 MB/)
+    const soma = prepararEnvio([tel, a1, a2, a3], { [id(1)]: '81999991111' },
+      new Map([[id(7), arq(8)], [id(8), arq(8)], [id(9), arq(8)]]), true, reais)
+    expect(!soma.ok && soma.erros[id(9)]).toMatch(/20 MB/)
+  })
   it('dinheiro vira centavos', () => {
     const m = { ...novoCampo('moeda', id(6)) }
     const r = prepararEnvio([tel, m], { [id(1)]: '81999991111', [id(6)]: '1.234,50' }, new Map(), true, reais)

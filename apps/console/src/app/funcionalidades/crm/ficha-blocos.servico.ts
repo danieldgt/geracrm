@@ -54,6 +54,10 @@ export class FichaBlocosServico {
     const r = await firstValueFrom(this.http.get<{ itens: { id: string; tipo: string; fato: string }[] }>(`/v1/contatos/${id}/memoria`))
     return r.itens
   }
+  /** Resposta de formulário não verificada → ficha (gestor; a API audita e copia só o que faltava). */
+  aplicarRespostaFormulario(respostaId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post(`/v1/formularios/respostas/${respostaId}/aplicar`, {}))
+  }
   comentar(id: string, texto: string): Promise<unknown> {
     return firstValueFrom(this.http.post(`/v1/contatos/${id}/comentarios`, { texto }))
   }

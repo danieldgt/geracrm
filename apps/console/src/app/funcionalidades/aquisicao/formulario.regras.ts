@@ -144,7 +144,12 @@ export function snippetIframe(url: string, titulo: string): string {
 export interface FormularioDefinicao {
   titulo: string; descricao: string | null; cor: string; textoBotao: string
   campos: CampoFormulario[]; textoConsentimento: string; armadilha: string
+  /** Devolvido no envio: a API confere que a pessoa aceitou ESTE texto (409 `formulario.texto_mudou` se mudou). */
+  textoConsentimentoHash: string
 }
+
+/** Formato da chave pública (o mesmo que a API e o nginx aceitam). Fora dele, nem chama a API. */
+export const CHAVE_PUBLICA_VALIDA = /^[a-z0-9]{16,40}$/
 
 export type EnvioPronto =
   | { ok: true; respostas: Record<string, unknown>; anexos: Map<string, File> }
@@ -154,6 +159,10 @@ export type EnvioPronto =
  * Prepara o envio: só os campos VISÍVEIS (a condicional esconde, a API também descartaria), dinheiro em
  * centavos inteiros, e a mesma validação da API para antecipar o erro — a API continua sendo a regra.
  */
+/** Os mesmos tetos da API (10 MB por arquivo, 20 MB no envio): aqui é conveniência, lá é a regra. */
+export const MAX_BYTES_ANEXO = 10 * 1024 * 1024
+export const MAX_BYTES_ENVIO = 20 * 1024 * 1024
+
 export function prepararEnvio(
   campos: readonly CampoFormulario[], valores: Record<string, unknown>, arquivos: ReadonlyMap<string, File>,
   consentimento: boolean, reaisParaCentavos: (t: string) => number | null,
@@ -169,6 +178,15 @@ export function prepararEnvio(
   }
   const r = validarRespostas(campos, respostas, new Set(anexos.keys()))
   const erros: Record<string, string> = r.ok ? {} : { ...r.campos }
+  let total = 0
+  for (const [campoId, a] of anexos) {
+    total += a.size
+    if (a.size > MAX_BYTES_ANEXO) erros[campoId] = 'O arquivo passa de 10 MB.'
+  }
+  if (total > MAX_BYTES_ENVIO) {
+    const ultimo = [...anexos.keys()].pop()
+    if (ultimo && !erros[ultimo]) erros[ultimo] = 'Os arquivos passam de 20 MB no total.'
+  }
   if (!consentimento) erros['consentimento'] = 'É preciso aceitar o aviso de privacidade para enviar.'
   return Object.keys(erros).length > 0 ? { ok: false, erros } : { ok: true, respostas, anexos }
 }

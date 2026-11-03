@@ -7,6 +7,10 @@ import {
 import { exigirTenant } from '../../plugins/tenant.js'
 import { emSavepoint, type Sql } from '../../db/index.js'
 import { exigirPapel } from '../plataforma/papel.js'
+import { auditar } from '../plataforma/auditoria.js'
+import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { arquivosBucket } from '../crm/arquivos-bucket.js'
+import { gravarDocumento } from '../crm/contato-gravacao.js'
 import { celulaCsv } from '../atendimento/agente/rotas-qualidade.js'
 import {
   COLUNAS_FORMULARIO, UUID, camposDoFormulario, formularioParaApi, lerCursorTempo, montarCursorTempo,
@@ -20,6 +24,8 @@ import {
  */
 
 const PAGINA = 30
+const TTL_URL_SEGUNDOS = 300
+const ROTULO_VERIFICACAO: Record<string, string> = { nao_se_aplica: '', pendente: 'não verificada', aplicada: 'aplicada' }
 const LOTE_CSV = 500
 const CORES = ['acao', 'sucesso', 'atencao', 'erro', 'ia', 'neutro']
 const GESTOR = [exigirTenant, exigirPapel('gestor')]
@@ -31,7 +37,7 @@ const invalido = (reply: FastifyReply, campos: Record<string, string>) =>
 interface DadosFormulario {
   nome: string; slug: string | null; titulo: string; descricao: string | null; tipo: string
   filialId: string | null; etapaDestinoId: string | null; responsavelPadraoId: string | null; origemId: string | null
-  cor: string; textoBotao: string; mensagemSucesso: string; ativo: boolean
+  cor: string; textoBotao: string; mensagemSucesso: string; ativo: boolean; consentimentoMarketing: boolean
 }
 
 const texto = (v: unknown, max: number): string | null =>
@@ -88,6 +94,10 @@ function validarCorpo(
   if (b['ativo'] !== undefined) {
     if (typeof b['ativo'] === 'boolean') d.ativo = b['ativo']; else campos['ativo'] = 'Valor inválido.'
   }
+  if (b['consentimentoMarketing'] !== undefined) {
+    if (typeof b['consentimentoMarketing'] === 'boolean') d.consentimentoMarketing = b['consentimentoMarketing']
+    else campos['consentimentoMarketing'] = 'Valor inválido.'
+  }
   return Object.keys(campos).length > 0 ? { ok: false, campos } : { ok: true, dados: d }
 }
 
@@ -111,6 +121,19 @@ async function referenciasValidas(tx: Sql, d: Partial<DadosFormulario>): Promise
 }
 
 const novaChave = () => randomBytes(12).toString('hex')
+
+/** ⚠️ Publicar exige o campo telefone: sem ele não há identidade para o contato (e o envio quebraria). */
+const SEM_TELEFONE = { ativo: 'Inclua o campo telefone antes de publicar.' }
+async function temCampoTelefone(tx: Sql, formularioId: string): Promise<boolean> {
+  const [c] = await tx`SELECT 1 AS x FROM formulario_campo
+                        WHERE tenant_id = tenant_atual() AND formulario_id = ${formularioId} AND tipo = 'telefone' LIMIT 1`
+  return !!c
+}
+
+const primeiroValor = (campos: CampoFormulario[], v: Record<string, unknown>, tipo: string): string | null => {
+  const c = campos.find((x) => x.tipo === tipo && typeof v[x.id] === 'string' && v[x.id] !== '')
+  return c ? String(v[c.id]) : null
+}
 
 export async function rotasFormularios(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { cursor?: string } }>('/v1/formularios', { preHandler: GESTOR }, async (req, reply) => {
@@ -150,6 +173,8 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
     const v = validarCorpo(req.body ?? {}, false)
     if (!v.ok) return invalido(reply, v.campos)
     const d = v.dados as DadosFormulario
+    // Nasce sem campos — logo, sem telefone: não pode nascer publicado.
+    if (d.ativo === true) return invalido(reply, SEM_TELEFONE)
     const slugExplicito = d.slug !== undefined
     const base = d.slug ?? slugDeNome(d.nome)
 
@@ -163,12 +188,13 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
           await emSavepoint(tx, async (sp) => {
             await sp`
               INSERT INTO formulario (tenant_id, id, nome, slug, chave_publica, titulo, descricao, tipo, filial_id,
-                                      etapa_destino_id, responsavel_padrao_id, origem_id, cor, texto_botao, mensagem_sucesso, ativo)
+                                      etapa_destino_id, responsavel_padrao_id, origem_id, cor, texto_botao, mensagem_sucesso, ativo,
+                                      consentimento_marketing)
               VALUES (tenant_atual(), ${id}, ${d.nome}, ${slug}, ${novaChave()}, ${d.titulo}, ${d.descricao ?? null},
                       ${d.tipo ?? 'cadastro'}, ${d.filialId ?? null}, ${d.etapaDestinoId ?? null},
                       ${d.responsavelPadraoId ?? null}, ${d.origemId ?? null}, ${d.cor ?? 'acao'},
                       ${d.textoBotao ?? 'Enviar'}, ${d.mensagemSucesso ?? 'Recebemos suas informações. Obrigado!'},
-                      ${d.ativo ?? true})`
+                      false, ${d.consentimentoMarketing ?? false})`
           })
           const [f] = await tx<LinhaFormulario[]>`SELECT ${tx(COLUNAS_FORMULARIO)} FROM formulario WHERE tenant_id = tenant_atual() AND id = ${id}`
           return { f: f! }
@@ -207,12 +233,15 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
             origem: tem('origemId') ? d.origemId ?? null : atual.origem_id,
             cor: d.cor ?? atual.cor, botao: d.textoBotao ?? atual.texto_botao,
             sucesso: d.mensagemSucesso ?? atual.mensagem_sucesso, ativo: d.ativo ?? atual.ativo,
+            marketing: d.consentimentoMarketing ?? atual.consentimento_marketing,
           }
+          if (f.ativo && !(await temCampoTelefone(tx, req.params.id))) return { refs: SEM_TELEFONE }
           const [novo] = await tx<LinhaFormulario[]>`
             UPDATE formulario SET nome = ${f.nome}, slug = ${f.slug}, titulo = ${f.titulo}, descricao = ${f.descricao},
                    tipo = ${f.tipo}, filial_id = ${f.filial}, etapa_destino_id = ${f.etapa},
                    responsavel_padrao_id = ${f.resp}, origem_id = ${f.origem}, cor = ${f.cor}, texto_botao = ${f.botao},
-                   mensagem_sucesso = ${f.sucesso}, ativo = ${f.ativo}, atualizado_em = now()
+                   mensagem_sucesso = ${f.sucesso}, ativo = ${f.ativo}, consentimento_marketing = ${f.marketing},
+                   atualizado_em = now()
              WHERE tenant_id = tenant_atual() AND id = ${req.params.id}
             RETURNING ${tx(COLUNAS_FORMULARIO)}`
           return { f: novo! }
@@ -300,8 +329,8 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
         const [f] = await tx`SELECT 1 AS x FROM formulario WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!f) return null
         return tx<{ id: string; contato_id: string | null; contato_nome: string | null; contato_novo: boolean
-          respostas: Record<string, unknown>; criado_em: Date; em_txt: string }[]>`
-          SELECT r.id, r.contato_id, c.nome AS contato_nome, r.contato_novo, r.respostas, r.criado_em,
+          verificacao: string; respostas: Record<string, unknown>; criado_em: Date; em_txt: string }[]>`
+          SELECT r.id, r.contato_id, c.nome AS contato_nome, r.contato_novo, r.verificacao, r.respostas, r.criado_em,
                  to_char(r.criado_em AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS em_txt
             FROM formulario_resposta r
             LEFT JOIN contato c ON c.tenant_id = r.tenant_id AND c.id = r.contato_id
@@ -316,7 +345,7 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
       return reply.send({
         itens: pagina.map((l) => ({
           id: l.id, contatoId: l.contato_id, contatoNome: l.contato_nome, contatoNovo: l.contato_novo,
-          respostas: l.respostas, criadoEm: l.criado_em,
+          verificacao: l.verificacao, respostas: l.respostas, criadoEm: l.criado_em,
         })),
         proximoCursor: temMais && ultimo ? montarCursorTempo(ultimo.em_txt, ultimo.id) : null,
       })
@@ -344,12 +373,12 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
         return String(v)
       }
       async function* linhas() {
-        yield `﻿${['Data', 'Contato', 'Contato novo', ...base!.campos.map((c) => c.rotulo)].map(celulaCsv).join(';')}\r\n`
+        yield `﻿${['Data', 'Contato', 'Contato novo', 'Verificação', ...base!.campos.map((c) => c.rotulo)].map(celulaCsv).join(';')}\r\n`
         let cur: { em: string; id: string } | null = null
         for (;;) {
-          const lote: { id: string; contato_nome: string | null; contato_novo: boolean; respostas: Record<string, unknown>
-            em_txt: string }[] = await req.comTenant((tx) => tx`
-            SELECT r.id, c.nome AS contato_nome, r.contato_novo, r.respostas,
+          const lote: { id: string; contato_nome: string | null; contato_novo: boolean; verificacao: string
+            respostas: Record<string, unknown>; em_txt: string }[] = await req.comTenant((tx) => tx`
+            SELECT r.id, c.nome AS contato_nome, r.contato_novo, r.verificacao, r.respostas,
                    to_char(r.criado_em AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS em_txt
               FROM formulario_resposta r
               LEFT JOIN contato c ON c.tenant_id = r.tenant_id AND c.id = r.contato_id
@@ -357,7 +386,7 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
                AND ${cur === null ? tx`true` : tx`(r.criado_em, r.id) < (${cur.em}::timestamptz, ${cur.id}::uuid)`}
              ORDER BY r.criado_em DESC, r.id DESC LIMIT ${LOTE_CSV}`)
           if (lote.length === 0) return
-          yield lote.map((l) => [l.em_txt, l.contato_nome ?? '', l.contato_novo ? 'sim' : 'não',
+          yield lote.map((l) => [l.em_txt, l.contato_nome ?? '', l.contato_novo ? 'sim' : 'não', ROTULO_VERIFICACAO[l.verificacao] ?? '',
             ...base!.campos.map((c) => fmt(c, l.respostas[c.id]))].map(celulaCsv).join(';')).join('\r\n') + '\r\n'
           const ultimo = lote[lote.length - 1]!
           cur = { em: ultimo.em_txt, id: ultimo.id }
@@ -369,5 +398,76 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
         .header('content-disposition', `attachment; filename="formulario-${base.slug}-respostas.csv"`)
         .header('cache-control', 'no-store')
         .send(Readable.from(linhas()))
+    })
+
+  /**
+   * "Aplicar ao contato": o gestor confirmou que a resposta NÃO VERIFICADA (telefone já cadastrado, quem
+   * preencheu é anônimo) é mesmo do dono do cadastro. Só então os dados entram na ficha — e só o que
+   * faltava (e-mail, origem, filial, documento): o nome e o cadastro do ERP nunca são pisados. Os anexos
+   * passam da resposta para a ficha com o mesmo id e a mesma chave do bucket. Consentimento NÃO é copiado:
+   * o aceite foi de alguém não verificado. Auditado.
+   */
+  app.post<{ Params: { respostaId: string } }>(
+    '/v1/formularios/respostas/:respostaId/aplicar', { preHandler: GESTOR }, async (req, reply) => {
+      if (!UUID.test(req.params.respostaId)) return reply.code(404).send({ erro: 'formulario.resposta_nao_encontrada' })
+      const r = await req.comTenant(async (tx) => {
+        const [resp] = await tx<{ id: string; formulario_id: string; contato_id: string | null; verificacao: string
+          respostas: Record<string, unknown> }[]>`
+          SELECT id, formulario_id, contato_id, verificacao, respostas FROM formulario_resposta
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.respostaId} FOR UPDATE`
+        if (!resp) return 'nao_encontrada' as const
+        if (resp.verificacao !== 'pendente' || !resp.contato_id) return 'nao_pendente' as const
+        const [f] = await tx<{ origem_id: string | null; filial_id: string | null }[]>`
+          SELECT origem_id, filial_id FROM formulario WHERE tenant_id = tenant_atual() AND id = ${resp.formulario_id}`
+        const campos = await camposDoFormulario(tx, resp.formulario_id)
+        const email = primeiroValor(campos, resp.respostas, 'email')
+        const documento = primeiroValor(campos, resp.respostas, 'cnpj') ?? primeiroValor(campos, resp.respostas, 'cpf')
+        const contatoId = resp.contato_id
+        const eu = await garantirUsuarioId(tx, req)
+
+        await tx`
+          UPDATE contato SET email = COALESCE(email, ${email}), origem_id = COALESCE(origem_id, ${f?.origem_id ?? null}),
+                             filial_id = COALESCE(filial_id, ${f?.filial_id ?? null})
+           WHERE tenant_id = tenant_atual() AND id = ${contatoId}`
+        let documentoGravado = false
+        if (documento) {
+          const [tem] = await tx`SELECT 1 AS x FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${contatoId} LIMIT 1`
+          if (!tem) { await gravarDocumento(tx, contatoId, { documento }); documentoGravado = true }
+        }
+        const anexos = await tx<{ id: string }[]>`
+          INSERT INTO contato_arquivo (tenant_id, id, contato_id, nome, tipo_mime, tamanho_bytes, chave_bucket, legenda, enviado_por)
+          SELECT tenant_id, id, ${contatoId}, nome, tipo_mime, tamanho_bytes, chave_bucket, 'Formulário (aplicado)', ${eu}
+            FROM formulario_resposta_anexo WHERE tenant_id = tenant_atual() AND resposta_id = ${resp.id}
+          RETURNING id`
+        await tx`DELETE FROM formulario_resposta_anexo WHERE tenant_id = tenant_atual() AND resposta_id = ${resp.id}`
+        await tx`
+          UPDATE formulario_resposta SET verificacao = 'aplicada', aplicada_em = now(), aplicada_por = ${eu}
+           WHERE tenant_id = tenant_atual() AND id = ${resp.id}`
+        await auditar(tx, {
+          atorId: eu, acao: 'formulario.resposta_aplicada', entidade: 'contato', entidadeId: contatoId,
+          dados: { respostaId: resp.id, formularioId: resp.formulario_id, email: !!email, documento: documentoGravado, anexos: anexos.length },
+        })
+        return { contatoId }
+      })
+      if (r === 'nao_encontrada') return reply.code(404).send({ erro: 'formulario.resposta_nao_encontrada' })
+      if (r === 'nao_pendente') {
+        return reply.code(409).send({ erro: 'formulario.resposta_nao_pendente', mensagem: 'Esta resposta já foi aplicada ou não precisa de verificação.' })
+      }
+      return reply.send({ ok: true, contatoId: r.contatoId })
+    })
+
+  /** URL curta para o gestor conferir o anexo de uma resposta NÃO verificada (antes de aplicar). Baixa, não abre. */
+  app.get<{ Params: { respostaId: string; arquivoId: string } }>(
+    '/v1/formularios/respostas/:respostaId/anexos/:arquivoId/url', { preHandler: GESTOR }, async (req, reply) => {
+      const { respostaId, arquivoId } = req.params
+      if (!UUID.test(respostaId) || !UUID.test(arquivoId)) return reply.code(404).send({ erro: 'arquivo.nao_encontrado' })
+      const bucket = arquivosBucket()
+      if (!bucket.disponivel()) return reply.code(503).send({ erro: 'arquivos.bucket_indisponivel', mensagem: 'Armazenamento indisponível.' })
+      const [a] = await req.comTenant((tx) => tx<{ chave_bucket: string; nome: string; tipo_mime: string }[]>`
+        SELECT chave_bucket, nome, tipo_mime FROM formulario_resposta_anexo
+         WHERE tenant_id = tenant_atual() AND id = ${arquivoId} AND resposta_id = ${respostaId}`)
+      if (!a) return reply.code(404).send({ erro: 'arquivo.nao_encontrado' })
+      const url = await bucket.urlAssinada(a.chave_bucket, TTL_URL_SEGUNDOS, { nome: a.nome, tipo: a.tipo_mime })
+      return reply.header('cache-control', 'no-store').send({ url, nome: a.nome, expiraEmSegundos: TTL_URL_SEGUNDOS })
     })
 }

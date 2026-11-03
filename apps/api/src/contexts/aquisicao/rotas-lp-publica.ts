@@ -26,7 +26,7 @@ import { criarLimiteTaxa } from './limite-taxa.js'
 const limitePorIp = criarLimiteTaxa({ teto: 20, janelaMs: 60_000 })
 /**
  * ⚠️ E um teto por LP, independente de IP: o limite por IP se contorna trocando
- * de IP (ou forjando `x-forwarded-for`, que é cabeçalho de cliente). O teto por
+ * de IP (proxy aberto, rede móvel). O teto por
  * chave é o que realmente limita quantas linhas entram no banco.
  */
 const limitePorLp = criarLimiteTaxa({ teto: 600, janelaMs: 60_000 })
@@ -34,14 +34,12 @@ const limitePorLp = criarLimiteTaxa({ teto: 600, janelaMs: 60_000 })
 /**
  * IP de quem chamou, atrás do proxy do Railway.
  *
- * ⚠️ `x-forwarded-for` é escrito pelo cliente e só depois acrescentado pelo
- * proxy — dá para forjar. Serve para separar tráfego normal, não para barrar
- * quem está tentando: quem tenta esbarra no teto por LP.
+ * ⚠️ É `req.ip`, resolvido pelo `trustProxy` do Fastify (`saltosDeProxy` em `app.ts`): conta só os saltos
+ * de proxy confiáveis a partir da direita do `X-Forwarded-For`. O primeiro valor do cabeçalho é escrito
+ * pelo cliente — lê-lo dava a quem quisesse um "IP" novo a cada envio.
  */
 export function ipDoCliente(req: FastifyRequest): string {
-  const xff = req.headers['x-forwarded-for']
-  const bruto = Array.isArray(xff) ? xff[0] : xff
-  return bruto?.split(',')[0]?.trim() || req.ip
+  return req.ip
 }
 
 interface LinhaLp {
@@ -144,8 +142,9 @@ export async function rotasLpPublica(app: FastifyInstance): Promise<void> {
 
       const agora = Date.now()
       const ip = ipDoCliente(req)
-      if (!limitePorIp.permitir(`${req.params.chave}:${ip}`, agora)
-        || !limitePorLp.permitir(req.params.chave, agora)) {
+      // Teto da LP ANTES da chave por IP: estourado o teto, nem cria entrada nova no mapa por IP.
+      if (!limitePorLp.permitir(req.params.chave, agora)
+        || !limitePorIp.permitir(`${req.params.chave}:${ip}`, agora)) {
         // ⚠️ 429 com corpo tipificado — a página trata como falha e degrada para
         //    o wa.me sem código. O lead conversa; só a atribuição se perde.
         return reply.code(429).send({ erro: 'limite.excedido' })
@@ -211,8 +210,9 @@ export async function rotasLpPublica(app: FastifyInstance): Promise<void> {
 
       const agora = Date.now()
       const ip = ipDoCliente(req)
-      if (!limitePorIp.permitir(`${req.params.chave}:${ip}`, agora)
-        || !limitePorLp.permitir(req.params.chave, agora)) {
+      // Teto da LP ANTES da chave por IP: estourado o teto, nem cria entrada nova no mapa por IP.
+      if (!limitePorLp.permitir(req.params.chave, agora)
+        || !limitePorIp.permitir(`${req.params.chave}:${ip}`, agora)) {
         return reply.code(429).send({ erro: 'limite.excedido' })
       }
 

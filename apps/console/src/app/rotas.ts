@@ -139,10 +139,22 @@ export const ROTAS: Routes = [
     loadComponent: () => import('./nucleo/login.pagina.js').then((m) => m.LoginPagina),
   },
   // Formulário PÚBLICO (F3): fora da casca, sem guard — quem preenche não tem conta.
+  // ⚠️ Só `/f/<chave>` é o formulário (e só ele pode ir para iframe, ver nginx.conf). Qualquer outro
+  //    caminho sob `/f/` mostra "indisponível" — nunca cai na casca/login, que não pode ser incorporada.
   {
-    path: 'f/:chave',
-    loadComponent: () =>
-      import('./funcionalidades/aquisicao/formulario-publico.pagina.js').then((m) => m.FormularioPublicoPagina),
+    path: 'f',
+    children: [
+      {
+        path: ':chave',
+        loadComponent: () =>
+          import('./funcionalidades/aquisicao/formulario-publico.pagina.js').then((m) => m.FormularioPublicoPagina),
+      },
+      {
+        path: '**',
+        loadComponent: () =>
+          import('./funcionalidades/aquisicao/formulario-publico.pagina.js').then((m) => m.FormularioPublicoPagina),
+      },
+    ],
   },
   {
     path: '',

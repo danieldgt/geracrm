@@ -25,6 +25,10 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
 const OPCOES_TIPO: OpcaoSelect[] = TIPOS_FORM.map((t) => ({ valor: t, rotulo: ROTULO_TIPO_FORM[t] }))
 const OPCOES_COR: OpcaoSelect[] = CORES_FORM.map((c) => ({ valor: c.valor, rotulo: c.rotulo }))
 const OPCOES_SITUACAO: OpcaoSelect[] = [{ valor: 'true', rotulo: 'Ativo' }, { valor: 'false', rotulo: 'Inativo' }]
+const OPCOES_MARKETING: OpcaoSelect[] = [
+  { valor: 'false', rotulo: 'Não pedir (só contato sobre a solicitação)' },
+  { valor: 'true', rotulo: 'Pedir consentimento para ofertas' },
+]
 const COM_PLACEHOLDER: readonly TipoCampo[] = ['texto', 'texto_longo', 'numero', 'moeda', 'telefone', 'email', 'cpf', 'cnpj']
 const MAX_PAGINAS_CATALOGO = 5
 
@@ -84,7 +88,8 @@ const MAX_PAGINAS_CATALOGO = 5
                   dica="Em branco, usa o nome." />
                 <ui-campo class="largo" tipo="textarea" rotulo="Descrição" [(valor)]="descricao" [erro]="errosCfg()['descricao'] ?? null" />
                 <ui-select rotulo="Tipo" [opcoes]="opcoesTipo" [(valor)]="tipo" [erro]="errosCfg()['tipo'] ?? null" />
-                <ui-select rotulo="Situação" [opcoes]="opcoesSituacao" [(valor)]="ativo" [erro]="errosCfg()['ativo'] ?? null" />
+                <ui-select rotulo="Situação" [opcoes]="opcoesSituacao" [(valor)]="ativo" [erro]="errosCfg()['ativo'] ?? null"
+                  dica="Só publica com o campo telefone." />
                 <ui-select rotulo="Cor do botão" [opcoes]="opcoesCor" [(valor)]="cor" [erro]="errosCfg()['cor'] ?? null" />
                 <ui-campo rotulo="Texto do botão" [(valor)]="textoBotao" [erro]="errosCfg()['textoBotao'] ?? null" />
                 <ui-campo class="largo" rotulo="Mensagem de agradecimento" [(valor)]="mensagemSucesso" [erro]="errosCfg()['mensagemSucesso'] ?? null" />
@@ -100,6 +105,9 @@ const MAX_PAGINAS_CATALOGO = 5
                 <ui-select class="largo" rotulo="Etapa do funil" placeholder="Não criar oportunidade" [opcoes]="opcoesEtapa()"
                   [(valor)]="etapaDestinoId" [erro]="errosCfg()['etapaDestinoId'] ?? null"
                   dica="Se escolher, quem preencher já entra como oportunidade aberta nesta etapa." />
+                <ui-select class="largo" rotulo="Consentimento de marketing (LGPD)" [opcoes]="opcoesMarketing" [(valor)]="marketing"
+                  [erro]="errosCfg()['consentimentoMarketing'] ?? null"
+                  dica="Se pedir, o aviso exibido diz que a pessoa aceita receber ofertas, e o contato novo entra em campanhas. Sem isso, não entra." />
               </ui-grade-form>
             </section>
 
@@ -208,16 +216,8 @@ const MAX_PAGINAS_CATALOGO = 5
         </label>
         <button type="button" class="btn btn--secundario" (click)="copiar(snippet())">Copiar código</button>
         <p class="dica txt-denso">O servidor de páginas controla quem pode incorporar (cabeçalho <code>frame-ancestors</code>, configurável na hospedagem do console).</p>
-        <hr />
-        <p class="txt-denso"><strong>Token de integração.</strong> Para integrar por API. Aparece só uma vez: se perder, gere outro (o anterior deixa de valer).</p>
-        @if (token(); as t) {
-          <ui-campo rotulo="Novo token" [valor]="t" [desabilitado]="true">
-            <button acao type="button" class="btn btn--secundario" (click)="copiar(t)">Copiar</button>
-          </ui-campo>
-        }
-        <button type="button" class="btn btn--secundario" [disabled]="gerandoToken()" (click)="gerarToken()">
-          {{ temToken() ? 'Gerar outro token' : 'Gerar token' }}
-        </button>
+        <!-- ⚠️ O token de integração fica FORA da tela até existir uma integração que o use: um segredo
+             gerado sem consumidor só aumenta a superfície (a rota POST /v1/formularios/:id/token continua). -->
       </div>
       <div rodape>
         <button type="button" class="btn btn--primario" (click)="incorporando.set(false)">Fechar</button>
@@ -296,13 +296,13 @@ export class FormularioBuilderPagina implements OnInit {
   protected readonly opcoesTipo = OPCOES_TIPO
   protected readonly opcoesCor = OPCOES_COR
   protected readonly opcoesSituacao = OPCOES_SITUACAO
+  protected readonly opcoesMarketing = OPCOES_MARKETING
 
   protected readonly estado = signal<Estado>('carregando')
   protected readonly erroCarga = signal('')
   protected readonly idAtual = signal<string | null>(null)
   protected readonly slugSalvo = signal('')
   protected readonly chavePublica = signal('')
-  protected readonly temToken = signal(false)
   protected readonly aba = signal('construtor')
   protected readonly abas = computed<Aba[]>(() => [{ id: 'construtor', rotulo: 'Construtor' }, { id: 'respostas', rotulo: 'Respostas' }])
   protected readonly trilha = computed(() => [{ rotulo: 'Formulários', rota: '/formularios' }, { rotulo: this.nome() || 'Novo formulário' }])
@@ -316,7 +316,9 @@ export class FormularioBuilderPagina implements OnInit {
   protected readonly textoBotao = signal('Enviar')
   protected readonly mensagemSucesso = signal('Recebemos suas informações. Obrigado!')
   protected readonly slug = signal('')
-  protected readonly ativo = signal('true')
+  /** Nasce INATIVO: a API recusa publicar sem o campo telefone. */
+  protected readonly ativo = signal('false')
+  protected readonly marketing = signal('false')
   protected readonly origemId = signal('')
   protected readonly filialId = signal('')
   protected readonly etapaDestinoId = signal('')
@@ -343,8 +345,6 @@ export class FormularioBuilderPagina implements OnInit {
 
   // Incorporar
   protected readonly incorporando = signal(false)
-  protected readonly token = signal<string | null>(null)
-  protected readonly gerandoToken = signal(false)
   protected readonly linkDoForm = computed(() => linkPublico(window.location.origin, this.chavePublica()))
   protected readonly snippet = computed(() => snippetIframe(linkIncorporado(window.location.origin, this.chavePublica()), this.titulo() || this.nome()))
 
@@ -421,10 +421,10 @@ export class FormularioBuilderPagina implements OnInit {
   }
 
   private aplicar(f: FormularioDetalhe): void {
-    this.idAtual.set(f.id); this.slugSalvo.set(f.slug); this.chavePublica.set(f.chavePublica); this.temToken.set(f.temToken)
+    this.idAtual.set(f.id); this.slugSalvo.set(f.slug); this.chavePublica.set(f.chavePublica)
     this.nome.set(f.nome); this.titulo.set(f.titulo === f.nome ? '' : f.titulo); this.descricao.set(f.descricao ?? '')
     this.tipo.set(f.tipo); this.cor.set(f.cor); this.textoBotao.set(f.textoBotao); this.mensagemSucesso.set(f.mensagemSucesso)
-    this.slug.set(f.slug); this.ativo.set(String(f.ativo))
+    this.slug.set(f.slug); this.ativo.set(String(f.ativo)); this.marketing.set(String(f.consentimentoMarketing))
     this.origemId.set(f.origemId ?? ''); this.filialId.set(f.filialId ?? ''); this.etapaDestinoId.set(f.etapaDestinoId ?? '')
     this.responsavelCtl.setValue(f.responsavelPadraoId)
     this.campos.set(f.campos.map((c) => ({ ...c })))
@@ -462,20 +462,23 @@ export class FormularioBuilderPagina implements OnInit {
       nome: this.nome().trim(), titulo: this.titulo().trim() || this.nome().trim(), descricao: this.descricao().trim() || null,
       tipo: this.tipo(), cor: this.cor(), textoBotao: this.textoBotao().trim() || 'Enviar',
       mensagemSucesso: this.mensagemSucesso().trim() || 'Recebemos suas informações. Obrigado!',
-      ativo: this.ativo() === 'true', origemId: this.origemId() || null, filialId: this.filialId() || null,
+      consentimentoMarketing: this.marketing() === 'true', origemId: this.origemId() || null, filialId: this.filialId() || null,
       etapaDestinoId: this.etapaDestinoId() || null, responsavelPadraoId: this.responsavelCtl.value || null,
     }
+    const ativo = this.ativo() === 'true'
+    const slug = this.slug().trim() ? { slug: this.slug().trim() } : {}
     try {
+      // ⚠️ Ordem: campos ANTES de publicar. A API só aceita `ativo: true` com o campo telefone já gravado
+      //    (o formulário nasce inativo e sem campos).
       let id = this.idAtual()
-      if (id) {
-        await this.api.editar(id, { ...corpo, ...(this.slug().trim() ? { slug: this.slug().trim() } : {}) })
-      } else {
-        const novo = await this.api.criar({ ...corpo, ...(this.slug().trim() ? { slug: this.slug().trim() } : {}) })
+      if (!id) {
+        const novo = await this.api.criar({ ...corpo, ...slug })
         id = novo.id
         this.idAtual.set(id); this.slugSalvo.set(novo.slug); this.slug.set(novo.slug); this.chavePublica.set(novo.chavePublica)
       }
       const r = await this.api.salvarCampos(id, this.campos())
       this.campos.set(r.campos.map((c) => ({ ...c })))
+      await this.api.editar(id, { ...corpo, ...slug, ativo })
       this.rascunhoOpcoes.set({})
       this.slugSalvo.set(this.slug().trim() || this.slugSalvo())
       this.toast.sucesso('Formulário salvo.')
@@ -503,22 +506,10 @@ export class FormularioBuilderPagina implements OnInit {
   }
 
   // ── incorporar ──
-  protected abrirIncorporar(): void { this.token.set(null); this.incorporando.set(true) }
+  protected abrirIncorporar(): void { this.incorporando.set(true) }
 
   protected async copiar(texto: string): Promise<void> {
     try { await navigator.clipboard.writeText(texto); this.toast.sucesso('Copiado.') }
     catch { this.toast.erro('Não foi possível copiar. Selecione o texto e copie à mão.') }
-  }
-
-  protected async gerarToken(): Promise<void> {
-    const id = this.idAtual()
-    if (!id || this.gerandoToken()) return
-    this.gerandoToken.set(true)
-    try {
-      const r = await this.api.regerarToken(id)
-      this.token.set(r.token); this.temToken.set(true)
-    } catch (e) {
-      this.toast.erro(mensagemDeErro(e, 'Não foi possível gerar o token.'))
-    } finally { this.gerandoToken.set(false) }
   }
 }

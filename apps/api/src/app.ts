@@ -84,6 +84,26 @@ import { rotasSla } from './contexts/atendimento/rotas-sla.js'
 import { rotasCockpit } from './contexts/plataforma/rotas-cockpit.js'
 
 /**
+ * Quantos proxies CONFIÁVEIS ficam entre o cliente e a API (`TRUST_PROXY_HOPS`, padrão 1).
+ *
+ * ⚠️ É o que faz `req.ip` ser o IP real: o Fastify conta N saltos a partir do socket, da DIREITA para a
+ * esquerda do `X-Forwarded-For`, e para ali. Tudo à esquerda disso foi escrito pelo cliente e é
+ * ignorado — ler o PRIMEIRO valor do cabeçalho (como se fazia) deixava qualquer um trocar de "IP" a cada
+ * envio e furar o limite por IP. Nunca leia o cabeçalho na mão: use `req.ip`.
+ *
+ * Valor por caminho (documentado em `.env.example`):
+ *  - 1 = só a borda do Railway (chamada direta ao domínio da API);
+ *  - 2 = rotas públicas que passam pelo nginx do console: o nginx reescreve o XFF com o IP que a borda
+ *    dele viu (`real_ip_header`, ver `apps/console/nginx.conf`) e a borda da API acrescenta o do nginx.
+ * 0 desliga (o IP é o do socket).
+ */
+export function saltosDeProxy(bruto = process.env.TRUST_PROXY_HOPS): number | false {
+  const n = bruto === undefined || bruto.trim() === '' ? 1 : Number(bruto)
+  if (!Number.isInteger(n) || n < 0 || n > 10) return 1
+  return n === 0 ? false : n
+}
+
+/**
  * Builds the app without listening — so tests can use `app.inject()`
  * without opening a port.
  *
@@ -94,6 +114,7 @@ export async function criarApp(
   opcoes: { provedorIdentidade?: ProvedorIdentidade } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
+    trustProxy: saltosDeProxy(),
     logger:
       process.env.NODE_ENV === 'test'
         ? false

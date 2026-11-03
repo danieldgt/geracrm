@@ -3,7 +3,7 @@ import { HttpErrorResponse } from '@angular/common/http'
 import { reaisParaCentavos } from '../../compartilhado/ui/index.js'
 import { TemaServico } from '../../nucleo/tema.servico.js'
 import { FormularioRenderComponente } from './formulario-render.componente.js'
-import { estiloDoBotao, prepararEnvio, type FormularioDefinicao } from './formulario.regras.js'
+import { CHAVE_PUBLICA_VALIDA, estiloDoBotao, prepararEnvio, type FormularioDefinicao } from './formulario.regras.js'
 import { FormulariosServico } from './formularios.servico.js'
 
 type Estado = 'carregando' | 'indisponivel' | 'erro_carga' | 'pronto' | 'enviando' | 'sucesso'
@@ -119,8 +119,8 @@ type Estado = 'carregando' | 'indisponivel' | 'erro_carga' | 'pronto' | 'enviand
   `,
 })
 export class FormularioPublicoPagina implements OnInit {
-  /** Ligado à rota `f/:chave` e ao `?embed=1` (withComponentInputBinding). */
-  readonly chave = input.required<string>()
+  /** Ligado à rota `f/:chave` e ao `?embed=1` (withComponentInputBinding). Vazio em `f/**` → indisponível. */
+  readonly chave = input<string>('')
   readonly embed = input<string | undefined>(undefined)
 
   private readonly api = inject(FormulariosServico)
@@ -147,6 +147,7 @@ export class FormularioPublicoPagina implements OnInit {
   ngOnInit(): void { void this.carregar() }
 
   protected async carregar(): Promise<void> {
+    if (!CHAVE_PUBLICA_VALIDA.test(this.chave() ?? '')) { this.estado.set('indisponivel'); return }
     this.estado.set('carregando')
     try {
       this.definicao.set(await this.api.definicaoPublica(this.chave()))
@@ -169,20 +170,42 @@ export class FormularioPublicoPagina implements OnInit {
     this.estado.set('enviando')
     try {
       const r = await this.api.enviarPublico(this.chave(), {
-        respostas: pronto.respostas, consentimento: true, [d.armadilha]: this.apelido(),
+        respostas: pronto.respostas, consentimento: true, textoConsentimentoHash: d.textoConsentimentoHash,
+        [d.armadilha]: this.apelido(),
       }, pronto.anexos)
       this.mensagemSucesso.set(r.mensagem)
       this.estado.set('sucesso')
     } catch (e) {
       this.estado.set('pronto')
       if (e instanceof HttpErrorResponse) {
-        const corpo = e.error as { campos?: Record<string, string>; mensagem?: string } | null
+        const corpo = e.error as { erro?: string; campos?: Record<string, string>; mensagem?: string } | null
         if (e.status === 422 && corpo?.campos) { this.erros.set(corpo.campos); return }
         if (e.status === 404) { this.estado.set('indisponivel'); return }
+        if (e.status === 409 && corpo?.erro === 'formulario.texto_mudou') { await this.textoMudou(); return }
+        if (e.status === 503 && corpo?.erro === 'formulario.ocupado') {
+          this.erroEnvio.set('Estamos recebendo muitos arquivos agora. Aguarde alguns segundos e tente de novo — seus dados continuam aqui.')
+          return
+        }
+        if (e.status === 413) { this.erroEnvio.set('Os arquivos passam de 20 MB no total. Envie arquivos menores.'); return }
         if (e.status === 429) { this.erroEnvio.set('Muitos envios seguidos. Aguarde um instante e tente de novo.'); return }
         if (corpo?.mensagem) { this.erroEnvio.set(corpo.mensagem); return }
       }
       this.erroEnvio.set('Não foi possível enviar agora. Seus dados continuam aqui — tente de novo.')
     }
+  }
+
+  /**
+   * LGPD: o aviso de privacidade mudou depois que a página abriu. Recarrega a definição (o texto novo),
+   * desmarca o aceite — a pessoa precisa ler e aceitar o texto ATUAL — e mantém o que ela já preencheu.
+   */
+  private async textoMudou(): Promise<void> {
+    try {
+      this.definicao.set(await this.api.definicaoPublica(this.chave()))
+    } catch (e) {
+      this.estado.set(e instanceof HttpErrorResponse && e.status === 404 ? 'indisponivel' : 'erro_carga')
+      return
+    }
+    this.aceitou.set(false)
+    this.erroEnvio.set('O aviso de privacidade foi atualizado. Leia o texto abaixo, marque o aceite e envie de novo.')
   }
 }

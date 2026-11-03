@@ -18,18 +18,26 @@ export interface FormularioDetalhe {
   readonly filialId: string | null; readonly etapaDestinoId: string | null
   readonly responsavelPadraoId: string | null; readonly origemId: string | null
   readonly cor: string; readonly textoBotao: string; readonly mensagemSucesso: string
-  readonly ativo: boolean; readonly temToken: boolean; readonly campos: readonly CampoFormulario[]
+  readonly ativo: boolean; readonly consentimentoMarketing: boolean; readonly temToken: boolean
+  readonly campos: readonly CampoFormulario[]
 }
 
 export interface CorpoFormulario {
   nome?: string; slug?: string; titulo?: string; descricao?: string | null; tipo?: string
   filialId?: string | null; etapaDestinoId?: string | null; responsavelPadraoId?: string | null; origemId?: string | null
-  cor?: string; textoBotao?: string; mensagemSucesso?: string; ativo?: boolean
+  cor?: string; textoBotao?: string; mensagemSucesso?: string; ativo?: boolean; consentimentoMarketing?: boolean
 }
+
+/**
+ * `pendente` = telefone já cadastrado, preenchido por alguém NÃO verificado: nada foi aplicado ao contato
+ * até um gestor confirmar ("Aplicar ao contato"). `nao_se_aplica` = contato criado pelo formulário.
+ */
+export type VerificacaoResposta = 'nao_se_aplica' | 'pendente' | 'aplicada'
 
 export interface RespostaLinha {
   readonly id: string; readonly contatoId: string | null; readonly contatoNome: string | null
-  readonly contatoNovo: boolean; readonly respostas: Record<string, unknown>; readonly criadoEm: string
+  readonly contatoNovo: boolean; readonly verificacao: VerificacaoResposta
+  readonly respostas: Record<string, unknown>; readonly criadoEm: string
 }
 
 export interface EtapaFunil { readonly id: string; readonly nome: string; readonly tipo: string; readonly ativo: boolean }
@@ -59,6 +67,10 @@ export class FormulariosServico {
   }
   regerarToken(id: string): Promise<{ token: string }> {
     return firstValueFrom(this.http.post<{ token: string }>(`/v1/formularios/${id}/token`, {}))
+  }
+  /** Gestor confirma que a resposta não verificada é do dono do cadastro: copia o que faltava (auditado). */
+  aplicarResposta(respostaId: string): Promise<{ ok: boolean; contatoId: string }> {
+    return firstValueFrom(this.http.post<{ ok: boolean; contatoId: string }>(`/v1/formularios/respostas/${respostaId}/aplicar`, {}))
   }
   respostas(id: string, cursor?: string | null): Promise<Pagina<RespostaLinha>> {
     return firstValueFrom(this.http.get<Pagina<RespostaLinha>>(`/v1/formularios/${id}/respostas${queryDeLista({ cursor })}`))

@@ -64,6 +64,10 @@ describe('feed', () => {
     expect(itemParaExibicao(item({ id: 'a', tipo: 'tarefa_concluida', autor: { id: 'u', nome: 'Vera' } })))
       .toMatchObject({ icone: 'check-square', rotuloTipo: 'Tarefa concluída', tom: 'sucesso', autor: 'Vera' })
     expect(itemParaExibicao(item({ id: 'b', tipo: 'handoff' })).autor).toBe('Sistema')
+    // resposta de formulário não verificada: aviso em atenção e o id para "Aplicar ao contato"
+    const pend = itemParaExibicao(item({ id: 'c', tipo: 'formulario', ref: { tipo: 'formulario_resposta_pendente', id: 'r1' } }))
+    expect(pend).toMatchObject({ tom: 'atencao', rotuloTipo: 'Formulário', respostaPendenteId: 'r1' })
+    expect(itemParaExibicao(item({ id: 'd', tipo: 'formulario', ref: { tipo: 'formulario_resposta', id: 'r2' } })).respostaPendenteId).toBeNull()
   })
   it('mesclar não repete id (item novo empurrou a borda) e preserva a ordem', () => {
     const a = [item({ id: '1' }), item({ id: '2' })]

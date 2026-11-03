@@ -94,7 +94,7 @@ import { camposVisiveis, type CampoFormulario } from './formulario.regras.js'
               <input class="arquivo" type="file" [id]="'anexo-' + c.id" [disabled]="desabilitado()"
                 accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.xls,.xlsx,.csv,.txt"
                 (change)="escolherArquivo(c.id, $event)" />
-              <span class="dica txt-denso">PDF, imagem, planilha, Word ou texto, até 10 MB.</span>
+              <span class="dica txt-denso">PDF, imagem, planilha, Word ou texto, até 10 MB (20 MB somando os arquivos).</span>
               @if (erros()[c.id]) { <span class="msg-erro txt-denso" role="alert">{{ erros()[c.id] }}</span> }
             </div>
           }

@@ -30,13 +30,14 @@ export interface LinhaFormulario {
   id: string; nome: string; slug: string; chave_publica: string; titulo: string; descricao: string | null
   tipo: string; filial_id: string | null; etapa_destino_id: string | null; responsavel_padrao_id: string | null
   origem_id: string | null; cor: string; texto_botao: string; mensagem_sucesso: string; ativo: boolean
-  token_hash: string | null; criado_em: Date
+  consentimento_marketing: boolean; token_hash: string | null; criado_em: Date
 }
 
 /** Para `tx(COLUNAS_FORMULARIO)` — identificadores, nunca texto de usuário. */
 export const COLUNAS_FORMULARIO = [
   'id', 'nome', 'slug', 'chave_publica', 'titulo', 'descricao', 'tipo', 'filial_id', 'etapa_destino_id',
-  'responsavel_padrao_id', 'origem_id', 'cor', 'texto_botao', 'mensagem_sucesso', 'ativo', 'token_hash', 'criado_em',
+  'responsavel_padrao_id', 'origem_id', 'cor', 'texto_botao', 'mensagem_sucesso', 'ativo', 'consentimento_marketing',
+  'token_hash', 'criado_em',
 ]
 
 /** Representação de API. ⚠️ Nunca devolve `token_hash`: só diz se há token. */
@@ -45,7 +46,7 @@ export function formularioParaApi(l: LinhaFormulario, totalRespostas?: number) {
     id: l.id, nome: l.nome, slug: l.slug, chavePublica: l.chave_publica, titulo: l.titulo, descricao: l.descricao,
     tipo: l.tipo, filialId: l.filial_id, etapaDestinoId: l.etapa_destino_id, responsavelPadraoId: l.responsavel_padrao_id,
     origemId: l.origem_id, cor: l.cor, textoBotao: l.texto_botao, mensagemSucesso: l.mensagem_sucesso, ativo: l.ativo,
-    temToken: l.token_hash !== null, criadoEm: l.criado_em,
+    consentimentoMarketing: l.consentimento_marketing, temToken: l.token_hash !== null, criadoEm: l.criado_em,
     ...(totalRespostas === undefined ? {} : { totalRespostas }),
   }
 }
@@ -54,6 +55,19 @@ export function formularioParaApi(l: LinhaFormulario, totalRespostas?: number) {
 export const TEXTO_CONSENTIMENTO_PADRAO =
   'Ao enviar este formulário, você autoriza o uso dos seus dados para contato sobre sua solicitação, '
   + 'inclusive por WhatsApp. Você pode pedir a exclusão dos dados a qualquer momento.'
+
+/** Acrescentado ao texto quando o formulário pede consentimento de marketing — o pedido fica EXPLÍCITO. */
+export const TEXTO_CONSENTIMENTO_MARKETING =
+  'Também autorizo o envio de ofertas e novidades por WhatsApp; posso cancelar quando quiser.'
+
+/**
+ * O texto que a pessoa VÊ e aceita (é o que vai congelado na resposta e cujo hash o POST confere).
+ * Marketing só entra quando o formulário pede — e então aparece escrito, não presumido.
+ */
+export function textoConsentimentoExibido(doTenant: string | null, marketing: boolean): string {
+  const base = doTenant?.trim() || TEXTO_CONSENTIMENTO_PADRAO
+  return marketing ? `${base} ${TEXTO_CONSENTIMENTO_MARKETING}` : base
+}
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
