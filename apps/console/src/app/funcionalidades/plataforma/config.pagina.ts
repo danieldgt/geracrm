@@ -112,7 +112,7 @@ const PAPEL_ROTULO: Record<string, string> = { admin: 'Admin', gestor: 'Gestor',
 
           <ui-painel>
             <h2 class="txt-secao">Equipe <span class="cont">({{ equipe().length }})</span></h2>
-            <p class="dica txt-corpo">Quem tem acesso e com qual papel. A gestão de usuários fica na tela de usuários.</p>
+            <p class="dica txt-corpo">Quem tem acesso e com qual papel. <a routerLink="/usuarios">Gerenciar usuários</a></p>
             @if (equipe().length === 0) {
               <p class="vazio txt-corpo">Nenhum usuário ainda.</p>
             } @else {
