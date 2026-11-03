@@ -29,21 +29,21 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D5 configurações com abas + módulos | 2 | ✅ | integrada (0116); `exigirModulo('agenda')` e `ModulosServico` prontos |
 | H2 LGPD retenção/anonimização | 2 | 🔍 | revisão Opus REPROVOU (falsos positivos confirmados, ressurreição pelo ERP, bloqueio irremovível na retenção, mídia sem remoção); correção Opus em curso — automática desligada por padrão com prévia |
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
-| B1 panorama do funil | 2 | 🔄 | Sonnet; migration 0131 se necessária |
+| B1 panorama do funil | 2 | ✅ | integrada (0131) |
 | C2 agenda (módulo) | 2 | ✅ | integrada (0117); pendente: trocar escopo por papéis pelo `escopo.ts` e montar `app-agenda-contato` na ficha |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | ⬜ | |
 | D4 notificações, perfil, esqueci a senha | 2 | ⬜ | |
 | D6 auditoria v2 | 2 | ✅ | integrada; cursor com µs corrigido; pendente: login/logout (vai com D4), janela padrão da busca `q` |
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
-| D2 higienização da carteira | 2 | ⬜ | |
+| D2 higienização da carteira | 2 | 🔄 | Sonnet |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
 | F1 campanhas v2 | 3 | ⬜ | |
-| F3 formulários públicos | 3 | 🔍 | integrada (0127); revisão de segurança Opus do endpoint público em curso |
+| F3 formulários públicos | 3 | 🔍 | revisão de segurança: aprovado com correções (upload fora da transação, IP real, contato existente intocado); correção Opus em curso — não divulgar link antes |
 | G2 objeções | 3 | 🔄 | Opus; migration 0126 |
 | G3 pós-venda, NPS, indicações, prova social | 3 | 🔄 | Opus; migration 0130 |
 | G4 roteamento e rodízio | 3 | ⬜ | |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
-| H1 importador | 3 | ⬜ | |
+| H1 importador | 3 | 🔄 | Sonnet; migration 0133 |
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
 | E2 relatórios 1ª leva | 3 | ⬜ | |
 | E3 relatórios 2ª leva | 3 | ⬜ | |
