@@ -43,9 +43,9 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | G3 pós-venda, NPS, indicações, prova social | 3 | 🔍 | integrada (0130); revisão Opus em curso |
 | G4 roteamento e rodízio | 3 | 🔄 | Opus; migration 0136 |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
-| H1 importador | 3 | 🔍 | integrada (0133); revisão Sonnet em curso |
+| H1 importador | 3 | 🔍 | integrada (0133); revisão: aprovado com correções (alto: LGPD — não ressuscitar titular nem editar anonimizado; arrendamento do worker; simulação fiel); correção em curso pelo agente da raia |
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
-| E2 relatórios 1ª leva | 3 | 🔍 | integrada (sem migration; consultas vivas com período ≤ 366 dias); revisão Sonnet em curso |
+| E2 relatórios 1ª leva | 3 | 🔍 | integrada (sem migration); revisão: aprovado com correções (mensagens de sistema no WhatsApp, ranking fora do escopo, vazio em Dia); correção em curso pelo agente da raia |
 | E3 relatórios 2ª leva | 3 | 🔄 | Sonnet |
 | L1 retrofit das telas restantes | 4 | 🔄 | L1a ✅ integrada (8 telas); L1b (Haiku) em curso: canais, canal-config, templates, automações, catálogo, conexões, mídia; depois L1c (nps, mapa, mercado, bi, performance, fidelidade, carteiras, leads) e L1d Sonnet (kanban de atendimento, fila do dia, CRM avançado); pendente: cursor em `/v1/listas`, `/v1/metas`, `/v1/segmentos` |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
