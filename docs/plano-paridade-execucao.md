@@ -24,8 +24,8 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | C1 tarefas v2 | 1 | ✅ | integrada com correções (validação Zod, cursor µs, responsável nulo, autorização); 0114 corrigida no lugar |
 | A5 pedidos em lista | 1 | ✅ | integrada; API não tem busca/período/contadores — cards e busca só no carregado |
 | A2 lista de contatos + massa | 1 | ⬜ | |
-| B2 modais do funil + ganho | 1 | 🔍 | integrada (0122); revisão Sonnet em curso |
-| A3 ficha 2+1 | 1 | 🔄 | Sonnet, migration 0115 |
+| B2 modais do funil + ganho | 1 | 🔍 | revisão aprovou com correções (FK PG14, pedido efetivado, CPF preservado, idempotência, menu acessível); correção Sonnet em curso |
+| A3 ficha 2+1 | 1 | ✅ | integrada (0115); feed lê a auditoria de `qualificarContato`; 'Enviar no WhatsApp' do arquivo fica para quando o inbox enviar mídia por id |
 | D5 configurações com abas + módulos | 2 | ✅ | integrada (0116); `exigirModulo('agenda')` e `ModulosServico` prontos |
 | H2 LGPD retenção/anonimização | 2 | 🔄 | Sonnet, migration 0125 |
 | E1 início v2 + base de relatórios | 2 | 🔄 | Sonnet; migration 0123 reservada |
@@ -51,6 +51,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
+| X2 cursores de pedidos e memória com µs | — | 🔄 | Haiku |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 > Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.
