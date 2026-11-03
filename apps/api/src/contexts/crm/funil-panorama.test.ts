@@ -310,6 +310,6 @@ describe('B1: filtros da coluna e dos totais', () => {
     expect((await coluna('adm', lead, 'filialId=xx')).status).toBe(422)
     const r = await coluna('adm', lead, `vendedorId=${U.va}`)
     expect(r.status).toBe(200)
-    expect((r.corpo as { proximoCursor: string | null }).proximoCursor).toBeNull()
+    expect((r.corpo as unknown as { proximoCursor: string | null }).proximoCursor).toBeNull()
   })
 })
