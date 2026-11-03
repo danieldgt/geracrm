@@ -59,6 +59,8 @@ import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
 import { rotasCatalogoManual } from './contexts/catalogo/rotas-catalogo-manual.js'
 import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
 import { rotasLpPublica } from './contexts/aquisicao/rotas-lp-publica.js'
+import { rotasFormularios } from './contexts/aquisicao/rotas-formularios.js'
+import { rotasFormularioPublico } from './contexts/aquisicao/rotas-formulario-publico.js'
 import { rotasPush } from './contexts/plataforma/rotas-push.js'
 import { rotasAuth } from './contexts/identidade/rotas-auth.js'
 import { rotasUsuarios } from './contexts/identidade/rotas-usuarios.js'
@@ -183,6 +185,8 @@ export async function criarApp(
   //    RESOLVIDO pela chave da URL (0062), como o webhook resolve pelo
   //    phone_number_id (0057) — nunca recebido em parâmetro (ADR-001).
   await app.register(rotasLpPublica)
+  await app.register(rotasFormularios)
+  await app.register(rotasFormularioPublico)
   await app.register(rotasPush)
   await app.register(rotasAuth)
   // Cadastro de usuários e filiais (D3) — admin; o login nasce atrás da porta.

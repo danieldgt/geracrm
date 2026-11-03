@@ -131,6 +131,8 @@ export const MENU: readonly GrupoMenu[] = [
     itens: [
       { rota: 'midia', rotulo: 'Mídia paga', icone: 'megaphone', status: 'pronto', onda: 'O4',
         descricao: 'Custo e leads por anúncio — quanto cada peça trouxe, e a que preço.' },
+      { rota: 'formularios', rotulo: 'Formulários', icone: 'file-text', status: 'pronto', onda: 'F3',
+        descricao: 'Formulários públicos que criam contatos' },
     ],
   },
   {
