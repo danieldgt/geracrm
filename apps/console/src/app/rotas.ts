@@ -67,6 +67,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/acesso/filiais.pagina.js').then((m) => m.FiliaisPagina),
   tarefas: () =>
     import('./funcionalidades/crm/tarefas.pagina.js').then((m) => m.TarefasPagina),
+  agenda: () =>
+    import('./funcionalidades/agenda/agenda.pagina.js').then((m) => m.AgendaPagina),
   carteiras: () =>
     import('./funcionalidades/crm/carteiras.pagina.js').then((m) => m.CarteirasPagina),
   metas: () =>

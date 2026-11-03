@@ -22,6 +22,8 @@ export interface ItemMenu {
   readonly descricao: string
   /** 'rail' = não gera rota; o item abre/recolhe o chat rail (Conversas). */
   readonly acao?: 'rail'
+  /** Item de módulo opcional por tenant: some do menu quando o módulo está desligado (ModulosServico). */
+  readonly modulo?: 'agenda'
 }
 
 export interface GrupoMenu {
@@ -99,6 +101,8 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Quem é dono de qual cliente (sem sobreposição de vigência).' },
       { rota: 'tarefas', rotulo: 'Tarefas', icone: 'check-square', status: 'pronto', onda: 'O1',
         descricao: 'Agenda de follow-up: agendadas, vencidas, concluídas.' },
+      { rota: 'agenda', rotulo: 'Agenda', icone: 'calendar', status: 'pronto', onda: 'O5', modulo: 'agenda',
+        descricao: 'Reuniões, ligações e visitas com clientes — o calendário do time (módulo opcional).' },
       { rota: 'sequencias', rotulo: 'Sequências', icone: 'repeat', status: 'pronto', onda: 'O2',
         descricao: 'Cadências automáticas de contato.' },
       { rota: 'metas', rotulo: 'Metas', icone: 'target', status: 'pronto', onda: 'O2',
@@ -172,4 +176,16 @@ export const MENU: readonly GrupoMenu[] = [
 /** Achata o menu para gerar as rotas. */
 export function itensDoMenu(): ItemMenu[] {
   return MENU.flatMap((g) => g.itens)
+}
+
+/**
+ * Esconde do menu os itens de módulo desligado (e os grupos que ficam vazios).
+ * ⚠️ Higiene de interface: a rota continua existindo (mostra "módulo desligado") e a API responde 404.
+ */
+export function menuVisivel(
+  menu: readonly GrupoMenu[], modulosAtivos: Readonly<Partial<Record<NonNullable<ItemMenu['modulo']>, boolean>>>,
+): readonly GrupoMenu[] {
+  return menu
+    .map((g) => ({ ...g, itens: g.itens.filter((i) => !i.modulo || modulosAtivos[i.modulo] === true) }))
+    .filter((g) => g.itens.length > 0)
 }
