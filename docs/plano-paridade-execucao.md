@@ -47,16 +47,16 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
 | E2 relatórios 1ª leva | 3 | 🔍 | integrada (sem migration); revisão: aprovado com correções (mensagens de sistema no WhatsApp, ranking fora do escopo, vazio em Dia); correção em curso pelo agente da raia |
 | E3 relatórios 2ª leva | 3 | 🔄 | Sonnet |
-| L1 retrofit das telas restantes | 4 | 🔄 | L1a ✅ integrada (8 telas); L1b (Haiku) em curso: canais, canal-config, templates, automações, catálogo, conexões, mídia; depois L1c (nps, mapa, mercado, bi, performance, fidelidade, carteiras, leads) e L1d Sonnet (kanban de atendimento, fila do dia, CRM avançado); pendente: cursor em `/v1/listas`, `/v1/metas`, `/v1/segmentos` |
+| L1 retrofit das telas restantes | 4 | 🔄 | L1a ✅ integrada (8 telas); L1b (Haiku) em curso: canais, canal-config, templates, automações, catálogo, conexões, mídia; depois L1c (nps, mapa, mercado, bi, performance, fidelidade, carteiras, leads) e L1d Sonnet (kanban de atendimento, fila do dia, CRM avançado); cursores resolvidos pela X4 |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
 | D3.4 telas de usuários e filiais | 0 | ✅ | integrada (console 656); conferir códigos de erro com a API quando D3 entrar |
 | C2b agenda no escopo comum + na ficha | 2 | ✅ | integrada; contato fora do escopo → 422 e nome oculto na leitura |
 | X3 teste do worker de aquisição sem isolamento de tenant | — | ✅ | integrada |
-| D3.4b telas de usuário sem admin atribuído + nomear admin | 0 | ✅ | integrada; API passou a responder `acesso.admin_atribuido` no modo fundador; pendente: `GET /v1/plataforma/clientes/:id/usuarios` para trocar o campo de ID por select |
+| D3.4b telas de usuário sem admin atribuído + nomear admin | 0 | ✅ | integrada; API passou a responder `acesso.admin_atribuido` no modo fundador; select de usuários entregue pela X4 |
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
-| X4 cursor em listas/metas/segmentos + usuários do cliente para o staff | — | 🔄 | Sonnet; sem migration |
+| X4 cursor em listas/metas/segmentos + usuários do cliente para o staff | — | ✅ | integrada; listas por cursor; metas e segmentos com teto documentado (limitados por construção); "Nomear admin" com select paginado; agregação RFV em SQL em curso (mesmo agente) |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 > Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.
