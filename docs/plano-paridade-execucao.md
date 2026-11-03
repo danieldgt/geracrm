@@ -11,14 +11,14 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 
 | Raia | Onda | Estado | Branch / observação |
 |---|---|---|---|
-| L0a primitivos de formulário | 0 | ⬜ | |
-| L0b composição (página, modal, abas) | 0 | ⬜ | |
-| L0c lista (tabela, filtros, paginação) | 0 | ⬜ | |
-| L0d ícones Lucide | 0 | ⬜ | |
+| L0a primitivos de formulário | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
+| L0b composição (página, modal, abas) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
+| L0c lista (tabela, filtros, paginação) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
+| L0d ícones Lucide | 0 | 🔄 | Haiku, worktree |
 | L0e docs e skill de formulários | 0 | ⬜ | depois de L0a–d |
-| D3 escopo por papel + usuários + filiais | 0 | ⬜ | |
-| G1 devolver ao agente / reatribuir / filtro | 0 | ⬜ | |
-| H3 monitor | 0 | ⬜ | backup fora (decisão) |
+| D3 escopo por papel + usuários + filiais | 0 | 🔄 | Opus, worktree — só API (D3.1–D3.3); telas D3.4 depois de L0 |
+| G1 devolver ao agente / reatribuir / filtro | 0 | 🔄 | Sonnet, worktree |
+| H3 monitor | 0 | 🔄 | Sonnet, worktree — backup fora (decisão) |
 | A1 cadastro do contato | 1 | ⬜ | |
 | A4 etiquetas e origens | 1 | ⬜ | |
 | C1 tarefas v2 | 1 | ⬜ | |
@@ -73,6 +73,8 @@ Etapas de toda raia e o modelo padrão de cada uma:
 | 5. Revisão adversarial (`revisar-raia`) | Sonnet | Opus nas raias de risco |
 | 6. Docs, fichas, skill, quadro | Haiku | — |
 | 7. Merge e checks completos | Fable | — |
+
+⚠️ `pnpm --filter X lint typecheck test` roda SÓ o lint (os outros nomes viram argumentos); rodar `pnpm lint && pnpm typecheck && pnpm test` dentro do pacote. O console precisa de `pnpm --filter @geracrm/design-tokens build` antes do typecheck. Os worktrees nascem da `main`, não de `feat/paridade-am`: o brief tem de trazer o que o agente precisa do plano.
 
 Ambiente de cada agente (worktree): `export PATH="$HOME/.local/bin:$PATH"`; copiar `.env` da raiz; banco
 próprio `geracrm_<raia>` (skill `geracrm-testes` §Banco próprio por raia); `CI=true pnpm install
