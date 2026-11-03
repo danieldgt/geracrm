@@ -16,7 +16,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | L0c lista (tabela, filtros, paginação) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
 | L0d ícones Lucide | 0 | ✅ | integrada; desenhos de memória — revisão aponta os suspeitos |
 | L0e docs e skill de formulários | 0 | ✅ | integrada; skill `geracrm-formularios` criada; docs ajustados ao contrato por cursor |
-| D3 escopo por papel + usuários + filiais | 0 | 🔄 | 2º merge de feat em curso (6 conflitos + escopar feed/arquivos/ganho/agregados); integrações de API seguradas até ela entrar |
+| D3 escopo por papel + usuários + filiais | 0 | 🔍 | integrada (0111; a54d513); revisão de segurança Opus em curso |
 | G1 devolver ao agente / reatribuir / filtro | 0 | ✅ | integrada com correções (etapa `devolucao-da-equipe` no pipeline, guarda de concorrência, turno enfileirado) |
 | H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
 | A1 cadastro do contato | 1 | ✅ | integrada com correções (ERP preservado, 422 no telefone, origem validada); 0112 corrigida no lugar |
@@ -24,27 +24,27 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | C1 tarefas v2 | 1 | ✅ | integrada com correções (validação Zod, cursor µs, responsável nulo, autorização); 0114 corrigida no lugar |
 | A5 pedidos em lista | 1 | ✅ | integrada; API não tem busca/período/contadores — cards e busca só no carregado |
 | A2 lista de contatos + massa | 1 | ⬜ | |
-| B2 modais do funil + ganho | 1 | ⏸ | correção pronta (017b2ff, 0122 corrigida no lugar); aguarda D3 para integrar |
+| B2 modais do funil + ganho | 1 | ✅ | integrada com correções (0122 corrigida no lugar) |
 | A3 ficha 2+1 | 1 | ✅ | integrada (0115); feed lê a auditoria de `qualificarContato`; 'Enviar no WhatsApp' do arquivo fica para quando o inbox enviar mídia por id |
 | D5 configurações com abas + módulos | 2 | ✅ | integrada (0116); `exigirModulo('agenda')` e `ModulosServico` prontos |
 | H2 LGPD retenção/anonimização | 2 | 🔍 | pronta (1c78f17, 0125); revisão Opus em curso; aguarda D3; consumidor da fila de mídia pendente falta |
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
 | B1 panorama do funil | 2 | ⬜ | |
-| C2 agenda (módulo) | 2 | ⏸ | pronta (77a1592, 0117); aguarda D3; `app-agenda-contato` a montar na ficha |
+| C2 agenda (módulo) | 2 | ✅ | integrada (0117); pendente: trocar escopo por papéis pelo `escopo.ts` e montar `app-agenda-contato` na ficha |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | ⬜ | |
 | D4 notificações, perfil, esqueci a senha | 2 | ⬜ | |
 | D6 auditoria v2 | 2 | ✅ | integrada; cursor com µs corrigido; pendente: login/logout (vai com D4), janela padrão da busca `q` |
 | D1 cockpit | 2 | ⬜ | |
 | D2 higienização da carteira | 2 | ⬜ | |
-| F2 preços, templates, consumo | 3 | ⏸ | pronta (3bad3bb, migration 0124); aguarda D3 para integrar |
+| F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
 | F1 campanhas v2 | 3 | ⬜ | |
-| F3 formulários públicos | 3 | ⬜ | |
-| G2 objeções | 3 | ⬜ | |
+| F3 formulários públicos | 3 | 🔄 | Sonnet; migration 0127 |
+| G2 objeções | 3 | 🔄 | Opus; migration 0126 |
 | G3 pós-venda, NPS, indicações, prova social | 3 | ⬜ | |
 | G4 roteamento e rodízio | 3 | ⬜ | |
-| G5 cadência descarte/reativação | 3 | 🔍 | revisão REPROVOU (sem teto por número no não-oficial, descarte padrão ligado, corrida); correção Opus em curso — descarte desligado por padrão e só sem compra |
+| G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
 | H1 importador | 3 | ⬜ | |
-| H4 e2e no CI | 3 | ⬜ | |
+| H4 e2e no CI | 3 | 🔄 | Sonnet |
 | E2 relatórios 1ª leva | 3 | ⬜ | |
 | E3 relatórios 2ª leva | 3 | ⬜ | |
 | L1 retrofit das telas restantes | 4 | ⬜ | |
@@ -52,7 +52,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
 | D3.4 telas de usuários e filiais | 0 | ✅ | integrada (console 656); conferir códigos de erro com a API quando D3 entrar |
-| X2 cursores de pedidos e memória com µs | — | ⏸ | pronta (9f3c061); aguarda D3 |
+| X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 > Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.
