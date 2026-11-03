@@ -19,7 +19,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D3 escopo por papel + usuários + filiais | 0 | 🔄 | Opus, worktree — só API (D3.1–D3.3); telas D3.4 depois de L0 |
 | G1 devolver ao agente / reatribuir / filtro | 0 | 🔍 | revisão REPROVOU (motivo sem leitor, sem guarda de concorrência); correção Opus em curso |
 | H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
-| A1 cadastro do contato | 1 | 🔍 | revisão REPROVOU (PUT pisa endereço/telefone do ERP, 500 em 23505, origem); correção Sonnet em curso |
+| A1 cadastro do contato | 1 | ✅ | integrada com correções (ERP preservado, 422 no telefone, origem validada); 0112 corrigida no lugar |
 | A4 etiquetas e origens | 1 | ✅ | integrada (0113); revisão aprovou |
 | C1 tarefas v2 | 1 | 🔍 | revisão aprovou com correções (validação, cursor µs, responsável nulo, autorização, NOT VALID); correção Sonnet em curso |
 | A5 pedidos em lista | 1 | ✅ | integrada; API não tem busca/período/contadores — cards e busca só no carregado |
@@ -42,7 +42,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | G2 objeções | 3 | ⬜ | |
 | G3 pós-venda, NPS, indicações, prova social | 3 | ⬜ | |
 | G4 roteamento e rodízio | 3 | ⬜ | |
-| G5 cadência descarte/reativação | 3 | 🔍 | integrada (0121); revisão Sonnet em curso (cota de aquecimento, descarte padrão ligado) |
+| G5 cadência descarte/reativação | 3 | 🔍 | revisão REPROVOU (sem teto por número no não-oficial, descarte padrão ligado, corrida); correção Opus em curso — descarte desligado por padrão e só sem compra |
 | H1 importador | 3 | ⬜ | |
 | H4 e2e no CI | 3 | ⬜ | |
 | E2 relatórios 1ª leva | 3 | ⬜ | |
