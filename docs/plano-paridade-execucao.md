@@ -39,7 +39,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
 | F1 campanhas v2 | 3 | ⬜ | |
 | F3 formulários públicos | 3 | 🔍 | revisão de segurança: aprovado com correções (upload fora da transação, IP real, contato existente intocado); correção Opus em curso — não divulgar link antes |
-| G2 objeções | 3 | 🔄 | Opus; migration 0126 |
+| G2 objeções | 3 | 🔍 | integrada (0126); revisão Sonnet em curso; seções de texto do playbook ficam no Conhecimento (decisão 9) |
 | G3 pós-venda, NPS, indicações, prova social | 3 | 🔄 | Opus; migration 0130 |
 | G4 roteamento e rodízio | 3 | ⬜ | |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
