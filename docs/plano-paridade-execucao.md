@@ -28,7 +28,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | A3 ficha 2+1 | 1 | 🔄 | Sonnet, migration 0115 |
 | D5 configurações com abas + módulos | 2 | 🔄 | Sonnet, migration 0116 (destrava C2 e H2) |
 | H2 LGPD retenção/anonimização | 2 | ⬜ | |
-| E1 início v2 + base de relatórios | 2 | ⬜ | |
+| E1 início v2 + base de relatórios | 2 | 🔄 | Sonnet; migration 0123 reservada |
 | B1 panorama do funil | 2 | ⬜ | |
 | C2 agenda (módulo) | 2 | ⬜ | |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | ⬜ | |
@@ -36,7 +36,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D6 auditoria v2 | 2 | ✅ | integrada; cursor com µs corrigido; pendente: login/logout (vai com D4), janela padrão da busca `q` |
 | D1 cockpit | 2 | ⬜ | |
 | D2 higienização da carteira | 2 | ⬜ | |
-| F2 preços, templates, consumo | 3 | ⬜ | |
+| F2 preços, templates, consumo | 3 | 🔄 | Sonnet; migration 0124 |
 | F1 campanhas v2 | 3 | ⬜ | |
 | F3 formulários públicos | 3 | ⬜ | |
 | G2 objeções | 3 | ⬜ | |
