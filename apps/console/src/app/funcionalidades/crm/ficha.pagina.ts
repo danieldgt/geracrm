@@ -7,6 +7,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
 import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
 import { EtiquetasContatoComponente } from './etiquetas-contato.componente.js'
+import { TarefaModalComponente } from './tarefa-modal.componente.js'
 
 /**
  * Ficha do Contato — o cliente 360°.
@@ -20,7 +21,7 @@ import { EtiquetasContatoComponente } from './etiquetas-contato.componente.js'
 @Component({
   selector: 'app-ficha-contato',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, DatePipe, AvisosPrivacidadeComponente, EtiquetasContatoComponente],
+  imports: [RouterLink, DatePipe, AvisosPrivacidadeComponente, EtiquetasContatoComponente, TarefaModalComponente],
   template: `
     <!-- Volta para ONDE a pessoa veio (lista, chat, funil, pedidos) — e para a
          lista de contatos quando a ficha foi aberta por link direto. -->
@@ -62,6 +63,8 @@ import { EtiquetasContatoComponente } from './etiquetas-contato.componente.js'
                      title="Todos os pedidos deste cliente">🧾 Pedidos</a>
                   <a class="btn btn--secundario btn--pequeno" routerLink="/tarefas" [queryParams]="{ contatoId: f.id }"
                      title="Tarefas e follow-ups deste cliente">✅ Tarefas</a>
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="novaTarefa.set(true)"
+                          title="Criar uma tarefa para este cliente">➕ Nova tarefa</button>
                 </div>
                 @if (erroConversa(); as e) { <p class="erro-edit" role="alert">{{ e }}</p> }
                 <div class="tags">
@@ -218,6 +221,8 @@ import { EtiquetasContatoComponente } from './etiquetas-contato.componente.js'
               <app-avisos-privacidade [contatoId]="f.id" />
             </section>
           </div>
+          <app-tarefa-modal [aberto]="novaTarefa()" [contatoId]="f.id" [contatoNome]="f.nome"
+            (fechar)="novaTarefa.set(false)" (criada)="novaTarefa.set(false)" />
         }
       }
     }
@@ -291,6 +296,7 @@ export class FichaContatoPagina {
   private readonly toast = inject(ToastServico)
   readonly id = input.required<string>()
   readonly abrindoConversa = signal(false)
+  readonly novaTarefa = signal(false)
   readonly erroConversa = signal<string | null>(null)
 
   /** Volta pelo histórico; sem histórico (link direto), vai à lista. */
