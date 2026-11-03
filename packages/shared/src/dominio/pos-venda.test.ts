@@ -81,7 +81,7 @@ describe('prova social', () => {
 describe('ações do playbook (G3)', () => {
   it('⚠️ versão publicada ANTES da G3 (sem as chaves novas) continua válida — ligadas por padrão', () => {
     const antigo = { catalogo: true, pedido: true, proposta: true, memoria: false, conhecimento: true }
-    expect(acoesPlaybook.parse(antigo)).toEqual({ ...antigo, nps: true, indicacoes: true, provaSocial: true })
+    expect(acoesPlaybook.parse(antigo)).toEqual({ ...antigo, objecoes: true, nps: true, indicacoes: true, provaSocial: true })
   })
   it('desligáveis, e cada uma diz qual ferramenta tira do menu', () => {
     expect(acoesPlaybook.parse({ ...ACOES_TODAS_LIGADAS, nps: false })).toMatchObject({ nps: false })
