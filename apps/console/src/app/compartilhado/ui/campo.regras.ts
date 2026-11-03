@@ -60,12 +60,12 @@ export function textoDoValor(tipo: TipoCampo, valor: unknown): string {
   return String(valor)
 }
 
-/** Estilos comuns de rótulo/dica/erro/controle, só tokens — usado por campo, select e select-paginado. */
+/** Estilos comuns de rótulo/dica/erro/controle, só tokens (tamanho vem das classes .txt-* no template) — usado por campo, select e select-paginado. */
 export const ESTILOS_CONTROLE = `
   :host { display: block; min-width: 0; }
   :host(.largo) { grid-column: 1 / -1; }
   .campo { display: flex; flex-direction: column; gap: var(--espacamento-1); }
-  .rotulo { font-size: 13px; color: var(--texto); }
+  .rotulo { font-weight: 500; color: var(--texto); }
   .obrigatorio { color: var(--erro); margin-left: 2px; }
   .linha { display: flex; gap: var(--espacamento-2); align-items: stretch; }
   .linha > .controle { flex: 1; min-width: 0; }
@@ -80,6 +80,6 @@ export const ESTILOS_CONTROLE = `
   .controle:focus-visible { outline: none; border-color: var(--borda-foco); box-shadow: 0 0 0 2px var(--borda-foco); }
   .controle[aria-invalid='true'] { border-color: var(--borda-erro); }
   .controle:disabled { opacity: .6; }
-  .dica { font-size: 12px; color: var(--texto-secundario); }
-  .msg-erro { font-size: 12px; color: var(--erro); }
+  .dica { color: var(--texto-secundario); }
+  .msg-erro { color: var(--erro); }
 `

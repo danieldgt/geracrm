@@ -5,7 +5,8 @@ export const DEBOUNCE_BUSCA_MS = 300
 
 /**
  * Cartão de filtros do padrão Lista: busca (debounce 300 ms) + controles projetados + Filtrar/Limpar.
- * `buscar` dispara com o texto já com debounce; Enter e o botão Filtrar disparam `aplicar` na hora.
+ * `buscar` dispara com o texto já com debounce. Enter e o botão Filtrar disparam `aplicar` na hora —
+ * e só `aplicar`: o texto vai por `buscar` se ainda não tinha sido entregue (nunca em duplicidade).
  */
 @Component({
   selector: 'ui-filtros',
@@ -19,7 +20,7 @@ export const DEBOUNCE_BUSCA_MS = 300
                stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
             <circle cx="9" cy="9" r="5.5" /><path d="M13.5 13.5 17 17" />
           </svg>
-          <input type="search" [placeholder]="placeholder()" [attr.aria-label]="placeholder()"
+          <input type="search" [placeholder]="placeholder()"
                  [value]="termo" (input)="digitou($event)" />
         </span>
       </label>
@@ -51,7 +52,9 @@ export class FiltrosComponente {
   readonly limpar = output<void>()
 
   protected termo = ''
-  private readonly emitir = comDebounce((t: string) => this.buscar.emit(t), DEBOUNCE_BUSCA_MS)
+  /** Último texto entregue por `buscar`: o submit só reenvia se a digitação ainda não chegou. */
+  private entregue = ''
+  private readonly emitir = comDebounce((t: string) => { this.entregue = t; this.buscar.emit(t) }, DEBOUNCE_BUSCA_MS)
 
   constructor() { inject(DestroyRef).onDestroy(() => this.emitir.cancelar()) }
 
@@ -59,10 +62,15 @@ export class FiltrosComponente {
     this.termo = (e.target as HTMLInputElement).value
     this.emitir(this.termo)
   }
-  protected enviar(): void { this.emitir.cancelar(); this.buscar.emit(this.termo); this.aplicar.emit() }
+  protected enviar(): void {
+    this.emitir.cancelar()
+    if (this.termo !== this.entregue) { this.entregue = this.termo; this.buscar.emit(this.termo) }
+    this.aplicar.emit()
+  }
   protected limparTudo(): void {
     this.emitir.cancelar()
     this.termo = ''
+    this.entregue = ''
     this.buscar.emit('')
     this.limpar.emit()
   }

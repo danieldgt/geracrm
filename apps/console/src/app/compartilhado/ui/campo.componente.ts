@@ -1,9 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, forwardRef, input, model, signal } from '@angular/core'
+import { ChangeDetectionStrategy, Component, computed, forwardRef, input, isDevMode, model, signal } from '@angular/core'
 import { NG_VALUE_ACCESSOR, type ControlValueAccessor } from '@angular/forms'
 import {
   atributosAria, ESTILOS_CONTROLE, idDica, idErro, proximoIdCampo, textoDoValor, valorDoControle, type TipoCampo,
 } from './campo.regras.js'
-import { digitosDaMascara, formatarMascara, type TipoMascara } from './mascaras.js'
+import { aplicarMascaraNoElemento, digitosDaMascara, formatarMascara, type TipoMascara } from './mascaras.js'
 
 /**
  * Campo de formulário (R-12 + padrão "disposição AM, pele GeraCRM"): rótulo ligado
@@ -19,7 +19,7 @@ import { digitosDaMascara, formatarMascara, type TipoMascara } from './mascaras.
   template: `
     <div class="campo">
       @if (rotulo()) {
-        <label class="rotulo" [for]="id">{{ rotulo() }}@if (obrigatorio()) { <span class="obrigatorio" aria-hidden="true">*</span> }</label>
+        <label class="rotulo txt-denso" [for]="id">{{ rotulo() }}@if (obrigatorio()) { <span class="obrigatorio" aria-hidden="true">*</span> }</label>
       }
       <div class="linha">
         @if (tipo() === 'textarea') {
@@ -33,12 +33,12 @@ import { digitosDaMascara, formatarMascara, type TipoMascara } from './mascaras.
                  [disabled]="desabilitadoEfetivo()" [attr.autocomplete]="autocomplete()"
                  [attr.aria-invalid]="aria().ariaInvalid" [attr.aria-required]="aria().ariaRequired"
                  [attr.aria-describedby]="aria().ariaDescribedBy"
-                 (input)="digitou($any($event.target).value)" (blur)="sair($any($event.target))" />
+                 (input)="aoInput($any($event.target))" (blur)="sair($any($event.target))" />
         }
         <ng-content select="[acao]" />
       </div>
-      @if (dica()) { <span class="dica" [id]="idDica">{{ dica() }}</span> }
-      @if (erro()) { <span class="msg-erro" [id]="idErro" role="alert">{{ erro() }}</span> }
+      @if (dica()) { <span class="dica txt-denso" [id]="idDica">{{ dica() }}</span> }
+      @if (erro()) { <span class="msg-erro txt-denso" [id]="idErro" role="alert">{{ erro() }}</span> }
     </div>
   `,
   styles: ESTILOS_CONTROLE,
@@ -71,6 +71,14 @@ export class CampoComponente implements ControlValueAccessor {
   private aoMudar: (v: string | number | null) => void = () => undefined
   protected aoTocar: () => void = () => undefined
 
+  /** Evento do input: com máscara, formata direto no elemento e preserva o cursor; depois segue o fluxo normal. */
+  protected aoInput(el: HTMLInputElement): void {
+    const m = this.mascara()
+    const bruto = el.value
+    if (m) aplicarMascaraNoElemento(el, m, document.activeElement === el)
+    this.digitou(bruto)
+  }
+
   protected digitou(texto: string): void {
     const m = this.mascara()
     this.valor.set(m ? formatarMascara(m, texto) : texto)
@@ -87,7 +95,15 @@ export class CampoComponente implements ControlValueAccessor {
     this.aoTocar()
   }
 
+  /**
+   * Dinheiro NÃO aceita negativo (crédito/estorno é outro fluxo): `writeValue` com centavos negativos
+   * vira `null` (campo vazio) e avisa em dev — melhor vazio visível que um "-" que o parser rejeitaria.
+   */
   writeValue(v: unknown): void {
+    if (this.tipo() === 'dinheiro' && typeof v === 'number' && v < 0) {
+      if (isDevMode()) console.warn('ui-campo (dinheiro): valor negativo não é permitido; tratado como vazio.', v)
+      v = null
+    }
     const m = this.mascara()
     this.valor.set(m ? formatarMascara(m, v == null ? '' : String(v)) : textoDoValor(this.tipo(), v))
   }

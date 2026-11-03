@@ -1,9 +1,12 @@
 import {
-  ChangeDetectionStrategy, Component, Directive, TemplateRef, computed, contentChildren, inject, input, model,
+  ChangeDetectionStrategy, Component, Directive, TemplateRef, computed, contentChildren, effect, inject, input, isDevMode,
+  model, untracked,
 } from '@angular/core'
 import { NgTemplateOutlet } from '@angular/common'
 import { EsqueletoComponente } from './esqueleto.componente.js'
-import { alternarChave, alternarPagina, estadoSelecaoPagina, textoDaCelula } from './lista.regras.js'
+import {
+  alternarChave, alternarPagina, chavePadraoDaLinha, estadoSelecaoPagina, podarSelecao, rotuloSelecaoDaLinha, textoDaCelula,
+} from './lista.regras.js'
 
 export interface ColunaTabela {
   chave: string
@@ -31,6 +34,11 @@ export type LinhaTabela = Record<string, unknown>
  * Tabela de lista (padrão Lista, §4 do plano de paridade). `<table>` real, linha de 40 px,
  * rola na horizontal dentro da própria caixa. Paginação é por CURSOR e mora em `ui-paginacao`.
  * Slot de vazio: `<div uiVazio>...</div>`.
+ *
+ * Seleção: quando `linhas` muda (outra página, filtro, busca), `selecionados` é PODADO às chaves
+ * visíveis — nunca sobra seleção de linha que o usuário não vê (a ação em lote rodaria às cegas).
+ * A poda não roda enquanto `carregando` (linhas transitoriamente vazias não apagam a seleção).
+ * Quem mostra o contador (`ui-acoes-lote`) deve ler o MESMO `selecionados`, já podado.
  */
 @Component({
   selector: 'ui-tabela',
@@ -65,11 +73,11 @@ export type LinhaTabela = Record<string, unknown>
               </tr>
             }
           } @else {
-            @for (l of linhas(); track chaveLinha()(l)) {
+            @for (l of linhas(); track chaveLinha()(l); let i = $index) {
               <tr [attr.data-selecionada]="selecionados().has(chaveLinha()(l)) ? 'true' : null">
                 @if (selecionavel()) {
                   <td class="sel">
-                    <input type="checkbox" aria-label="Selecionar linha"
+                    <input type="checkbox" [attr.aria-label]="rotuloCheckbox(l, i)"
                       [checked]="selecionados().has(chaveLinha()(l))" (change)="alternarLinha(l)" />
                   </td>
                 }
@@ -113,7 +121,10 @@ export type LinhaTabela = Record<string, unknown>
 export class TabelaComponente {
   readonly colunas = input.required<readonly ColunaTabela[]>()
   readonly linhas = input<readonly LinhaTabela[]>([])
-  readonly chaveLinha = input<(linha: LinhaTabela) => string>((l) => String(l['id']))
+  /** Chave estável da linha; o padrão é `id` e lança erro claro em dev se faltar. */
+  readonly chaveLinha = input<(linha: LinhaTabela) => string>((l) => chavePadraoDaLinha(l, isDevMode()))
+  /** Rótulo humano da linha para leitor de tela ("Selecionar <rótulo>"); padrão "Selecionar linha N". */
+  readonly rotuloLinha = input<((linha: LinhaTabela) => string) | null>(null)
   readonly selecionavel = input(false)
   readonly selecionados = model<ReadonlySet<string>>(new Set())
   readonly carregando = input(false)
@@ -125,6 +136,19 @@ export class TabelaComponente {
   private readonly chaves = computed(() => this.linhas().map((l) => this.chaveLinha()(l)))
   protected readonly estadoPagina = computed(() => estadoSelecaoPagina(this.selecionados(), this.chaves()))
 
+  constructor() {
+    effect(() => {
+      const chaves = this.chaves()
+      if (this.carregando()) return
+      const atual = untracked(this.selecionados)
+      const podada = podarSelecao(atual, chaves)
+      if (podada !== atual) this.selecionados.set(podada)
+    })
+  }
+
+  protected rotuloCheckbox(l: LinhaTabela, i: number): string {
+    return rotuloSelecaoDaLinha(this.rotuloLinha()?.(l), i)
+  }
   protected texto(v: unknown): string { return textoDaCelula(v) }
   protected alternarTodos(): void { this.selecionados.set(alternarPagina(this.selecionados(), this.chaves())) }
   protected alternarLinha(l: LinhaTabela): void { this.selecionados.set(alternarChave(this.selecionados(), this.chaveLinha()(l))) }

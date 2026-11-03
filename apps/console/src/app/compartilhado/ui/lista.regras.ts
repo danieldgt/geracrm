@@ -46,3 +46,34 @@ export function comDebounce<A extends unknown[]>(fn: (...a: A) => void, ms: numb
   f.cancelar = (): void => { if (t) clearTimeout(t); t = undefined }
   return f
 }
+
+/**
+ * Poda a seleção às chaves visíveis. Devolve a MESMA referência quando nada sai (evita
+ * disparar o `model` à toa). Seleção que sobrevive a troca de página/filtro é a pegadinha
+ * clássica do lote: o usuário vê "2 selecionados" e a ação roda em linhas que ele não vê.
+ */
+export function podarSelecao(selecionados: ReadonlySet<string>, chavesVisiveis: readonly string[]): ReadonlySet<string> {
+  if (selecionados.size === 0) return selecionados
+  const visiveis = new Set(chavesVisiveis)
+  const mantidos = [...selecionados].filter((k) => visiveis.has(k))
+  return mantidos.length === selecionados.size ? selecionados : new Set(mantidos)
+}
+
+/**
+ * Chave padrão da linha: `id`. Em desenvolvimento, linha sem `id` LANÇA erro claro — antes,
+ * todas viravam "undefined" e a seleção/`track` colapsavam numa linha só, sem aviso.
+ */
+export function chavePadraoDaLinha(linha: Record<string, unknown>, dev = true): string {
+  const id = linha['id']
+  if (id === null || id === undefined) {
+    if (dev) throw new Error('ui-tabela: linha sem "id". Informe [chaveLinha] ou inclua um id em cada linha.')
+    return String(id)
+  }
+  return String(id)
+}
+
+/** Rótulo do checkbox da linha: "Selecionar <rótulo>" ou, sem rótulo, "Selecionar linha N" (1-based). */
+export function rotuloSelecaoDaLinha(rotulo: string | null | undefined, indice: number): string {
+  const r = rotulo?.trim()
+  return r ? `Selecionar ${r}` : `Selecionar linha ${indice + 1}`
+}

@@ -1,6 +1,8 @@
+// @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import {
   formatarCpf, formatarCnpj, formatarCpfCnpj, formatarTelefone, formatarCep, soDigitos, digitosDaMascara,
+  posicaoDoCursor, aplicarMascaraNoElemento,
 } from './mascaras.js'
 
 describe('máscaras — ida (exibir) e volta (só dígitos)', () => {
@@ -75,5 +77,59 @@ describe('máscaras — ida (exibir) e volta (só dígitos)', () => {
       expect(f(f(v))).toBe(f(v))
       expect(digitosDaMascara(tipo, f(v))).toBe(v)
     }
+  })
+})
+
+describe('posicaoDoCursor', () => {
+  it('meio do texto: digitar no meio mantém o cursor após o dígito digitado', () => {
+    const novo = formatarCpf('1923456')
+    expect(novo).toBe('192.345.6')
+    expect(posicaoDoCursor('1923.456', 3, novo)).toBe(3)
+    expect(posicaoDoCursor('1234', 4, formatarCpf('1234'))).toBe(5)
+  })
+  it('apagar: cursor fica colado ao dígito anterior', () => {
+    expect(posicaoDoCursor('123.56', 4, formatarCpf('12356'))).toBe(3)
+  })
+  it('colar: cursor vai ao fim do que foi colado, truncado ao limite', () => {
+    const novo = formatarCpf('12345678901999')
+    expect(posicaoDoCursor('12345678901999', 14, novo)).toBe(novo.length)
+  })
+  it('sem dígitos à esquerda é 0; caret fora do intervalo não quebra', () => {
+    expect(posicaoDoCursor('abc', 3, '')).toBe(0)
+    expect(posicaoDoCursor('12', 99, '12')).toBe(2)
+    expect(posicaoDoCursor('12', -5, '12')).toBe(0)
+  })
+})
+
+describe('aplicarMascaraNoElemento', () => {
+  function input(valor: string, caret: number): HTMLInputElement {
+    const el = document.createElement('input')
+    document.body.appendChild(el)
+    el.focus()
+    el.value = valor
+    el.setSelectionRange(caret, caret)
+    return el
+  }
+  it('sobra "123a" some da tela mesmo quando o valor formatado não muda', () => {
+    const el = input('123.456.789-01a', 15)
+    aplicarMascaraNoElemento(el, 'cpf', true)
+    expect(el.value).toBe('123.456.789-01')
+  })
+  it('digitar no meio não joga o cursor para o fim', () => {
+    const el = input('1923.456', 3)
+    aplicarMascaraNoElemento(el, 'cpf', true)
+    expect(el.value).toBe('192.345.6')
+    expect(el.selectionStart).toBe(3)
+  })
+  it('DDD 55 (RS) digitando: não vira +55 até 12 dígitos', () => {
+    let texto = ''
+    for (const d of '55987654321') {
+      texto += d
+      const el = input(texto, texto.length)
+      texto = aplicarMascaraNoElemento(el, 'telefone', true)
+      expect(texto.startsWith('+')).toBe(false)
+      expect(el.selectionStart).toBe(texto.length)
+    }
+    expect(texto).toBe('(55) 98765-4321')
   })
 })

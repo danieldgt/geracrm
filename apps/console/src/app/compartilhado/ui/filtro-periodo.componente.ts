@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, model, output } from '@angular/core'
-import { ATALHOS_PERIODO, atalhoAtivo, hojeIso, periodoDoAtalho, type AtalhoPeriodo } from './periodo.js'
+import { ATALHOS_PERIODO, atalhoAtivo, hojeIso, periodoDoAtalho, periodoInvertido, type AtalhoPeriodo } from './periodo.js'
 
 /** Período por atalhos (Hoje, 7 dias, 30 dias, Mês atual, Mês passado) ou datas livres. Datas em ISO yyyy-mm-dd. */
 @Component({
@@ -19,12 +19,17 @@ import { ATALHOS_PERIODO, atalhoAtivo, hojeIso, periodoDoAtalho, type AtalhoPeri
       <label class="campo"><span class="txt-rotulo">Até</span>
         <input type="date" [value]="fim()" [min]="inicio() || null" (change)="fim.set(valor($event))" /></label>
       <ng-content />
-      <button type="button" class="btn btn--primario btn--pequeno" (click)="aplicar.emit()">Aplicar</button>
+      <button type="button" class="btn btn--primario btn--pequeno" [disabled]="invertido()"
+              (click)="aplicar.emit()">Aplicar</button>
+      @if (invertido()) {
+        <span class="erro txt-denso" role="alert">A data inicial é depois da final.</span>
+      }
     </div>
   `,
   styles: `
     :host { display: block; }
     .periodo { display: flex; flex-wrap: wrap; align-items: end; gap: var(--espacamento-3); }
+    .erro { flex-basis: 100%; color: var(--erro); }
     .atalhos { display: flex; flex-wrap: wrap; gap: var(--espacamento-1); }
   `,
 })
@@ -36,6 +41,7 @@ export class FiltroPeriodoComponente {
   readonly aplicar = output<void>()
 
   protected readonly atalhos = ATALHOS_PERIODO
+  protected readonly invertido = computed(() => periodoInvertido(this.inicio(), this.fim()))
   protected readonly ativo = computed(() => atalhoAtivo(this.inicio(), this.fim(), this.hoje() ?? hojeIso()))
 
   protected escolher(a: AtalhoPeriodo): void {
