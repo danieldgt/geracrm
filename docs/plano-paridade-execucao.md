@@ -19,13 +19,13 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D3 escopo por papel + usuários + filiais | 0 | 🔄 | Opus, worktree — só API (D3.1–D3.3); telas D3.4 depois de L0 |
 | G1 devolver ao agente / reatribuir / filtro | 0 | 🔍 | revisão REPROVOU (motivo sem leitor, sem guarda de concorrência); correção Opus em curso |
 | H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
-| A1 cadastro do contato | 1 | 🔄 | Sonnet, migration 0112 |
-| A4 etiquetas e origens | 1 | 🔄 | Sonnet, migration 0113 |
-| C1 tarefas v2 | 1 | 🔄 | Sonnet, migration 0114 |
+| A1 cadastro do contato | 1 | ✅ | integrada (0112); revisão conjunta onda 1 pendente |
+| A4 etiquetas e origens | 1 | ✅ | integrada (0113); revisão conjunta onda 1 pendente |
+| C1 tarefas v2 | 1 | ✅ | integrada (0114); `situacao=hoje` não inclui mais atrasadas; revisão conjunta pendente |
 | A5 pedidos em lista | 1 | ✅ | integrada; API não tem busca/período/contadores — cards e busca só no carregado |
 | A2 lista de contatos + massa | 1 | ⬜ | |
-| B2 modais do funil + ganho | 1 | ⬜ | |
-| A3 ficha 2+1 | 1 | ⬜ | |
+| B2 modais do funil + ganho | 1 | 🔄 | Sonnet; ganho = CNPJ, razão social, fantasia, endereço |
+| A3 ficha 2+1 | 1 | 🔄 | Sonnet, migration 0115 |
 | D5 configurações com abas + módulos | 2 | ⬜ | |
 | H2 LGPD retenção/anonimização | 2 | ⬜ | |
 | E1 início v2 + base de relatórios | 2 | ⬜ | |
