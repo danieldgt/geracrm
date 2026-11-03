@@ -17,7 +17,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | L0d ícones Lucide | 0 | ✅ | integrada; desenhos de memória — revisão aponta os suspeitos |
 | L0e docs e skill de formulários | 0 | 🔄 | Haiku |
 | D3 escopo por papel + usuários + filiais | 0 | 🔄 | Opus, worktree — só API (D3.1–D3.3); telas D3.4 depois de L0 |
-| G1 devolver ao agente / reatribuir / filtro | 0 | 🔄 | Sonnet, worktree |
+| G1 devolver ao agente / reatribuir / filtro | 0 | 🔍 | integrada (d59c80d); revisão Sonnet em curso; suíte completa da API rodando |
 | H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
 | A1 cadastro do contato | 1 | 🔄 | Sonnet, migration 0112 |
 | A4 etiquetas e origens | 1 | 🔄 | Sonnet, migration 0113 |
