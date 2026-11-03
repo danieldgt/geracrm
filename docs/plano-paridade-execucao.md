@@ -53,7 +53,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
 | D3.4 telas de usuários e filiais | 0 | ✅ | integrada (console 656); conferir códigos de erro com a API quando D3 entrar |
 | C2b agenda no escopo comum + na ficha | 2 | ✅ | integrada; contato fora do escopo → 422 e nome oculto na leitura |
-| X3 teste do worker de aquisição sem isolamento de tenant | — | ⬜ | Haiku; passa na suíte, falha no subconjunto `aquisicao/` |
+| X3 teste do worker de aquisição sem isolamento de tenant | — | 🔄 | Haiku |
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
