@@ -1,11 +1,33 @@
 import { describe, it, expect } from 'vitest'
 import {
   adicionarFeriado, badgeStatusTemplate, confirmacaoLiberar, erroDaApi, feriadoDeData, formatarNoFuso, removerFeriado, rotuloFeriado,
-  rotuloSuspensao, validarAtivas,
+  lerDias, rotuloSuspensao, validarAtivas,
 } from './ativas.regras.js'
 
 describe('Mensagens ativas — regras da tela', () => {
-  const ok = { limiteDia: 2, limiteSemana: 4, templateRetorno: null, feriados: [] }
+  const ok = {
+    limiteDia: 2, limiteSemana: 4, templateRetorno: null, descarteAposHoras: 72,
+    reativacao: { ativa: false, dias: [30, 90], templateId: null, texto: null }, feriados: [],
+  }
+
+  it('descarte e reativação: horas de 0 a 720; prazos crescentes, 7 a 365, no máximo 3', () => {
+    expect(validarAtivas({ ...ok, descarteAposHoras: 0 })).toEqual({})
+    expect(validarAtivas({ ...ok, descarteAposHoras: 721 })).toHaveProperty('descarteAposHoras')
+    expect(validarAtivas({ ...ok, descarteAposHoras: 1.5 })).toHaveProperty('descarteAposHoras')
+    const dias = (d: number[]) => validarAtivas({ ...ok, reativacao: { ...ok.reativacao, dias: d } })
+    expect(dias([7, 30, 365])).toEqual({})
+    expect(dias([90, 30])).toHaveProperty('reativacao')
+    expect(dias([5, 30])).toHaveProperty('reativacao')
+    expect(dias([30, 400])).toHaveProperty('reativacao')
+    expect(dias([7, 30, 90, 180])).toHaveProperty('reativacao')
+    expect(dias([Number.NaN])).toHaveProperty('reativacao')
+  })
+
+  it('lerDias aceita vírgula, ponto e vírgula e espaço; lixo vira NaN', () => {
+    expect(lerDias('30, 90')).toEqual([30, 90])
+    expect(lerDias(' 7;30 90 ')).toEqual([7, 30, 90])
+    expect(lerDias('30, x').some(Number.isNaN)).toBe(true)
+  })
 
   it('valida limites como a API: inteiros, mínimo 1, semana ≥ dia', () => {
     expect(validarAtivas(ok)).toEqual({})

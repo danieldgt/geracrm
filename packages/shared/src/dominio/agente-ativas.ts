@@ -28,11 +28,44 @@ export const MAX_FERIADOS = 60
 /** "AAAA-MM-DD" vale só naquele dia; "MM-DD" vale todo ano (feriado fixo). */
 export const FERIADO = /^(\d{4}-)?(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/
 
+export const DESCARTE_APOS_HORAS_PADRAO = 72
+export const DESCARTE_APOS_HORAS_MAX = 720
+export const REATIVACAO_DIAS_PADRAO: readonly number[] = [30, 90]
+export const REATIVACAO_DIAS_MIN = 7
+export const REATIVACAO_DIAS_MAX = 365
+export const REATIVACAO_MAX_PASSOS = 3
+export const REATIVACAO_TEXTO_MAX = 500
+
+/**
+ * Reativação do contato descartado por `sem_resposta` (raia G5): uma ativa por
+ * marco em `dias` (contados do descarte). Desligada por padrão.
+ * Oficial: SEMPRE o template aprovado (`templateId`). Não-oficial: o `texto`
+ * configurado — sem ele, nada é enviado.
+ */
+export const reativacaoAtivas = z.object({
+  ativa: z.boolean(),
+  dias: z.array(z.number().int().min(REATIVACAO_DIAS_MIN, `Use de ${REATIVACAO_DIAS_MIN} a ${REATIVACAO_DIAS_MAX} dias.`)
+    .max(REATIVACAO_DIAS_MAX, `Use de ${REATIVACAO_DIAS_MIN} a ${REATIVACAO_DIAS_MAX} dias.`))
+    .min(1, 'Informe ao menos um prazo.').max(REATIVACAO_MAX_PASSOS, `No máximo ${REATIVACAO_MAX_PASSOS} prazos.`),
+  templateId: z.string().uuid().nullable(),
+  texto: z.string().trim().max(REATIVACAO_TEXTO_MAX).nullable().default(null),
+}).refine((r) => r.dias.every((d, i) => i === 0 || d > r.dias[i - 1]!), {
+  message: 'Os prazos da reativação devem ser crescentes.', path: ['dias'],
+})
+export type ReativacaoAtivas = z.infer<typeof reativacaoAtivas>
+
+export const REATIVACAO_PADRAO: ReativacaoAtivas = {
+  ativa: false, dias: [...REATIVACAO_DIAS_PADRAO], templateId: null, texto: null,
+}
+
 export const configAtivas = z.object({
   limiteDia: z.number().int().min(1).max(LIMITE_ATIVAS_MAX_DIA),
   limiteSemana: z.number().int().min(1).max(LIMITE_ATIVAS_MAX_SEMANA),
   /** Id do template usado no OFICIAL fora da janela de 24h. `null` = nenhum. */
   templateRetorno: z.string().uuid().nullable(),
+  /** Horas após o ÚLTIMO retorno sem resposta até descartar o contato (`sem_resposta`). 0 = não descarta. */
+  descarteAposHoras: z.number().int().min(0).max(DESCARTE_APOS_HORAS_MAX),
+  reativacao: reativacaoAtivas,
 }).refine((c) => c.limiteSemana >= c.limiteDia, {
   message: 'O limite da semana não pode ser menor que o do dia.', path: ['limiteSemana'],
 })
@@ -42,13 +75,21 @@ export const ATIVAS_PADRAO: ConfigAtivas = {
   limiteDia: LIMITE_ATIVAS_DIA_PADRAO,
   limiteSemana: LIMITE_ATIVAS_SEMANA_PADRAO,
   templateRetorno: null,
+  descarteAposHoras: DESCARTE_APOS_HORAS_PADRAO,
+  reativacao: REATIVACAO_PADRAO,
 }
 
-/** Corpo do PUT: a config das ativas + os feriados do número. */
+/**
+ * Corpo do PUT: a config das ativas + os feriados do número. `descarteAposHoras`
+ * e `reativacao` são opcionais: ausentes, o servidor mantém o que já está salvo
+ * (cliente antigo não zera a política nova).
+ */
 export const corpoAtivas = z.object({
   limiteDia: z.number().int().min(1).max(LIMITE_ATIVAS_MAX_DIA),
   limiteSemana: z.number().int().min(1).max(LIMITE_ATIVAS_MAX_SEMANA),
   templateRetorno: z.string().uuid().nullable(),
+  descarteAposHoras: z.number().int().min(0).max(DESCARTE_APOS_HORAS_MAX).optional(),
+  reativacao: reativacaoAtivas.optional(),
   feriados: z.array(z.string().regex(FERIADO)).max(MAX_FERIADOS),
 }).refine((c) => c.limiteSemana >= c.limiteDia, {
   message: 'O limite da semana não pode ser menor que o do dia.', path: ['limiteSemana'],
@@ -67,7 +108,14 @@ export function lerConfigAtivas(bruto: unknown): ConfigAtivas {
   const limiteSemana = Math.max(limiteDia, inteiro(o['limiteSemana'], 1, LIMITE_ATIVAS_MAX_SEMANA, LIMITE_ATIVAS_SEMANA_PADRAO))
   const t = o['templateRetorno']
   const templateRetorno = typeof t === 'string' && z.string().uuid().safeParse(t).success ? t : null
-  return { limiteDia, limiteSemana, templateRetorno }
+  const descarteAposHoras = inteiro(o['descarteAposHoras'], 0, DESCARTE_APOS_HORAS_MAX, DESCARTE_APOS_HORAS_PADRAO)
+  return { limiteDia, limiteSemana, templateRetorno, descarteAposHoras, reativacao: lerReativacao(o['reativacao']) }
+}
+
+/** Leitura tolerante da reativação: qualquer coisa torta cai no padrão (desligada). */
+export function lerReativacao(bruto: unknown): ReativacaoAtivas {
+  const r = reativacaoAtivas.safeParse(bruto)
+  return r.success ? r.data : { ...REATIVACAO_PADRAO, dias: [...REATIVACAO_DIAS_PADRAO] }
 }
 
 /** Normaliza a lista de feriados: só formatos válidos, sem repetição, ordenada. */

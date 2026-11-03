@@ -7,6 +7,7 @@ import { emSavepoint, type Sql } from '../../db/index.js'
 import { notificarMensagemEntrante, notificarConfirmacaoSemPedido } from './notificacao.js'
 import { agendarTurno } from './agente/fila.js'
 import { cancelarRetornosDaConversa } from './agente/retorno.js'
+import { reabrirContatoDescartadoSemResposta } from './agente/descarte-reativacao.js'
 import { midiaHabilitada } from './midia/armazenamento.js'
 
 /**
@@ -240,6 +241,12 @@ export async function ingerirMensagemEntrante(
   try {
     await emSavepoint(tx, (sp) => cancelarRetornosDaConversa(sp, conversaId))
   } catch { /* cancelar retorno é acessório; a mensagem não pode se perder por ele */ }
+
+  // 6.9 Quem o robô deu por perdido (`sem_resposta`) e voltou a escrever está vivo: o
+  //     contato volta a "novo" (G5). O descarte manual nunca é reaberto aqui.
+  try {
+    await emSavepoint(tx, (sp) => reabrirContatoDescartadoSemResposta(sp, conversaId, msg.recebidaEm))
+  } catch { /* reabrir é acessório; a mensagem não pode se perder por ele */ }
 
   // 7. Notifica o atendente que assumiu esta conversa (PLT-07), no mesmo commit.
   //    Só entrante NOVA chega aqui — a duplicada já retornou lá em cima.
