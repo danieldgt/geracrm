@@ -1,7 +1,8 @@
 import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
-import { firstValueFrom } from 'rxjs'
+import { firstValueFrom, type Observable } from 'rxjs'
 import { mensagemDeErro } from '../../compartilhado/ui/index.js'
+import type { PedidoDoContato } from './funil-acoes.regras.js'
 
 export interface Etapa {
   readonly id: string
@@ -25,6 +26,9 @@ export interface Coluna {
   proximoCursor: string | null
   carregandoMais: boolean
 }
+/** Resultado tipificado de uma ação do funil: o corpo do erro volta para a tela mapear por campo. */
+export type ResultadoAcao = { ok: true } | { ok: false; status: number; corpo: unknown; mensagem: string }
+
 export interface Motivo { readonly codigo: string; readonly nome: string }
 
 /** Etapa na visão de CONFIGURAÇÃO: inclui as inativas, a ordem e o uso. */
@@ -222,14 +226,49 @@ export class FunilServico {
     }
   }
 
-  async criar(contatoId: string): Promise<boolean> {
+  /** Cria a oportunidade na etapa inicial escolhida. Falha de negócio volta tipificada (mensagem do servidor). */
+  async criar(corpo: { contatoId: string; etapaId: string; valorCentavos?: number }): Promise<ResultadoAcao> {
+    const r = await this.acao(() => this.http.post('/v1/funil/oportunidades', corpo), 'Não foi possível criar a oportunidade.')
+    if (r.ok) await this.carregar()
+    return r
+  }
+
+  /** Ganhar: valida/grava os dados do contato e move, numa transação só (422 por campo em `corpo`). */
+  async ganhar(cardId: string, corpo: unknown): Promise<ResultadoAcao> {
+    const r = await this.acao(() => this.http.post(`/v1/funil/oportunidades/${cardId}/ganhar`, corpo), 'Não foi possível ganhar o negócio.')
+    // 422 (dados) mantém o modal aberto e o quadro como está; o resto recarrega para refletir o servidor.
+    if (r.ok || r.status !== 422) await this.carregar()
+    return r
+  }
+
+  async perder(cardId: string, corpo: unknown): Promise<ResultadoAcao> {
+    const r = await this.acao(() => this.http.post(`/v1/funil/oportunidades/${cardId}/perder`, corpo), 'Não foi possível registrar a perda.')
+    if (r.ok || r.status !== 422) await this.carregar()
+    return r
+  }
+
+  async transferir(cardId: string, corpo: { usuarioId: string; motivo: string }): Promise<ResultadoAcao> {
+    const r = await this.acao(() => this.http.post(`/v1/funil/oportunidades/${cardId}/transferir`, corpo), 'Não foi possível transferir.')
+    if (r.ok) await this.carregar()
+    return r
+  }
+
+  /** Pedidos do contato (os mais recentes, uma página) para vincular ao ganho. */
+  async pedidosDoContato(contatoId: string): Promise<PedidoDoContato[]> {
     try {
-      await firstValueFrom(this.http.post('/v1/funil/oportunidades', { contatoId }))
-      await this.carregar()
-      return true
+      const r = await firstValueFrom(this.http.get<{ itens: PedidoDoContato[] }>(`/v1/pedidos?contatoId=${encodeURIComponent(contatoId)}`))
+      return r.itens
+    } catch { return [] }
+  }
+
+  private async acao(chamar: () => Observable<unknown>, padrao: string): Promise<ResultadoAcao> {
+    try {
+      await firstValueFrom(chamar())
+      return { ok: true }
     } catch (e) {
-      this.erroMove.set(mensagemDeErro(e, 'Não foi possível criar a oportunidade.'))
-      return false
+      const status = e instanceof HttpErrorResponse ? e.status : 0
+      const corpo = e instanceof HttpErrorResponse ? e.error : null
+      return { ok: false, status, corpo, mensagem: mensagemDeErro(e, padrao) }
     }
   }
 }

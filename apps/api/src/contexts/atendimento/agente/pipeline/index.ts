@@ -4,6 +4,7 @@ import { etapaModoEfetivo } from './modo-efetivo.js'
 import { etapaGatilhosEntrada } from './gatilhos-entrada.js'
 import { etapaSlotsDoCliente } from './slots-do-cliente.js'
 import { etapaTetoConversa } from './teto-conversa.js'
+import { etapaDevolucaoDaEquipe } from './devolucao-da-equipe.js'
 import { etapaNumerosAmpliados } from './numeros-ampliados.js'
 import { etapaFiltroSaida } from './filtro-saida.js'
 import { etapaPerguntaRepetida } from './pergunta-repetida.js'
@@ -19,7 +20,7 @@ export * from './tipos.js'
 /**
  * O PIPELINE DO TURNO, MONTADO — a ordem é esta e só muda aqui (raia P0).
  *
- *   modoEfetivo → [portão] → gatilhos → slots → teto(pré) → LLM →
+ *   modoEfetivo → [portão] → gatilhos → slots → teto(pré) → devolução → LLM →
  *   [guardrail R$] → números → filtro → pergunta → qualidade → envio → teto(pós)
  *
  * Cada etapa mora no seu arquivo e tem uma raia dona; editar a etapa NÃO exige
@@ -31,6 +32,7 @@ export const PIPELINE_PADRAO: PipelineDoTurno = {
   gatilhos: etapaGatilhosEntrada,
   slots: etapaSlotsDoCliente,
   teto: etapaTetoConversa,
+  devolucao: etapaDevolucaoDaEquipe,
   numeros: etapaNumerosAmpliados,
   filtro: etapaFiltroSaida,
   pergunta: etapaPerguntaRepetida,
@@ -42,9 +44,13 @@ export function montarPipeline(sobrepor: Partial<PipelineDoTurno> = {}): Pipelin
   return { ...PIPELINE_PADRAO, ...sobrepor }
 }
 
-/** Etapas antes do modelo, na ordem. O teto entra pelo seu lado `antes`. */
+/**
+ * Etapas antes do modelo, na ordem. O teto entra pelo seu lado `antes`. A
+ * devolução da equipe (G1) é a ÚLTIMA: só acrescenta instrução, e só no turno
+ * que de fato chega ao modelo (ver `devolucao-da-equipe.ts`).
+ */
 function etapasPreLlm(p: PipelineDoTurno): readonly EtapaPreLlm[] {
-  return [p.gatilhos, p.slots, { nome: p.teto.nome, executar: (ctx) => p.teto.antes(ctx) }]
+  return [p.gatilhos, p.slots, { nome: p.teto.nome, executar: (ctx) => p.teto.antes(ctx) }, p.devolucao]
 }
 
 /** Etapas depois do modelo (e do guardrail de R$), na ordem. */
@@ -67,7 +73,7 @@ export interface ResultadoPreLlm {
 }
 
 /**
- * Roda gatilhos → slots → teto(pré). Para na primeira decisão que não é
+ * Roda gatilhos → slots → teto(pré) → devolução. Para na primeira decisão que não é
  * `segue`. Cada etapa enxerga o estado já com os patches das anteriores.
  */
 export async function rodarPreLlm(p: PipelineDoTurno, ctx: ContextoPipeline): Promise<ResultadoPreLlm> {

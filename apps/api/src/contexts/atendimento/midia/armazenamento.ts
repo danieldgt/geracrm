@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 /**
@@ -59,6 +59,16 @@ export async function subirMidia(tenantId: string, bytes: Buffer, mime: string):
  */
 export async function urlAssinada(chave: string, ttlSegundos = 3600): Promise<string> {
   return getSignedUrl(cliente(), new GetObjectCommand({ Bucket: bucket, Key: chave }), { expiresIn: ttlSegundos })
+}
+
+/** Sobe bytes numa chave JÁ montada pelo chamador (arquivos do contato). A chave leva o tenant no prefixo. */
+export async function subirObjeto(chave: string, bytes: Buffer, mime: string): Promise<void> {
+  await cliente().send(new PutObjectCommand({ Bucket: bucket, Key: chave, Body: bytes, ContentType: mime }))
+}
+
+/** Remove um objeto do bucket. Inexistente não é erro (S3 responde 204). */
+export async function removerObjeto(chave: string): Promise<void> {
+  await cliente().send(new DeleteObjectCommand({ Bucket: bucket, Key: chave }))
 }
 
 /** É uma chave nossa (namespaced) e não uma URL externa (entrada do provedor)? */

@@ -78,8 +78,23 @@ export function validarTarefa(f: FormTarefa, contatoObrigatorio = false): ErrosT
   const e: Record<string, string> = {}
   if (contatoObrigatorio && !f.contatoId) e['contatoId'] = 'Escolha o contato.'
   if (!f.titulo.trim()) e['titulo'] = 'Dê um título.'
+  else if (f.titulo.trim().length > 200) e['titulo'] = 'Use até 200 caracteres.'
   if (!f.data) e['data'] = 'Informe a data.'
   if (!f.hora) e['hora'] = 'Informe a hora.'
+  return e
+}
+
+/**
+ * Maps the `campos` of an API 422 (`tarefa.entrada_invalida` family) to the form fields,
+ * so the message lands on the field instead of a generic banner. Unknown fields are ignored.
+ */
+export function errosDoServidor(campos: readonly string[] | undefined): ErrosTarefa {
+  const e: Record<string, string> = {}
+  for (const c of campos ?? []) {
+    if (c === 'contatoId') e['contatoId'] = 'Contato não encontrado.'
+    else if (c === 'titulo') e['titulo'] = 'Título inválido (até 200 caracteres).'
+    else if (c === 'venceEm') e['data'] = 'Data ou hora inválida.'
+  }
   return e
 }
 

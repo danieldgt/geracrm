@@ -15,6 +15,10 @@ import { rotasAtendimentoKanban } from '../atendimento/rotas-atendimento-kanban.
 import { rotasMensagens } from '../atendimento/rotas-mensagens.js'
 import { rotasDevolucao } from '../atendimento/rotas-devolucao.js'
 import { rotasEtiquetas } from '../crm/rotas-etiquetas.js'
+import { rotasContatoFeed } from '../crm/rotas-contato-feed.js'
+import { rotasContatoArquivo } from '../crm/rotas-contato-arquivo.js'
+import { rotasPainel } from './rotas-painel.js'
+import { rotasRelatorios } from './rotas-relatorios.js'
 
 /**
  * ESCOPO NAS ROTAS (D3) — banco real, papel da aplicação (RLS), DOIS tenants.
@@ -155,7 +159,7 @@ beforeAll(async () => {
     if (typeof s === 'string') { req.usuarioSub = s; req.usuarioEmail = `${s}@d3.test` }
     if (req.headers['x-teste-staff'] === '1') req.atorStaff = true
   })
-  for (const r of [rotasContatos, rotasCarteira, rotasTarefa, rotasFunil, rotasLeads, rotasConversas, rotasFila, rotasPedido, rotasAtendimentoKanban, rotasMensagens, rotasDevolucao, rotasEtiquetas]) {
+  for (const r of [rotasContatos, rotasCarteira, rotasTarefa, rotasFunil, rotasLeads, rotasConversas, rotasFila, rotasPedido, rotasAtendimentoKanban, rotasMensagens, rotasDevolucao, rotasEtiquetas, rotasContatoFeed, rotasContatoArquivo, rotasPainel, rotasRelatorios]) {
     await app.register(r)
   }
   await app.ready()
@@ -277,6 +281,28 @@ describe('contatos — lista, busca e ficha', () => {
     expect((await pedir('va', 'POST', `/v1/contatos/${C.a}/comentarios`, { texto: 'meu cliente' })).status).toBe(201)
   })
 
+  it('ficha 2+1 (A3): feed, arquivos e whatsapp do contato alheio → 404', async () => {
+    for (const sub of ['feed', 'arquivos', 'whatsapp']) {
+      expect((await pedir('va', 'GET', `/v1/contatos/${C.b}/${sub}`)).status, sub).toBe(404)
+    }
+    expect((await pedir('va', 'GET', `/v1/contatos/${C.a}/feed`)).status).toBe(200)
+  })
+
+  it('painel Início e relatório por dimensão (E1) contam só o escopo', async () => {
+    const painel = async (quem: 'va' | 'gx' | 'adm') => (await pedir(quem, 'GET', '/v1/painel/inicio')).corpo
+    expect((await painel('va'))['contatosNovos']).toBe(1)
+    expect((await painel('gx'))['contatosNovos']).toBe(2)
+    expect((await painel('adm'))['contatosNovos']).toBe(4)
+    expect(((await painel('va'))['tarefas'] as { pendentes: number }).pendentes).toBe(2)
+    const recentes = ((await painel('va'))['contatosRecentes'] as { id: string }[]).map((c) => c.id)
+    expect(recentes).toEqual([C.a])
+    const total = async (quem: 'va' | 'adm') =>
+      ((await pedir(quem, 'GET', '/v1/relatorios/contatos-por/qualificacao')).corpo.itens ?? [])
+        .reduce((n, i) => n + (i['contatos'] as number), 0)
+    expect(await total('va')).toBe(1)
+    expect(await total('adm')).toBe(4)
+  })
+
   it('papel muda → vale na PRÓXIMA requisição (sem cache)', async () => {
     await dono`UPDATE usuario_filial SET papel = 'admin' WHERE tenant_id = ${A} AND usuario_id = ${U.va}`
     expect(ids((await pedir('va', 'GET', '/v1/contatos')).corpo)).toEqual(TODOS_A)
@@ -323,13 +349,15 @@ describe('tarefas', () => {
     expect(ids((await pedir('adm', 'GET', '/v1/tarefas')).corpo)).toEqual([T.a, T.b, T.livre, T.livreB].sort())
   })
 
-  it('concluir/cancelar tarefa alheia → 404 e nada muda; criar tarefa sobre cliente alheio → 404', async () => {
+  it('concluir/cancelar tarefa alheia → 404 e nada muda; criar tarefa sobre cliente alheio → 422 de contato inexistente', async () => {
     expect((await pedir('va', 'POST', `/v1/tarefas/${T.b}/concluir`)).status).toBe(404)
     expect((await pedir('va', 'POST', `/v1/tarefas/${T.b}/cancelar`)).status).toBe(404)
     const [t] = await dono<{ estado: string }[]>`SELECT estado FROM tarefa WHERE tenant_id = ${A} AND id = ${T.b}`
     expect(t!.estado).toBe('aberta')
     const venceEm = new Date(Date.now() + 86400000).toISOString()
-    expect((await pedir('va', 'POST', '/v1/tarefas', { titulo: 'x', venceEm, contatoId: C.b })).status).toBe(404)
+    const criar = await pedir('va', 'POST', '/v1/tarefas', { titulo: 'x', venceEm, contatoId: C.b })
+    expect(criar.status).toBe(422)
+    expect(criar.corpo.erro).toBe('tarefa.contato_invalido')
   })
 })
 
@@ -344,9 +372,10 @@ describe('tarefas — contadores, sem próximo passo e lote', () => {
     expect(ids(r.corpo, 'contatoId')).toEqual([C.a])
   })
 
-  it('lote: contato fora do escopo é ignorado e contado', async () => {
+  it('lote (gestão): contato fora do escopo do gestor é ignorado e contado', async () => {
     const venceEm = new Date(Date.now() + 86400000).toISOString()
-    const r = await pedir('va', 'POST', '/v1/tarefas/lote', { contatoIds: [C.a, C.b], titulo: 'Lote D3', venceEm })
+    // Gestor de X: C.a (vendedora de X) entra; C.b (vendedor de Y) é ignorado.
+    const r = await pedir('gx', 'POST', '/v1/tarefas/lote', { contatoIds: [C.a, C.b], titulo: 'Lote D3', venceEm })
     expect(r.status).toBe(201)
     expect(r.corpo).toMatchObject({ criadas: 1, ignorados: 1 })
     const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tarefa WHERE tenant_id = ${A} AND titulo = 'Lote D3' AND contato_id = ${C.b}`
@@ -393,6 +422,16 @@ describe('funil e leads', () => {
       ((await pedir(quem, 'GET', '/v1/funil/etapas')).corpo.itens ?? []).find((e) => e['id'] === etapaFunil)?.['total']
     expect(await total('va')).toBe(1)
     expect(await total('adm')).toBe(2)
+  })
+
+  it('modais do funil (B2): criar, ganhar, perder e transferir fora do escopo → 404', async () => {
+    expect((await pedir('va', 'POST', '/v1/funil/oportunidades', { contatoId: C.b })).status).toBe(404)
+    expect((await pedir('va', 'POST', `/v1/funil/oportunidades/${O.b}/ganhar`, {})).status).toBe(404)
+    expect((await pedir('va', 'POST', `/v1/funil/oportunidades/${O.b}/perder`, { motivoCodigo: 'preco' })).status).toBe(404)
+    // Transferir é da gestão: o gestor de X não alcança o card do cliente de Y.
+    expect((await pedir('gx', 'POST', `/v1/funil/oportunidades/${O.b}/transferir`, { usuarioId: U.va, motivo: 'x' })).status).toBe(404)
+    const [o] = await dono<{ estado: string }[]>`SELECT estado FROM oportunidade WHERE tenant_id = ${A} AND id = ${O.b}`
+    expect(o!.estado).toBe('aberta')
   })
 
   it('mover card alheio → 404', async () => {
@@ -464,7 +503,7 @@ describe('conversas — e a fila continua funcionando', () => {
     expect((await pedir('vb', 'POST', `/v1/conversas/${CV.fila2}/assumir`)).status).toBe(201)
     const semAcesso = await pedir('adm', 'POST', `/v1/conversas/${CV.fila2}/reatribuir`, { usuarioId: U.va, motivo: 'teste' })
     expect(semAcesso.status).toBe(422)
-    expect(semAcesso.corpo.erro).toBe('reatribuicao.destino_sem_acesso')
+    expect(semAcesso.corpo.erro).toBe('reatribuicao.sem_acesso_ao_numero')
     const [at] = await dono<{ atendente_id: string }[]>`SELECT atendente_id FROM atendimento WHERE tenant_id = ${A} AND conversa_id = ${CV.fila2} AND estado <> 'encerrado'`
     expect(at!.atendente_id).toBe(U.vb)
     // Supervisor de todas as filiais pode atender → reatribuição passa.

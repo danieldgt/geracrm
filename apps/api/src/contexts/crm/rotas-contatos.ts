@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Sql } from 'postgres'
-import { classificarRfv, normalizarTelefone, normalizarDocumento, apenasDigitos, ehPerfilPreco, perfilDeCotacao } from '@geracrm/shared'
+import { classificarRfv, normalizarTelefone, normalizarDocumento, ehPerfilPreco, perfilDeCotacao } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { parseCsvContatos } from './importar-csv.js'
 import { condicaoContato, contatoNoEscopo, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
-import { validarCadastro, type ContatoCadastro } from './contato-cadastro.js'
+import { validarCadastro } from './contato-cadastro.js'
+import { gravarDocumentoEEndereco } from './contato-gravacao.js'
 
 /** Teto de linhas por importação — evita engolir um arquivo gigante numa tx. */
 const MAX_LINHAS_CSV = 5000
@@ -73,115 +74,6 @@ const escreverCursor = (a: string | number, id: string) =>
 
 /** Sub-rotas do contato: fora do escopo do usuário = 404, como inexistente (D3). */
 const ESCOPO_CONTATO = exigirNoEscopo('contato')
-
-/**
- * Documento (CNPJ/CPF) e endereço de uma edição manual.
- *
- * ⚠️ Linha do ERP NUNCA é reescrita. A edição do usuário VENCE para exibição
- *    (ele corrigiu o dado): a linha manual vira a principal/fiscal e a do ERP é
- *    só DEMOVIDA (principal/fiscal = false), intacta, na mesma transação.
- *    A ingestão do ERP (`ingestao-clientes.ts`) só INSERE telefone/documento
- *    quando faltam e não toca em endereço — não re-promove sobre o manual.
- *    Reenviar o mesmo valor que o ERP já mostra (o formulário devolve tudo)
- *    não cria linha manual: seria um override sem mudança.
- *    Vazio remove só a linha manual; se sobrar linha do ERP sem principal, ela
- *    volta a ser a principal.
- */
-interface EnderecoLinha {
-  seq: number; logradouro: string | null; numero: string | null; complemento: string | null
-  bairro: string | null; cidade: string | null; uf: string | null; cep: string | null
-  principal: boolean; fonte: string
-}
-
-const trimOuNull = (x: string | null | undefined) => (typeof x === 'string' && x.trim() !== '' ? x.trim() : null)
-
-async function gravarDocumento(tx: Sql, id: string, d: ContatoCadastro): Promise<void> {
-  const doc = d.documento ? apenasDigitos(d.documento) : null
-  const linhas = await tx<{ seq: number; tipo: string; numero: string; fiscal: boolean; fonte: string }[]>`
-    SELECT seq, tipo, numero, fiscal, fonte FROM contato_documento
-     WHERE tenant_id = tenant_atual() AND contato_id = ${id} ORDER BY seq`
-  const manual = linhas.find((l) => l.fonte === 'manual')
-
-  if (!doc) {
-    if (!manual) return
-    await tx`DELETE FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${manual.seq}`
-    const resto = linhas.filter((l) => l.seq !== manual.seq)
-    if (resto.length > 0 && !resto.some((l) => l.fiscal)) {
-      await tx`UPDATE contato_documento SET fiscal = true WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${resto[0]!.seq}`
-    }
-    return
-  }
-
-  const tipo = doc.length === 14 ? 'cnpj' : 'cpf'
-  if (!manual) {
-    const fiscalAtual = linhas.find((l) => l.fiscal)
-    if (fiscalAtual && fiscalAtual.tipo === tipo && fiscalAtual.numero === doc) return // já é o que a ficha mostra
-  }
-  let seq: number
-  if (manual) {
-    seq = manual.seq
-    await tx`UPDATE contato_documento SET fiscal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fiscal AND seq <> ${seq}`
-    await tx`UPDATE contato_documento SET tipo = ${tipo}, numero = ${doc}, fiscal = true, visto_em = now()
-              WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${seq}`
-  } else {
-    seq = Math.max(0, ...linhas.map((l) => l.seq)) + 1
-    await tx`UPDATE contato_documento SET fiscal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fiscal`
-    await tx`
-      INSERT INTO contato_documento (tenant_id, contato_id, seq, tipo, numero, fiscal, fonte)
-      VALUES (tenant_atual(), ${id}, ${seq}, ${tipo}, ${doc}, true, 'manual')`
-  }
-}
-
-async function gravarEndereco(tx: Sql, id: string, d: ContatoCadastro): Promise<void> {
-  const e = d.endereco
-  const novo = {
-    logradouro: trimOuNull(e?.logradouro), numero: trimOuNull(e?.numero), complemento: trimOuNull(e?.complemento),
-    bairro: trimOuNull(e?.bairro), cidade: trimOuNull(e?.cidade), uf: trimOuNull(e?.uf),
-    cep: e?.cep ? apenasDigitos(e.cep) : null,
-  }
-  const preenchido = Object.values(novo).some((x) => x !== null)
-  const linhas = await tx<EnderecoLinha[]>`
-    SELECT seq, logradouro, numero, complemento, bairro, cidade, uf, cep, principal, fonte FROM contato_endereco
-     WHERE tenant_id = tenant_atual() AND contato_id = ${id} ORDER BY seq`
-  const manual = linhas.find((l) => l.fonte === 'manual')
-
-  if (!preenchido) {
-    if (!manual) return
-    await tx`DELETE FROM contato_endereco WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${manual.seq}`
-    const resto = linhas.filter((l) => l.seq !== manual.seq)
-    if (resto.length > 0 && !resto.some((l) => l.principal)) {
-      await tx`UPDATE contato_endereco SET principal = true WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${resto[0]!.seq}`
-    }
-    return
-  }
-
-  if (!manual) {
-    const principal = linhas.find((l) => l.principal)
-    const igual = principal && (Object.keys(novo) as (keyof typeof novo)[]).every((k) => trimOuNull(principal[k]) === novo[k])
-    if (igual) return // já é o que a ficha mostra
-  }
-  let seq: number
-  if (manual) {
-    seq = manual.seq
-    await tx`UPDATE contato_endereco SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND principal AND seq <> ${seq}`
-    await tx`
-      UPDATE contato_endereco SET logradouro = ${novo.logradouro}, numero = ${novo.numero}, complemento = ${novo.complemento},
-             bairro = ${novo.bairro}, cidade = ${novo.cidade}, uf = ${novo.uf}, cep = ${novo.cep}, principal = true
-       WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${seq} AND fonte = 'manual'`
-  } else {
-    seq = Math.max(0, ...linhas.map((l) => l.seq)) + 1
-    await tx`UPDATE contato_endereco SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND principal`
-    await tx`
-      INSERT INTO contato_endereco (tenant_id, contato_id, seq, logradouro, numero, complemento, bairro, cidade, uf, cep, principal, fonte)
-      VALUES (tenant_atual(), ${id}, ${seq}, ${novo.logradouro}, ${novo.numero}, ${novo.complemento},
-              ${novo.bairro}, ${novo.cidade}, ${novo.uf}, ${novo.cep}, true, 'manual')`
-  }
-}
-
-async function gravarDocumentoEEndereco(tx: Sql, id: string, d: ContatoCadastro): Promise<void> {
-  await gravarDocumento(tx, id, d)
-  await gravarEndereco(tx, id, d)
-}
 
 /**
  * Telefone principal de uma edição. A linha do ERP não é reescrita: a antiga é
@@ -552,11 +444,17 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
           recebe_campanhas: boolean; recebe_automacoes: boolean; criado_em: Date; perfil_preco: string | null
           razao_social: string | null; nome_fantasia: string | null; email: string | null; prioridade: string | null
           temperatura: string | null; origem_id: string | null; valor_estimado_centavos: string | null; observacoes: string | null
+          origem_nome: string | null; vendedor_id: string | null; vendedor_nome: string | null
         }[]>`
-          SELECT id, nome, modalidade, qualificado, recebe_campanhas, recebe_automacoes, criado_em, perfil_preco,
+          SELECT contato.id, contato.nome, modalidade, qualificado, recebe_campanhas, recebe_automacoes, contato.criado_em, perfil_preco,
                  razao_social, nome_fantasia, email, prioridade, temperatura, origem_id,
-                 valor_estimado_centavos::text, observacoes
-            FROM contato WHERE id = ${id}
+                 valor_estimado_centavos::text, observacoes,
+                 (SELECT o.nome FROM origem o WHERE o.tenant_id = contato.tenant_id AND o.id = contato.origem_id) AS origem_nome,
+                 ca.usuario_id AS vendedor_id,
+                 (SELECT u.nome FROM usuario u WHERE u.tenant_id = contato.tenant_id AND u.id = ca.usuario_id) AS vendedor_nome
+            FROM contato
+            LEFT JOIN carteira_atribuicao ca ON ca.tenant_id = contato.tenant_id AND ca.contato_id = contato.id AND ca.ate IS NULL
+           WHERE contato.id = ${id}
         `
         if (!contato) return null
 
@@ -627,6 +525,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         prioridade: dados.contato.prioridade,
         temperatura: dados.contato.temperatura,
         origemId: dados.contato.origem_id,
+        origem: dados.contato.origem_nome,
+        criadoEm: dados.contato.criado_em,
+        vendedor: dados.contato.vendedor_id ? { id: dados.contato.vendedor_id, nome: dados.contato.vendedor_nome ?? 'Usuário' } : null,
         valorEstimadoCentavos: dados.contato.valor_estimado_centavos === null ? null : Number(dados.contato.valor_estimado_centavos),
         observacoes: dados.contato.observacoes,
         // Perfil de preço DECLARADO (ADR-025). null = cota pelo padrão (atacado).

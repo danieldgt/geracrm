@@ -13,7 +13,7 @@ import type { EstadoAgente } from '../estado-agente.js'
  * O turno do vendedor é uma sequência FIXA de etapas determinísticas em volta
  * do modelo. A ordem é código, não configuração:
  *
- *   modoEfetivo → [portão] → gatilhos → slots → teto(pré) → LLM →
+ *   modoEfetivo → [portão] → gatilhos → slots → teto(pré) → devolução → LLM →
  *   [guardrail R$] → números → filtro → pergunta → qualidade → envio → teto(pós)
  *
  * Os colchetes são etapas que já existiam em `vendedor.ts` e continuam lá. As
@@ -252,6 +252,8 @@ export interface PipelineDoTurno {
   readonly gatilhos: EtapaPreLlm
   readonly slots: EtapaPreLlm
   readonly teto: EtapaTetoConversa
+  /** Recado de "Devolver ao agente" (G1): última etapa pré-modelo, só acrescenta instrução. */
+  readonly devolucao: EtapaPreLlm
   readonly numeros: EtapaPosResposta
   readonly filtro: EtapaPosResposta
   readonly pergunta: EtapaPosResposta

@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
-import { ehTipoTarefa, semProximoPasso, type TipoTarefa } from '@geracrm/shared'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { z } from 'zod'
+import { ehTipoTarefa, semProximoPasso } from '@geracrm/shared'
 import type { Sql } from '../../db/index.js'
-import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
+import { atendePapel, exigirPapel, papeisDoUsuario } from '../plataforma/papel.js'
 import { condicaoContato, condicaoTarefa, contatoNoEscopo, escopoDaRequisicao, type Escopo } from '../plataforma/escopo.js'
 
 const PAGINA = 30
@@ -14,6 +16,63 @@ const CONSULTA_MAX = 200
 const RESULTADO_MAX = 2000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DIA = /^\d{4}-\d{2}-\d{2}$/
+// Full-precision UTC text of a timestamptz (microseconds), as produced by Postgres `to_char` below.
+const CURSOR_EM = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
+const ISO_DATA_HORA = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/
+
+/** Real calendar date check: 2026-02-31 matches the shape but is not a date. */
+function diaReal(v: string): boolean {
+  if (!DIA.test(v)) return false
+  const [a, m, d] = v.split('-').map(Number) as [number, number, number]
+  const dt = new Date(Date.UTC(a, m - 1, d))
+  return dt.getUTCFullYear() === a && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+}
+
+const uuid = z.string().regex(UUID)
+const dia = z.string().refine(diaReal)
+const iso = z.string().refine((v) => ISO_DATA_HORA.test(v) && diaReal(v.slice(0, 10)) && !Number.isNaN(Date.parse(v)))
+const tipoSchema = z.string().refine(ehTipoTarefa)
+const SITUACOES = ['abertas', 'atrasadas', 'vencidas', 'hoje', 'semana', 'concluidas'] as const
+
+const consultaLista = z.object({
+  situacao: z.enum(SITUACOES).optional(), contatoId: uuid.optional(), tipo: tipoSchema.optional(),
+  responsavelId: uuid.optional(), q: z.string().max(200).optional(), de: dia.optional(), ate: dia.optional(),
+  cursor: z.string().max(300).optional(),
+})
+const consultaContadores = z.object({ responsavelId: uuid.optional() })
+const consultaSemProximoPasso = z.object({ contatoIds: z.string().max(CONSULTA_MAX * 40).optional() })
+const corpoTarefa = z.object({
+  contatoId: uuid.nullish(), titulo: z.string().trim().min(1).max(200), descricao: z.string().max(5000).nullish(),
+  venceEm: iso, tipo: tipoSchema.optional(), responsavelId: uuid.nullish(),
+})
+const corpoLote = corpoTarefa.omit({ contatoId: true }).extend({ contatoIds: z.array(uuid).min(1).max(LOTE_MAX) })
+const corpoConcluir = z.object({ resultado: z.string().trim().max(RESULTADO_MAX).nullish() }).nullish()
+const paramId = z.object({ id: uuid })
+
+/** Error code per invalid field (stable for the console); `campos` lists every offending field. */
+const CODIGO_POR_CAMPO: Record<string, string> = {
+  titulo: 'tarefa.titulo_obrigatorio', venceEm: 'tarefa.vencimento_invalido', tipo: 'tarefa.tipo_invalido',
+  responsavelId: 'tarefa.responsavel_invalido', contatoId: 'tarefa.contato_invalido', contatoIds: 'tarefa.id_invalido',
+  resultado: 'tarefa.resultado_grande', cursor: 'cursor.invalido', de: 'tarefa.periodo_invalido', ate: 'tarefa.periodo_invalido',
+  situacao: 'tarefa.situacao_invalida', q: 'tarefa.busca_invalida', descricao: 'tarefa.descricao_invalida',
+}
+
+function entradaInvalida(reply: FastifyReply, e: z.ZodError): FastifyReply {
+  const campos = [...new Set(e.issues.map((i) => String(i.path[0] ?? '')).filter(Boolean))]
+  const primeiro = e.issues[0]
+  let erro = CODIGO_POR_CAMPO[campos[0] ?? ''] ?? 'tarefa.entrada_invalida'
+  if (campos[0] === 'contatoIds' && primeiro?.code === 'too_small') erro = 'tarefa.lote_vazio'
+  if (campos[0] === 'contatoIds' && primeiro?.code === 'too_big') erro = 'tarefa.lote_grande'
+  return reply.code(422).send({ erro, mensagem: 'Dados da tarefa inválidos.', campos })
+}
+
+/** Cursor = base64url("<vence_em µs UTC>§<id>"); anything else is malformed. */
+function lerCursor(bruto: string | undefined): { em: string; id: string } | null | 'invalido' {
+  if (!bruto) return null
+  const [em, id, resto] = Buffer.from(bruto, 'base64url').toString('utf8').split('§')
+  if (resto !== undefined || !em || !id || !CURSOR_EM.test(em) || !diaReal(em.slice(0, 10)) || Number.isNaN(Date.parse(em)) || !UUID.test(id)) return 'invalido'
+  return { em, id }
+}
 
 /** Limites de "hoje" e "esta semana" no fuso do tenant, calculados com o `now()` do BANCO. */
 interface Limites { fuso: string; inicioDia: Date; fimDia: Date; inicioSemana: Date; fimSemana: Date }
@@ -36,7 +95,7 @@ const escaparLike = (s: string): string => s.replace(/[\\%_]/g, (c) => `\\${c}`)
 
 /**
  * A tarefa está no escopo do usuário (D3)? Com escopo `tudo` não consulta (a rota
- * segue com o 409 de sempre para inexistente/fechada). Fora do escopo = 404.
+ * segue com as respostas de sempre). Fora do escopo = 404, como inexistente.
  */
 async function tarefaNoEscopo(tx: Sql, escopo: Escopo, id: string): Promise<boolean> {
   if (escopo.tipo === 'tudo') return true
@@ -50,33 +109,31 @@ async function tarefaNoEscopo(tx: Sql, escopo: Escopo, id: string): Promise<bool
  * Tarefas de follow-up. ⚠️ "Situação" é derivada, no fuso do tenant:
  *   • abertas    = estado 'aberta'
  *   • atrasadas  = 'aberta' E vence_em < now()   (alias legado: 'vencidas')
- *   • hoje       = 'aberta' E vence_em dentro do dia local de hoje
+ *   • hoje       = 'aberta' E vence_em dentro do dia local de hoje — SÓ o dia: a tarefa
+ *                  de ontem ainda aberta NÃO aparece em `hoje`, aparece em `atrasadas`
+ *                  (decisão intencional; fixada em tarefa.test.ts)
  *   • semana     = 'aberta' E vence_em dentro da semana local (segunda a domingo)
  *   • concluidas
- * Ordena por vencimento (mais urgente primeiro). Cursor por (vence_em, id).
+ * Ordena por vencimento (mais urgente primeiro). Cursor por (vence_em, id), com o
+ * vencimento em microssegundos (texto do próprio Postgres) para não perder a fronteira.
  *
- * `responsavel_id` NULL = de ninguém (aparece para todos); por padrão a API grava quem criou.
+ * `responsavel_id` NULL = de ninguém: aparece para todos — o filtro `responsavelId` e os
+ * contadores por responsável incluem essas tarefas. Por padrão a API grava quem criou.
+ *
+ * Toda entrada passa por um schema Zod (422 com `campos`); `:id` que não é UUID → 404.
+ * Autorização: criar em lote exige gestor/supervisor/admin; concluir/cancelar vale para o
+ * responsável, o criador ou gestor/supervisor/admin (403 para os demais). Ambos são auditados.
  */
 export async function rotasTarefa(app: FastifyInstance): Promise<void> {
-  app.get<{ Querystring: {
-    situacao?: string; contatoId?: string; tipo?: string; responsavelId?: string; q?: string
-    de?: string; ate?: string; cursor?: string
-  } }>(
+  app.get<{ Querystring: Record<string, unknown> }>(
     '/v1/tarefas', { preHandler: exigirTenant },
     async (req, reply) => {
-      let curEm: string | null = null, curId: string | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
-        curEm = em; curId = id
-      }
-      const { situacao, contatoId, tipo, responsavelId, de, ate } = req.query
-      const q = req.query.q?.trim() || null
-      if (tipo && !ehTipoTarefa(tipo)) return reply.code(422).send({ erro: 'tarefa.tipo_invalido' })
-      if ((contatoId && !UUID.test(contatoId)) || (responsavelId && !UUID.test(responsavelId))) {
-        return reply.code(422).send({ erro: 'tarefa.id_invalido' })
-      }
-      if ((de && !DIA.test(de)) || (ate && !DIA.test(ate))) return reply.code(422).send({ erro: 'tarefa.periodo_invalido' })
+      const parsed = consultaLista.safeParse(req.query)
+      if (!parsed.success) return entradaInvalida(reply, parsed.error)
+      const { situacao, contatoId, tipo, responsavelId, de, ate } = parsed.data
+      const q = parsed.data.q?.trim() || null
+      const cur = lerCursor(parsed.data.cursor)
+      if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido', campos: ['cursor'] })
 
       const linhas = await req.comTenant(async (tx) => {
         const lim = await limitesDoTenant(tx)
@@ -90,11 +147,13 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
           : situacao === 'abertas'  ? tx`t.estado = 'aberta'`
           : tx`t.estado <> 'cancelada'`
         return tx<{
-          id: string; titulo: string; descricao: string | null; vence_em: Date; estado: string; tipo: string
+          id: string; titulo: string; descricao: string | null; vence_em: Date; vence_em_cursor: string; estado: string; tipo: string
           resultado: string | null; concluida_em: Date | null; contato_id: string | null; contato: string | null
           responsavel_id: string | null; responsavel: string | null
         }[]>`
-          SELECT t.id, t.titulo, t.descricao, t.vence_em, t.estado, t.tipo, t.resultado, t.concluida_em, t.contato_id,
+          SELECT t.id, t.titulo, t.descricao, t.vence_em,
+                 to_char(t.vence_em AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS vence_em_cursor,
+                 t.estado, t.tipo, t.resultado, t.concluida_em, t.contato_id,
                  c.nome AS contato, t.responsavel_id, u.nome AS responsavel
             FROM tarefa t
             LEFT JOIN contato c ON c.tenant_id = t.tenant_id AND c.id = t.contato_id
@@ -102,12 +161,13 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
            WHERE t.tenant_id = tenant_atual() AND ${filtroSituacao}
              AND ${contatoId ? tx`t.contato_id = ${contatoId}` : tx`true`}
              AND ${tipo ? tx`t.tipo = ${tipo}` : tx`true`}
-             AND ${responsavelId ? tx`t.responsavel_id = ${responsavelId}` : tx`true`}
+             AND ${responsavelId ? tx`(t.responsavel_id = ${responsavelId} OR t.responsavel_id IS NULL)` : tx`true`}
              AND ${condicaoTarefa(tx, escopo, 't')}
              AND ${q ? tx`(t.titulo ILIKE ${'%' + escaparLike(q) + '%'} OR c.nome ILIKE ${'%' + escaparLike(q) + '%'})` : tx`true`}
              AND ${de ? tx`t.vence_em >= (${de}::date::timestamp AT TIME ZONE ${lim.fuso}::text)` : tx`true`}
              AND ${ate ? tx`t.vence_em < ((${ate}::date + 1)::timestamp AT TIME ZONE ${lim.fuso}::text)` : tx`true`}
-             AND ${curEm === null ? tx`true` : tx`(t.vence_em, t.id) > (${curEm}::timestamptz, ${curId}::uuid)`}
+             -- ⚠️ ::text::timestamptz — a bare ::timestamptz makes the driver parse the string into a JS Date and drop microseconds.
+             AND ${cur === null ? tx`true` : tx`(t.vence_em, t.id) > (${cur.em}::text::timestamptz, ${cur.id}::uuid)`}
            ORDER BY t.vence_em ASC, t.id ASC LIMIT ${PAGINA + 1}`
       })
       const temMais = linhas.length > PAGINA
@@ -122,17 +182,18 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
           vencida: l.estado === 'aberta' && l.vence_em.getTime() < agora,
         })),
         proximoCursor: temMais && ultimo
-          ? Buffer.from(`${ultimo.vence_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
+          ? Buffer.from(`${ultimo.vence_em_cursor}§${ultimo.id}`).toString('base64url') : null,
       })
     },
   )
 
-  // Cartões da tela: contagem das ABERTAS, no fuso do tenant.
-  app.get<{ Querystring: { responsavelId?: string } }>(
+  // Screen cards: count of OPEN tasks in the tenant timezone (unowned tasks count for everyone).
+  app.get<{ Querystring: Record<string, unknown> }>(
     '/v1/tarefas/contadores', { preHandler: exigirTenant },
     async (req, reply) => {
-      const { responsavelId } = req.query
-      if (responsavelId && !UUID.test(responsavelId)) return reply.code(422).send({ erro: 'tarefa.id_invalido' })
+      const parsed = consultaContadores.safeParse(req.query)
+      if (!parsed.success) return entradaInvalida(reply, parsed.error)
+      const { responsavelId } = parsed.data
       const c = await req.comTenant(async (tx) => {
         const lim = await limitesDoTenant(tx)
         // ⚠️ Os cartões contam o que a lista MOSTRA (escopo D3).
@@ -144,7 +205,7 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
                  (count(*) FILTER (WHERE t.vence_em >= ${lim.inicioSemana} AND t.vence_em < ${lim.fimSemana}))::int AS semana
             FROM tarefa t
            WHERE t.tenant_id = tenant_atual() AND t.estado = 'aberta'
-             AND ${responsavelId ? tx`t.responsavel_id = ${responsavelId}` : tx`true`}
+             AND ${responsavelId ? tx`(t.responsavel_id = ${responsavelId} OR t.responsavel_id IS NULL)` : tx`true`}
              AND ${condicaoTarefa(tx, escopo, 't')}`
         return r!
       })
@@ -152,14 +213,16 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
     },
   )
 
-  // Derivado para outras telas (contatos, funil): ?contatoIds=a,b,c (máx. 200).
-  app.get<{ Querystring: { contatoIds?: string } }>(
+  // Derived for other screens (contacts, funnel): ?contatoIds=a,b,c (max 200).
+  app.get<{ Querystring: Record<string, unknown> }>(
     '/v1/tarefas/sem-proximo-passo', { preHandler: exigirTenant },
     async (req, reply) => {
-      const ids = [...new Set((req.query.contatoIds ?? '').split(',').map((s) => s.trim()).filter(Boolean))]
+      const parsed = consultaSemProximoPasso.safeParse(req.query)
+      if (!parsed.success) return entradaInvalida(reply, parsed.error)
+      const ids = [...new Set((parsed.data.contatoIds ?? '').split(',').map((s) => s.trim()).filter(Boolean))]
       if (ids.length === 0) return reply.send({ itens: [] })
-      if (ids.length > CONSULTA_MAX) return reply.code(422).send({ erro: 'tarefa.consulta_grande', mensagem: `Máximo de ${CONSULTA_MAX} contatos por consulta.` })
-      if (ids.some((i) => !UUID.test(i))) return reply.code(422).send({ erro: 'tarefa.id_invalido' })
+      if (ids.length > CONSULTA_MAX) return reply.code(422).send({ erro: 'tarefa.consulta_grande', mensagem: `Máximo de ${CONSULTA_MAX} contatos por consulta.`, campos: ['contatoIds'] })
+      if (ids.some((i) => !UUID.test(i))) return reply.code(422).send({ erro: 'tarefa.id_invalido', campos: ['contatoIds'] })
       const { linhas, visiveis } = await req.comTenant(async (tx) => {
         // ⚠️ Escopo (D3): contato fora do escopo some da resposta (como inexistente).
         const escopo = await escopoDaRequisicao(tx, req)
@@ -180,7 +243,7 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
           const tarefasAbertasFuturas = futuras.get(contatoId) ?? 0
           return {
             contatoId, tarefasAbertasFuturas,
-            // TODO(C2): contar eventos futuros da agenda e ler o módulo Agenda do tenant quando a raia C2 existir.
+            // TODO(C2): count future agenda events and read the tenant's Agenda module once lane C2 exists.
             semProximoPasso: semProximoPasso({ tarefasAbertasFuturas, eventosFuturos: 0, moduloAgendaAtivo: false }),
           }
         }),
@@ -188,123 +251,134 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
     },
   )
 
-  interface CorpoTarefa {
-    contatoId?: string; titulo?: string; descricao?: string; venceEm?: string; tipo?: string; responsavelId?: string
-  }
-  /** Valida os campos comuns ao POST simples e ao lote; devolve o erro 422 ou os valores limpos. */
-  const validar = (b: CorpoTarefa | undefined) => {
-    const titulo = b?.titulo?.trim()
-    if (!titulo) return { erro: { erro: 'tarefa.titulo_obrigatorio', mensagem: 'Dê um título.' } }
-    if (!b?.venceEm || Number.isNaN(Date.parse(b.venceEm))) return { erro: { erro: 'tarefa.vencimento_invalido', mensagem: 'Informe o vencimento.' } }
-    if (b.tipo !== undefined && !ehTipoTarefa(b.tipo)) return { erro: { erro: 'tarefa.tipo_invalido', mensagem: 'Tipo de tarefa inválido.' } }
-    if (b.responsavelId && !UUID.test(b.responsavelId)) return { erro: { erro: 'tarefa.responsavel_invalido', mensagem: 'Responsável inválido.' } }
-    return {
-      v: {
-        titulo, venceEm: b.venceEm, tipo: (b.tipo ?? 'outro') as TipoTarefa,
-        descricao: b.descricao?.trim() || null, responsavelId: b.responsavelId ?? null,
-      },
-    }
-  }
   const responsavelExiste = async (tx: Sql, id: string): Promise<boolean> => {
     const [u] = await tx`SELECT 1 FROM usuario WHERE tenant_id = tenant_atual() AND id = ${id}`
     return !!u
   }
+  const contatoExiste = async (tx: Sql, id: string): Promise<boolean> => {
+    const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
+    return !!c
+  }
 
-  app.post<{ Body: CorpoTarefa }>(
+  app.post<{ Body: unknown }>(
     '/v1/tarefas', { preHandler: exigirTenant },
     async (req, reply) => {
-      const r = validar(req.body)
-      if (!r.v) return reply.code(422).send(r.erro)
-      const v = r.v
+      const parsed = corpoTarefa.safeParse(req.body)
+      if (!parsed.success) return entradaInvalida(reply, parsed.error)
+      const v = parsed.data
       const id = randomUUID()
-      const contatoId = req.body?.contatoId
-      const ok = await req.comTenant(async (tx) => {
-        // ⚠️ Escopo (D3): tarefa só sobre cliente que a pessoa enxerga — a lista
-        //    devolveria o nome de um cliente alheio. Fora = 404.
-        if (contatoId && !(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), contatoId))) return 'fora' as const
+      const falha = await req.comTenant(async (tx): Promise<'contatoId' | 'responsavelId' | null> => {
         const eu = await garantirUsuarioId(tx, req)
-        if (v.responsavelId && !(await responsavelExiste(tx, v.responsavelId))) return false
+        // ⚠️ Escopo (D3): contato fora do escopo responde como inexistente — a lista
+        //    devolveria o nome de um cliente alheio.
+        if (v.contatoId && !(await contatoExiste(tx, v.contatoId)
+          && await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), v.contatoId))) return 'contatoId'
+        if (v.responsavelId && !(await responsavelExiste(tx, v.responsavelId))) return 'responsavelId'
         await tx`INSERT INTO tarefa (tenant_id, id, contato_id, responsavel_id, titulo, descricao, vence_em, criado_por, tipo)
-                 VALUES (tenant_atual(), ${id}, ${req.body?.contatoId ?? null}, ${v.responsavelId ?? eu}, ${v.titulo},
-                         ${v.descricao}, ${v.venceEm}, ${eu}, ${v.tipo})`
-        return true
+                 VALUES (tenant_atual(), ${id}, ${v.contatoId ?? null}, ${v.responsavelId ?? eu}, ${v.titulo},
+                         ${v.descricao?.trim() || null}, ${v.venceEm}, ${eu}, ${v.tipo ?? 'outro'})`
+        return null
       })
-      if (ok === 'fora') return reply.code(404).send({ erro: 'contato.nao_encontrado' })
-      if (!ok) return reply.code(422).send({ erro: 'tarefa.responsavel_invalido', mensagem: 'Responsável não encontrado.' })
+      if (falha === 'contatoId') return reply.code(422).send({ erro: 'tarefa.contato_invalido', mensagem: 'Contato não encontrado.', campos: ['contatoId'] })
+      if (falha === 'responsavelId') return reply.code(422).send({ erro: 'tarefa.responsavel_invalido', mensagem: 'Responsável não encontrado.', campos: ['responsavelId'] })
       return reply.code(201).send({ id })
     },
   )
 
-  // Uma tarefa por contato, numa transação só (tudo ou nada), auditada.
-  app.post<{ Body: CorpoTarefa & { contatoIds?: string[] } }>(
-    '/v1/tarefas/lote', { preHandler: exigirTenant },
+  // One task per contact, one transaction (all or nothing), audited. Managers only.
+  app.post<{ Body: unknown }>(
+    '/v1/tarefas/lote', { preHandler: [exigirTenant, exigirPapel('gestor', 'supervisor')] },
     async (req, reply) => {
-      const ids = [...new Set(req.body?.contatoIds ?? [])]
-      if (ids.length === 0) return reply.code(422).send({ erro: 'tarefa.lote_vazio', mensagem: 'Selecione ao menos um contato.' })
-      if (ids.length > LOTE_MAX) return reply.code(422).send({ erro: 'tarefa.lote_grande', mensagem: `Máximo de ${LOTE_MAX} contatos por lote.` })
-      if (ids.some((i) => typeof i !== 'string' || !UUID.test(i))) return reply.code(422).send({ erro: 'tarefa.id_invalido' })
-      const r = validar(req.body)
-      if (!r.v) return reply.code(422).send(r.erro)
-      const v = r.v
+      const parsed = corpoLote.safeParse(req.body)
+      if (!parsed.success) return entradaInvalida(reply, parsed.error)
+      const { contatoIds, ...v } = parsed.data
+      const ids = [...new Set(contatoIds)]
+      const tipo = v.tipo ?? 'outro'
       const res = await req.comTenant(async (tx) => {
         const escopo = await escopoDaRequisicao(tx, req)
         const eu = await garantirUsuarioId(tx, req)
         if (v.responsavelId && !(await responsavelExiste(tx, v.responsavelId))) return null
-        // Só contatos do tenant (RLS + filtro) E do escopo do usuário (D3): id
-        // desconhecido ou fora do escopo é ignorado e contado em `ignorados`.
+        // Only this tenant's contacts (RLS + filter) AND the caller's scope (D3): unknown or
+        // out-of-scope ids are ignored and counted in `ignorados`.
         const criadas = await tx<{ id: string }[]>`
           INSERT INTO tarefa (tenant_id, id, contato_id, responsavel_id, titulo, descricao, vence_em, criado_por, tipo)
-          SELECT tenant_atual(), gen_random_uuid(), c.id, ${v.responsavelId ?? eu}, ${v.titulo}, ${v.descricao},
-                 ${v.venceEm}, ${eu}, ${v.tipo}
+          SELECT tenant_atual(), gen_random_uuid(), c.id, ${v.responsavelId ?? eu}, ${v.titulo}, ${v.descricao?.trim() || null},
+                 ${v.venceEm}, ${eu}, ${tipo}
             FROM contato c
            WHERE c.tenant_id = tenant_atual() AND c.id = ANY(${ids}::uuid[])
              AND ${condicaoContato(tx, escopo, 'c')}
           RETURNING id`
         await auditar(tx, {
           atorId: eu, acao: 'tarefa.lote', entidade: 'tarefa',
-          dados: { solicitados: ids.length, criadas: criadas.length, tipo: v.tipo, titulo: v.titulo },
+          dados: { solicitados: ids.length, criadas: criadas.length, tipo, titulo: v.titulo },
         })
         return { criadas: criadas.length, ignorados: ids.length - criadas.length }
       })
-      if (!res) return reply.code(422).send({ erro: 'tarefa.responsavel_invalido', mensagem: 'Responsável não encontrado.' })
+      if (!res) return reply.code(422).send({ erro: 'tarefa.responsavel_invalido', mensagem: 'Responsável não encontrado.', campos: ['responsavelId'] })
       return reply.code(201).send(res)
     },
   )
 
-  app.post<{ Params: { id: string }; Body: { resultado?: string } | undefined }>(
+  /**
+   * Closes an open task (done or cancelled). Allowed for the assignee, the creator, or
+   * manager/supervisor/admin; audited. Shared by both routes.
+   */
+  async function encerrar(
+    req: FastifyRequest, reply: FastifyReply, id: string,
+    novo: 'concluida' | 'cancelada', resultado: string | null,
+  ): Promise<FastifyReply> {
+    const r = await req.comTenant(async (tx): Promise<'nao_encontrada' | 'nao_aberta' | 'proibido' | 'ok'> => {
+      // ⚠️ Escopo (D3): tarefa fora do escopo = 404, antes de qualquer outra resposta.
+      if (!(await tarefaNoEscopo(tx, await escopoDaRequisicao(tx, req), id))) return 'nao_encontrada'
+      const eu = await garantirUsuarioId(tx, req)
+      const [t] = await tx<{ estado: string; responsavel_id: string | null; criado_por: string | null }[]>`
+        SELECT estado, responsavel_id, criado_por FROM tarefa
+         WHERE tenant_id = tenant_atual() AND id = ${id} FOR UPDATE`
+      if (!t) return 'nao_encontrada'
+      if (t.estado !== 'aberta') return 'nao_aberta'
+      if (t.responsavel_id !== eu && t.criado_por !== eu) {
+        const acesso = await papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff })
+        if (!atendePapel(acesso, ['gestor', 'supervisor'])) return 'proibido'
+      }
+      if (novo === 'concluida') {
+        await tx`UPDATE tarefa SET estado = 'concluida', concluida_em = now(), resultado = ${resultado}, concluida_por = ${eu}
+                  WHERE tenant_id = tenant_atual() AND id = ${id}`
+      } else {
+        await tx`UPDATE tarefa SET estado = 'cancelada' WHERE tenant_id = tenant_atual() AND id = ${id}`
+      }
+      await auditar(tx, {
+        atorId: eu, acao: novo === 'concluida' ? 'tarefa.concluida' : 'tarefa.cancelada',
+        entidade: 'tarefa', entidadeId: id,
+      })
+      return 'ok'
+    })
+    if (r === 'nao_encontrada') return reply.code(404).send({ erro: 'tarefa.nao_encontrada' })
+    if (r === 'nao_aberta') return reply.code(409).send({ erro: 'tarefa.nao_aberta' })
+    if (r === 'proibido') {
+      return reply.code(403).send({
+        erro: 'acesso.papel_insuficiente', mensagem: 'Só o responsável, quem criou a tarefa ou a gestão pode alterá-la.',
+      })
+    }
+    return reply.send({ ok: true })
+  }
+
+  app.post<{ Params: { id: string }; Body: unknown }>(
     '/v1/tarefas/:id/concluir', { preHandler: exigirTenant },
     async (req, reply) => {
-      const resultado = req.body?.resultado?.trim() || null
-      if (resultado && resultado.length > RESULTADO_MAX) {
-        return reply.code(422).send({ erro: 'tarefa.resultado_grande', mensagem: `Máximo de ${RESULTADO_MAX} caracteres.` })
-      }
-      const r = await req.comTenant(async (tx) => {
-        if (!(await tarefaNoEscopo(tx, await escopoDaRequisicao(tx, req), req.params.id))) return 'fora' as const
-        const eu = await garantirUsuarioId(tx, req)
-        const [x] = await tx`
-          UPDATE tarefa SET estado = 'concluida', concluida_em = now(), resultado = ${resultado}, concluida_por = ${eu}
-           WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND estado = 'aberta' RETURNING id`
-        return x ? 'ok' as const : 'nao_aberta' as const
-      })
-      if (r === 'fora') return reply.code(404).send({ erro: 'tarefa.nao_encontrada' })
-      if (r === 'nao_aberta') return reply.code(409).send({ erro: 'tarefa.nao_aberta' })
-      return reply.send({ ok: true })
+      const p = paramId.safeParse(req.params)
+      if (!p.success) return reply.code(404).send({ erro: 'tarefa.nao_encontrada' })
+      const corpo = corpoConcluir.safeParse(req.body)
+      if (!corpo.success) return entradaInvalida(reply, corpo.error)
+      return encerrar(req, reply, p.data.id, 'concluida', corpo.data?.resultado?.trim() || null)
     },
   )
 
   app.post<{ Params: { id: string } }>(
     '/v1/tarefas/:id/cancelar', { preHandler: exigirTenant },
     async (req, reply) => {
-      const r = await req.comTenant(async (tx) => {
-        if (!(await tarefaNoEscopo(tx, await escopoDaRequisicao(tx, req), req.params.id))) return 'fora' as const
-        const [x] = await tx`
-          UPDATE tarefa SET estado = 'cancelada'
-           WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND estado = 'aberta' RETURNING id`
-        return x ? 'ok' as const : 'nao_aberta' as const
-      })
-      if (r === 'fora') return reply.code(404).send({ erro: 'tarefa.nao_encontrada' })
-      if (r === 'nao_aberta') return reply.code(409).send({ erro: 'tarefa.nao_aberta' })
-      return reply.send({ ok: true })
+      const p = paramId.safeParse(req.params)
+      if (!p.success) return reply.code(404).send({ erro: 'tarefa.nao_encontrada' })
+      return encerrar(req, reply, p.data.id, 'cancelada', null)
     },
   )
 }

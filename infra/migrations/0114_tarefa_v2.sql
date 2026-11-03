@@ -5,7 +5,10 @@
 --
 -- `descricao` e `responsavel_id` JÁ existem desde a 0039 (FK composta para usuario, ON DELETE SET NULL),
 -- então não são recriadas. Semântica de `responsavel_id`: NULL = "de ninguém", aparece para todos
--- (tarefa de automação sem dono de carteira); a API grava quem criou quando o corpo não traz responsável.
+-- (tarefa de automação sem dono de carteira); o filtro por responsável e os contadores incluem essas tarefas; a API grava quem criou quando o corpo não traz responsável.
+--
+-- ⚠️ Revisada antes de ir para produção (constraints NOT VALID + VALIDATE, FK sem SET NULL parcial):
+-- o hash do arquivo mudou — bancos de dev que já aplicaram a versão anterior precisam recriar o banco.
 --
 -- Novas: tipo (ligação, whatsapp…), resultado (texto livre ao concluir) e concluida_por (quem concluiu).
 
@@ -14,11 +17,20 @@ ALTER TABLE tarefa
     ADD COLUMN resultado     text,
     ADD COLUMN concluida_por uuid;
 
+-- NOT VALID + VALIDATE (padrão da 0113): the ADD takes only a brief lock, the scan runs later
+-- under a weaker one. ⚠️ concluida_por uses a plain FK (NO ACTION): `ON DELETE SET NULL (col)`
+-- needs PostgreSQL 15+ and we could not confirm the production version; a plain
+-- `ON DELETE SET NULL` would also null `tenant_id` (NOT NULL). Users are deactivated
+-- (`usuario.ativo`), never deleted, so NO ACTION is the safe, PG14-compatible choice.
 ALTER TABLE tarefa
     ADD CONSTRAINT tarefa_tipo_valido
-        CHECK (tipo IN ('ligacao','whatsapp','reuniao','email','visita','outro')),
+        CHECK (tipo IN ('ligacao','whatsapp','reuniao','email','visita','outro')) NOT VALID;
+ALTER TABLE tarefa VALIDATE CONSTRAINT tarefa_tipo_valido;
+
+ALTER TABLE tarefa
     ADD CONSTRAINT tarefa_concluida_por_fk
-        FOREIGN KEY (tenant_id, concluida_por) REFERENCES usuario (tenant_id, id) ON DELETE SET NULL (concluida_por);
+        FOREIGN KEY (tenant_id, concluida_por) REFERENCES usuario (tenant_id, id) NOT VALID;
+ALTER TABLE tarefa VALIDATE CONSTRAINT tarefa_concluida_por_fk;
 
 -- Leitura quente da tela: "abertas por responsável e vencimento".
 CREATE INDEX tarefa_abertas_responsavel ON tarefa (tenant_id, responsavel_id, vence_em)

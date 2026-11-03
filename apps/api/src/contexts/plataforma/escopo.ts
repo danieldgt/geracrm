@@ -61,9 +61,10 @@ import { fragmentoNaFila } from '../atendimento/sla-handoff.js'
  *                a quem atende o número.
  *     filial   → o mesmo, mais: conversa de número (`canal_conectado.filial_id`)
  *                de uma das filiais, e a fila desses números.
- *   TAREFA     → responsável = o usuário; filial: responsável com papel na
- *                filial; tarefa SEM responsável ("de ninguém", 0039) aparece se
- *                for avulsa ou se o contato dela for visível.
+ *   TAREFA     → responsável OU criador = o usuário (quem delega acompanha); filial:
+ *                responsável com papel na filial; tarefa SEM responsável ("de
+ *                ninguém", 0039) aparece se for avulsa ou se o contato dela for
+ *                visível.
  *   PEDIDO     → `vendedor_id` = o usuário (filial: vendedor da filial); OU o
  *                contato é visível; OU a conversa onde nasceu (ADR-005) é
  *                visível. Pedido sem contato e sem vendedor (balcão
@@ -270,6 +271,7 @@ export function condicaoTarefa(tx: Sql, escopo: Escopo, aliasTarefa = 't') {
     : tx`false`
   return tx`(
     ${a}.responsavel_id = ${escopo.usuarioId}::uuid
+    OR ${a}.criado_por = ${escopo.usuarioId}::uuid
     OR ${daFilial}
     OR (${a}.responsavel_id IS NULL AND (
           ${a}.contato_id IS NULL
