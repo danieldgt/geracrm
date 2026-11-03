@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { auditar } from '../plataforma/auditoria.js'
 
 const PAGINA = 50 // cards por página de coluna (kanban paginado por coluna, ADR)
 
@@ -113,6 +115,11 @@ export async function rotasLeads(app: FastifyInstance): Promise<void> {
          WHERE tenant_id = tenant_atual() AND id = ${req.params.contatoId} AND ativo
          RETURNING id`)
       if (!row) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      // Rastro para o feed da ficha (A3): quem mudou a qualificação e quando.
+      await req.comTenant(async (tx) => auditar(tx, {
+        atorId: await garantirUsuarioId(tx, req), acao: 'contato.qualificado', entidade: 'contato',
+        entidadeId: req.params.contatoId, dados: { estado },
+      }))
       return reply.send({ ok: true, estado })
     },
   )

@@ -27,6 +27,7 @@
     "@aws-sdk/client-cognito-identity-provider": "^3.1124.0",
     "@aws-sdk/client-s3": "^3.1106.0",
     "@aws-sdk/s3-request-presigner": "^3.1106.0",
+    "@fastify/multipart": "^9",
     "@geracrm/conectores": "workspace:*",
     "@geracrm/shared": "workspace:*",
     "aws-jwt-verify": "^5.2.1",
