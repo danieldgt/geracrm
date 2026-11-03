@@ -143,6 +143,8 @@ export const MENU: readonly GrupoMenu[] = [
     itens: [
       { rota: 'bi', rotulo: 'Painéis (BI)', icone: 'line-chart', status: 'pronto', onda: 'O2',
         descricao: 'Vendas, ranking, top produtos, exportações.' },
+      { rota: 'relatorios', rotulo: 'Relatórios', icone: 'bar-chart-3', status: 'pronto', onda: 'E1',
+        descricao: 'Contatos por origem, etapa, vendedor e dia da semana' },
       { rota: 'automacoes', rotulo: 'Automações', icone: 'workflow', status: 'pronto', onda: 'O2',
         descricao: 'Gatilhos e ações automáticas.' },
       { rota: 'etiquetas-origens', rotulo: 'Etiquetas e origens', icone: 'tag', status: 'pronto', onda: 'O2',

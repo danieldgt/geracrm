@@ -45,6 +45,7 @@ import { rotasAuditoria } from './contexts/plataforma/rotas-auditoria.js'
 import { rotasMetricas } from './contexts/plataforma/rotas-metricas.js'
 import { rotasPainel } from './contexts/plataforma/rotas-painel.js'
 import { rotasBi } from './contexts/plataforma/rotas-bi.js'
+import { rotasRelatorios } from './contexts/plataforma/rotas-relatorios.js'
 import { rotasPerformance } from './contexts/plataforma/rotas-performance.js'
 import { rotasMercado } from './contexts/plataforma/rotas-mercado.js'
 import { rotasMapa } from './contexts/plataforma/rotas-mapa.js'
@@ -154,6 +155,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasMetricas)
   await app.register(rotasPainel)
   await app.register(rotasBi)
+  await app.register(rotasRelatorios)
   await app.register(rotasPerformance)
   await app.register(rotasMercado)
   await app.register(rotasMapa)
