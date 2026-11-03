@@ -1,6 +1,15 @@
 // Biblioteca de componentes — bloco 1 (R-12). Import único.
 export { BotaoComponente } from './botao.componente.js'
 export { CampoComponente } from './campo.componente.js'
+export { SelectComponente, type OpcaoSelect } from './select.componente.js'
+export { SelectPaginadoComponente } from './select-paginado.componente.js'
+export { type CarregarOpcoes, type OpcaoPaginada, type PaginaOpcoes } from './select-paginado.estado.js'
+export { MascaraDiretiva } from './mascara.diretiva.js'
+export {
+  formatarCpf, formatarCnpj, formatarCpfCnpj, formatarTelefone, formatarCep, formatarMascara, soDigitos,
+  type TipoMascara,
+} from './mascaras.js'
+export { centavosParaTexto, type TipoCampo } from './campo.regras.js'
 export { BadgeComponente } from './badge.componente.js'
 export { PainelComponente } from './painel.componente.js'
 export { EsqueletoComponente } from './esqueleto.componente.js'
