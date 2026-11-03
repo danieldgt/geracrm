@@ -110,7 +110,7 @@ describe('revisão de segurança D3 — M6: o modo fundador NÃO abre o cadastro
       ['POST', `/v1/usuarios/${FUND_C}/redefinir-senha`], ['GET', '/v1/filiais'], ['POST', '/v1/filiais']] as const) {
       const r = await pedir('fundC', m, url, m === 'GET' ? undefined : { nome: 'x', papeis: [{ papel: 'admin', filialId: null }] })
       expect(r.status, `${m} ${url}`).toBe(403)
-      expect(r.corpo.erro).toBe('acesso.papel_insuficiente')
+      expect(r.corpo.erro).toBe('acesso.admin_atribuido')
     }
     // E ninguém virou admin pelo caminho.
     const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM usuario_filial WHERE tenant_id = ${C}`

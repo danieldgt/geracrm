@@ -118,8 +118,9 @@ export function exigirAdminAtribuido() {
     }
     const acesso = await req.comTenant((tx) => papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff }))
     if (acesso.origem === 'staff' || (acesso.origem === 'atribuido' && acesso.papeis.includes('admin'))) return undefined
+    // Modo fundador: código próprio para a tela mostrar "sem administrador definido" (não é falta de papel).
     return reply.code(403).send({
-      erro: 'acesso.papel_insuficiente',
+      erro: acesso.origem === 'fundador' ? 'acesso.admin_atribuido' : 'acesso.papel_insuficiente',
       mensagem: acesso.origem === 'fundador'
         ? 'Esta empresa ainda não tem administrador definido. Peça ao suporte para definir o administrador.'
         : 'Seu papel não permite esta ação. Peça a um administrador.',
