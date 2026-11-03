@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import type { Sql } from 'postgres'
-import { classificarRfv, normalizarTelefone, normalizarDocumento, apenasDigitos, ehPerfilPreco, perfilDeCotacao } from '@geracrm/shared'
+import { classificarRfv, normalizarTelefone, normalizarDocumento, ehPerfilPreco, perfilDeCotacao } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { parseCsvContatos } from './importar-csv.js'
-import { validarCadastro, type ContatoCadastro } from './contato-cadastro.js'
+import { validarCadastro } from './contato-cadastro.js'
+import { gravarDocumentoEEndereco } from './contato-gravacao.js'
 
 /** Teto de linhas por importação — evita engolir um arquivo gigante numa tx. */
 const MAX_LINHAS_CSV = 5000
@@ -69,39 +69,6 @@ function lerCursor(cursor: string | undefined): [string, string] | null {
 }
 const escreverCursor = (a: string | number, id: string) =>
   Buffer.from(`${a}:${id}`, 'utf8').toString('base64url')
-
-/**
- * Grava documento (CNPJ/CPF) e endereço principal de fonte 'manual'. Só toca nas
- * linhas manuais — o que veio do ERP não é pisado. Vazio remove a linha manual.
- */
-async function gravarDocumentoEEndereco(tx: Sql, id: string, d: ContatoCadastro): Promise<void> {
-  const doc = d.documento ? apenasDigitos(d.documento) : null
-  await tx`DELETE FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fonte = 'manual'`
-  if (doc) {
-    const tipo = doc.length === 14 ? 'cnpj' : 'cpf'
-    const [{ prox } = { prox: 1 }] = await tx<{ prox: number }[]>`
-      SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id}`
-    const [fiscal] = await tx`SELECT 1 FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fiscal`
-    await tx`
-      INSERT INTO contato_documento (tenant_id, contato_id, seq, tipo, numero, fiscal, fonte)
-      VALUES (tenant_atual(), ${id}, ${prox}, ${tipo}, ${doc}, ${!fiscal}, 'manual')`
-  }
-
-  const e = d.endereco
-  const preenchido = !!e && Object.values(e).some((x) => typeof x === 'string' && x.trim() !== '')
-  if (!preenchido) {
-    await tx`DELETE FROM contato_endereco WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = 1 AND fonte = 'manual'`
-    return
-  }
-  const cep = e.cep ? apenasDigitos(e.cep) : null
-  await tx`
-    INSERT INTO contato_endereco (tenant_id, contato_id, seq, logradouro, numero, complemento, bairro, cidade, uf, cep, principal, fonte)
-    VALUES (tenant_atual(), ${id}, 1, ${e.logradouro ?? null}, ${e.numero ?? null}, ${e.complemento ?? null},
-            ${e.bairro ?? null}, ${e.cidade ?? null}, ${e.uf ?? null}, ${cep}, true, 'manual')
-    ON CONFLICT (tenant_id, contato_id, seq) DO UPDATE SET
-      logradouro = EXCLUDED.logradouro, numero = EXCLUDED.numero, complemento = EXCLUDED.complemento,
-      bairro = EXCLUDED.bairro, cidade = EXCLUDED.cidade, uf = EXCLUDED.uf, cep = EXCLUDED.cep`
-}
 
 export async function rotasContatos(app: FastifyInstance): Promise<void> {
   /**

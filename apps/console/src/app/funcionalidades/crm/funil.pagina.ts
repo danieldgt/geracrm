@@ -1,18 +1,30 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
-import { RouterLink } from '@angular/router'
+import { Router, RouterLink } from '@angular/router'
 import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop'
 import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConfig } from './funil.servico.js'
-import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
+import { ConfirmacaoServico, IconeComponente, ToastServico } from '../../compartilhado/ui/index.js'
+import { InboxServico } from '../../nucleo/inbox.servico.js'
+import { ClientesServico } from './clientes.servico.js'
+import { TarefaModalComponente } from './tarefa-modal.componente.js'
+import { FunilGanharModalComponente } from './funil-ganhar-modal.componente.js'
+import { FunilPerderModalComponente } from './funil-perder-modal.componente.js'
+import { FunilTransferirModalComponente } from './funil-transferir-modal.componente.js'
+import { FunilNovaOportunidadeModalComponente } from './funil-nova-oportunidade-modal.componente.js'
+import { decidirAcaoAoSoltar, itensDoMenu, type AcaoDoCard, type TipoEtapa } from './funil-acoes.regras.js'
 
 /**
  * Kanban do funil de relacionamento (Onda 2). Colunas paginadas + drag-drop
- * nativo do CDK (ADR: sem virtual scroll). Arrastar para "Perdido" pede motivo.
+ * nativo do CDK (ADR: sem virtual scroll). Soltar em coluna de ganho/perdido abre o
+ * modal (dados mínimos / motivo); o menu ⋯ do card dá as mesmas ações + transferir/tarefa.
  * Segue a skill geracrm-layout-ui: tokens, 5 estados, sem sobreposição.
  */
 @Component({
   selector: 'app-funil',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CdkDropListGroup, CdkDropList, CdkDrag, RouterLink],
+  imports: [
+    CdkDropListGroup, CdkDropList, CdkDrag, RouterLink, IconeComponente, TarefaModalComponente, FunilGanharModalComponente,
+    FunilPerderModalComponente, FunilTransferirModalComponente, FunilNovaOportunidadeModalComponente,
+  ],
   template: `
     <header class="cabecalho">
       <div>
@@ -20,6 +32,7 @@ import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.j
         <p class="sub">Arraste o card conforme a relação com o cliente evolui.</p>
       </div>
       <div class="acoes">
+        <button class="btn btn--primario" (click)="novaOportunidade.set(true)">Nova oportunidade</button>
         <button class="btn" [class.btn--primario]="mostrarMetricas()" [class.btn--secundario]="!mostrarMetricas()" (click)="alternarMetricas()">
           📊 {{ mostrarMetricas() ? 'Ocultar métricas' : 'Métricas' }}
         </button>
@@ -105,6 +118,10 @@ import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.j
                    (cdkDropListDropped)="soltou($event, col)">
                 @for (card of col.cards; track card.id) {
                   <article class="card" cdkDrag [cdkDragData]="card">
+                    <button type="button" class="card-menu" aria-label="Ações do card" aria-haspopup="menu"
+                            (click)="abrirMenu($event, card, col.etapa.tipo)" (mousedown)="$event.stopPropagation()">
+                      <ui-icone nome="more-horizontal" [tamanho]="14" />
+                    </button>
                     <!-- Sem beco: o card leva à ficha do cliente. stopPropagation
                          para o link não disputar com o drag/abrir do card. -->
                     <a class="card-nome encolhe" [routerLink]="['/contato', card.contatoId]"
@@ -128,20 +145,23 @@ import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.j
       }
     }
 
-    <!-- Prompt de motivo ao arrastar para Perdido. -->
-    @if (perdendo(); as p) {
-      <div class="fora" (click)="cancelarPerda()"></div>
-      <div class="motivo-modal" role="dialog" aria-label="Motivo da perda">
-        <h2 class="txt-secao">Por que perdeu?</h2>
-        <p class="motivo-sub">{{ p.card.nome }}</p>
-        <div class="motivos">
-          @for (m of servico.motivos(); track m.codigo) {
-            <button class="motivo" (click)="confirmarPerda(m.codigo)">{{ m.nome }}</button>
-          }
-        </div>
-        <button class="btn btn--fantasma btn--bloco" (click)="cancelarPerda()">Cancelar</button>
+    <!-- Menu do card (⋯): posicionado na tela, fora da coluna que rola. -->
+    @if (menu(); as m) {
+      <div class="menu-fora" (click)="fecharMenu()"></div>
+      <div class="menu-card" role="menu" [style.top.px]="m.y" [style.left.px]="m.x" (keydown.escape)="fecharMenu()">
+        @for (i of itensDoMenu(m.tipo); track i.acao) {
+          <button type="button" role="menuitem" class="menu-item" (click)="escolher(i.acao)">{{ i.rotulo }}</button>
+        }
       </div>
     }
+
+    <app-funil-ganhar-modal [card]="ganhando()" (concluido)="ganhando.set(null)" (cancelado)="cancelar('ganhando')" />
+    <app-funil-perder-modal [card]="perdendo()" (concluido)="perdendo.set(null)" (cancelado)="cancelar('perdendo')" />
+    <app-funil-transferir-modal [card]="transferindo()" (concluido)="transferindo.set(null)" (fechar)="transferindo.set(null)" />
+    <app-tarefa-modal [aberto]="tarefando() !== null" [contatoId]="tarefando()?.contatoId ?? null"
+      [contatoNome]="tarefando()?.nome ?? null" (criada)="tarefando.set(null)" (fechar)="tarefando.set(null)" />
+    <app-funil-nova-oportunidade-modal [aberto]="novaOportunidade()" (criada)="novaOportunidade.set(false)"
+      (fechar)="novaOportunidade.set(false)" />
 
     <!-- Configuração das raias: a empresa monta o próprio funil. -->
     @if (configAberta()) {
@@ -262,6 +282,18 @@ import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.j
       background: var(--superficie-elevada); border: 1px solid var(--borda); border-left: 3px solid var(--borda-forte);
       border-radius: var(--raio-controle); cursor: grab; box-shadow: var(--elevacao-nenhuma); }
     .card:active { cursor: grabbing; }
+    .card { position: relative; }
+    .card-menu { position: absolute; top: var(--espacamento-1); right: var(--espacamento-1); display: grid; place-items: center;
+      min-width: 28px; min-height: 28px; border: 0; border-radius: var(--raio-controle); background: transparent; color: var(--texto-suave); }
+    .card-menu:hover { background: var(--superficie-hover); color: var(--texto); }
+    .card-menu:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 1px; }
+    .card-nome { padding-right: var(--espacamento-6); }
+    .menu-fora { position: fixed; inset: 0; z-index: 40; }
+    .menu-card { position: fixed; z-index: 41; min-width: 180px; display: flex; flex-direction: column; padding: var(--espacamento-1);
+      background: var(--superficie-elevada); border: 1px solid var(--borda); border-radius: var(--raio-controle); box-shadow: var(--elevacao-modal); }
+    .menu-item { padding: var(--espacamento-2) var(--espacamento-3); border: 0; border-radius: var(--raio-controle); background: transparent;
+      color: var(--texto); font: inherit; font-size: 13px; text-align: left; }
+    .menu-item:hover, .menu-item:focus-visible { background: var(--superficie-hover); outline: none; }
     .card-nome { font-size: 13px; color: var(--texto); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
     .card-nome:hover { color: var(--acao); text-decoration: underline; }
     .card-nome:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 1px; border-radius: var(--raio-controle); }
@@ -277,15 +309,6 @@ import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.j
     .cdk-drag-placeholder { opacity: .4; }
     .cdk-drop-list-dragging .card:not(.cdk-drag-placeholder) { transition: transform var(--movimento-estado-duracao) var(--movimento-estado-curva); }
     .fora { position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 40; }
-    .motivo-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 41; width: 320px;
-      background: var(--superficie-elevada); border: 1px solid var(--borda); border-radius: var(--raio-painel);
-      box-shadow: var(--elevacao-modal); padding: var(--espacamento-5); }
-    .motivo-modal h2 { margin: 0; color: var(--texto); }
-    .motivo-sub { margin: var(--espacamento-1) 0 var(--espacamento-4); color: var(--texto-secundario); font-size: 13px; }
-    .motivos { display: flex; flex-direction: column; gap: var(--espacamento-2); }
-    .motivo { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
-      background: var(--superficie-elevada); color: var(--texto); font: inherit; text-align: left; }
-    .motivo:hover { background: var(--superficie-hover); }
     .acoes { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }
     /* Modal de configuração das raias. Rola por dentro: o funil de ERP tem 6
        raias, mas nada impede uma operação com 12 — a lista não pode empurrar o
@@ -331,7 +354,16 @@ export class FunilPagina implements OnInit {
   readonly servico = inject(FunilServico)
   private readonly confirmacao = inject(ConfirmacaoServico)
   private readonly toast = inject(ToastServico)
-  readonly perdendo = signal<{ card: Card; deEtapa: string; indice: number } | null>(null)
+  private readonly router = inject(Router)
+  private readonly clientes = inject(ClientesServico)
+  private readonly inbox = inject(InboxServico)
+  readonly ganhando = signal<Card | null>(null)
+  readonly perdendo = signal<Card | null>(null)
+  readonly transferindo = signal<Card | null>(null)
+  readonly tarefando = signal<Card | null>(null)
+  readonly novaOportunidade = signal(false)
+  readonly menu = signal<{ card: Card; tipo: TipoEtapa; x: number; y: number } | null>(null)
+  protected readonly itensDoMenu = itensDoMenu
   readonly mostrarMetricas = signal(false)
   readonly configAberta = signal(false)
   readonly novoNome = signal('')
@@ -360,11 +392,12 @@ export class FunilPagina implements OnInit {
     }
     this.servico.colunas.set([...this.servico.colunas()])
 
-    // Perdido pede motivo ANTES de persistir.
-    if (destino.etapa.tipo === 'perdido') {
-      this.perdendo.set({ card, deEtapa: origem.etapa.id, indice: ev.currentIndex })
-      return
-    }
+    // Ganho e perda abrem o modal ANTES de persistir (dados mínimos / motivo); cancelar devolve o card.
+    const acao = decidirAcaoAoSoltar(origem.etapa.id, destino.etapa.id, destino.etapa.tipo)
+    // Reordenar dentro de coluna fechada não persiste (exigiria dados/motivo de novo): só volta ao estado do servidor.
+    if (acao === 'reordenar' && destino.etapa.tipo !== 'aberto') { void this.servico.carregar(); return }
+    if (acao === 'abrir_ganho') { this.ganhando.set(card); return }
+    if (acao === 'abrir_perda') { this.perdendo.set(card); return }
     const r = await this.servico.mover(card, origem.etapa.id, destino.etapa.id, ev.currentIndex)
     if (!r.ok) {
       this.servico.erroMove.set(r.motivo === 'move.conflito'
@@ -372,18 +405,40 @@ export class FunilPagina implements OnInit {
     } else { this.servico.erroMove.set(null) }
   }
 
-  async confirmarPerda(motivo: string): Promise<void> {
-    const p = this.perdendo()
-    if (!p) return
-    const perdidoCol = this.servico.colunas().find((c) => c.etapa.tipo === 'perdido')!
-    this.perdendo.set(null)
-    const r = await this.servico.mover(p.card, p.deEtapa, perdidoCol.etapa.id, p.indice, motivo)
-    if (!r.ok) this.servico.erroMove.set('Não foi possível registrar a perda — recarreguei o funil.')
+  /** Cancelar o modal de ganho/perda desfaz o movimento otimista: recarrega o quadro. */
+  cancelar(qual: 'ganhando' | 'perdendo'): void {
+    this[qual].set(null)
+    void this.servico.carregar()
   }
 
-  cancelarPerda(): void {
-    this.perdendo.set(null)
-    void this.servico.carregar() // reverte o move otimista
+  abrirMenu(ev: MouseEvent, card: Card, tipo: TipoEtapa): void {
+    ev.stopPropagation()
+    const alvo = (ev.currentTarget as HTMLElement).getBoundingClientRect()
+    // 180px de largura mínima; encosta na borda direita do botão sem sair da tela.
+    const x = Math.max(8, Math.min(alvo.right - 180, window.innerWidth - 188))
+    this.menu.set({ card, tipo, x, y: alvo.bottom + 4 })
+  }
+
+  fecharMenu(): void { this.menu.set(null) }
+
+  async escolher(acao: AcaoDoCard): Promise<void> {
+    const m = this.menu()
+    this.menu.set(null)
+    if (!m) return
+    const card = m.card
+    switch (acao) {
+      case 'ganhar': this.ganhando.set(card); break
+      case 'perder': this.perdendo.set(card); break
+      case 'transferir': this.transferindo.set(card); break
+      case 'tarefa': this.tarefando.set(card); break
+      case 'ficha': void this.router.navigate(['/contato', card.contatoId]); break
+      case 'conversa': {
+        const conversaId = await this.clientes.iniciarConversa(card.contatoId)
+        if (conversaId) void this.inbox.abrir(conversaId)
+        else this.servico.erroMove.set('Não foi possível abrir a conversa.')
+        break
+      }
+    }
   }
 
   // ───────── Configuração das raias ─────────
