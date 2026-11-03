@@ -1,3 +1,4 @@
+import { ModulosServico } from './modulos.servico.js'
 import {
   Component, ChangeDetectionStrategy, signal, computed, inject, OnInit, effect, untracked, viewChild, ElementRef, HostListener,
 } from '@angular/core'
@@ -406,6 +407,7 @@ export class ShellComponente implements OnInit {
   readonly tema = inject(TemaServico)
   readonly inbox = inject(InboxServico)
   readonly auth = inject(AuthServico)
+  private readonly modulos = inject(ModulosServico)
   private readonly router = inject(Router)
   private readonly http = inject(HttpClient)
 
@@ -473,6 +475,7 @@ export class ShellComponente implements OnInit {
     this.tema.aplicar()
     this.eventos.conectar()
     void this.alertas.carregar()
+    void this.modulos.carregar()
     // Alerta novo chega pelo SSE → rebusca os abertos (sem polling).
     this.eventos.escutar('alerta.novo', () => void this.alertas.carregar())
     void this.carregarVersaoApi()

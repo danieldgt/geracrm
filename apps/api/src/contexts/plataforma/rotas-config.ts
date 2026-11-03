@@ -3,6 +3,33 @@ import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { atendePapel, exigirPapel, papeisDoUsuario } from './papel.js'
 import { fusoValido } from './fuso.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { auditar } from './auditoria.js'
+import { listarModulos, moduloAtivo } from './modulos.js'
+import { ehModulo, validarEmpresa, type CorpoEmpresa, type EmpresaContatoLgpd } from '@geracrm/shared'
+import type { Sql } from '../../db/index.js'
+
+type EmpresaLida = EmpresaContatoLgpd & { plano: string }
+
+/** A empresa do tenant da transação, já no formato da API (camelCase, endereço como objeto). */
+async function lerEmpresa(tx: Sql): Promise<EmpresaLida | null> {
+  const [e] = await tx<{
+    nome: string; fuso: string; plano: string; cnpj: string | null; telefone: string | null; whatsapp: string | null
+    email: string | null; site: string | null; endereco: EmpresaContatoLgpd['endereco']
+    dpo_nome: string | null; dpo_email: string | null; retencao_meses: number
+    texto_consentimento: string | null; exigir_consentimento_whatsapp: boolean
+  }[]>`
+    SELECT t.nome, t.fuso, p.codigo AS plano, t.cnpj, t.telefone, t.whatsapp, t.email, t.site, t.endereco,
+           t.dpo_nome, t.dpo_email, t.retencao_meses, t.texto_consentimento, t.exigir_consentimento_whatsapp
+      FROM tenant t JOIN plano p ON p.id = t.plano_id
+     WHERE t.id = tenant_atual()`
+  if (!e) return null
+  return {
+    nome: e.nome, fuso: e.fuso, plano: e.plano, cnpj: e.cnpj, telefone: e.telefone, whatsapp: e.whatsapp,
+    email: e.email, site: e.site, endereco: e.endereco ?? null, dpoNome: e.dpo_nome, dpoEmail: e.dpo_email,
+    retencaoMeses: e.retencao_meses, textoConsentimento: e.texto_consentimento,
+    exigirConsentimentoWhatsapp: e.exigir_consentimento_whatsapp,
+  }
+}
 
 /** A linha de `usuario` nasce no batimento; garantir antes de `exigirPapel` (mesmo padrão das rotas do agente). */
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
@@ -18,30 +45,77 @@ async function garantirUsuario(req: FastifyRequest): Promise<void> {
  */
 export async function rotasConfig(app: FastifyInstance): Promise<void> {
   app.get('/v1/config/empresa', { preHandler: exigirTenant }, async (req, reply) => {
-    const [e] = await req.comTenant((tx) => tx<{ nome: string; fuso: string; plano: string }[]>`
-      SELECT t.nome, t.fuso, p.codigo AS plano
-        FROM tenant t JOIN plano p ON p.id = t.plano_id
-       WHERE t.id = tenant_atual()`)
+    const e = await req.comTenant((tx) => lerEmpresa(tx))
     if (!e) return reply.code(404).send({ erro: 'empresa.nao_encontrada' })
-    return reply.send({ nome: e.nome, fuso: e.fuso, plano: e.plano })
+    return reply.send(e)
   })
 
-  app.patch<{ Body: { nome?: string; fuso?: string } }>(
-    // ⚠️ Admin: o fuso decide o expediente, a ausência e o recorte do agente de todos os números.
+  app.patch<{ Body: CorpoEmpresa }>(
+    // ⚠️ Admin: o fuso decide o expediente, a ausência e o recorte do agente de todos os números;
+    //    LGPD e contato são dados que a empresa responde por.
     '/v1/config/empresa', { preHandler: [exigirTenant, garantirUsuario, exigirPapel('admin')] },
     async (req, reply) => {
-      const nome = req.body?.nome?.trim()
-      const fuso = req.body?.fuso?.trim()
-      if (nome !== undefined && nome.length === 0) return reply.code(422).send({ erro: 'empresa.nome_obrigatorio', mensagem: 'O nome não pode ficar vazio.' })
       // ⚠️ Fuso IANA de verdade: um texto qualquer derrubava toda consulta com AT TIME ZONE.
-      if (fuso && !fusoValido(fuso)) {
-        return reply.code(422).send({ erro: 'empresa.fuso_invalido', mensagem: `Fuso "${fuso}" não existe. Use um fuso IANA, por exemplo America/Sao_Paulo ou America/Manaus.`, campos: ['fuso'] })
+      const v = validarEmpresa(req.body ?? {}, fusoValido)
+      if (!v.ok) {
+        return reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.', campos: v.campos })
       }
-      const [r] = await req.comTenant((tx) => tx`
-        UPDATE tenant SET nome = COALESCE(${nome ?? null}, nome), fuso = COALESCE(${fuso || null}, fuso)
-         WHERE id = tenant_atual() RETURNING id`)
-      if (!r) return reply.code(404).send({ erro: 'empresa.nao_encontrada' })
+      const novos = v.valores
+      const resultado = await req.comTenant(async (tx) => {
+        const atual = await lerEmpresa(tx)
+        if (!atual) return null
+        const m = { ...atual, ...novos }
+        await tx`
+          UPDATE tenant SET
+            nome = ${m.nome}, fuso = ${m.fuso}, cnpj = ${m.cnpj}, telefone = ${m.telefone}, whatsapp = ${m.whatsapp},
+            email = ${m.email}, site = ${m.site},
+            endereco = ${m.endereco === null ? null : JSON.stringify(m.endereco)}::text::jsonb,
+            dpo_nome = ${m.dpoNome}, dpo_email = ${m.dpoEmail}, retencao_meses = ${m.retencaoMeses},
+            texto_consentimento = ${m.textoConsentimento},
+            exigir_consentimento_whatsapp = ${m.exigirConsentimentoWhatsapp}
+           WHERE id = tenant_atual()`
+        // Só os NOMES dos campos vão para a trilha: CNPJ e e-mail não precisam morar duas vezes.
+        await auditar(tx, {
+          atorId: req.atorStaff ? null : await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+          acao: 'empresa.alterada', entidade: 'tenant', dados: { campos: Object.keys(novos) },
+        })
+        return true
+      })
+      if (!resultado) return reply.code(404).send({ erro: 'empresa.nao_encontrada' })
       return reply.send({ ok: true })
+    },
+  )
+
+  // Chaves de módulo: todos leem (o menu precisa saber); só admin liga/desliga.
+  app.get('/v1/config/modulos', { preHandler: exigirTenant }, async (req, reply) => {
+    const modulos = await req.comTenant((tx) => listarModulos(tx))
+    return reply.send({ modulos })
+  })
+
+  app.put<{ Params: { modulo: string }; Body: { ativo?: unknown } }>(
+    '/v1/config/modulos/:modulo', { preHandler: [exigirTenant, garantirUsuario, exigirPapel('admin')] },
+    async (req, reply) => {
+      const { modulo } = req.params
+      if (!ehModulo(modulo)) return reply.code(404).send({ erro: 'modulo.desconhecido', mensagem: 'Módulo desconhecido.' })
+      const ativo = req.body?.ativo
+      if (typeof ativo !== 'boolean') {
+        return reply.code(422).send({ erro: 'validacao', mensagem: 'Informe se o módulo fica ligado.', campos: { ativo: 'Informe sim ou não.' } })
+      }
+      const modulos = await req.comTenant(async (tx) => {
+        const atorId = req.atorStaff ? null : await garantirUsuarioId(tx, req)
+        const antes = await moduloAtivo(tx, modulo)
+        await tx`
+          INSERT INTO tenant_modulo (tenant_id, modulo, ativo, atualizado_em, atualizado_por)
+          VALUES (tenant_atual(), ${modulo}, ${ativo}, now(), ${atorId})
+          ON CONFLICT (tenant_id, modulo) DO UPDATE
+            SET ativo = EXCLUDED.ativo, atualizado_em = now(), atualizado_por = EXCLUDED.atualizado_por`
+        await auditar(tx, {
+          atorId, atorStaff: req.atorStaff ?? false, acao: 'modulo.alterado', entidade: 'tenant_modulo',
+          dados: { modulo, antes, depois: ativo },
+        })
+        return listarModulos(tx)
+      })
+      return reply.send({ modulos })
     },
   )
 
@@ -96,16 +170,16 @@ export async function rotasConfig(app: FastifyInstance): Promise<void> {
    */
   app.get('/v1/config/eu', { preHandler: exigirTenant }, async (req, reply) => {
     const sub = subDoUsuario(req)
-    const { u, gestao } = await req.comTenant(async (tx) => {
+    const { u, gestao, admin } = await req.comTenant(async (tx) => {
       const [linha] = await tx<{ nome: string; email: string | null; ausente: boolean }[]>`
         SELECT nome, email, ausente FROM usuario
          WHERE tenant_id = tenant_atual() AND cognito_sub = ${sub}`
       // Só para a tela decidir o que MOSTRAR (ex.: Reatribuir); quem barra é o servidor em cada rota.
       const acesso = await papeisDoUsuario(tx, { sub, atorStaff: req.atorStaff })
-      return { u: linha, gestao: atendePapel(acesso, ['gestor', 'supervisor']) }
+      return { u: linha, gestao: atendePapel(acesso, ['gestor', 'supervisor']), admin: atendePapel(acesso, []) }
     })
     return reply.send({
-      nome: u?.nome ?? null, email: u?.email ?? null, ausente: u?.ausente === true, gestao,
+      nome: u?.nome ?? null, email: u?.email ?? null, ausente: u?.ausente === true, gestao, admin,
     })
   })
 

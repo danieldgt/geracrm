@@ -1,5 +1,5 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
-import { RouterLink } from '@angular/router'
+import { ActivatedRoute, RouterLink } from '@angular/router'
 import {
   BotaoComponente, CabecalhoTelaComponente, PainelComponente, EsqueletoComponente, EstadoComponente,
 } from '../../../compartilhado/ui/index.js'
@@ -141,6 +141,7 @@ const ABAS = TODAS_AS_ABAS.filter((a) => a.pronta)
 })
 export class AgentePagina implements OnInit {
   private readonly api = inject(AgenteServico)
+  private readonly rota = inject(ActivatedRoute)
 
   readonly abas = ABAS
   readonly estado = signal<Estado>('carregando')
@@ -148,7 +149,13 @@ export class AgentePagina implements OnInit {
   readonly canalId = signal('')
   readonly aba = signal<Aba>('configuracao')
 
-  ngOnInit(): void { void this.carregar() }
+  ngOnInit(): void {
+    // Atalho das Configurações (?aba=playbook): só vale para aba que existe e está pronta.
+    const pedida = this.rota.snapshot.queryParamMap.get('aba')
+    const alvo = ABAS.find((a) => a.id === pedida)
+    if (alvo) this.aba.set(alvo.id)
+    void this.carregar()
+  }
 
   async carregar(): Promise<void> {
     this.estado.set('carregando')
