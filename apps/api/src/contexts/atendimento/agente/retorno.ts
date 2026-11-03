@@ -3,14 +3,14 @@ import { comTenantServico, type Sql } from '../../../db/index.js'
 import { enviarTextoNaConversa } from '../envio-conversa.js'
 import { enviarTemplateNaConversa } from '../envio-template.js'
 import { decidirAtiva, lerContextoAtiva, lerTemplate, type ContextoAtiva, type DecisaoAtiva } from './ativas.js'
-import { normalizarFeriados, recorteAgente, type RecorteAgente } from '@geracrm/shared'
+import { canalAceitaReativacao, normalizarFeriados, recorteAgente, type RecorteAgente } from '@geracrm/shared'
 import { modoEfetivoDoCanal, lerFatosDoModo } from './pipeline/modo-efetivo.js'
 import { proximaAbertura, partesLocais, instanteLocal, ehFeriado, type Feriados, type HorarioAtendimento } from '../expediente.js'
 import { fusoSeguro } from '../../plataforma/fuso.js'
-import { statusAquecimento } from '../aquecimento.js'
+import { reativacoesEnviadasHoje, statusAquecimento } from '../aquecimento.js'
 import {
-  executarDescarte, lerConfigAtivasDoCanal, motivoParaNaoReativar, prazoDoDescarte, proximoMarcoDaReativacao,
-  MOTIVO_DESCARTE, MOTIVO_REATIVACAO, DIA_MS,
+  executarDescarte, instanteDoMarco, lerConfigAtivasDoCanal, motivoParaNaoReativar, motivoTransitorio, prazoDoDescarte,
+  proximoMarcoDaReativacao, travarConversaEContato, MOTIVO_DESCARTE, MOTIVO_REATIVACAO,
 } from './descarte-reativacao.js'
 
 /**
@@ -142,8 +142,10 @@ export interface RelatorioRetornos {
   reagendados: number
   /** Política das ativas: suspensão, expediente ou feriado — mesma linha, na próxima abertura. */
   adiados: number
-  /** Política das ativas: limite do dia/semana — final (estado `cancelado`, detalhe com o limite) — e contato descartado por `sem_resposta` (G5). */
+  /** Política das ativas: limite do dia/semana — final (estado `cancelado`, detalhe com o limite). */
   descartados: number
+  /** Fim da cadência (G5): contato levado a Descartado por `sem_resposta`. Não é mensagem nem limite. */
+  contatosDescartados: number
 }
 
 /** Quanto um retorno pode ser adiado pelo recorte além do horário previsto (decisão q, revisão P17). */
@@ -170,7 +172,9 @@ interface RetornoVencido {
 export async function processarRetornos(
   dono: Sql, deps: DepsRetorno = {}, agora: Date = new Date(),
 ): Promise<RelatorioRetornos> {
-  const r: RelatorioRetornos = { vencidos: 0, enviados: 0, cancelados: 0, recusados: 0, reagendados: 0, adiados: 0, descartados: 0 }
+  const r: RelatorioRetornos = {
+    vencidos: 0, enviados: 0, cancelados: 0, recusados: 0, reagendados: 0, adiados: 0, descartados: 0, contatosDescartados: 0,
+  }
   // ⚠️ A passada do worker desiste se outra está rodando; a DIRIGIDA
   //    (`somenteTenant`: reprocessamento, testes em paralelo) espera a vez —
   //    senão volta vazia sem dizer por quê.
@@ -198,6 +202,7 @@ export async function processarRetornos(
         else if (desfecho === 'recusado') r.recusados += 1
         else if (desfecho === 'adiado') r.adiados += 1
         else if (desfecho === 'descartado') r.descartados += 1
+        else if (desfecho === 'contato_descartado') r.contatosDescartados += 1
         else r.reagendados += 1
       } catch (erro) {
         // ⚠️ Um retorno quebrado não pode parar os OUTROS (de todos os tenants).
@@ -230,7 +235,7 @@ export async function processarRetornos(
   return r
 }
 
-type Desfecho = 'enviado' | 'cancelado' | 'recusado' | 'reagendado' | 'adiado' | 'descartado'
+type Desfecho = 'enviado' | 'cancelado' | 'recusado' | 'reagendado' | 'adiado' | 'descartado' | 'contato_descartado'
 
 type Veredito =
   | { tipo: 'cancelar'; motivo: string }
@@ -299,17 +304,10 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
   // 3. Desfecho + próximo passo, no MESMO commit.
   return comTenantServico(v.tenant_id, async (tx) => {
     if (envio.ok) {
+      // Reativação: o próximo marco (90 d, contado do DESCARTE) é agendado por `encerrar`.
       await encerrar(tx, v, 'enviado', null, agora)
-      if (v.motivo === MOTIVO_REATIVACAO) {
-        // Próximo marco (90 d) é contado do DESCARTE, não deste envio.
-        const quando = await proximoMarcoDaReativacao(tx, { conversaId: v.conversa_id, canalId: v.canal_id, passo: v.tentativa + 1 })
-        if (quando) {
-          await agendarRetorno(tx, {
-            conversaId: v.conversa_id, canalId: v.canal_id, motivo: MOTIVO_REATIVACAO,
-            tentativa: v.tentativa + 1, executarEm: quando, criadoEm: agora,
-          })
-        }
-      } else if (v.tentativa < MAX_TENTATIVAS_RETORNO) {
+      if (v.motivo === MOTIVO_REATIVACAO) return 'enviado'
+      if (v.tentativa < MAX_TENTATIVAS_RETORNO) {
         await agendarRetorno(tx, {
           conversaId: v.conversa_id, canalId: v.canal_id, motivo: v.motivo, texto: v.texto,
           tentativa: v.tentativa + 1, executarEm: new Date(agora.getTime() + CADENCIA_RETORNO_MS[v.tentativa]!),
@@ -357,7 +355,10 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
  * A reativação é uma ativa como as outras (suspensão, expediente, limites), mas
  * o conteúdo é o PRÓPRIO dela: no oficial, SEMPRE o template aprovado da
  * reativação (a janela de 24h conta como fechada — nunca texto livre); no
- * não-oficial, o texto configurado — sem ele nada sai — e o aquecimento do número.
+ * não-oficial, o texto configurado — sem ele nada sai.
+ * ⚠️ E dois tetos POR NÚMERO, por dia do tenant (ADR-021, risco de banimento):
+ *    `reativacao.limiteDia` (reativações enviadas hoje por este número) e a cota do
+ *    aquecimento (campanhas + reativações). Acabou a cota → adia para o dia seguinte.
  */
 async function decidirReativacao(tx: Sql, v: RetornoVencido, ctx: ContextoAtiva, agora: Date): Promise<Veredito> {
   const r = (await lerConfigAtivasDoCanal(tx, v.canal_id)).reativacao
@@ -368,31 +369,75 @@ async function decidirReativacao(tx: Sql, v: RetornoVencido, ctx: ContextoAtiva,
     template: oficial && r.templateId ? await lerTemplate(tx, r.templateId) : null,
     ultimaEntranteEm: oficial ? null : ctx.ultimaEntranteEm,
   }, agora)
-  if (decisao.acao !== 'texto') return { tipo: 'politica', decisao }
-  if (!r.texto) return { tipo: 'recusar', motivo: 'sem_texto_reativacao' }
-  const aq = await statusAquecimento(tx, v.canal_id, agora)
-  if (aq.emAquecimento && aq.restante <= 0) {
-    return { tipo: 'adiar', ate: new Date(agora.getTime() + DIA_MS), motivo: 'aquecimento_do_numero' }
+  if (decisao.acao !== 'texto' && decisao.acao !== 'template') return { tipo: 'politica', decisao }
+  if (decisao.acao === 'texto' && !r.texto) return { tipo: 'recusar', motivo: 'sem_texto_reativacao' }
+  const amanha = inicioDoProximoDia(agora, ctx.fuso)
+  if (await reativacoesEnviadasHoje(tx, v.canal_id, inicioDoDia(agora, ctx.fuso)) >= r.limiteDia) {
+    return { tipo: 'adiar', ate: amanha, motivo: 'limite_reativacao_dia' }
   }
-  return { tipo: 'politica', decisao, texto: r.texto }
+  const aq = await statusAquecimento(tx, v.canal_id, agora)
+  if (aq.emAquecimento && aq.restante <= 0) return { tipo: 'adiar', ate: amanha, motivo: 'aquecimento_do_numero' }
+  return decisao.acao === 'texto' && r.texto ? { tipo: 'politica', decisao, texto: r.texto } : { tipo: 'politica', decisao }
 }
 
-/** O descarte vencido: o contato vai para Descartado (`sem_resposta`) e a reativação, se ligada, é agendada. */
+/** 00:00 de hoje no fuso do tenant. */
+function inicioDoDia(agora: Date, fuso: string): Date {
+  return instanteLocal(partesLocais(agora, fuso).data, '00:00', fuso)
+}
+
+/** 00:00 de amanhã no fuso do tenant (o expediente, se houver, empurra para a abertura). */
+function inicioDoProximoDia(agora: Date, fuso: string): Date {
+  const [y, m, d] = partesLocais(agora, fuso).data.split('-').map(Number) as [number, number, number]
+  const x = new Date(Date.UTC(y, m - 1, d + 1))
+  const data = `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, '0')}-${String(x.getUTCDate()).padStart(2, '0')}`
+  return instanteLocal(data, '00:00', fuso)
+}
+
+/**
+ * O descarte vencido: o contato vai para Descartado (`sem_resposta`) e a
+ * reativação, se ligada e o canal for WhatsApp, é agendada (marco 1, espalhado).
+ * ⚠️ Trava conversa e contato ANTES de tudo (a ingestão trava as mesmas) e
+ *    confere que a linha ainda está pendente — a resposta pode tê-la cancelado.
+ * ⚠️ É ação automática do agente sobre o CRM: só no modo EFETIVO autônomo
+ *    (kill switch, número em sombra/assistido e recorte cancelam; recorte só por
+ *    horário adia, como o retorno).
+ */
 async function processarDescarte(v: RetornoVencido, agora: Date): Promise<Desfecho> {
   return comTenantServico(v.tenant_id, async (tx) => {
+    const trava = await travarConversaEContato(tx, v.conversa_id)
+    if (!trava) {
+      await encerrar(tx, v, 'cancelado', 'conversa_inexistente', agora)
+      return 'cancelado'
+    }
+    const [ainda] = await tx<{ ok: boolean }[]>`
+      SELECT true AS ok FROM agente_retorno WHERE tenant_id = tenant_atual() AND id = ${v.id} AND estado = 'pendente' FOR UPDATE`
+    if (!ainda) return 'cancelado'
+    const modo = await vereditoDoModo(tx, v, trava.contatoId, agora)
+    if (typeof modo === 'string') {
+      await encerrar(tx, v, 'cancelado', modo, agora)
+      return 'cancelado'
+    }
+    if (modo) {
+      await tx`UPDATE agente_retorno SET executar_em = ${modo.adiarAte}, detalhe = ${modo.motivo}
+                WHERE tenant_id = tenant_atual() AND id = ${v.id} AND estado = 'pendente'`
+      return 'adiado'
+    }
     const r = await executarDescarte(tx, { conversaId: v.conversa_id, canalId: v.canal_id, criadoEm: v.criado_em }, agora)
     if (r.tipo === 'cancelar') {
       await encerrar(tx, v, 'cancelado', r.motivo, agora)
       return 'cancelado'
     }
-    await encerrar(tx, v, 'enviado', 'descartado', agora)
-    const quando = r.config.reativacao.ativa ? new Date(agora.getTime() + r.config.reativacao.dias[0]! * DIA_MS) : null
+    // A linha está travada por esta transação: se não encerrar, algo está errado — desfaz o descarte.
+    if (!(await encerrar(tx, v, 'enviado', 'descartado', agora))) throw new Error('descarte: a linha deixou de estar pendente')
+    const quando = r.config.reativacao.ativa && canalAceitaReativacao(r.tipoCanal)
+      ? instanteDoMarco({ descartadoEm: agora, dias: r.config.reativacao.dias, contatoId: r.contatoId, passo: 1 })
+      : null
     if (quando) {
       await agendarRetorno(tx, {
         conversaId: v.conversa_id, canalId: v.canal_id, motivo: MOTIVO_REATIVACAO, tentativa: 1, executarEm: quando, criadoEm: agora,
       })
     }
-    return 'descartado'
+    return 'contato_descartado'
   })
 }
 
@@ -421,28 +466,8 @@ async function avaliar(tx: Sql, v: RetornoVencido, agora: Date): Promise<'envia'
     if (nao) return nao
   }
 
-  // ⚠️ O modo EFETIVO (P14, ADR-028): teto do tenant (kill switch), recorte de
-  //    horário/segmento/feriado — nunca a coluna `agente_config.modo` direto.
-  //    A cutucada é o agente falando sozinho: só em autônomo de fato.
-  const efetivo = await modoEfetivoDoCanal(tx, { canalId: v.canal_id, contatoId: conv.contato_id, agora })
-  if (efetivo.modo !== 'autonomo') {
-    const motivoModo = `modo:${efetivo.modo}${efetivo.motivo ? ` (${efetivo.motivo})` : ''}`
-    // ⚠️ Decisão (q): fora do recorte SÓ por horário/feriado, com número autônomo e
-    //    teto do tenant que permite autônomo → ADIA para a próxima abertura do
-    //    recorte. Kill switch, segmento, recorte inválido e modo do número cancelam.
-    const soHorario = efetivo.modoDoNumero === 'autonomo' && !efetivo.recorteInvalido
-      && efetivo.foraDoRecorte.length === 1 && efetivo.foraDoRecorte[0] === 'horario'
-    if (!soHorario) return motivoModo
-    const fatos = await lerFatosDoModo(tx, agora, v.canal_id)
-    if (fatos.modoTenant !== null && fatos.modoTenant !== 'autonomo') return motivoModo
-    const ate = await aberturaDoRecorte(tx, v.canal_id, agora)
-    if (ate === undefined) return motivoModo
-    if (ate === null) return 'fora_do_recorte_sem_abertura'
-    // Validade: no máximo 24 h além do previsto. Uma cutucada de "carrinho parado"
-    // dias depois (feriado prolongado, recorte só no fim de semana) já não é a mesma conversa.
-    if (ate.getTime() - new Date(v.executar_em).getTime() > VALIDADE_ADIAMENTO_RECORTE_MS) return 'fora_do_recorte_prazo_excedido'
-    return { adiarAte: ate, motivo: `${motivoModo}: adiado para a abertura do recorte` }
-  }
+  const modo = await vereditoDoModo(tx, v, conv.contato_id, agora)
+  if (modo) return modo
 
   if (v.motivo === 'proposta_sem_resposta') {
     const [p] = await tx<{ ok: boolean }[]>`
@@ -460,10 +485,58 @@ async function avaliar(tx: Sql, v: RetornoVencido, agora: Date): Promise<'envia'
   return 'envia'
 }
 
-async function encerrar(tx: Sql, v: RetornoVencido, estado: EstadoRetorno, detalhe: string | null, agora: Date): Promise<void> {
-  await tx`
+/**
+ * ⚠️ O modo EFETIVO (P14, ADR-028): teto do tenant (kill switch), recorte de
+ * horário/segmento/feriado — nunca a coluna `agente_config.modo` direto. A
+ * cutucada (e o descarte, G5) é o agente agindo sozinho: só em autônomo de fato.
+ * `null` = autônomo; texto = cancelar com o motivo; objeto = adiar.
+ */
+async function vereditoDoModo(tx: Sql, v: RetornoVencido, contatoId: string, agora: Date): Promise<string | AdiarRecorte | null> {
+  const efetivo = await modoEfetivoDoCanal(tx, { canalId: v.canal_id, contatoId, agora })
+  if (efetivo.modo === 'autonomo') return null
+  const motivoModo = `modo:${efetivo.modo}${efetivo.motivo ? ` (${efetivo.motivo})` : ''}`
+  // ⚠️ Decisão (q): fora do recorte SÓ por horário/feriado, com número autônomo e
+  //    teto do tenant que permite autônomo → ADIA para a próxima abertura do
+  //    recorte. Kill switch, segmento, recorte inválido e modo do número cancelam.
+  const soHorario = efetivo.modoDoNumero === 'autonomo' && !efetivo.recorteInvalido
+    && efetivo.foraDoRecorte.length === 1 && efetivo.foraDoRecorte[0] === 'horario'
+  if (!soHorario) return motivoModo
+  const fatos = await lerFatosDoModo(tx, agora, v.canal_id)
+  if (fatos.modoTenant !== null && fatos.modoTenant !== 'autonomo') return motivoModo
+  const ate = await aberturaDoRecorte(tx, v.canal_id, agora)
+  if (ate === undefined) return motivoModo
+  if (ate === null) return 'fora_do_recorte_sem_abertura'
+  // Validade: no máximo 24 h além do previsto. Uma cutucada de "carrinho parado"
+  // dias depois (feriado prolongado, recorte só no fim de semana) já não é a mesma conversa.
+  if (ate.getTime() - new Date(v.executar_em).getTime() > VALIDADE_ADIAMENTO_RECORTE_MS) return 'fora_do_recorte_prazo_excedido'
+  return { adiarAte: ate, motivo: `${motivoModo}: adiado para a abertura do recorte` }
+}
+
+/**
+ * Encerra a linha (só se ainda pendente) e devolve se encerrou. Na reativação,
+ * QUALQUER desfecho final (enviado, recusado, cancelado pela política) agenda o
+ * próximo marco — um 30 d recusado por template pausado não pode matar o 90 d —,
+ * a menos que o motivo de não reativar seja permanente (cliente voltou, opt-out,
+ * reativação desligada…).
+ */
+async function encerrar(tx: Sql, v: RetornoVencido, estado: EstadoRetorno, detalhe: string | null, agora: Date): Promise<boolean> {
+  const linhas = await tx<{ id: string }[]>`
     UPDATE agente_retorno SET estado = ${estado}, detalhe = ${detalhe}, concluido_em = ${agora}
-     WHERE tenant_id = tenant_atual() AND id = ${v.id} AND estado = 'pendente'`
+     WHERE tenant_id = tenant_atual() AND id = ${v.id} AND estado = 'pendente'
+     RETURNING id`
+  if (linhas.length === 0) return false
+  if (v.motivo === MOTIVO_REATIVACAO) await agendarProximoMarco(tx, v, agora)
+  return true
+}
+
+async function agendarProximoMarco(tx: Sql, v: RetornoVencido, agora: Date): Promise<void> {
+  const nao = await motivoParaNaoReativar(tx, { conversaId: v.conversa_id, canalId: v.canal_id, criadoEm: v.criado_em })
+  if (nao && !motivoTransitorio(nao)) return
+  const quando = await proximoMarcoDaReativacao(tx, { conversaId: v.conversa_id, canalId: v.canal_id, passo: v.tentativa + 1, agora })
+  if (!quando) return
+  await agendarRetorno(tx, {
+    conversaId: v.conversa_id, canalId: v.canal_id, motivo: MOTIVO_REATIVACAO, tentativa: v.tentativa + 1, executarEm: quando, criadoEm: agora,
+  })
 }
 
 /** Quantos dias à frente procurar o próximo feriado (mesmo horizonte de `proximaAbertura`). */

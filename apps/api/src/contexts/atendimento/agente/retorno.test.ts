@@ -176,8 +176,8 @@ describe('Processar os vencidos', () => {
       agora = new Date(agora.getTime() + (CADENCIA_RETORNO_MS[passo] ?? 0) + 1000)
     }
     const linhas = await retornos()
-    // Fim da sequência (G5): depois do T3 fica agendado o DESCARTE (padrão 72 h), que não é mensagem.
-    expect(linhas.map((l) => [l.tentativa, l.estado])).toEqual([[1, 'enviado'], [2, 'enviado'], [3, 'enviado'], [1, 'pendente']])
+    // Fim da sequência: o descarte (G5) é DESLIGADO por padrão — nada mais é agendado.
+    expect(linhas.map((l) => [l.tentativa, l.estado])).toEqual([[1, 'enviado'], [2, 'enviado'], [3, 'enviado']])
     expect(await processarRetornos(dono as never, { enviar: enviarFalso, somenteTenant: T }, agora)).toMatchObject({ vencidos: 0 })
   })
 

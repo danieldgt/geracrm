@@ -7,7 +7,9 @@ import { emSavepoint, type Sql } from '../../db/index.js'
 import { notificarMensagemEntrante, notificarConfirmacaoSemPedido } from './notificacao.js'
 import { agendarTurno } from './agente/fila.js'
 import { cancelarRetornosDaConversa } from './agente/retorno.js'
-import { reabrirContatoDescartadoSemResposta } from './agente/descarte-reativacao.js'
+import {
+  cancelarDescarteEReativacaoDoContato, reabrirContatoDescartadoSemResposta, travarConversaEContato,
+} from './agente/descarte-reativacao.js'
 import { midiaHabilitada } from './midia/armazenamento.js'
 
 /**
@@ -237,15 +239,24 @@ export async function ingerirMensagemEntrante(
   } catch { /* agendar é acessório; a mensagem não pode se perder por ele */ }
 
   // 6.8 O cliente escreveu: os retornos agendados (R5) perdem o motivo — quem
-  //     responde agora é o turno do agente, não a cutucada programada.
+  //     responde agora é o turno do agente, não a cutucada programada. E o
+  //     descarte/reativação (G5) do CONTATO, em qualquer número dele.
+  //     ⚠️ Trava conversa (já travada pelo UPDATE do passo 5) e contato ANTES — as
+  //     mesmas linhas, na mesma ordem, que o worker do descarte trava: ou ele já
+  //     descartou (e o 6.9 reabre), ou espera este commit e vê a resposta.
   try {
-    await emSavepoint(tx, (sp) => cancelarRetornosDaConversa(sp, conversaId))
+    await emSavepoint(tx, async (sp) => {
+      await travarConversaEContato(sp, conversaId)
+      await cancelarRetornosDaConversa(sp, conversaId)
+      await cancelarDescarteEReativacaoDoContato(sp, conversaId)
+    })
   } catch { /* cancelar retorno é acessório; a mensagem não pode se perder por ele */ }
 
   // 6.9 Quem o robô deu por perdido (`sem_resposta`) e voltou a escrever está vivo: o
-  //     contato volta a "novo" (G5). O descarte manual nunca é reaberto aqui.
+  //     contato volta a "novo" (G5). O descarte manual nunca é reaberto aqui, nem
+  //     quem escreveu para PARAR (ou já está na lista de bloqueio).
   try {
-    await emSavepoint(tx, (sp) => reabrirContatoDescartadoSemResposta(sp, conversaId, msg.recebidaEm))
+    await emSavepoint(tx, (sp) => reabrirContatoDescartadoSemResposta(sp, conversaId, msg.recebidaEm, msg.texto ?? null))
   } catch { /* reabrir é acessório; a mensagem não pode se perder por ele */ }
 
   // 7. Notifica o atendente que assumiu esta conversa (PLT-07), no mesmo commit.

@@ -57,6 +57,9 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                       <span class="card-topo">
                         <span class="card-nome encolhe">{{ card.nome }}</span>
                         @if (card.uf) { <span class="card-uf">{{ card.uf }}</span> }
+                        @if (col.chave === 'descartado' && card.descarteMotivo === 'sem_resposta') {
+                          <span class="card-selo" title="Descartado pelo sistema: sem resposta ao fim da sequência de retornos. Volta sozinho se o cliente escrever.">descarte automático</span>
+                        }
                       </span>
                       <span class="card-tel txt-dados">{{ telefone(card) }}</span>
                       <!-- ⚠️ A terceira linha é a MESMA caixa das ações: elas
@@ -167,6 +170,8 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .card-uf { flex: none; font-size: 11px; color: var(--texto-suave); border: 1px solid var(--borda); border-radius: var(--raio-completo); padding: 0 6px; }
     .card-resp { font-size: 11px; color: var(--texto-suave); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .card-resp.orfa { color: var(--atencao); }
+    .card-selo { flex: none; font-size: 10px; line-height: 14px; padding: 0 6px; border-radius: var(--raio-completo);
+      background: var(--superficie); border: 1px solid var(--borda); color: var(--texto-secundario); white-space: nowrap; }
     .card-vendas { flex: none; font-size: 11px; color: var(--texto-suave); }
     .card-toque { flex: none; margin-left: auto; font-size: 11px; color: var(--texto-suave); }
     .card-toque.frio { color: var(--texto-suave); opacity: .75; font-style: italic; }

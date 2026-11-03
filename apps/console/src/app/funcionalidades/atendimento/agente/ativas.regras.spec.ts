@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
   adicionarFeriado, badgeStatusTemplate, confirmacaoLiberar, erroDaApi, feriadoDeData, formatarNoFuso, removerFeriado, rotuloFeriado,
-  lerDias, rotuloSuspensao, validarAtivas,
+  lerDias, rotuloSuspensao, validarAtivas, confirmacaoRiscoReativacao, exigeConfirmarRiscoReativacao,
 } from './ativas.regras.js'
 
 describe('Mensagens ativas — regras da tela', () => {
   const ok = {
-    limiteDia: 2, limiteSemana: 4, templateRetorno: null, descarteAposHoras: 72,
-    reativacao: { ativa: false, dias: [30, 90], templateId: null, texto: null }, feriados: [],
+    limiteDia: 2, limiteSemana: 4, templateRetorno: null, descarteAposHoras: 0,
+    reativacao: { ativa: false, dias: [30, 90], templateId: null, texto: null, limiteDia: 30 }, feriados: [],
   }
 
   it('descarte e reativação: horas de 0 a 720; prazos crescentes, 7 a 365, no máximo 3', () => {
@@ -21,6 +21,27 @@ describe('Mensagens ativas — regras da tela', () => {
     expect(dias([30, 400])).toHaveProperty('reativacao')
     expect(dias([7, 30, 90, 180])).toHaveProperty('reativacao')
     expect(dias([Number.NaN])).toHaveProperty('reativacao')
+  })
+
+  it('teto diário da reativação: inteiro de 1 a 200', () => {
+    const teto = (n: number) => validarAtivas({ ...ok, reativacao: { ...ok.reativacao, limiteDia: n } })
+    expect(teto(1)).toEqual({})
+    expect(teto(200)).toEqual({})
+    expect(teto(0)).toHaveProperty('reativacao')
+    expect(teto(201)).toHaveProperty('reativacao')
+    expect(teto(2.5)).toHaveProperty('reativacao')
+  })
+
+  it('⚠️ ligar a reativação no NÃO-OFICIAL pede confirmação digitada do risco de banimento; só ao ligar', () => {
+    const ligada = { ...ok, reativacao: { ...ok.reativacao, ativa: true, texto: 'Oi!' } }
+    expect(exigeConfirmarRiscoReativacao('whatsapp_nao_oficial', ok, ligada)).toBe(true)
+    expect(exigeConfirmarRiscoReativacao('whatsapp_nao_oficial', null, ligada)).toBe(true)
+    expect(exigeConfirmarRiscoReativacao('whatsapp_nao_oficial', ligada, { ...ligada, reativacao: { ...ligada.reativacao, limiteDia: 10 } })).toBe(false)
+    expect(exigeConfirmarRiscoReativacao('whatsapp_nao_oficial', ok, ok)).toBe(false)
+    expect(exigeConfirmarRiscoReativacao('whatsapp_oficial', ok, ligada)).toBe(false)
+    const c = confirmacaoRiscoReativacao()
+    expect(c).toMatchObject({ perigo: true, digitar: 'reativar' })
+    expect(c.mensagem).toMatch(/banir/i)
   })
 
   it('lerDias aceita vírgula, ponto e vírgula e espaço; lixo vira NaN', () => {

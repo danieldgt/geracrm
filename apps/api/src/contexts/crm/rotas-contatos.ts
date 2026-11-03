@@ -440,13 +440,13 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         // ⚠️ Fora do escopo do usuário = 404, igual a inexistente (D3).
         if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), id))) return null
         const [contato] = await tx<{
-          id: string; nome: string; modalidade: string | null; qualificado: boolean
+          id: string; nome: string; modalidade: string | null; qualificado: boolean; descarte_motivo: string | null
           recebe_campanhas: boolean; recebe_automacoes: boolean; criado_em: Date; perfil_preco: string | null
           razao_social: string | null; nome_fantasia: string | null; email: string | null; prioridade: string | null
           temperatura: string | null; origem_id: string | null; valor_estimado_centavos: string | null; observacoes: string | null
           origem_nome: string | null; vendedor_id: string | null; vendedor_nome: string | null
         }[]>`
-          SELECT contato.id, contato.nome, modalidade, qualificado, recebe_campanhas, recebe_automacoes, contato.criado_em, perfil_preco,
+          SELECT contato.id, contato.nome, modalidade, qualificado, descarte_motivo, recebe_campanhas, recebe_automacoes, contato.criado_em, perfil_preco,
                  razao_social, nome_fantasia, email, prioridade, temperatura, origem_id,
                  valor_estimado_centavos::text, observacoes,
                  (SELECT o.nome FROM origem o WHERE o.tenant_id = contato.tenant_id AND o.id = contato.origem_id) AS origem_nome,
@@ -533,6 +533,8 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         // Perfil de preço DECLARADO (ADR-025). null = cota pelo padrão (atacado).
         perfilPreco: dados.contato.perfil_preco,
         qualificado: dados.contato.qualificado,
+        // Por que está Descartado: "sem_resposta" = descarte automático do fim da cadência (G5); null = manual.
+        descarteMotivo: dados.contato.descarte_motivo,
         recebeCampanhas: dados.contato.recebe_campanhas,
         recebeAutomacoes: dados.contato.recebe_automacoes,
         telefones: dados.telefones,
