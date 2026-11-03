@@ -250,3 +250,13 @@ para acordar gente de madrugada, recalibrar com 2–4 semanas de histórico.
 - **Ação:** criar à mão, fora de pico: `SELECT * FROM manter_particoes_mensais(12);` (idempotente; pega
   ACCESS EXCLUSIVE na tabela-mãe por instantes). Depois, consertar a causa do worker.
 - **Volta:** nada a desfazer; o motivo some na próxima leitura da saúde.
+
+## 17. Monitor
+
+- **O que é:** um cron service do Railway (a cada 5 min) que lê `GET /saude/detalhada`, confere o console
+  e avisa no Slack/Discord quando a saúde degrada, a API/console caem ou o webhook fica parado em
+  horário comercial (componente `entrada`: última mensagem de entrada, máximo global, sem dado de tenant).
+  Avisa também quando o problema some ("voltou ao normal").
+- **Quando um alerta chega:** o texto traz o motivo (código de `/saude/detalhada`); siga a seção deste
+  runbook do motivo (§1 LLM, §4 fila, §11 webhook parado, §16 partições…).
+- **Operar/configurar:** variáveis, criação do serviço e teste local em `infra/monitor/README.md`.

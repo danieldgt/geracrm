@@ -134,6 +134,12 @@ importers:
         specifier: ^4.0.8
         version: 4.1.10(@types/node@26.2.0)(jsdom@25.0.1)(vite@7.3.6(@types/node@26.2.0)(lightningcss@1.33.0)(sass@1.97.3)(tsx@4.23.11))
 
+  infra/monitor:
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@26.2.0)(jsdom@25.0.1)(lightningcss@1.33.0)(sass@1.101.0)
+
   packages/conectores:
     dependencies:
       '@geracrm/shared':
