@@ -51,6 +51,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/atendimento/atendimento-kanban.pagina.js').then((m) => m.AtendimentoKanbanPagina),
   campanhas: () =>
     import('./funcionalidades/campanha/campanhas.pagina.js').then((m) => m.CampanhasPagina),
+  consumo: () =>
+    import('./funcionalidades/consumo/consumo.pagina.js').then((m) => m.ConsumoPagina),
   pedidos: () =>
     import('./funcionalidades/pedido/pedidos.pagina.js').then((m) => m.PedidosPagina),
   catalogo: () =>

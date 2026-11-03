@@ -13,6 +13,8 @@ export interface ItemTemplate {
   readonly id: string; readonly nome: string; readonly categoria: string; readonly idioma: string
   readonly versao: number; readonly statusMeta: string; readonly motivoRejeicao: string | null
   readonly corpo: CorpoTemplate; readonly submetido: boolean; readonly criadoEm: string
+  /** {{n}} -> campo do contato (F2). */
+  readonly mapeamentoVariaveis?: Readonly<Record<string, string>>
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
@@ -77,6 +79,17 @@ export class TemplatesServico {
       return null
     } catch (e) {
       return e instanceof HttpErrorResponse ? (e.error as { erro?: string })?.erro ?? 'erro' : 'erro'
+    }
+  }
+
+  /** Salva o mapeamento {{n}} -> campo. null em sucesso; senão a mensagem da API (422 por campo). */
+  async salvarMapeamento(id: string, variaveis: Record<string, string>): Promise<string | null> {
+    try {
+      await firstValueFrom(this.http.patch(`/v1/templates/${id}/mapeamento`, { variaveis }))
+      this.itens.set(this.itens().map((t) => (t.id === id ? { ...t, mapeamentoVariaveis: variaveis } : t)))
+      return null
+    } catch (e) {
+      return mensagemDeErro(e, 'Não foi possível salvar o mapeamento.')
     }
   }
 

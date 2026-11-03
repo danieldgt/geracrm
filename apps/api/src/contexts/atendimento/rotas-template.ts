@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { variaveisDoCorpo, validarMapeamento } from '@geracrm/shared'
 
 const PAGINA = 50
 
@@ -53,8 +54,9 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
       const linhas = await req.comTenant((tx) => tx<{
         id: string; nome: string; categoria: string; idioma: string; criado_em: Date
         versao: number; status_meta: string; motivo_rejeicao: string | null; corpo: Corpo; submetido: boolean
+        mapeamento_variaveis: Record<string, string>
       }[]>`
-        SELECT t.id, t.nome, t.categoria, t.idioma, t.criado_em,
+        SELECT t.id, t.nome, t.categoria, t.idioma, t.criado_em, t.mapeamento_variaveis,
                v.versao, v.status_meta, v.motivo_rejeicao, v.corpo, v.id_externo IS NOT NULL AS submetido
           FROM template t
           JOIN LATERAL (
@@ -78,7 +80,7 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
         itens: pagina.map((l) => ({
           id: l.id, nome: l.nome, categoria: l.categoria, idioma: l.idioma, criadoEm: l.criado_em,
           versao: l.versao, statusMeta: l.status_meta, motivoRejeicao: l.motivo_rejeicao,
-          corpo: l.corpo, submetido: l.submetido,
+          corpo: l.corpo, submetido: l.submetido, mapeamentoVariaveis: l.mapeamento_variaveis,
         })),
         proximoCursor,
       })
@@ -91,8 +93,8 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
     { preHandler: exigirTenant },
     async (req, reply) => {
       const r = await req.comTenant(async (tx) => {
-        const [t] = await tx<{ id: string; nome: string; categoria: string; idioma: string; criado_em: Date }[]>`
-          SELECT id, nome, categoria, idioma, criado_em FROM template
+        const [t] = await tx<{ id: string; nome: string; categoria: string; idioma: string; criado_em: Date; mapeamento_variaveis: Record<string, string> }[]>`
+          SELECT id, nome, categoria, idioma, criado_em, mapeamento_variaveis FROM template
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!t) return null
         const versoes = await tx<{
@@ -107,7 +109,7 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
       })
       if (!r) return reply.code(404).send({ erro: 'template.nao_encontrado' })
       return reply.send({
-        id: r.t.id, nome: r.t.nome, categoria: r.t.categoria, idioma: r.t.idioma, criadoEm: r.t.criado_em,
+        id: r.t.id, nome: r.t.nome, categoria: r.t.categoria, idioma: r.t.idioma, criadoEm: r.t.criado_em, mapeamentoVariaveis: r.t.mapeamento_variaveis,
         versoes: r.versoes.map((v) => ({
           versao: v.versao, statusMeta: v.status_meta, motivoRejeicao: v.motivo_rejeicao, corpo: v.corpo,
           submetido: v.id_externo !== null, revisadoEm: v.revisado_em, criadoEm: v.criado_em,
@@ -168,6 +170,47 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
       })
       if (!r.ok) return reply.code(404).send({ erro: 'template.nao_encontrado' })
       return reply.code(201).send({ versao: r.versao })
+    },
+  )
+
+  /**
+   * Mapeamento {{n}} -> campo do contato (F2). Lista FECHADA de campos (shared) e só variáveis
+   * que o corpo da última versão realmente tem. `{}` limpa o mapeamento.
+   */
+  app.patch<{ Params: { id: string }; Body: { variaveis?: unknown } }>(
+    '/v1/templates/:id/mapeamento',
+    { preHandler: exigirTenant },
+    async (req, reply) => {
+      const v = req.body?.variaveis
+      if (!v || typeof v !== 'object' || Array.isArray(v)) {
+        return reply.code(422).send({ erro: 'mapeamento.invalido', mensagem: 'Envie variaveis como objeto {"1": campo}.', campos: { variaveis: 'Informe um objeto.' } })
+      }
+      const r = await req.comTenant(async (tx) => {
+        const [t] = await tx<{ corpo: Corpo }[]>`
+          SELECT v.corpo FROM template t
+            JOIN LATERAL (SELECT corpo FROM template_versao tv
+                           WHERE tv.tenant_id = t.tenant_id AND tv.template_id = t.id
+                           ORDER BY versao DESC LIMIT 1) v ON true
+           WHERE t.tenant_id = tenant_atual() AND t.id = ${req.params.id}`
+        if (!t) return { estado: 'nao_encontrado' as const }
+        const texto = `${t.corpo.header?.texto ?? ''} ${t.corpo.body?.texto ?? ''}`
+        const erro = validarMapeamento(v as Record<string, unknown>, variaveisDoCorpo(texto))
+        if (erro) return { estado: 'invalido' as const, erro }
+        await tx`
+          UPDATE template SET mapeamento_variaveis = ${JSON.stringify(v)}::text::jsonb
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        return { estado: 'ok' as const }
+      })
+      if (r.estado === 'nao_encontrado') return reply.code(404).send({ erro: 'template.nao_encontrado' })
+      if (r.estado === 'invalido') {
+        return reply.code(422).send({
+          erro: r.erro.motivo === 'campo_invalido' ? 'mapeamento.campo_invalido' : 'mapeamento.variavel_inexistente',
+          mensagem: r.erro.motivo === 'campo_invalido'
+            ? `Campo inválido para {{${r.erro.variavel}}}.` : `O corpo do template não tem a variável {{${r.erro.variavel}}}.`,
+          campos: { [`variaveis.${r.erro.variavel}`]: r.erro.motivo === 'campo_invalido' ? 'Campo inválido.' : 'O corpo não tem esta variável.' },
+        })
+      }
+      return reply.send({ ok: true, mapeamentoVariaveis: v })
     },
   )
 

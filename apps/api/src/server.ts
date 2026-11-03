@@ -28,6 +28,7 @@ import { processarPosIngestao, INTERVALO_POS_INGESTAO_MS } from './workers/pos-i
 import {
   processarParticoes, ALERTA_PARTICOES, ATRASO_PRIMEIRA_PASSADA_PARTICOES_MS, INTERVALO_PARTICOES_MS,
 } from './workers/particoes.js'
+import { atualizarConsumoDiario, ATRASO_PRIMEIRA_PASSADA_CONSUMO_MS, INTERVALO_CONSUMO_MS } from './workers/consumo.js'
 
 const porta = Number(process.env.PORT ?? 3000)
 
@@ -299,6 +300,19 @@ if (process.env.DATABASE_ADMIN_URL) {
   }
   intervalosAquisicao.push(setTimeout(passadaParticoes, ATRASO_PRIMEIRA_PASSADA_PARTICOES_MS))
   intervalosAquisicao.push(setInterval(passadaParticoes, INTERVALO_PARTICOES_MS))
+
+  // ⚠️ CONSUMO (0124): atualiza a MV diária da tela de Consumo a cada 15 min, com guarda
+  //    anti-sobreposição. 1ª passada logo após o boot (deploy frequente não esperaria 15 min).
+  let atualizandoConsumo = false
+  const passadaConsumo = () => {
+    if (atualizandoConsumo) return
+    atualizandoConsumo = true
+    void atualizarConsumoDiario(donoAquisicao as never)
+      .catch((e) => app.log.warn({ erro: e, contexto: 'atendimento.consumo' }, 'atualização do consumo falhou'))
+      .finally(() => { atualizandoConsumo = false })
+  }
+  intervalosAquisicao.push(setTimeout(passadaConsumo, ATRASO_PRIMEIRA_PASSADA_CONSUMO_MS))
+  intervalosAquisicao.push(setInterval(passadaConsumo, INTERVALO_CONSUMO_MS))
 
   // Push nativo (PLT-07) — a notificação que chega com o navegador fechado.
   // ⚠️ 20s: é a mesma ordem de grandeza do despachante de webhooks. Push de

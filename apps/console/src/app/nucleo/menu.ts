@@ -68,6 +68,8 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Catálogo de templates aprovados na Meta — o que reabre a janela.' },
       { rota: 'campanhas', rotulo: 'Campanhas', icone: 'megaphone', status: 'pronto', onda: 'O3',
         descricao: 'Disparo em massa com ROI honesto (vendas 3/7/14 dias).' },
+      { rota: 'consumo', rotulo: 'Consumo', icone: 'line-chart', status: 'pronto', onda: 'F2',
+        descricao: 'Quanto custaram WhatsApp, IA e transcrição no mês' },
       { rota: 'mensagens', rotulo: 'Mensagens Enviadas', icone: 'send', status: 'pronto', onda: 'O1',
         descricao: 'Log de envios individuais e em massa.' },
       { rota: 'listas', rotulo: 'Listas', icone: 'list', status: 'pronto', onda: 'O3',
