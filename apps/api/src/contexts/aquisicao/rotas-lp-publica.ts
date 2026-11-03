@@ -38,7 +38,7 @@ const limitePorLp = criarLimiteTaxa({ teto: 600, janelaMs: 60_000 })
  * proxy — dá para forjar. Serve para separar tráfego normal, não para barrar
  * quem está tentando: quem tenta esbarra no teto por LP.
  */
-function ipDoCliente(req: FastifyRequest): string {
+export function ipDoCliente(req: FastifyRequest): string {
   const xff = req.headers['x-forwarded-for']
   const bruto = Array.isArray(xff) ? xff[0] : xff
   return bruto?.split(',')[0]?.trim() || req.ip

@@ -58,6 +58,8 @@ import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
 import { rotasCatalogoManual } from './contexts/catalogo/rotas-catalogo-manual.js'
 import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
 import { rotasLpPublica } from './contexts/aquisicao/rotas-lp-publica.js'
+import { rotasFormularios } from './contexts/aquisicao/rotas-formularios.js'
+import { rotasFormularioPublico } from './contexts/aquisicao/rotas-formulario-publico.js'
 import { rotasPush } from './contexts/plataforma/rotas-push.js'
 import { rotasAuth } from './contexts/identidade/rotas-auth.js'
 // Raias do plano-port-playbook-am: registradas pela P0, preenchidas cada uma no seu arquivo.
@@ -171,6 +173,8 @@ export async function criarApp(): Promise<FastifyInstance> {
   //    RESOLVIDO pela chave da URL (0062), como o webhook resolve pelo
   //    phone_number_id (0057) — nunca recebido em parâmetro (ADR-001).
   await app.register(rotasLpPublica)
+  await app.register(rotasFormularios)
+  await app.register(rotasFormularioPublico)
   await app.register(rotasPush)
   await app.register(rotasAuth)
   // ⚠️ Pontos de extensão das raias P2–P19 (plano-port-playbook-am, P0): cada

@@ -57,6 +57,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/catalogo/catalogo.pagina.js').then((m) => m.CatalogoPagina),
   midia: () =>
     import('./funcionalidades/aquisicao/midia.pagina.js').then((m) => m.MidiaPagina),
+  formularios: () =>
+    import('./funcionalidades/aquisicao/formularios.pagina.js').then((m) => m.FormulariosPagina),
   segmentos: () =>
     import('./funcionalidades/crm/segmentos.pagina.js').then((m) => m.SegmentosPagina),
   inicio: () =>
@@ -130,6 +132,12 @@ export const ROTAS: Routes = [
     path: 'login',
     loadComponent: () => import('./nucleo/login.pagina.js').then((m) => m.LoginPagina),
   },
+  // Formulário PÚBLICO (F3): fora da casca, sem guard — quem preenche não tem conta.
+  {
+    path: 'f/:chave',
+    loadComponent: () =>
+      import('./funcionalidades/aquisicao/formulario-publico.pagina.js').then((m) => m.FormularioPublicoPagina),
+  },
   {
     path: '',
     component: ShellComponente,
@@ -177,6 +185,17 @@ export const ROTAS: Routes = [
         path: 'midia/anuncio/:id',
         loadComponent: () =>
           import('./funcionalidades/aquisicao/anuncio-roi.pagina.js').then((m) => m.AnuncioRoiPagina),
+      },
+      // Builder do formulário: `novo` ANTES de `:id`, senão "novo" casa como id.
+      {
+        path: 'formularios/novo',
+        loadComponent: () =>
+          import('./funcionalidades/aquisicao/formulario-builder.pagina.js').then((m) => m.FormularioBuilderPagina),
+      },
+      {
+        path: 'formularios/:id',
+        loadComponent: () =>
+          import('./funcionalidades/aquisicao/formulario-builder.pagina.js').then((m) => m.FormularioBuilderPagina),
       },
       ...rotasFilhas,
       // Rota desconhecida volta para a base — não deixa tela órfã.
