@@ -18,7 +18,7 @@ let app: FastifyInstance
 const chamar = (t: string, m: 'GET' | 'POST' | 'PUT', url: string, corpo?: Record<string, unknown>) =>
   app.inject({ method: m, url, headers: { 'x-tenant-id': t }, ...(corpo ? { payload: corpo } : {}) })
 
-const TABELAS = ['contato_telefone', 'contato_documento', 'contato_endereco', 'contato']
+const TABELAS = ['contato_telefone', 'contato_documento', 'contato_endereco', 'contato', 'origem']
 async function limpar() {
   for (const tb of TABELAS) for (const t of [T, OUTRO]) await dono.unsafe(`DELETE FROM ${tb} WHERE tenant_id = '${t}'`)
 }
@@ -159,6 +159,107 @@ describe('POST/PUT /v1/contatos completos', () => {
   it('CHECK do banco barra prioridade fora do domínio mesmo sem passar pela API', async () => {
     const { id } = (await chamar(T, 'POST', '/v1/contatos', { nome: 'Z', telefone: '81922221111' })).json() as { id: string }
     await expect(dono`UPDATE contato SET prioridade = 'x' WHERE tenant_id=${T} AND id=${id}`).rejects.toThrow()
+  })
+})
+
+describe('PUT não pisa no dado do ERP; telefone duplicado; origem validada', () => {
+  const O1 = 'a1c00000-5555-4000-8000-000000000001'
+  const O_INATIVA = 'a1c00000-5555-4000-8000-000000000002'
+  const O_OUTRO = 'a1c00000-5555-4000-8000-000000000003'
+  const criar = async (corpo: Record<string, unknown>) => (await chamar(T, 'POST', '/v1/contatos', corpo)).json() as { id: string }
+  const deErp = async (id: string) => {
+    for (const tb of ['contato_telefone', 'contato_documento', 'contato_endereco'])
+      await dono.unsafe(`UPDATE ${tb} SET fonte = 'erp' WHERE tenant_id = '${T}' AND contato_id = '${id}'`)
+  }
+
+  it('contato do ERP editado: linha do ERP intacta, manual vira principal, sem 500', async () => {
+    const { id } = await criar({ ...completo, telefone: '81988887777' })
+    await deErp(id)
+    const r = await chamar(T, 'PUT', `/v1/contatos/${id}`, {
+      nome: 'Saturno', telefone: '81977776666', whatsapp: false, documento: '52998224725',
+      endereco: { logradouro: 'Rua Nova', cidade: 'Olinda', uf: 'PE' },
+    })
+    expect(r.statusCode).toBe(200)
+    const tels = await dono`SELECT e164, principal, fonte, whatsapp FROM contato_telefone WHERE tenant_id=${T} AND contato_id=${id} ORDER BY seq`
+    expect(tels).toHaveLength(2)
+    expect(tels[0]).toMatchObject({ e164: '+5581988887777', principal: false, fonte: 'erp', whatsapp: true })
+    expect(tels[1]).toMatchObject({ e164: '+5581977776666', principal: true, fonte: 'manual', whatsapp: false })
+    const docs = await dono`SELECT numero, fiscal, fonte FROM contato_documento WHERE tenant_id=${T} AND contato_id=${id} ORDER BY seq`
+    expect(docs).toMatchObject([{ numero: '11222333000181', fiscal: false, fonte: 'erp' }, { numero: '52998224725', fiscal: true, fonte: 'manual' }])
+    const ends = await dono`SELECT logradouro, cidade, principal, fonte FROM contato_endereco WHERE tenant_id=${T} AND contato_id=${id} ORDER BY seq`
+    expect(ends).toMatchObject([{ logradouro: 'Rua A', cidade: 'Recife', principal: false, fonte: 'erp' },
+      { logradouro: 'Rua Nova', cidade: 'Olinda', principal: true, fonte: 'manual' }])
+
+    // Segunda edição atualiza a linha manual no lugar (sem novas linhas); o ERP segue intacto.
+    const r2 = await chamar(T, 'PUT', `/v1/contatos/${id}`, { nome: 'Saturno', telefone: '81977776666', endereco: { cidade: 'Paulista', uf: 'PE' } })
+    expect(r2.statusCode).toBe(200)
+    expect(await dono`SELECT 1 FROM contato_endereco WHERE tenant_id=${T} AND contato_id=${id}`).toHaveLength(2)
+    expect(await dono`SELECT 1 FROM contato_telefone WHERE tenant_id=${T} AND contato_id=${id}`).toHaveLength(2)
+    // Apagar o endereço manual devolve o principal ao ERP.
+    await chamar(T, 'PUT', `/v1/contatos/${id}`, { nome: 'Saturno', telefone: '81977776666', endereco: {} })
+    const [e] = await dono`SELECT cidade, principal, fonte FROM contato_endereco WHERE tenant_id=${T} AND contato_id=${id}`
+    expect(e).toMatchObject({ cidade: 'Recife', principal: true, fonte: 'erp' })
+  })
+
+  it('reenviar o que o ERP já mostra não cria linha manual', async () => {
+    const { id } = await criar(completo)
+    await deErp(id)
+    const r = await chamar(T, 'PUT', `/v1/contatos/${id}`, completo)
+    expect(r.statusCode).toBe(200)
+    for (const tb of ['contato_telefone', 'contato_documento', 'contato_endereco'])
+      expect(await dono.unsafe(`SELECT 1 FROM ${tb} WHERE tenant_id='${T}' AND contato_id='${id}' AND fonte='manual'`)).toHaveLength(0)
+  })
+
+  it('corrida no telefone principal (23505) → 422 no campo, no PUT e no POST', async () => {
+    const a = await criar({ nome: 'A', telefone: '81911110001' })
+    const b = await criar({ nome: 'B', telefone: '81911110002' })
+    const alvo = '+5581900000000'
+    // Outra transação (B) pega o número e só commita depois que a requisição já passou
+    // do pré-check e travou no índice único — a corrida, determinística.
+    const segurar = async (acao: () => Promise<{ statusCode: number; json: () => unknown }>) => {
+      let soltar!: () => void
+      const aberta = new Promise<void>((res) => { soltar = res })
+      const tx = dono.begin(async (t) => {
+        await t`UPDATE contato_telefone SET e164 = ${alvo}, chave_bloqueio = '558100000000' WHERE tenant_id=${T} AND contato_id=${b.id}`
+        await aberta
+      })
+      await new Promise((r) => setTimeout(r, 200))
+      const resposta = acao()
+      await new Promise((r) => setTimeout(r, 300))
+      soltar(); await tx
+      return resposta
+    }
+    const put = await segurar(() => chamar(T, 'PUT', `/v1/contatos/${a.id}`, { nome: 'A', telefone: '81900000000' }))
+    expect(put.statusCode).toBe(422)
+    expect(put.json()).toMatchObject({ erro: 'validacao', campos: { telefone: 'Este telefone já é o principal de outro contato.' } })
+
+    await dono`UPDATE contato_telefone SET e164 = '+5581911110002', chave_bloqueio = '558111110002' WHERE tenant_id=${T} AND contato_id=${b.id}`
+    const post = await segurar(() => chamar(T, 'POST', '/v1/contatos', { nome: 'C', telefone: '81900000000' }))
+    expect(post.statusCode).toBe(422)
+    expect(post.json()).toMatchObject({ campos: { telefone: expect.any(String) } })
+    expect(await dono`SELECT 1 FROM contato WHERE tenant_id=${T} AND nome='C'`).toHaveLength(0)
+  })
+
+  it('origemId: inexistente, de outro tenant e inativa → 422; ativa passa; PUT sem origemId preserva', async () => {
+    await dono`INSERT INTO origem (tenant_id, id, nome, ativa) VALUES (${T}, ${O1}, 'Feira', true), (${T}, ${O_INATIVA}, 'Antiga', false), (${OUTRO}, ${O_OUTRO}, 'Alheia', true)`
+    for (const origemId of ['a1c00000-5555-4000-8000-0000000000ff', O_OUTRO, O_INATIVA]) {
+      const p = await chamar(T, 'POST', '/v1/contatos', { nome: 'X', telefone: '81933330001', origemId })
+      expect(p.statusCode).toBe(422)
+      expect(p.json()).toMatchObject({ campos: { origemId: expect.any(String) } })
+    }
+    const { id } = await criar({ nome: 'Com origem', telefone: '81933330002', origemId: O1 })
+    const [c] = await dono`SELECT origem_id FROM contato WHERE tenant_id=${T} AND id=${id}`
+    expect(c!['origem_id']).toBe(O1)
+    expect((await chamar(T, 'PUT', `/v1/contatos/${id}`, { nome: 'Com origem', telefone: '81933330002', origemId: O_OUTRO })).statusCode).toBe(422)
+    expect((await chamar(T, 'PUT', `/v1/contatos/${id}`, { nome: 'Novo nome', telefone: '81933330002' })).statusCode).toBe(200)
+    const [c2] = await dono`SELECT origem_id, nome FROM contato WHERE tenant_id=${T} AND id=${id}`
+    expect(c2).toMatchObject({ origem_id: O1, nome: 'Novo nome' })
+    // Desativada depois: a mesma origem já gravada segue aceita; null explícito limpa.
+    await dono`UPDATE origem SET ativa = false WHERE tenant_id=${T} AND id=${O1}`
+    expect((await chamar(T, 'PUT', `/v1/contatos/${id}`, { nome: 'N', telefone: '81933330002', origemId: O1 })).statusCode).toBe(200)
+    expect((await chamar(T, 'PUT', `/v1/contatos/${id}`, { nome: 'N', telefone: '81933330002', origemId: null })).statusCode).toBe(200)
+    const [c3] = await dono`SELECT origem_id FROM contato WHERE tenant_id=${T} AND id=${id}`
+    expect(c3!['origem_id']).toBeNull()
   })
 })
 
