@@ -58,6 +58,8 @@ export interface Thread {
     readonly estado: string
     readonly atendenteNome: string | null
     readonly protocolo: number | null
+    /** Quem conduz sou eu (G1: só quem conduz, ou a gestão, vê "Devolver"). */
+    readonly meu?: boolean
   } | null
   readonly temMaisAntigas: boolean
   readonly janela: Janela
@@ -161,29 +163,43 @@ export class InboxServico {
     await this.carregar()
   }
 
-  /** Devolve a conversa ao agente (ou à fila, se o agente não fala sozinho). Devolve o texto de erro, ou o aviso do servidor. */
+  /**
+   * Devolve a conversa ao agente (ou à fila, se o agente não fala sozinho agora). No sucesso diz
+   * para onde foi e, na fila, o aviso do servidor com o porquê; no erro, o texto e o código (a tela
+   * oferece "Recarregar" quando o estado mudou por baixo dela).
+   */
   async devolverAoAgente(conversaId: string, corpo: { motivo: MotivoDevolucao; observacao?: string }):
-    Promise<{ ok: true; aviso: string | null } | { ok: false; erro: string }> {
+    Promise<{ ok: true; destino: 'agente' | 'fila'; aviso: string | null } | { ok: false; erro: string; codigo: string | null }> {
     try {
-      const r = await firstValueFrom(this.http.post<{ aviso?: string }>(`/v1/conversas/${conversaId}/devolver-agente`, corpo))
+      const r = await firstValueFrom(this.http.post<{ destino?: 'agente' | 'fila'; aviso?: string }>(`/v1/conversas/${conversaId}/devolver-agente`, corpo))
       await Promise.all([this.atualizarThread(conversaId), this.carregar(), this.carregarContadores()])
-      return { ok: true, aviso: r.aviso ?? null }
+      return { ok: true, destino: r.destino === 'fila' ? 'fila' : 'agente', aviso: r.aviso ?? null }
     } catch (e) {
       await this.atualizarThread(conversaId)
-      return { ok: false, erro: this.textoDoErro(e, 'Não foi possível devolver ao agente.') }
+      return { ok: false, erro: this.textoDoErro(e, 'Não foi possível devolver ao agente.'), codigo: this.codigoDoErro(e) }
     }
   }
 
   async reatribuir(conversaId: string, corpo: { usuarioId: string; motivo: string }):
-    Promise<{ ok: true } | { ok: false; erro: string }> {
+    Promise<{ ok: true } | { ok: false; erro: string; codigo: string | null }> {
     try {
       await firstValueFrom(this.http.post(`/v1/conversas/${conversaId}/reatribuir`, corpo))
       await Promise.all([this.atualizarThread(conversaId), this.carregar(), this.carregarContadores()])
       return { ok: true }
     } catch (e) {
       await this.atualizarThread(conversaId)
-      return { ok: false, erro: this.textoDoErro(e, 'Não foi possível reatribuir.') }
+      return { ok: false, erro: this.textoDoErro(e, 'Não foi possível reatribuir.'), codigo: this.codigoDoErro(e) }
     }
+  }
+
+  /** "Recarregar" depois de um 409/403 de estado velho: a conversa, a lista e os contadores. */
+  async recarregarConversa(conversaId: string): Promise<void> {
+    await Promise.all([this.atualizarThread(conversaId), this.carregar(), this.carregarContadores()])
+  }
+
+  private codigoDoErro(e: unknown): string | null {
+    const corpo = e instanceof HttpErrorResponse ? (e.error as { erro?: unknown } | null) : null
+    return typeof corpo?.erro === 'string' ? corpo.erro : null
   }
 
   private textoDoErro(e: unknown, padrao: string): string {

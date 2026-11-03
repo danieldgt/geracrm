@@ -14,6 +14,12 @@ export type MotivoDevolucao = (typeof MOTIVOS_DEVOLUCAO)[number]['id']
 
 export const TETO_TEXTO = 300
 
+/**
+ * Chips de condução. ⚠️ Conversa `conduzida_por = 'humano'` SEM atendimento aberto e com a última
+ * palavra nossa (atendimento encerrado, campanha) não aparece em nenhum chip: ninguém conduz e
+ * ninguém espera. Não entra em "Aguardando" de propósito — o chip usa a régua única da fila (a
+ * mesma do contador e da aba Fila); quando o cliente escreve, ela entra lá sozinha.
+ */
 export type Conducao = 'agente' | 'humano' | 'aguardando'
 export const CONDUCOES: readonly { readonly id: Conducao; readonly rotulo: string }[] = [
   { id: 'agente', rotulo: 'Agente' },
@@ -21,11 +27,18 @@ export const CONDUCOES: readonly { readonly id: Conducao; readonly rotulo: strin
   { id: 'aguardando', rotulo: 'Aguardando' },
 ]
 
-export interface AtendimentoDaThread { readonly estado: string }
+export interface AtendimentoDaThread {
+  readonly estado: string
+  /** Quem conduz é quem está olhando (servidor compara pelo token). */
+  readonly meu?: boolean | undefined
+}
 
-/** Só há o que devolver quando uma PESSOA conduz (atendimento aberto e assumido). */
-export function podeDevolver(atendimento: AtendimentoDaThread | null | undefined): boolean {
-  return !!atendimento && atendimento.estado === 'em_atendimento'
+/**
+ * Só há o que devolver quando uma PESSOA conduz (atendimento aberto e assumido) — e só quem
+ * conduz, ou a gestão, pode devolver (o servidor responde 403 aos demais; o botão nem aparece).
+ */
+export function podeDevolver(atendimento: AtendimentoDaThread | null | undefined, gestao = false): boolean {
+  return !!atendimento && atendimento.estado === 'em_atendimento' && (atendimento.meu === true || gestao)
 }
 
 /** Reatribuir exige gestão E um atendimento aberto (assumido ou na fila). */
@@ -33,7 +46,7 @@ export function podeReatribuir(atendimento: AtendimentoDaThread | null | undefin
   return gestao && !!atendimento && atendimento.estado !== 'encerrado'
 }
 
-/** `null` = pode enviar; senão, o texto que a tela mostra. "Outro" exige a observação. */
+/** `null` = pode enviar; senão, o texto que a tela mostra. Observação vale em todo motivo; "Outro" a exige. */
 export function erroDevolucao(f: { motivo: MotivoDevolucao | null; observacao: string }): string | null {
   if (!f.motivo) return 'Escolha o motivo.'
   const obs = f.observacao.trim()
@@ -50,7 +63,7 @@ export function erroReatribuicao(f: { usuarioId: string | null; motivo: string }
   return null
 }
 
-/** Corpo do POST: a observação só vai quando digitada ("Outro" a exige, validado antes). */
+/** Corpo do POST: a observação só vai quando digitada (qualquer motivo; "Outro" a exige, validado antes). */
 export function corpoDevolucao(f: { motivo: MotivoDevolucao; observacao: string }): { motivo: MotivoDevolucao; observacao?: string } {
   const obs = f.observacao.trim()
   return obs ? { motivo: f.motivo, observacao: obs } : { motivo: f.motivo }
@@ -59,4 +72,11 @@ export function corpoDevolucao(f: { motivo: MotivoDevolucao; observacao: string 
 /** Clicar no chip ativo o desliga (volta a "todas as condutas"). */
 export function alternarConducao(atual: Conducao | null, clicada: Conducao): Conducao | null {
   return atual === clicada ? null : clicada
+}
+
+/** Erros da devolução/reatribuição que pedem RECARREGAR a conversa: o estado mudou por baixo da tela. */
+export const ERROS_DE_ESTADO_VELHO: readonly string[] = ['conversa.sem_atendimento_humano', 'atendimento.conflito', 'atendimento.nao_e_seu', 'conversa.sem_atendimento']
+
+export function pedeRecarregar(codigo: string | null | undefined): boolean {
+  return !!codigo && ERROS_DE_ESTADO_VELHO.includes(codigo)
 }

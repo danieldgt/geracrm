@@ -118,6 +118,12 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
     const filtro = q.filtro === 'fila' || q.filtro === 'meus' ? q.filtro : 'todas'
     // Quem CONDUZ agora (combina com `filtro`): agente = conduzida pela IA sem atendimento aberto;
     // humano = atendimento aberto com atendente; aguardando = na fila (mesma régua da aba Fila).
+    // ⚠️ `conduzida_por = 'humano'` SEM atendimento aberto (atendimento encerrado, ou conversa que
+    //    nasceu de envio nosso — campanha, template) não entra em NENHUM chip enquanto a última
+    //    palavra for nossa: ninguém conduz e ninguém espera. NÃO vai para "Aguardando" de propósito:
+    //    o chip é a régua ÚNICA da fila (`fragmentoNaFila` — contador, aba Fila, coluna do kanban), e
+    //    pôr ali quem não está esperando inflaria a fila com conversas encerradas. Quando o cliente
+    //    escreve, `ultima_direcao` vira 'entrante' e a conversa entra em "Aguardando" sozinha.
     const conduzidoPor = q.conduzidoPor === 'agente' || q.conduzidoPor === 'humano' || q.conduzidoPor === 'aguardando' ? q.conduzidoPor : null
     if (q.conduzidoPor !== undefined && q.conduzidoPor !== '' && conduzidoPor === null) {
       return reply.code(422).send({ erro: 'conversas.conduzido_por_invalido', validos: ['agente', 'humano', 'aguardando'] })
@@ -249,19 +255,20 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ erro: 'conversa.id_invalido', mensagem: 'Id inválido.' })
       }
 
+      const sub = subDoUsuario(req)
       const dados = await req.comTenant(async (tx) => {
         const [conversa] = await tx<{
           id: string; nome: string; contato_id: string
           ultima_entrante_em: Date | null; conduzida_por: string; canal_tipo: string
-          at_estado: string | null; at_nome: string | null; at_protocolo: string | null
+          at_estado: string | null; at_nome: string | null; at_protocolo: string | null; at_meu: boolean | null
         }[]>`
           SELECT cv.id, ct.nome, cv.contato_id, cv.ultima_entrante_em, cv.conduzida_por,
-                 cc.tipo AS canal_tipo, at.estado AS at_estado, at.nome AS at_nome, at.protocolo AS at_protocolo
+                 cc.tipo AS canal_tipo, at.estado AS at_estado, at.nome AS at_nome, at.protocolo AS at_protocolo, at.meu AS at_meu
             FROM conversa cv
             JOIN contato ct ON ct.id = cv.contato_id
             JOIN canal_conectado cc ON cc.tenant_id = cv.tenant_id AND cc.id = cv.canal_id
             LEFT JOIN LATERAL (
-              SELECT a.estado, a.protocolo, u.nome
+              SELECT a.estado, a.protocolo, u.nome, coalesce(u.cognito_sub = ${sub}, false) AS meu
                 FROM atendimento a
                 LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id
                WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado <> 'encerrado'
@@ -302,6 +309,8 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
               estado: dados.conversa.at_estado,
               atendenteNome: dados.conversa.at_nome,
               protocolo: dados.conversa.at_protocolo ? Number(dados.conversa.at_protocolo) : null,
+              // Quem conduz sou EU? (G1: a tela só oferece "Devolver" a quem conduz ou à gestão.)
+              meu: dados.conversa.at_meu === true,
             }
           : null,
         // ⚠️ A janela de 24h + template é regra SÓ do WhatsApp Oficial (Meta).
