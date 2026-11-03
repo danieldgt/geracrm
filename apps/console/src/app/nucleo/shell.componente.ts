@@ -11,7 +11,7 @@ import {
   camadaTrilho, conteudoInerte, focoPreso, proximaGaveta, resumoAlertas, separarAlertas, type EventoGaveta,
 } from './casca.regras.js'
 import { VERSAO } from './versao.js'
-import { MENU } from './menu.js'
+import { MENU, menuVisivel } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
 import { MenuUsuarioComponente } from './menu-usuario.componente.js'
 import { MarcaComponente } from '../compartilhado/ui/marca.componente.js'
@@ -434,7 +434,9 @@ export class ShellComponente implements OnInit {
    * interface — a autorização real é o 403 da API.
    */
   readonly menuFiltrado = computed(() => {
-    const visiveis = MENU.filter((g) => !g.soStaff || this.auth.ehStaff())
+    const doStaff = MENU.filter((g) => !g.soStaff || this.auth.ehStaff())
+    // Itens de módulo desligado (Agenda) saem do menu — o estado vem de `ModulosServico`.
+    const visiveis = menuVisivel(doStaff, this.modulos.estado())
     const q = this.filtro().trim().toLowerCase()
     if (!q) return visiveis
     return visiveis

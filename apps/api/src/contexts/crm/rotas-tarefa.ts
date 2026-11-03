@@ -6,6 +6,7 @@ import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
+import { moduloAtivo } from '../plataforma/modulos.js'
 
 const PAGINA = 30
 const LOTE_MAX = 500
@@ -148,13 +149,26 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
            AND t.contato_id = ANY(${ids}::uuid[])
          GROUP BY t.contato_id`)
       const futuras = new Map(linhas.map((l) => [l.contato_id, l.futuras]))
+      // Agenda (C2): só conta com o módulo ligado — desligado, a consulta nem roda.
+      const { moduloAgendaAtivo, eventos } = await req.comTenant(async (tx) => {
+        const ativo = await moduloAtivo(tx, 'agenda')
+        if (!ativo) return { moduloAgendaAtivo: false, eventos: new Map<string, number>() }
+        const l = await tx<{ contato_id: string; futuros: number }[]>`
+          SELECT e.contato_id, count(*)::int AS futuros
+            FROM evento_agenda e
+           WHERE e.tenant_id = tenant_atual() AND e.status = 'agendado' AND e.inicio >= now()
+             AND e.contato_id = ANY(${ids}::uuid[])
+           GROUP BY e.contato_id`
+        return { moduloAgendaAtivo: true, eventos: new Map(l.map((x) => [x.contato_id, x.futuros])) }
+      })
       return reply.send({
         itens: ids.map((contatoId) => {
           const tarefasAbertasFuturas = futuras.get(contatoId) ?? 0
           return {
             contatoId, tarefasAbertasFuturas,
-            // TODO(C2): contar eventos futuros da agenda e ler o módulo Agenda do tenant quando a raia C2 existir.
-            semProximoPasso: semProximoPasso({ tarefasAbertasFuturas, eventosFuturos: 0, moduloAgendaAtivo: false }),
+            semProximoPasso: semProximoPasso({
+              tarefasAbertasFuturas, eventosFuturos: eventos.get(contatoId) ?? 0, moduloAgendaAtivo,
+            }),
           }
         }),
       })

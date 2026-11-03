@@ -12,6 +12,7 @@ import {
 import { vigiarTodos } from './contexts/aquisicao/vigia.js'
 import { varrerResumoDiario, HORA_RESUMO_LOCAL } from './contexts/aquisicao/entrega-resumo.js'
 import { despacharPush, configVapid, envioReal } from './contexts/plataforma/push.js'
+import { enviarLembretesAgenda, INTERVALO_LEMBRETE_AGENDA_MS } from './contexts/crm/agenda-lembrete.js'
 import { despacharCampanhas } from './contexts/crm/despachante-campanha.js'
 import { vigiarConexaoCanais } from './contexts/atendimento/vigia-canal.js'
 import { processarTarefasDoAgente, INTERVALO_WORKER_MS } from './workers/agente.js'
@@ -262,6 +263,10 @@ if (process.env.DATABASE_ADMIN_URL) {
     ['posIngestao', INTERVALO_POS_INGESTAO_MS, () => processarPosIngestao(donoAquisicao as never, {}, new Date())],
     ['qualidade', INTERVALO_QUALIDADE_MS, () => processarQualidade(donoAquisicao as never, {}, new Date())],
     ['sla', INTERVALO_SLA_MS, () => processarSla(donoAquisicao as never, {}, new Date())],
+    ['agendaLembrete', INTERVALO_LEMBRETE_AGENDA_MS, async () => {
+      const r = await enviarLembretesAgenda(donoAquisicao as never, new Date())
+      return { processadas: r.avisados, ...r }
+    }],
   ] as const) {
     let rodando = false
     intervalosAquisicao.push(setInterval(() => {
