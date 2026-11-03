@@ -17,7 +17,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | L0d ícones Lucide | 0 | ✅ | integrada; desenhos de memória — revisão aponta os suspeitos |
 | L0e docs e skill de formulários | 0 | 🔄 | Haiku |
 | D3 escopo por papel + usuários + filiais | 0 | 🔄 | Opus, worktree — só API (D3.1–D3.3); telas D3.4 depois de L0 |
-| G1 devolver ao agente / reatribuir / filtro | 0 | 🔍 | integrada (d59c80d); revisão Sonnet em curso; suíte completa da API rodando |
+| G1 devolver ao agente / reatribuir / filtro | 0 | 🔍 | revisão REPROVOU (motivo sem leitor, sem guarda de concorrência); correção Opus em curso |
 | H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
 | A1 cadastro do contato | 1 | 🔄 | Sonnet, migration 0112 |
 | A4 etiquetas e origens | 1 | 🔄 | Sonnet, migration 0113 |
@@ -33,7 +33,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | C2 agenda (módulo) | 2 | ⬜ | |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | ⬜ | |
 | D4 notificações, perfil, esqueci a senha | 2 | ⬜ | |
-| D6 auditoria v2 | 2 | ⬜ | |
+| D6 auditoria v2 | 2 | 🔄 | Haiku |
 | D1 cockpit | 2 | ⬜ | |
 | D2 higienização da carteira | 2 | ⬜ | |
 | F2 preços, templates, consumo | 3 | ⬜ | |
@@ -42,14 +42,16 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | G2 objeções | 3 | ⬜ | |
 | G3 pós-venda, NPS, indicações, prova social | 3 | ⬜ | |
 | G4 roteamento e rodízio | 3 | ⬜ | |
-| G5 cadência descarte/reativação | 3 | ⬜ | |
+| G5 cadência descarte/reativação | 3 | 🔄 | Sonnet; migration 0121 se indispensável |
 | H1 importador | 3 | ⬜ | |
 | H4 e2e no CI | 3 | ⬜ | |
 | E2 relatórios 1ª leva | 3 | ⬜ | |
 | E3 relatórios 2ª leva | 3 | ⬜ | |
 | L1 retrofit das telas restantes | 4 | ⬜ | |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
-| R0 revisão adversarial da biblioteca L0 | 0 | 🔄 | Sonnet, só leitura |
+| R0b correções da biblioteca L0 | 0 | 🔄 | Sonnet |
+| G1b correções da G1 | 0 | 🔄 | Opus (etapa de pipeline + concorrência) |
+| R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 ## 1. Política de modelos
 
