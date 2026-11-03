@@ -65,6 +65,42 @@ export async function gravarDocumento(tx: Sql, id: string, d: Pick<ContatoCadast
   }
 }
 
+/**
+ * Documento do GANHO do funil: acrescenta o CNPJ SEM apagar um CPF manual do contato.
+ * Linha manual de tipo/número diferente (ex.: CPF) é mantida e o CNPJ entra como NOVA linha manual
+ * (seq+1, fiscal) demovendo as demais; mesmo CNPJ → nada; outro CNPJ manual → substitui (correção).
+ * O PUT do cadastro continua em `gravarDocumento`, com a semântica de uma linha manual só.
+ */
+export async function acrescentarCnpj(tx: Sql, id: string, cnpj: string): Promise<void> {
+  const doc = apenasDigitos(cnpj)
+  if (doc.length !== 14) return
+  const linhas = await tx<{ seq: number; tipo: string; numero: string; fiscal: boolean; fonte: string }[]>`
+    SELECT seq, tipo, numero, fiscal, fonte FROM contato_documento
+     WHERE tenant_id = tenant_atual() AND contato_id = ${id} ORDER BY seq`
+  const manuais = linhas.filter((l) => l.fonte === 'manual')
+  if (manuais.some((l) => l.tipo === 'cnpj' && l.numero === doc)) return
+  const cnpjManual = manuais.find((l) => l.tipo === 'cnpj')
+  if (cnpjManual) { // outro CNPJ manual: substitui (correção), sem tocar no CPF
+    await tx`UPDATE contato_documento SET fiscal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fiscal AND seq <> ${cnpjManual.seq}`
+    await tx`UPDATE contato_documento SET numero = ${doc}, fiscal = true, visto_em = now()
+              WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${cnpjManual.seq}`
+    return
+  }
+  await gravarDocumentoNovaLinha(tx, id, doc, linhas)
+}
+
+async function gravarDocumentoNovaLinha(
+  tx: Sql, id: string, doc: string, linhas: { seq: number; tipo: string; numero: string; fiscal: boolean; fonte: string }[],
+): Promise<void> {
+  const fiscalAtual = linhas.find((l) => l.fiscal)
+  if (fiscalAtual && fiscalAtual.tipo === 'cnpj' && fiscalAtual.numero === doc) return // o ERP já mostra este CNPJ
+  const seq = Math.max(0, ...linhas.map((l) => l.seq)) + 1
+  await tx`UPDATE contato_documento SET fiscal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fiscal`
+  await tx`
+    INSERT INTO contato_documento (tenant_id, contato_id, seq, tipo, numero, fiscal, fonte)
+    VALUES (tenant_atual(), ${id}, ${seq}, 'cnpj', ${doc}, true, 'manual')`
+}
+
 export async function gravarEndereco(tx: Sql, id: string, d: Pick<ContatoCadastro, 'endereco'>): Promise<void> {
   const e = d.endereco
   const novo = {

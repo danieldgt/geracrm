@@ -137,6 +137,23 @@ export function mapearErrosGanho(corpo: unknown): { campos: ErrosGanho; pedido: 
 
 export interface PedidoDoContato { id: string; estado: string; totalCentavos: number; numeroExterno: string | null; criadoEm: string }
 
+/** Só pedido com número no ERP (ou sob conferência) pode ser vinculado ao ganho — igual à API. */
+const ESTADOS_PEDIDO_VINCULAVEIS: ReadonlySet<string> = new Set(['efetivado', 'aguardando_conferencia'])
+
+export function pedidosVinculaveis(pedidos: readonly PedidoDoContato[]): PedidoDoContato[] {
+  return pedidos.filter((p) => ESTADOS_PEDIDO_VINCULAVEIS.has(p.estado))
+}
+
+/**
+ * Mescla a ficha (chegou depois) SEM sobrescrever o que o usuário já digitou: só entram os campos
+ * que ele ainda não tocou.
+ */
+export function mesclarFicha(atual: ValoresGanho, ficha: ValoresGanho, tocados: ReadonlySet<keyof ValoresGanho>): ValoresGanho {
+  const r = { ...atual }
+  for (const k of Object.keys(ficha) as (keyof ValoresGanho)[]) if (!tocados.has(k)) r[k] = ficha[k]
+  return r
+}
+
 const ESTADO_PEDIDO: Record<string, string> = {
   rascunho: 'Rascunho', validando: 'Validando', enviando: 'Enviando', efetivado: 'Efetivado',
   falhou: 'Falhou', aguardando_conferencia: 'Aguardando conferência',
@@ -161,6 +178,30 @@ export function validarPerda(f: FormPerda): { motivoCodigo?: string } {
 export function payloadPerda(f: FormPerda, versao: number): { motivoCodigo: string; descricao?: string; versao: number } {
   const descricao = f.descricao.trim()
   return { motivoCodigo: f.motivoCodigo.trim(), ...(descricao ? { descricao } : {}), versao }
+}
+
+// ───────── Falha de ação (ganhar/perder) ─────────
+
+export interface TratamentoFalha {
+  /** Fecha o modal (o quadro já recarregou: o card mudou). */
+  fechar: boolean
+  /** Mensagem para toast quando o modal fecha — nunca se perde. */
+  toast: string | null
+  /** Mensagem a mostrar dentro do modal (aberto). */
+  mensagemModal: string | null
+  /** Erro do select de motivo (422 `perda.motivo_invalido`). */
+  erroMotivo: string | null
+}
+
+/**
+ * 409 (alguém moveu) fecha o modal e mostra a mensagem em toast; status 0 (rede) mantém o modal aberto
+ * com a mensagem para tentar de novo; 422 `perda.motivo_invalido` vai para o select; o resto fica no modal.
+ */
+export function tratarFalhaDeAcao(status: number, corpo: unknown, mensagem: string): TratamentoFalha {
+  if (status === 409) return { fechar: true, toast: mensagem, mensagemModal: null, erroMotivo: null }
+  const erro = corpo && typeof corpo === 'object' ? (corpo as { erro?: unknown }).erro : null
+  if (status === 422 && erro === 'perda.motivo_invalido') return { fechar: false, toast: null, mensagemModal: null, erroMotivo: mensagem }
+  return { fechar: false, toast: null, mensagemModal: mensagem, erroMotivo: null }
 }
 
 // ───────── Transferir ─────────
@@ -213,4 +254,19 @@ export const ITENS_MENU_CARD: readonly { acao: AcaoDoCard; rotulo: string }[] = 
 /** Cards já fechados (ganho/perdido) não oferecem Ganhar/Perder. */
 export function itensDoMenu(tipoEtapa: TipoEtapa): typeof ITENS_MENU_CARD {
   return tipoEtapa === 'aberto' ? ITENS_MENU_CARD : ITENS_MENU_CARD.filter((i) => i.acao !== 'ganhar' && i.acao !== 'perder')
+}
+
+/**
+ * Navegação por teclado do menu (padrão WAI-ARIA menu): ↓/↑ circulam, Home/End vão às pontas.
+ * Devolve o novo índice, ou `null` quando a tecla não é de navegação.
+ */
+export function proximoItemDoMenu(atual: number, total: number, tecla: string): number | null {
+  if (total <= 0) return null
+  switch (tecla) {
+    case 'ArrowDown': return atual < 0 ? 0 : (atual + 1) % total
+    case 'ArrowUp': return atual < 0 ? total - 1 : (atual - 1 + total) % total
+    case 'Home': return 0
+    case 'End': return total - 1
+    default: return null
+  }
 }

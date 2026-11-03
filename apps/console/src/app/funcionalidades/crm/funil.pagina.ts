@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, ElementRef, effect, inject, signal, viewChild, OnInit } from '@angular/core'
 import { Router, RouterLink } from '@angular/router'
 import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop'
 import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConfig } from './funil.servico.js'
@@ -10,7 +10,7 @@ import { FunilGanharModalComponente } from './funil-ganhar-modal.componente.js'
 import { FunilPerderModalComponente } from './funil-perder-modal.componente.js'
 import { FunilTransferirModalComponente } from './funil-transferir-modal.componente.js'
 import { FunilNovaOportunidadeModalComponente } from './funil-nova-oportunidade-modal.componente.js'
-import { decidirAcaoAoSoltar, itensDoMenu, type AcaoDoCard, type TipoEtapa } from './funil-acoes.regras.js'
+import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, type TipoEtapa } from './funil-acoes.regras.js'
 
 /**
  * Kanban do funil de relacionamento (Onda 2). Colunas paginadas + drag-drop
@@ -119,6 +119,7 @@ import { decidirAcaoAoSoltar, itensDoMenu, type AcaoDoCard, type TipoEtapa } fro
                 @for (card of col.cards; track card.id) {
                   <article class="card" cdkDrag [cdkDragData]="card">
                     <button type="button" class="card-menu" aria-label="Ações do card" aria-haspopup="menu"
+                            [attr.aria-expanded]="menu()?.card?.id === card.id"
                             (click)="abrirMenu($event, card, col.etapa.tipo)" (mousedown)="$event.stopPropagation()">
                       <ui-icone nome="more-horizontal" [tamanho]="14" />
                     </button>
@@ -148,9 +149,10 @@ import { decidirAcaoAoSoltar, itensDoMenu, type AcaoDoCard, type TipoEtapa } fro
     <!-- Menu do card (⋯): posicionado na tela, fora da coluna que rola. -->
     @if (menu(); as m) {
       <div class="menu-fora" (click)="fecharMenu()"></div>
-      <div class="menu-card" role="menu" [style.top.px]="m.y" [style.left.px]="m.x" (keydown.escape)="fecharMenu()">
+      <div #menuCard class="menu-card" role="menu" aria-label="Ações do card" [style.top.px]="m.y" [style.left.px]="m.x"
+           (keydown)="teclaNoMenu($event)">
         @for (i of itensDoMenu(m.tipo); track i.acao) {
-          <button type="button" role="menuitem" class="menu-item" (click)="escolher(i.acao)">{{ i.rotulo }}</button>
+          <button type="button" role="menuitem" class="menu-item" tabindex="-1" (click)="escolher(i.acao)">{{ i.rotulo }}</button>
         }
       </div>
     }
@@ -362,6 +364,8 @@ export class FunilPagina implements OnInit {
   readonly transferindo = signal<Card | null>(null)
   readonly tarefando = signal<Card | null>(null)
   readonly novaOportunidade = signal(false)
+  private readonly menuCard = viewChild<ElementRef<HTMLElement>>('menuCard')
+  private gatilhoDoMenu: HTMLElement | null = null
   readonly menu = signal<{ card: Card; tipo: TipoEtapa; x: number; y: number } | null>(null)
   protected readonly itensDoMenu = itensDoMenu
   readonly mostrarMetricas = signal(false)
@@ -369,6 +373,16 @@ export class FunilPagina implements OnInit {
   readonly novoNome = signal('')
   readonly novoTipo = signal<EtapaConfig['tipo']>('aberto')
   readonly novoMotivo = signal('')
+
+  constructor() {
+    // Menu recém-aberto: o foco vai ao primeiro item (teclado e leitor de tela entram no menu).
+    effect(() => { this.itensDoContainer()[0]?.focus() })
+  }
+
+  private itensDoContainer(): HTMLElement[] {
+    const el = this.menuCard()?.nativeElement
+    return el ? Array.from(el.querySelectorAll<HTMLElement>('[role="menuitem"]')) : []
+  }
 
   ngOnInit(): void { void this.servico.carregar() }
 
@@ -413,17 +427,32 @@ export class FunilPagina implements OnInit {
 
   abrirMenu(ev: MouseEvent, card: Card, tipo: TipoEtapa): void {
     ev.stopPropagation()
+    this.gatilhoDoMenu = ev.currentTarget as HTMLElement
     const alvo = (ev.currentTarget as HTMLElement).getBoundingClientRect()
     // 180px de largura mínima; encosta na borda direita do botão sem sair da tela.
     const x = Math.max(8, Math.min(alvo.right - 180, window.innerWidth - 188))
     this.menu.set({ card, tipo, x, y: alvo.bottom + 4 })
   }
 
-  fecharMenu(): void { this.menu.set(null) }
+  /** Fecha o menu e devolve o foco ao botão ⋯ que o abriu. */
+  fecharMenu(): void {
+    this.menu.set(null)
+    this.gatilhoDoMenu?.focus()
+  }
+
+  /** ↑↓ Home End navegam; Esc e Tab fecham (foco volta ao botão). */
+  teclaNoMenu(ev: KeyboardEvent): void {
+    if (ev.key === 'Escape' || ev.key === 'Tab') { ev.preventDefault(); this.fecharMenu(); return }
+    const itens = this.itensDoContainer()
+    const proximo = proximoItemDoMenu(itens.indexOf(document.activeElement as HTMLElement), itens.length, ev.key)
+    if (proximo === null) return
+    ev.preventDefault()
+    itens[proximo]?.focus()
+  }
 
   async escolher(acao: AcaoDoCard): Promise<void> {
     const m = this.menu()
-    this.menu.set(null)
+    this.menu.set(null) // o foco segue para o modal da ação (não volta ao botão)
     if (!m) return
     const card = m.card
     switch (acao) {
