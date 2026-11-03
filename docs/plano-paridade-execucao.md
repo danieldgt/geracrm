@@ -36,7 +36,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D6 auditoria v2 | 2 | ✅ | integrada; cursor com µs corrigido; pendente: login/logout (vai com D4), janela padrão da busca `q` |
 | D1 cockpit | 2 | ⬜ | |
 | D2 higienização da carteira | 2 | ⬜ | |
-| F2 preços, templates, consumo | 3 | 🔄 | Sonnet; migration 0124 |
+| F2 preços, templates, consumo | 3 | ⏸ | pronta (3bad3bb, migration 0124); aguarda D3 para integrar |
 | F1 campanhas v2 | 3 | ⬜ | |
 | F3 formulários públicos | 3 | ⬜ | |
 | G2 objeções | 3 | ⬜ | |
