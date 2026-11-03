@@ -31,30 +31,30 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
 | B1 panorama do funil | 2 | ✅ | integrada (0131) |
 | C2 agenda (módulo) | 2 | ✅ | integrada (0117); pendente: trocar escopo por papéis pelo `escopo.ts` e montar `app-agenda-contato` na ficha |
-| C3 reunião pelo CRM e pelo agente (chave) | 2 | ⬜ | |
-| D4 notificações, perfil, esqueci a senha | 2 | ⬜ | |
+| C3 reunião pelo CRM e pelo agente (chave) | 2 | 🔄 | Opus; migration 0137 |
+| D4 notificações, perfil, esqueci a senha | 2 | 🔄 | Sonnet; migration 0138; inclui login/logout na auditoria |
 | D6 auditoria v2 | 2 | ✅ | integrada; cursor com µs corrigido; pendente: login/logout (vai com D4), janela padrão da busca `q` |
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
 | D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
 | F1 campanhas v2 | 3 | 🔄 | F1a API+despachante (Opus, migration 0134) em curso; F1b wizard (Sonnet) depois |
-| F3 formulários públicos | 3 | 🔍 | revisão de segurança: aprovado com correções (upload fora da transação, IP real, contato existente intocado); correção Opus em curso — não divulgar link antes |
+| F3 formulários públicos | 3 | ✅ | integrada com as correções de segurança (upload fora da transação, IP real via `TRUST_PROXY_HOPS`, contato existente só com "Aplicar ao contato", assinatura de arquivo, clickjacking, hash do texto LGPD); 0127 editada no lugar; **dono: `TRUST_PROXY_HOPS=2` na API do Railway**; re-revisão curta pendente |
 | G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
-| G3 pós-venda, NPS, indicações, prova social | 3 | 🔄 | Opus; migration 0130 |
+| G3 pós-venda, NPS, indicações, prova social | 3 | 🔍 | integrada (0130); revisão Opus em curso |
 | G4 roteamento e rodízio | 3 | 🔄 | Opus; migration 0136 |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
-| H1 importador | 3 | 🔄 | Sonnet; migration 0133 |
+| H1 importador | 3 | 🔍 | integrada (0133); revisão Sonnet em curso |
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
-| E2 relatórios 1ª leva | 3 | 🔄 | Sonnet; migration 0135 se necessária |
-| E3 relatórios 2ª leva | 3 | ⬜ | |
-| L1 retrofit das telas restantes | 4 | 🔄 | L1a (Haiku): bloqueios, listas, sequências, metas, webhooks, mensagens enviadas, retenção, segmentos |
+| E2 relatórios 1ª leva | 3 | 🔍 | integrada (sem migration; consultas vivas com período ≤ 366 dias); revisão Sonnet em curso |
+| E3 relatórios 2ª leva | 3 | 🔄 | Sonnet |
+| L1 retrofit das telas restantes | 4 | 🔄 | L1a ✅ integrada (8 telas); L1b (Haiku) em curso: canais, canal-config, templates, automações, catálogo, conexões, mídia; depois L1c (nps, mapa, mercado, bi, performance, fidelidade, carteiras, leads) e L1d Sonnet (kanban de atendimento, fila do dia, CRM avançado); pendente: cursor em `/v1/listas`, `/v1/metas`, `/v1/segmentos` |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
 | D3.4 telas de usuários e filiais | 0 | ✅ | integrada (console 656); conferir códigos de erro com a API quando D3 entrar |
 | C2b agenda no escopo comum + na ficha | 2 | ✅ | integrada; contato fora do escopo → 422 e nome oculto na leitura |
 | X3 teste do worker de aquisição sem isolamento de tenant | — | ✅ | integrada |
-| D3.4b telas de usuário sem admin atribuído + nomear admin | 0 | 🔄 | Haiku |
+| D3.4b telas de usuário sem admin atribuído + nomear admin | 0 | ✅ | integrada; API passou a responder `acesso.admin_atribuido` no modo fundador; pendente: `GET /v1/plataforma/clientes/:id/usuarios` para trocar o campo de ID por select |
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
