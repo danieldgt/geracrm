@@ -75,3 +75,44 @@ export function formatarMascara(tipo: TipoMascara, bruto: string): string {
 export function digitosDaMascara(tipo: TipoMascara, bruto: string): string {
   return soDigitos(formatarMascara(tipo, bruto))
 }
+
+/**
+ * Onde fica o cursor depois de reformatar: conta os dígitos à esquerda do caret no
+ * texto antigo (o que o usuário acabou de digitar/apagar/colar) e posiciona o caret
+ * logo após esse mesmo número de dígitos no texto novo. Sem dígitos à esquerda → 0;
+ * mais dígitos do que o novo texto comporta (corte do limite) → fim do texto.
+ */
+export function posicaoDoCursor(textoAntigo: string, caretAntigo: number, textoNovo: string): number {
+  const alvo = soDigitos(textoAntigo.slice(0, Math.max(0, caretAntigo))).length
+  if (alvo === 0) return 0
+  let vistos = 0
+  for (let i = 0; i < textoNovo.length; i++) {
+    if (/\d/.test(textoNovo[i]!)) vistos += 1
+    if (vistos === alvo) return i + 1
+  }
+  return textoNovo.length
+}
+
+/** O mínimo de um `<input>` que a máscara precisa — mantém este arquivo livre de DOM. */
+export interface ElementoDeTexto {
+  value: string
+  selectionStart: number | null
+  setSelectionRange(inicio: number, fim: number): void
+}
+
+/**
+ * Escreve o valor formatado DIRETO no elemento (o binding `[value]` não reescreve quando o
+ * signal não muda — ex.: digitar "a" num CPF completo deixaria "123a" na tela) e preserva o
+ * cursor. `focado` evita mexer em seleção de elemento sem foco. Devolve o texto formatado.
+ */
+export function aplicarMascaraNoElemento(el: ElementoDeTexto, tipo: TipoMascara, focado: boolean): string {
+  const antigo = el.value
+  const caret = el.selectionStart ?? antigo.length
+  const novo = formatarMascara(tipo, antigo)
+  if (novo !== antigo) el.value = novo
+  if (focado) {
+    const pos = posicaoDoCursor(antigo, caret, novo)
+    el.setSelectionRange(pos, pos)
+  }
+  return novo
+}

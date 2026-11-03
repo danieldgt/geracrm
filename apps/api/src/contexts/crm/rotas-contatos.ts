@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import type { Sql } from 'postgres'
 import { classificarRfv, normalizarTelefone, normalizarDocumento, ehPerfilPreco, perfilDeCotacao } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
@@ -70,6 +71,65 @@ function lerCursor(cursor: string | undefined): [string, string] | null {
 const escreverCursor = (a: string | number, id: string) =>
   Buffer.from(`${a}:${id}`, 'utf8').toString('base64url')
 
+/**
+ * Telefone principal de uma edição. A linha do ERP não é reescrita: a antiga é
+ * demovida e uma linha 'manual' (nova ou reativada) vira a principal. Linha
+ * principal já manual é atualizada no lugar. Mesmo número e mesmo WhatsApp que o
+ * ERP já mostra → nada a fazer.
+ */
+async function gravarTelefonePrincipal(tx: Sql, id: string, tel: { e164: string; chaveBloqueio: string }, whatsapp: boolean | undefined): Promise<void> {
+  const linhas = await tx<{ seq: number; e164: string; chave_bloqueio: string; whatsapp: boolean | null; principal: boolean; fonte: string }[]>`
+    SELECT seq, e164, chave_bloqueio, whatsapp, principal, fonte FROM contato_telefone
+     WHERE tenant_id = tenant_atual() AND contato_id = ${id} ORDER BY seq`
+  const atual = linhas.find((l) => l.principal)
+  const whats = whatsapp ?? atual?.whatsapp ?? true
+  const proximo = Math.max(0, ...linhas.map((l) => l.seq)) + 1
+
+  if (atual && atual.fonte === 'manual') {
+    await tx`
+      UPDATE contato_telefone SET e164 = ${tel.e164}, chave_bloqueio = ${tel.chaveBloqueio}, whatsapp = ${whats}, visto_em = now()
+       WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${atual.seq}`
+    return
+  }
+  if (atual && atual.e164 === tel.e164 && (atual.whatsapp ?? true) === whats) return
+
+  if (atual) {
+    await tx`UPDATE contato_telefone SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${atual.seq}`
+  }
+  const reativar = linhas.find((l) => l.fonte === 'manual' && l.e164 === tel.e164)
+  if (reativar) {
+    await tx`UPDATE contato_telefone SET principal = true, whatsapp = ${whats}, visto_em = now()
+              WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${reativar.seq}`
+  } else {
+    await tx`
+      INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
+      VALUES (tenant_atual(), ${id}, ${proximo}, ${tel.e164}, ${tel.chaveBloqueio}, true, ${whats}, 'manual')`
+  }
+}
+
+/** Violação de unicidade do telefone principal (corrida entre dois cadastros do mesmo número). */
+const ehTelefonePrincipalDuplicado = (err: unknown) =>
+  typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505' &&
+  (err as { constraint_name?: string }).constraint_name === 'contato_telefone_principal_unico'
+
+const respostaTelefoneDuplicado = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
+  reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.',
+    campos: { telefone: 'Este telefone já é o principal de outro contato.' } })
+
+/**
+ * Origem informada tem de existir, ser do tenant (RLS) e estar ativa — ou ser a
+ * que o contato já tem gravada (mesmo desativada, para não travar a edição).
+ */
+async function origemValida(tx: Sql, origemId: string, atualDoContato: string | null): Promise<boolean> {
+  if (origemId === atualDoContato) return true
+  const [o] = await tx`SELECT 1 FROM origem WHERE tenant_id = tenant_atual() AND id = ${origemId} AND ativa`
+  return !!o
+}
+
+const respostaOrigemInvalida = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
+  reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.',
+    campos: { origemId: 'Origem inexistente ou inativa.' } })
+
 export async function rotasContatos(app: FastifyInstance): Promise<void> {
   /**
    * Cadastra um contato. Corpo completo (`contato-cadastro.ts`) com só nome +
@@ -87,12 +147,15 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       const d = v.dados
       const tel = normalizarTelefone(d.telefone)!
 
-      const r = await req.comTenant(async (tx) => {
+      let r: { id: string; novo: boolean } | { erro: 'origem' }
+      try {
+        r = await req.comTenant(async (tx) => {
         const [existe] = await tx<{ contato_id: string }[]>`
           SELECT contato_id FROM contato_telefone
            WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal
            LIMIT 1`
         if (existe) return { id: existe.contato_id, novo: false }
+        if (d.origemId && !(await origemValida(tx, d.origemId, null))) return { erro: 'origem' as const }
 
         const id = randomUUID()
         await tx`
@@ -103,11 +166,15 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
                   ${d.valorEstimadoCentavos ?? null}, ${d.observacoes ?? null}, 'manual', true)`
         await tx`
           INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
-          VALUES (tenant_atual(), ${id}, 1, ${tel.e164}, ${tel.chaveBloqueio}, true, ${d.whatsapp ?? true}, 'manual')
-          ON CONFLICT DO NOTHING`
+          VALUES (tenant_atual(), ${id}, 1, ${tel.e164}, ${tel.chaveBloqueio}, true, ${d.whatsapp ?? true}, 'manual')`
         await gravarDocumentoEEndereco(tx, id, d)
         return { id, novo: true }
-      })
+        })
+      } catch (err) {
+        if (ehTelefonePrincipalDuplicado(err)) return respostaTelefoneDuplicado(reply)
+        throw err
+      }
+      if ('erro' in r) return respostaOrigemInvalida(reply)
 
       return reply.code(r.novo ? 201 : 200).send({ id: r.id, nome: d.nome, novo: r.novo })
     },
@@ -115,9 +182,12 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /**
    * Edição COMPLETA do cadastro (formulário-página). Substitui os campos
-   * editáveis: opcional omitido/vazio vira NULL. Telefone principal trocado
+   * editáveis: opcional omitido/vazio vira NULL — EXCETO `origemId`, em que omitido
+   * preserva e só `null`/'' limpa (o formulário sempre envia tudo; um cliente de
+   * API que não conhece a origem não a apaga por esquecimento). Telefone principal trocado
    * vira o novo principal; se já é principal de OUTRO contato → 422 no campo.
-   * Documento/endereço só mexem nas linhas de fonte 'manual' (não pisa no ERP).
+   * Telefone/documento/endereço do ERP não são reescritos: a edição manual vira
+   * a principal e a do ERP é só demovida (ver `gravarDocumento`).
    */
   app.put<{ Params: { id: string }; Body: unknown }>(
     '/v1/contatos/:id', { preHandler: exigirTenant },
@@ -129,8 +199,10 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       const d = v.dados
       const tel = normalizarTelefone(d.telefone)!
 
-      const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
+      let r: { ok: true } | { erro: 'contato.nao_encontrado' | 'telefone_duplicado' | 'origem' }
+      try {
+        r = await req.comTenant(async (tx) => {
+        const [c] = await tx<{ origem_id: string | null }[]>`SELECT origem_id FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
         if (!c) return { erro: 'contato.nao_encontrado' as const }
 
         const [outro] = await tx`
@@ -138,36 +210,29 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
            WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal AND contato_id <> ${id} LIMIT 1`
         if (outro) return { erro: 'telefone_duplicado' as const }
 
+        // Ausente ≠ null: omitir `origemId` preserva; `null`/'' limpa.
+        const origemFinal = d.origemId === undefined ? c.origem_id : d.origemId
+        if (origemFinal && !(await origemValida(tx, origemFinal, c.origem_id))) return { erro: 'origem' as const }
+
         await tx`
           UPDATE contato SET
             nome = ${d.nome}, razao_social = ${d.razaoSocial ?? null}, nome_fantasia = ${d.nomeFantasia ?? null},
             email = ${d.email ?? null}, modalidade = ${d.modalidade ?? null}, prioridade = ${d.prioridade ?? null},
-            temperatura = ${d.temperatura ?? null}, origem_id = ${d.origemId ?? null},
+            temperatura = ${d.temperatura ?? null}, origem_id = ${origemFinal},
             valor_estimado_centavos = ${d.valorEstimadoCentavos ?? null}, observacoes = ${d.observacoes ?? null}
            WHERE tenant_id = tenant_atual() AND id = ${id}`
 
-        const [atual] = await tx<{ seq: number; chave_bloqueio: string; whatsapp: boolean | null }[]>`
-          SELECT seq, chave_bloqueio, whatsapp FROM contato_telefone
-           WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND principal LIMIT 1`
-        const whats = d.whatsapp ?? atual?.whatsapp ?? true
-        if (!atual) {
-          const [{ prox } = { prox: 1 }] = await tx<{ prox: number }[]>`
-            SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${id}`
-          await tx`
-            INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
-            VALUES (tenant_atual(), ${id}, ${prox}, ${tel.e164}, ${tel.chaveBloqueio}, true, ${whats}, 'manual')`
-        } else {
-          await tx`
-            UPDATE contato_telefone SET e164 = ${tel.e164}, chave_bloqueio = ${tel.chaveBloqueio}, whatsapp = ${whats}
-             WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${atual.seq}`
-        }
+        await gravarTelefonePrincipal(tx, id, tel, d.whatsapp)
         await gravarDocumentoEEndereco(tx, id, d)
         return { ok: true as const }
-      })
+        })
+      } catch (err) {
+        if (ehTelefonePrincipalDuplicado(err)) return respostaTelefoneDuplicado(reply)
+        throw err
+      }
       if ('erro' in r) {
-        if (r.erro === 'telefone_duplicado') {
-          return reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.', campos: { telefone: 'Telefone já cadastrado em outro contato' } })
-        }
+        if (r.erro === 'telefone_duplicado') return respostaTelefoneDuplicado(reply)
+        if (r.erro === 'origem') return respostaOrigemInvalida(reply)
         return reply.code(404).send({ erro: 'contato.nao_encontrado', mensagem: 'Contato não encontrado.' })
       }
       return reply.send({ ok: true, id })

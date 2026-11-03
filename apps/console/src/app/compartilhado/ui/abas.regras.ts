@@ -24,3 +24,18 @@ export function proximaAba(abas: readonly Aba[], atualId: string, tecla: string)
   if (tecla === 'End') return abas[abas.length - 1]!.id
   return null
 }
+
+/** Id da aba que tem o foco, lido do elemento focado (ou de um filho dele); null fora das abas. */
+export function abaFocada(alvo: { closest(seletor: string): { getAttribute(nome: string): string | null } | null } | null): string | null {
+  return alvo?.closest('[data-aba]')?.getAttribute('data-aba') ?? null
+}
+
+/** Seletor de atributo para a aba, com o id escapado (id vem de dado: aspas e barras não quebram a busca). */
+export function seletorDaAba(id: string): string {
+  const css = (globalThis as { CSS?: { escape?: (s: string) => string } }).CSS
+  const escapado = css?.escape ? css.escape(id) : id.replace(/["\\]/g, '\\$&')
+  return `[data-aba="${escapado}"]`
+}
+
+/** Id do elemento da aba quando a tela usa painel (`aria-labelledby` do tabpanel aponta para ele). */
+export const idDaAba = (idPainel: string, abaId: string): string => `${idPainel}-aba-${abaId}`

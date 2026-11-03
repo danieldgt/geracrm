@@ -87,17 +87,124 @@ com estilo próprio.
 
 ## O padrão CANÔNICO de CRUD (todo CRUD novo copia este)
 
-1. **Cabeçalho** (título + subtítulo + ação primária à direita).
-2. **Barra de ações** opcional (busca com debounce, filtros, importar) — some no vazio.
-3. **Lista/tabela** com `track` no `@for`, **cursor** ("Carregar mais"), coluna de dados em
-   `.txt-dados`. Nada de `OFFSET` nem lista ilimitada (ADR).
-4. **Criar/editar** num painel (inline abaixo do cabeçalho para forms curtos; lateral/modal para
-   longos) — **preserva o texto digitado** ao alternar modo.
+Os componentes que implementam cada parte estão na §5B de `docs/biblioteca-componentes.md`.
+
+1. **Cabeçalho**: `<ui-cabecalho-tela titulo="…" subtitulo="…">` com a ação primária no slot padrão e a
+   trilha (`ui-breadcrumb`) no slot `[trilha]`, quando a tela é uma subpágina.
+2. **Filtros** (quando há muitos registros): `ui-filtros`, com os controles projetados. Filtro que muda zera o cursor.
+3. **Lista**: `ui-tabela` (com `track` no `@for` dos templates, `uiCelula` por coluna) + `ui-paginacao`
+   ("Carregar mais", por cursor). Dado numérico ou identificador em `mono`. Nada de `OFFSET` nem lista ilimitada (ADR).
+4. **Criar/editar**: padrão **F** (formulário-página) quando é longo ou tem seções; padrão **M** (modal) quando
+   é curto. Preserva o texto digitado ao alternar modo.
 5. **Os cinco estados**, sempre (abaixo).
 6. **Falha de negócio é texto nomeado com ação corretiva**, nunca "erro genérico".
 
-Exemplares já no padrão: `crm/bloqueios.pagina.ts`, `integracao/webhooks.pagina.ts`,
-`plataforma/auditoria.pagina.ts`. Copie a estrutura deles.
+Exemplares de referência (`crm/bloqueios.pagina.ts`, `integracao/webhooks.pagina.ts`,
+`plataforma/auditoria.pagina.ts`) ainda usam o formato anterior. Copie a estrutura dos componentes acima,
+não a deles; a migração das telas é a onda 1+ de `docs/plano-paridade-am.md` §4.5.
+
+## Formato de formulário e padrões de tela
+
+Toda tela do console cai em **um** dos seis padrões. Escolha o padrão antes de desenhar; telas do mesmo
+padrão têm a mesma anatomia. Origem: `docs/plano-paridade-am.md` §4 (disposição do AM Consórcio, com os
+tokens e a pele do GeraCRM). Regras de campo, máscara, select e validação: skill `geracrm-formularios`.
+
+| Padrão | Quando usar | Componentes |
+|---|---|---|
+| **L · Lista** | Ver e filtrar muitos registros | `ui-cabecalho-tela`, `ui-filtros`, `ui-acoes-lote`, `ui-tabela`, `ui-paginacao`, `ui-botao-csv` |
+| **F · Formulário-página** | Criar ou editar com seções (contato, campanha em passos) | `ui-breadcrumb`, `ui-form-pagina`, `ui-secao-form`, `ui-grade-form`, `ui-campo`, `ui-select`, `ui-select-paginado` |
+| **M · CRUD em modal** | Cadastro curto de configuração (grupo, meta, carteira, template) | `ui-cabecalho-tela`, `ui-tabela`, `ui-modal`, `ui-grade-form`, `ui-campo` |
+| **A · Modal de ação** | Uma ação sobre um registro com 1 a 3 dados (perder com motivo, transferir, agendar) | `ui-modal`, `ui-campo`, `ui-select`, `ui-select-paginado` |
+| **D · Detalhe** | Ver um registro com ações, histórico e dados laterais | `ui-breadcrumb`, `ui-cabecalho-tela`, `ui-chips-etiqueta`, `ui-abas`, `ui-lista-definicao`, `ui-stat-card` |
+| **C · Configurações com abas** | Ajustes agrupados por assunto | `ui-cabecalho-tela`, `ui-abas`, `ui-form-pagina`, `ui-grade-form`, `ui-campo`, `ui-select` |
+
+Anatomia de cada padrão (de cima para baixo):
+
+```
+L · Lista
+┌ cabeçalho ........................ [ Ação primária ]┐
+│ ui-filtros: [ busca ] [controles] [Filtrar][Limpar]  │
+│ ui-acoes-lote: "3 selecionados" [ações] (só com seleção)
+│ ui-tabela: cabeçalho · linhas de 40 px · ações à dir.│
+│ ui-paginacao: "Mostrando 50 · [Carregar mais]"       │
+└──────────────────────────────────────────────────────┘
+
+F · Formulário-página
+Início › Contatos › Novo contato          ← ui-breadcrumb
+┌ Novo contato / subtítulo ──────────────────────────┐
+│ DADOS PRINCIPAIS        (ui-secao-form)            │
+│ [ Nome*      ] [ Telefone*  ]   ← ui-grade-form 2 col
+│ [ Observações (largo)                    ]         │
+│ ENDEREÇO                                           │
+│ ...                                                │
+│────────────────────────────────────────────────────│
+│                  [Cancelar] [Salvar] [Salvar e criar outro]
+└────────────────────────────────────────────────────┘
+
+M · CRUD em modal
+Lista (L) ............................. [+ Novo grupo]
+   └─ ui-modal (largura m)
+      ┌ Novo grupo ×─────────────┐
+      │ [ Nome*      ] [ Ativo ] │  ← grade 2 col
+      │──────────────────────────│
+      │        [Cancelar] [Salvar]│
+      └──────────────────────────┘
+
+A · Modal de ação
+┌ Perder oportunidade ×─────────────────┐
+│ Lead: Ana Souza                    │
+│ [ Motivo*                 ▾ ]          │
+│ [ Observação                         ] │
+│───────────────────────────────────────│
+│              [Cancelar] [Perder]      │  ← cor de perigo
+└───────────────────────────────────────┘
+
+D · Detalhe 2+1
+Início › Contatos › Ana Souza
+┌ Ana Souza  [chips] [Editar][Pedido][Tarefa] ┐  ┌ Informações ┐
+│ [ Feed | Dados | Pedidos | Tarefas ]        │  │ rótulo/valor │
+│ conteúdo da aba                             │  │ ...          │
+└─────────────────────────────────────────────┘  └──────────────┘
+
+C · Configurações com abas
+Configurações
+[ Geral | Atendimento | Privacidade ]          ← ui-abas
+┌ Cabeçalho do cartão (título + descrição) ────────┐
+│ campos em grade de 3 colunas (ui-grade-form)     │
+│                                    [Salvar]      │
+└──────────────────────────────────────────────────┘
+```
+
+**Regras que valem para os seis padrões:**
+
+- **Rótulo visível acima do controle, sempre.** `ui-campo`/`ui-select` com `rotulo`. Placeholder só mostra
+  o formato ("(00) 00000-0000"); nunca substitui o rótulo.
+- **Asterisco no obrigatório**: `[obrigatorio]="true"`. Atributo sem valor não liga (ver §5B.1 da biblioteca).
+- **Grade de 2 colunas** com `ui-grade-form`; campo que pede a linha toda (nome longo, observação) recebe
+  `[largo]="true"`. Abaixo de 640 px do contêiner, a grade vira 1 coluna sozinha.
+- **Seções** com `ui-secao-form` (título em caixa normal; o CSS põe em maiúsculas), separadas por espaço,
+  não por linha.
+- **Rodapé à direita**, em ordem fixa: `Voltar` ou `Cancelar` (secundário) → **um** primário → `Salvar e criar
+  outro` (secundário, só em cadastro em série). O botão mantém o nome do começo ao fim.
+- **Erro 422 vai para o campo.** A API diz qual campo falhou; o formulário aplica a mensagem no `erro` do
+  campo e o foco vai para o primeiro campo com erro. Erro sem campo certo: texto inline no corpo, nomeando a
+  ação corretiva.
+- **Toast só no sucesso.** Erro de salvamento ou de carga fica na tela (inline ou no estado de erro), nunca só
+  num toast que some.
+- **Modal**: `ui-modal` vira tela inteira abaixo de 720 px, com o rodapé fixo. Modal com dados digitados não
+  fecha sem perguntar (ver §5B.9).
+- **Listas por cursor**: `ui-paginacao` com "Carregar mais". Sem página numerada, sem "de N páginas". `total`
+  só quando a API devolve um total barato.
+- **Celular**: o formulário-página mantém o cartão com margem menor; o rodapé ocupa a largura toda nos botões.
+
+**Qual padrão usar (decisão rápida):**
+
+- Muitos campos ou seções, ou fluxo em passos → **F** (página, com breadcrumb).
+- Poucos campos, de configuração, sem contexto de outra tela → **M** (modal).
+- Ação sobre um registro que pede 1 a 3 dados → **A** (modal de ação, nomeia o registro).
+- Quer ver o registro inteiro e agir nele → **D**.
+- Ajustes agrupados por assunto → **C**.
+- Muitos registros para achar e agir em lote → **L**.
 
 ## Os cinco estados (obrigatório — `especificar-telas`)
 

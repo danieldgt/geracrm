@@ -69,13 +69,13 @@ export class FunilNovaOportunidadeModalComponente {
     })
   }
 
-  /** Busca de contato (mínimo de 2 letras; a API limita o resultado — nunca lista ilimitada). */
-  protected readonly buscarContatos: CarregarOpcoes = async (_pagina, termo) => {
-    if (termo.trim().length < 2) return { itens: [], temMais: false }
+  /** Busca de contato (mínimo de 2 letras; a API devolve os 20 melhores, uma página só). */
+  protected readonly buscarContatos: CarregarOpcoes = async (_cursor, termo) => {
+    if (termo.trim().length < 2) return { itens: [], proximoCursor: null }
     const r = await firstValueFrom(this.http.get<{ itens: { id: string; nome: string; telefone: string | null }[] }>(
       `/v1/contatos/busca${queryDeLista({ q: termo.trim() })}`))
     const itens: OpcaoPaginada[] = r.itens.map((c) => ({ valor: c.id, rotulo: c.nome, ...(c.telefone ? { dica: c.telefone } : {}) }))
-    return { itens, temMais: false }
+    return { itens, proximoCursor: null }
   }
 
   protected async salvar(ev: Event): Promise<void> {

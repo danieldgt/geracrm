@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import type { Sql } from 'postgres'
-import { apenasDigitos, dadosMinimosDoGanho, type CampoGanho, type DadosDoGanho } from '@geracrm/shared'
+import { dadosMinimosDoGanho, type CampoGanho, type DadosDoGanho } from '@geracrm/shared'
 import { exigirPapel } from '../plataforma/papel.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { garantirEtapasFunil } from './funil-modelos.js'
@@ -359,13 +359,12 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
           if (d) {
             await tx`UPDATE contato SET razao_social = ${efetivos.razaoSocial?.trim() ?? null}, nome_fantasia = ${efetivos.nomeFantasia?.trim() ?? null}
                       WHERE tenant_id = tenant_atual() AND id = ${atual.contatoId}`
-            const cnpj = apenasDigitos(efetivos.cnpj ?? '')
-            if (cnpj !== apenasDigitos(atual.dados.cnpj ?? '')) await gravarDocumento(tx, atual.contatoId, cnpj, false)
+            await gravarDocumento(tx, atual.contatoId, { documento: efetivos.cnpj })
             if (e) {
-              await gravarEndereco(tx, atual.contatoId, {
+              await gravarEndereco(tx, atual.contatoId, { endereco: {
                 cep: efetivos.cep, logradouro: efetivos.logradouro, numero: efetivos.numero, complemento: texto(e.complemento) || null,
                 bairro: efetivos.bairro, cidade: efetivos.cidade, uf: efetivos.uf,
-              })
+              } })
             }
           }
           if (b.pedidoId) {

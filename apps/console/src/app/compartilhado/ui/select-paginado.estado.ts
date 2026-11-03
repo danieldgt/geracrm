@@ -1,8 +1,10 @@
 import { signal } from '@angular/core'
 
 export interface OpcaoPaginada { valor: string; rotulo: string; dica?: string }
-export interface PaginaOpcoes { itens: OpcaoPaginada[]; temMais: boolean }
-export type CarregarOpcoes = (pagina: number, termo: string) => Promise<PaginaOpcoes>
+/** Página por CURSOR (nunca offset): `proximoCursor` nulo = acabou. */
+export interface PaginaOpcoes { itens: OpcaoPaginada[]; proximoCursor: string | null }
+/** `cursor` nulo pede a primeira página. */
+export type CarregarOpcoes = (cursor: string | null, termo: string) => Promise<PaginaOpcoes>
 
 /**
  * Estado da busca paginada do `ui-select-paginado` — sem DOM, testável.
@@ -16,7 +18,7 @@ export class EstadoBuscaPaginada {
   readonly falhou = signal(false)
 
   private termo = ''
-  private pagina = 0
+  private cursor: string | null = null
   private geracao = 0
   private timer: ReturnType<typeof setTimeout> | null = null
 
@@ -26,11 +28,11 @@ export class EstadoBuscaPaginada {
   async iniciar(termo = ''): Promise<void> {
     this.cancelarTimer()
     this.termo = termo
-    this.pagina = 0
+    this.cursor = null
     this.geracao += 1
     this.itens.set([])
     this.temMais.set(false)
-    await this.buscarPagina(1, true)
+    await this.buscarPagina(true)
   }
 
   /** Digitação: espera `debounceMs` sem novas teclas antes de ir ao servidor. */
@@ -39,10 +41,21 @@ export class EstadoBuscaPaginada {
     this.timer = setTimeout(() => { this.timer = null; void this.iniciar(termo) }, this.debounceMs)
   }
 
-  /** Rolagem até o fim: próxima página, se houver e se não estiver carregando. */
+  /**
+   * Rolagem até o fim: próxima página, se houver, se não estiver carregando e se a última
+   * não falhou (repetir é decisão do usuário, em `tentarNovamente`). Falha numa página seguinte NÃO zera `temMais` — o cursor continua válido.
+   */
   async proximaPagina(): Promise<void> {
-    if (!this.temMais() || this.carregando()) return
-    await this.buscarPagina(this.pagina + 1, false)
+    if (!this.temMais() || this.carregando() || this.falhou()) return
+    await this.buscarPagina(false)
+  }
+
+  /** "Tentar novamente": refaz a página que falhou (a seguinte, ou a primeira). */
+  async tentarNovamente(): Promise<void> {
+    if (this.carregando()) return
+    this.falhou.set(false)
+    if (this.temMais()) await this.buscarPagina(false)
+    else await this.iniciar(this.termo)
   }
 
   destruir(): void { this.cancelarTimer(); this.geracao += 1 }
@@ -51,22 +64,22 @@ export class EstadoBuscaPaginada {
     if (this.timer) { clearTimeout(this.timer); this.timer = null }
   }
 
-  private async buscarPagina(pagina: number, substituir: boolean): Promise<void> {
+  private async buscarPagina(substituir: boolean): Promise<void> {
     const fn = this.carregar()
     if (!fn) return
     const minha = ++this.geracao
     this.carregando.set(true)
     this.falhou.set(false)
     try {
-      const r = await fn(pagina, this.termo)
+      const r = await fn(this.cursor, this.termo)
       if (minha !== this.geracao) return
-      this.pagina = pagina
+      this.cursor = r.proximoCursor
       this.itens.update((atual) => (substituir ? r.itens : [...atual, ...r.itens]))
-      this.temMais.set(r.temMais)
+      this.temMais.set(r.proximoCursor !== null)
     } catch {
       if (minha !== this.geracao) return
       this.falhou.set(true)
-      this.temMais.set(false)
+      if (substituir) this.temMais.set(false)
     } finally {
       if (minha === this.geracao) this.carregando.set(false)
     }

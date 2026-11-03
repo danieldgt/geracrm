@@ -116,8 +116,27 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
           if (!templateDeRetornoCompativel(tpl.corpo?.body?.texto ?? '')) return { tipo: 'template_incompativel' as const }
         }
 
-        const antes = { ...lerConfigAtivas(cfg.ativas), feriados: normalizarFeriados(cfg.feriados) }
-        const ativas = { limiteDia: corpo.limiteDia, limiteSemana: corpo.limiteSemana, templateRetorno: corpo.templateRetorno }
+        const atual = lerConfigAtivas(cfg.ativas)
+        // Reativação: oficial exige template APROVADO e compatível (mesma régua do retorno);
+        // ligada no não-oficial só vale com texto — sem ele nada sai, então a tela não deixa ligar vazia.
+        if (corpo.reativacao?.ativa) {
+          if (cfg.tipo === 'whatsapp_oficial') {
+            if (!corpo.reativacao.templateId) return { tipo: 'reativacao_sem_conteudo' as const }
+            const [tpl] = await tx<{ corpo: { body?: { texto?: string } } }[]>`
+              SELECT tv.corpo FROM template_versao tv
+               WHERE tv.tenant_id = tenant_atual() AND tv.template_id = ${corpo.reativacao.templateId} AND tv.status_meta = 'APPROVED'`
+            if (!tpl) return { tipo: 'reativacao_template_indisponivel' as const }
+            if (!templateDeRetornoCompativel(tpl.corpo?.body?.texto ?? '')) return { tipo: 'reativacao_template_incompativel' as const }
+          } else if (!corpo.reativacao.texto) {
+            return { tipo: 'reativacao_sem_conteudo' as const }
+          }
+        }
+        const antes = { ...atual, feriados: normalizarFeriados(cfg.feriados) }
+        const ativas = {
+          limiteDia: corpo.limiteDia, limiteSemana: corpo.limiteSemana, templateRetorno: corpo.templateRetorno,
+          descarteAposHoras: corpo.descarteAposHoras ?? atual.descarteAposHoras,
+          reativacao: corpo.reativacao ?? atual.reativacao,
+        }
         const feriados = normalizarFeriados(corpo.feriados)
         await tx`
           UPDATE agente_config SET ativas = ${JSON.stringify(ativas)}::text::jsonb
@@ -144,6 +163,21 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
         return reply.code(422).send({
           erro: 'ativas.template_incompativel', campos: ['templateRetorno'],
           mensagem: 'O template de retorno só pode ter a variável {{1}} (primeiro nome do cliente).',
+        })
+      }
+      if (r.tipo === 'reativacao_sem_conteudo') {
+        return reply.code(422).send({
+          erro: 'ativas.reativacao_sem_conteudo', campos: ['reativacao'],
+          mensagem: 'Para ligar a reativação, escolha um template aprovado (oficial) ou escreva o texto (não-oficial).',
+        })
+      }
+      if (r.tipo === 'reativacao_template_indisponivel') {
+        return reply.code(422).send({ erro: 'ativas.template_indisponivel', mensagem: 'Escolha um template aprovado pela Meta para a reativação.', campos: ['reativacao'] })
+      }
+      if (r.tipo === 'reativacao_template_incompativel') {
+        return reply.code(422).send({
+          erro: 'ativas.template_incompativel', campos: ['reativacao'],
+          mensagem: 'O template de reativação só pode ter a variável {{1}} (primeiro nome do cliente).',
         })
       }
       return { ok: true }

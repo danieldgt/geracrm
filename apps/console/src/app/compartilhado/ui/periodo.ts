@@ -49,3 +49,8 @@ export function hojeIso(agora: Date = new Date()): string {
   const z = (n: number): string => String(n).padStart(2, '0')
   return `${agora.getFullYear()}-${z(agora.getMonth() + 1)}-${z(agora.getDate())}`
 }
+
+/** Período invertido: início depois do fim (ISO yyyy-mm-dd compara certo como texto). Vazio nunca é inválido. */
+export function periodoInvertido(inicio: string, fim: string): boolean {
+  return inicio !== '' && fim !== '' && inicio > fim
+}

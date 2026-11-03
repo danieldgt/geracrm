@@ -9,7 +9,7 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core'
       <div class="txt">
         <ng-content select="[trilha]" />
         <h1 class="txt-titulo">{{ titulo() }}</h1>
-        @if (subtitulo()) { <p>{{ subtitulo() }}</p> }
+        @if (subtitulo()) { <p class="txt-corpo">{{ subtitulo() }}</p> }
       </div>
       <div class="acoes"><ng-content /></div>
     </header>
@@ -18,7 +18,7 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core'
     .cab { display: flex; align-items: flex-start; justify-content: space-between;
       gap: var(--espacamento-4); margin-bottom: var(--espacamento-5); }
     h1 { margin: 0; color: var(--texto); }
-    p { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
+    p { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); }
     .acoes { display: flex; gap: var(--espacamento-2); flex: none; }
   `,
 })

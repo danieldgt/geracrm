@@ -2,11 +2,16 @@ import { randomUUID } from 'node:crypto'
 import { comTenantServico, type Sql } from '../../../db/index.js'
 import { enviarTextoNaConversa } from '../envio-conversa.js'
 import { enviarTemplateNaConversa } from '../envio-template.js'
-import { decidirAtiva, lerContextoAtiva, type DecisaoAtiva } from './ativas.js'
+import { decidirAtiva, lerContextoAtiva, lerTemplate, type ContextoAtiva, type DecisaoAtiva } from './ativas.js'
 import { normalizarFeriados, recorteAgente, type RecorteAgente } from '@geracrm/shared'
 import { modoEfetivoDoCanal, lerFatosDoModo } from './pipeline/modo-efetivo.js'
 import { proximaAbertura, partesLocais, instanteLocal, ehFeriado, type Feriados, type HorarioAtendimento } from '../expediente.js'
 import { fusoSeguro } from '../../plataforma/fuso.js'
+import { statusAquecimento } from '../aquecimento.js'
+import {
+  executarDescarte, lerConfigAtivasDoCanal, motivoParaNaoReativar, prazoDoDescarte, proximoMarcoDaReativacao,
+  MOTIVO_DESCARTE, MOTIVO_REATIVACAO, DIA_MS,
+} from './descarte-reativacao.js'
 
 /**
  * O RETORNO DO AGENTE (follow-up, R5) — a cutucada programada quando o cliente
@@ -29,7 +34,9 @@ import { fusoSeguro } from '../../plataforma/fuso.js'
  * `recusado` com o motivo nomeado (`sem_template`, `template_indisponivel`).
  */
 
-export type MotivoRetorno = 'proposta_sem_resposta' | 'carrinho_abandonado' | 'combinado'
+export type MotivoRetorno = 'proposta_sem_resposta' | 'carrinho_abandonado' | 'combinado' | 'descarte_sem_resposta' | 'reativacao'
+/** Os motivos que são MENSAGEM da cadência de retorno (3 passos); os outros dois são o fim dela (G5). */
+type MotivoDeCadencia = Exclude<MotivoRetorno, 'descarte_sem_resposta' | 'reativacao'>
 export type EstadoRetorno = 'pendente' | 'enviado' | 'cancelado' | 'recusado'
 
 /** Quando cada passo sai, contado a partir do passo anterior: 1h → 24h → 72h. */
@@ -41,7 +48,7 @@ export const INTERVALO_RETORNOS_MS = 60_000
 const ATRASO_TRANSPORTE_MS = 15 * 60_000
 const LOTE = 20
 
-const TEXTOS: Record<Exclude<MotivoRetorno, 'combinado'>, readonly [string, string, string]> = {
+const TEXTOS: Record<Exclude<MotivoDeCadencia, 'combinado'>, readonly [string, string, string]> = {
   proposta_sem_resposta: [
     'Oi! Passando para saber se conseguiu ver o resumo do pedido que te mandei. Se quiser ajustar alguma coisa, é só me dizer.',
     'Oi, tudo bem? Seu pedido continua reservado por aqui. Posso confirmar do jeito que está, ou prefere mudar algo?',
@@ -58,6 +65,9 @@ const TEXTO_COMBINADO = 'Oi! Como combinamos, estou passando para retomar nossa 
 /** O texto fixo de um passo. `combinado` usa o texto gravado, se houver. */
 export function textoDoRetorno(motivo: MotivoRetorno, tentativa: number, texto: string | null): string {
   if (motivo === 'combinado') return texto?.trim() || TEXTO_COMBINADO
+  // Reativação: o texto é o CONFIGURADO (não-oficial); o motor nunca chega aqui sem ele.
+  if (motivo === 'reativacao') return texto?.trim() ?? ''
+  if (motivo === 'descarte_sem_resposta') return ''
   const passo = Math.min(Math.max(tentativa, 1), MAX_TENTATIVAS_RETORNO) - 1
   return TEXTOS[motivo][passo]!
 }
@@ -70,6 +80,8 @@ export interface AgendarRetorno {
   readonly executarEm: Date
   readonly tentativa?: number | undefined
   readonly texto?: string | null | undefined
+  /** Relógio de criação (injetável). A regra "o cliente escreveu depois de agendado" compara com ele. */
+  readonly criadoEm?: Date | undefined
 }
 
 /**
@@ -90,12 +102,12 @@ export async function agendarRetorno(
   }
   const id = randomUUID()
   const [linha] = await tx<{ id: string; reagendado: boolean }[]>`
-    INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, executar_em, estado, tentativa, texto)
+    INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, executar_em, estado, tentativa, texto, criado_em)
     VALUES (tenant_atual(), ${id}, ${p.conversaId}, ${canalId}, ${p.motivo}, ${p.executarEm}, 'pendente',
-            ${p.tentativa ?? 1}, ${p.texto ?? null})
+            ${p.tentativa ?? 1}, ${p.texto ?? null}, coalesce(${p.criadoEm ?? null}::timestamptz, now()))
     ON CONFLICT (tenant_id, conversa_id, motivo) WHERE estado = 'pendente'
     DO UPDATE SET executar_em = EXCLUDED.executar_em, tentativa = EXCLUDED.tentativa,
-                  texto = coalesce(EXCLUDED.texto, agente_retorno.texto), criado_em = now()
+                  texto = coalesce(EXCLUDED.texto, agente_retorno.texto), criado_em = EXCLUDED.criado_em
     RETURNING id, (xmax <> 0) AS reagendado`
   return { retornoId: linha!.id, reagendado: linha!.reagendado }
 }
@@ -130,7 +142,7 @@ export interface RelatorioRetornos {
   reagendados: number
   /** Política das ativas: suspensão, expediente ou feriado — mesma linha, na próxima abertura. */
   adiados: number
-  /** Política das ativas: limite do dia/semana — final (estado `cancelado`, detalhe com o limite). */
+  /** Política das ativas: limite do dia/semana — final (estado `cancelado`, detalhe com o limite) — e contato descartado por `sem_resposta` (G5). */
   descartados: number
 }
 
@@ -223,12 +235,15 @@ type Desfecho = 'enviado' | 'cancelado' | 'recusado' | 'reagendado' | 'adiado' |
 type Veredito =
   | { tipo: 'cancelar'; motivo: string }
   | { tipo: 'adiar'; ate: Date; motivo: string }
-  | { tipo: 'politica'; decisao: DecisaoAtiva }
+  | { tipo: 'politica'; decisao: DecisaoAtiva; /** Reativação no não-oficial: o texto configurado. */ texto?: string }
+  | { tipo: 'recusar'; motivo: string }
 
 /** Fora do recorte SÓ por horário/feriado: adia até a próxima abertura do recorte (decisão (q), plano-port §4). */
 interface AdiarRecorte { readonly adiarAte: Date; readonly motivo: string }
 
 async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): Promise<Desfecho> {
+  // O descarte é decisão de CRM, não mensagem: sem expediente, janela nem envio (G5).
+  if (v.motivo === MOTIVO_DESCARTE) return processarDescarte(v, agora)
   // 1. Decidir, sob o tenant: o motivo ainda vale? o agente pode falar sozinho?
   //    E a política das ATIVAS: suspensão, expediente, limites, janela/template.
   const veredito = await comTenantServico(v.tenant_id, async (tx): Promise<Veredito> => {
@@ -237,11 +252,16 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
     if (motivo !== 'envia') return { tipo: 'cancelar', motivo }
     const ctx = await lerContextoAtiva(tx, { conversaId: v.conversa_id, agora })
     if (!ctx) return { tipo: 'cancelar', motivo: 'conversa_inexistente' }
+    if (v.motivo === MOTIVO_REATIVACAO) return decidirReativacao(tx, v, ctx, agora)
     return { tipo: 'politica', decisao: decidirAtiva(ctx, agora) }
   })
   if (veredito.tipo === 'cancelar') {
     await comTenantServico(v.tenant_id, (tx) => encerrar(tx, v, 'cancelado', veredito.motivo, agora))
     return 'cancelado'
+  }
+  if (veredito.tipo === 'recusar') {
+    await comTenantServico(v.tenant_id, (tx) => encerrar(tx, v, 'recusado', veredito.motivo, agora))
+    return 'recusado'
   }
   if (veredito.tipo === 'adiar') {
     // ⚠️ Mesma linha, mesma tentativa: o recorte fechado por horário não é falha nem desistência.
@@ -274,17 +294,34 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
   const envio = d.acao === 'template'
     ? await (deps.enviarTemplate ?? enviarTemplateNaConversa)(v.tenant_id, v.conversa_id, d.templateId, agora, opcoes)
     : await (deps.enviar ?? enviarTextoNaConversa)(
-      v.tenant_id, v.conversa_id, textoDoRetorno(v.motivo, v.tentativa, v.texto), null, agora, opcoes)
+      v.tenant_id, v.conversa_id, textoDoRetorno(v.motivo, v.tentativa, veredito.texto ?? v.texto), null, agora, opcoes)
 
   // 3. Desfecho + próximo passo, no MESMO commit.
   return comTenantServico(v.tenant_id, async (tx) => {
     if (envio.ok) {
       await encerrar(tx, v, 'enviado', null, agora)
-      if (v.tentativa < MAX_TENTATIVAS_RETORNO) {
+      if (v.motivo === MOTIVO_REATIVACAO) {
+        // Próximo marco (90 d) é contado do DESCARTE, não deste envio.
+        const quando = await proximoMarcoDaReativacao(tx, { conversaId: v.conversa_id, canalId: v.canal_id, passo: v.tentativa + 1 })
+        if (quando) {
+          await agendarRetorno(tx, {
+            conversaId: v.conversa_id, canalId: v.canal_id, motivo: MOTIVO_REATIVACAO,
+            tentativa: v.tentativa + 1, executarEm: quando, criadoEm: agora,
+          })
+        }
+      } else if (v.tentativa < MAX_TENTATIVAS_RETORNO) {
         await agendarRetorno(tx, {
           conversaId: v.conversa_id, canalId: v.canal_id, motivo: v.motivo, texto: v.texto,
           tentativa: v.tentativa + 1, executarEm: new Date(agora.getTime() + CADENCIA_RETORNO_MS[v.tentativa]!),
         })
+      } else {
+        // Fim da sequência sem resposta: agenda o descarte (G5), se ligado e o contato ainda é "novo".
+        const quando = await prazoDoDescarte(tx, { conversaId: v.conversa_id, canalId: v.canal_id, agora })
+        if (quando) {
+          await agendarRetorno(tx, {
+            conversaId: v.conversa_id, canalId: v.canal_id, motivo: MOTIVO_DESCARTE, executarEm: quando, criadoEm: agora,
+          })
+        }
       }
       return 'enviado'
     }
@@ -316,6 +353,49 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
   })
 }
 
+/**
+ * A reativação é uma ativa como as outras (suspensão, expediente, limites), mas
+ * o conteúdo é o PRÓPRIO dela: no oficial, SEMPRE o template aprovado da
+ * reativação (a janela de 24h conta como fechada — nunca texto livre); no
+ * não-oficial, o texto configurado — sem ele nada sai — e o aquecimento do número.
+ */
+async function decidirReativacao(tx: Sql, v: RetornoVencido, ctx: ContextoAtiva, agora: Date): Promise<Veredito> {
+  const r = (await lerConfigAtivasDoCanal(tx, v.canal_id)).reativacao
+  const oficial = ctx.tipoCanal === 'whatsapp_oficial'
+  const decisao = decidirAtiva({
+    ...ctx,
+    config: { ...ctx.config, templateRetorno: oficial ? r.templateId : null },
+    template: oficial && r.templateId ? await lerTemplate(tx, r.templateId) : null,
+    ultimaEntranteEm: oficial ? null : ctx.ultimaEntranteEm,
+  }, agora)
+  if (decisao.acao !== 'texto') return { tipo: 'politica', decisao }
+  if (!r.texto) return { tipo: 'recusar', motivo: 'sem_texto_reativacao' }
+  const aq = await statusAquecimento(tx, v.canal_id, agora)
+  if (aq.emAquecimento && aq.restante <= 0) {
+    return { tipo: 'adiar', ate: new Date(agora.getTime() + DIA_MS), motivo: 'aquecimento_do_numero' }
+  }
+  return { tipo: 'politica', decisao, texto: r.texto }
+}
+
+/** O descarte vencido: o contato vai para Descartado (`sem_resposta`) e a reativação, se ligada, é agendada. */
+async function processarDescarte(v: RetornoVencido, agora: Date): Promise<Desfecho> {
+  return comTenantServico(v.tenant_id, async (tx) => {
+    const r = await executarDescarte(tx, { conversaId: v.conversa_id, canalId: v.canal_id, criadoEm: v.criado_em }, agora)
+    if (r.tipo === 'cancelar') {
+      await encerrar(tx, v, 'cancelado', r.motivo, agora)
+      return 'cancelado'
+    }
+    await encerrar(tx, v, 'enviado', 'descartado', agora)
+    const quando = r.config.reativacao.ativa ? new Date(agora.getTime() + r.config.reativacao.dias[0]! * DIA_MS) : null
+    if (quando) {
+      await agendarRetorno(tx, {
+        conversaId: v.conversa_id, canalId: v.canal_id, motivo: MOTIVO_REATIVACAO, tentativa: 1, executarEm: quando, criadoEm: agora,
+      })
+    }
+    return 'descartado'
+  })
+}
+
 /** Falhas do provedor que nenhuma repetição resolve. */
 const FALHAS_PERMANENTES: ReadonlySet<string> = new Set(['destino_invalido', 'credencial_invalida', 'resposta_inesperada'])
 /** Teto de falhas de transporte seguidas por retorno (a 4ª encerra como recusado). */
@@ -334,6 +414,12 @@ async function avaliar(tx: Sql, v: RetornoVencido, agora: Date): Promise<'envia'
   if (conv.ultima_entrante_em && conv.ultima_entrante_em > v.criado_em) return 'cliente_escreveu'
   // Atendimento humano aberto cala o agente — inclusive a cutucada.
   if (conv.humano_assumiu) return 'humano_atendendo'
+
+  // Reativação (G5): o contato ainda é um descartado `sem_resposta`? opt-out? ainda ligada?
+  if (v.motivo === MOTIVO_REATIVACAO) {
+    const nao = await motivoParaNaoReativar(tx, { conversaId: v.conversa_id, canalId: v.canal_id, criadoEm: v.criado_em })
+    if (nao) return nao
+  }
 
   // ⚠️ O modo EFETIVO (P14, ADR-028): teto do tenant (kill switch), recorte de
   //    horário/segmento/feriado — nunca a coluna `agente_config.modo` direto.
