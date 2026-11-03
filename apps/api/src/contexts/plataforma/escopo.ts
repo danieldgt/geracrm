@@ -314,6 +314,18 @@ export function condicaoOportunidade(tx: Sql, escopo: Escopo, aliasOportunidade 
     OR ${contatoDaColunaVisivel(tx, escopo, tenantCol, tx.unsafe(`${aliasOportunidade}.contato_id`))})`
 }
 
+/**
+ * Evento da agenda visível no escopo (alias padrão `e`). O evento não tem carteira
+ * própria: quem decide é o RESPONSÁVEL. `filial` = responsável com papel numa das
+ * filiais do escopo — a mesma régua de "alguém da filial" de `condicaoTarefa`.
+ */
+export function condicaoEvento(tx: Sql, escopo: Escopo, aliasEvento = 'e') {
+  if (escopo.tipo === 'tudo') return tx`true`
+  if (escopo.usuarioId === null) return tx`false`
+  if (escopo.tipo === 'carteira') return tx`${alias(tx, aliasEvento)}.responsavel_id = ${escopo.usuarioId}::uuid`
+  return usuarioDaFilial(tx, tx.unsafe(`${aliasEvento}.tenant_id`), tx.unsafe(`${aliasEvento}.responsavel_id`), escopo.filialIds)
+}
+
 // ─────────────────── checagens por id (detalhe → 404) ───────────────────
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -388,6 +400,24 @@ export async function pedidoNoEscopo(tx: Sql, escopo: Escopo, pedidoId: string):
   const [l] = await tx`SELECT 1 FROM pedido p
                         WHERE p.tenant_id = tenant_atual() AND p.id = ${pedidoId}
                           AND ${condicaoPedido(tx, escopo, 'p')}`
+  return Boolean(l)
+}
+
+/**
+ * Pode ser o RESPONSÁVEL de um evento escrito por este escopo? `tudo` → sim;
+ * `carteira` → só ele mesmo; `filial` → ele mesmo ou alguém com papel numa das
+ * filiais. Quem não existe ou está inativo (`usuarioId: null`) → não. Não confere
+ * se o usuário está ativo: quem chama faz essa checagem junto da existência.
+ */
+export async function responsavelNoEscopo(tx: Sql, escopo: Escopo, usuarioId: string): Promise<boolean> {
+  if (escopo.tipo === 'tudo') return true
+  if (escopo.usuarioId === null || !UUID.test(usuarioId)) return false
+  if (usuarioId === escopo.usuarioId) return true
+  if (escopo.tipo === 'carteira') return false
+  const [l] = await tx`SELECT 1 FROM usuario_filial esc_uf
+                        WHERE esc_uf.tenant_id = tenant_atual() AND esc_uf.usuario_id = ${usuarioId}::uuid
+                          AND esc_uf.filial_id = ANY(${[...escopo.filialIds]}::uuid[])
+                        LIMIT 1`
   return Boolean(l)
 }
 
