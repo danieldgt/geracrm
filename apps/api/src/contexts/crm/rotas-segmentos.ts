@@ -40,9 +40,17 @@ export async function distribuicaoRfv(sql: Sql): Promise<SegmentoResumo[]> {
   return [...mapa.values()].sort((a, b) => b.urgencia - a.urgencia)
 }
 
+/**
+ * ⚠️ Sem cursor, de propósito: o conjunto é FIXO por construção — um item por
+ * código de segmento RFV (`classificarRfv`, em shared: 6 códigos mais
+ * `sem_metrica`), nunca por contato. A resposta agrega a base, não a lista.
+ * `TETO_SEGMENTOS` é só a trava explícita contra regressão.
+ */
+const TETO_SEGMENTOS = 50
+
 export async function rotasSegmentos(app: FastifyInstance): Promise<void> {
   app.get('/v1/segmentos', { preHandler: exigirTenant }, async (req, reply) => {
-    const itens = await req.comTenant((tx) => distribuicaoRfv(tx))
+    const itens = (await req.comTenant((tx) => distribuicaoRfv(tx))).slice(0, TETO_SEGMENTOS)
     const totalContatos = itens.reduce((s, i) => s + i.contatos, 0)
     return reply.send({ itens, totalContatos })
   })

@@ -10,6 +10,7 @@ import {
 interface Lista { readonly id: string; readonly nome: string; readonly descricao: string | null; readonly membros: number }
 interface Membro { readonly id: string; readonly nome: string }
 interface AchadoContato { readonly id: string; readonly nome: string; readonly telefone: string | null }
+interface PaginaListas { readonly itens: Lista[]; readonly proximoCursor?: string | null }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
@@ -63,6 +64,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                 </ui-estado>
               </div>
             </ui-tabela>
+            @if (listas().length > 0) {
+              <ui-paginacao [mostrados]="listas().length" [temMais]="temMaisListas()" [carregando]="carregandoMais()"
+                (mais)="carregarMaisListas()" />
+            }
           </section>
 
           <section class="col">
@@ -179,6 +184,9 @@ export class ListasPagina implements OnInit {
   readonly membros = signal<readonly Membro[]>([])
   protected readonly linhasMembros = computed(() => this.membros() as unknown as readonly LinhaTabela[])
   readonly temMais = signal(false)
+  readonly temMaisListas = signal(false)
+  readonly carregandoMais = signal(false)
+  private cursorListas: string | null = null
   readonly criarAberto = signal(false)
   readonly novoNome = signal('')
   readonly criando = signal(false)
@@ -193,16 +201,31 @@ export class ListasPagina implements OnInit {
   async carregar(): Promise<void> {
     this.estado.set('carregando')
     try {
-      const r = await firstValueFrom(this.http.get<{ itens: Lista[] }>('/v1/listas'))
+      const r = await firstValueFrom(this.http.get<PaginaListas>('/v1/listas'))
       this.listas.set(r.itens)
+      this.cursorListas = r.proximoCursor ?? null
+      this.temMaisListas.set(this.cursorListas !== null)
       this.estado.set('pronto')
       const sel = this.selecionada()
       if (sel) {
-        const atual = r.itens.find((l) => l.id === sel.id) ?? null
+        // A lista aberta pode estar numa página ainda não carregada: só some se foi excluída.
+        const atual = r.itens.find((l) => l.id === sel.id) ?? sel
         this.selecionada.set(atual)
-        if (atual) await this.carregarMembros()
+        await this.carregarMembros()
       }
     } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
+  }
+
+  async carregarMaisListas(): Promise<void> {
+    if (!this.cursorListas || this.carregandoMais()) return
+    this.carregandoMais.set(true)
+    try {
+      const r = await firstValueFrom(this.http.get<PaginaListas>(`/v1/listas?cursor=${encodeURIComponent(this.cursorListas)}`))
+      this.listas.set([...this.listas(), ...r.itens])
+      this.cursorListas = r.proximoCursor ?? null
+      this.temMaisListas.set(this.cursorListas !== null)
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais listas.')) }
+    finally { this.carregandoMais.set(false) }
   }
 
   abrir(l: Lista): void { this.selecionada.set(l); this.termo.set(''); this.achados.set([]); void this.carregarMembros() }

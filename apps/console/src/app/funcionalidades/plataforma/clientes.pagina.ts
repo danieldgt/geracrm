@@ -3,7 +3,10 @@ import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { AuthServico } from '../../nucleo/auth.servico.js'
-import { CampoComponente, ModalComponente, ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
+import { FormsModule } from '@angular/forms'
+import {
+  ModalComponente, SelectPaginadoComponente, ToastServico, mensagemDeErro, type CarregarOpcoes,
+} from '../../compartilhado/ui/index.js'
 import { ModelosClienteComponente } from './modelos-cliente.componente.js'
 
 interface Cliente {
@@ -43,7 +46,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 @Component({
   selector: 'app-clientes-plataforma',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, ModelosClienteComponente, CampoComponente, ModalComponente],
+  imports: [DatePipe, FormsModule, ModelosClienteComponente, ModalComponente, SelectPaginadoComponente],
   template: `
     <header class="cabecalho">
       <h1 class="txt-titulo">Clientes</h1>
@@ -203,8 +206,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
           O usuário vira admin de <strong>{{ nomeando()?.nome }}</strong> em todas as filiais. Use quando a empresa
           ainda não tem administrador: depois disso, ele cadastra os próprios usuários e filiais.
         </p>
-        <ui-campo rotulo="ID do usuário" [obrigatorio]="true" [(valor)]="usuarioAdmin" [erro]="erroNomear()"
-          dica="UUID de um usuário ativo da empresa. A equipe não vê a lista de usuários do cliente; o ID vem do banco." />
+        <ui-select-paginado rotulo="Usuário" placeholder="Busque por nome ou e-mail" [obrigatorio]="true" [largo]="true"
+          [carregar]="carregarUsuarios" [erro]="erroNomear()" name="usuarioAdmin"
+          [ngModel]="usuarioAdmin()" (ngModelChange)="usuarioAdmin.set($event ?? '')"
+          dica="Só aparecem usuários da empresa que já entraram no sistema ou foram cadastrados." />
       </form>
       <div rodape>
         <button type="button" class="btn btn--secundario" (click)="fecharNomear()">Cancelar</button>
@@ -343,6 +348,22 @@ export class ClientesPlataformaPagina implements OnInit {
     this.motivo.set('')
   }
 
+  /** Usuários do cliente do modal, por cursor, com busca no servidor (rota de staff). */
+  protected readonly carregarUsuarios: CarregarOpcoes = async (cursor, termo) => {
+    const c = this.nomeando()
+    if (!c) return { itens: [], proximoCursor: null }
+    const q = new URLSearchParams()
+    if (cursor) q.set('cursor', cursor)
+    if (termo.trim()) q.set('busca', termo.trim())
+    const r = await firstValueFrom(this.http.get<{
+      itens: { id: string; nome: string; email: string; ativo: boolean; papeis: string[] }[]; proximoCursor: string | null
+    }>(`/v1/plataforma/clientes/${c.id}/usuarios${q.size ? `?${q}` : ''}`))
+    return {
+      itens: r.itens.map((u) => ({ valor: u.id, rotulo: u.nome, dica: u.ativo ? u.email : `${u.email} (inativo)` })),
+      proximoCursor: r.proximoCursor,
+    }
+  }
+
   abrirNomear(c: Cliente): void {
     this.usuarioAdmin.set('')
     this.erroNomear.set(null)
@@ -360,7 +381,7 @@ export class ClientesPlataformaPagina implements OnInit {
     if (!c || this.nomeandoSalvando()) return
     const usuarioId = this.usuarioAdmin().trim()
     if (!usuarioId) {
-      this.erroNomear.set('Informe o ID do usuário.')
+      this.erroNomear.set('Escolha o usuário.')
       return
     }
     this.nomeandoSalvando.set(true)
