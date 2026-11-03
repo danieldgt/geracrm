@@ -23,36 +23,37 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | A4 etiquetas e origens | 1 | ✅ | integrada (0113); revisão aprovou |
 | C1 tarefas v2 | 1 | ✅ | integrada com correções (validação Zod, cursor µs, responsável nulo, autorização); 0114 corrigida no lugar |
 | A5 pedidos em lista | 1 | ✅ | integrada; API não tem busca/período/contadores — cards e busca só no carregado |
-| A2 lista de contatos + massa | 1 | 🔄 | Sonnet; migration 0128 se necessária |
+| A2 lista de contatos + massa | 1 | ✅ | integrada (sem migration; filtro de etiqueta otimizado com EXISTS) |
 | B2 modais do funil + ganho | 1 | ✅ | integrada com correções (0122 corrigida no lugar) |
 | A3 ficha 2+1 | 1 | ✅ | integrada (0115); feed lê a auditoria de `qualificarContato`; 'Enviar no WhatsApp' do arquivo fica para quando o inbox enviar mídia por id |
 | D5 configurações com abas + módulos | 2 | ✅ | integrada (0116); `exigirModulo('agenda')` e `ModulosServico` prontos |
-| H2 LGPD retenção/anonimização | 2 | 🔍 | revisão Opus REPROVOU (falsos positivos confirmados, ressurreição pelo ERP, bloqueio irremovível na retenção, mídia sem remoção); correção Opus em curso — automática desligada por padrão com prévia |
+| H2 LGPD retenção/anonimização | 2 | 🔍 | integrada; 2ª revisão: aprovado com correções (reavaliar seletor na tx, pedidos pendentes, admin do tenant); correção Sonnet em curso — não ligar `lgpd_auto` antes |
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
-| B1 panorama do funil | 2 | ⬜ | |
+| B1 panorama do funil | 2 | ✅ | integrada (0131) |
 | C2 agenda (módulo) | 2 | ✅ | integrada (0117); pendente: trocar escopo por papéis pelo `escopo.ts` e montar `app-agenda-contato` na ficha |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | ⬜ | |
 | D4 notificações, perfil, esqueci a senha | 2 | ⬜ | |
 | D6 auditoria v2 | 2 | ✅ | integrada; cursor com µs corrigido; pendente: login/logout (vai com D4), janela padrão da busca `q` |
-| D1 cockpit | 2 | 🔄 | Sonnet; migration 0129 se necessária |
-| D2 higienização da carteira | 2 | ⬜ | |
+| D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
+| D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
-| F1 campanhas v2 | 3 | ⬜ | |
-| F3 formulários públicos | 3 | 🔄 | Sonnet; migration 0127 |
-| G2 objeções | 3 | 🔄 | Opus; migration 0126 |
+| F1 campanhas v2 | 3 | 🔄 | F1a API+despachante (Opus, migration 0134) em curso; F1b wizard (Sonnet) depois |
+| F3 formulários públicos | 3 | 🔍 | revisão de segurança: aprovado com correções (upload fora da transação, IP real, contato existente intocado); correção Opus em curso — não divulgar link antes |
+| G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
 | G3 pós-venda, NPS, indicações, prova social | 3 | 🔄 | Opus; migration 0130 |
 | G4 roteamento e rodízio | 3 | ⬜ | |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
-| H1 importador | 3 | ⬜ | |
+| H1 importador | 3 | 🔄 | Sonnet; migration 0133 |
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
-| E2 relatórios 1ª leva | 3 | ⬜ | |
+| E2 relatórios 1ª leva | 3 | 🔄 | Sonnet; migration 0135 se necessária |
 | E3 relatórios 2ª leva | 3 | ⬜ | |
-| L1 retrofit das telas restantes | 4 | ⬜ | |
+| L1 retrofit das telas restantes | 4 | 🔄 | L1a (Haiku): bloqueios, listas, sequências, metas, webhooks, mensagens enviadas, retenção, segmentos |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
 | D3.4 telas de usuários e filiais | 0 | ✅ | integrada (console 656); conferir códigos de erro com a API quando D3 entrar |
 | C2b agenda no escopo comum + na ficha | 2 | ✅ | integrada; contato fora do escopo → 422 e nome oculto na leitura |
+| X3 teste do worker de aquisição sem isolamento de tenant | — | ✅ | integrada |
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 

@@ -21,3 +21,16 @@ describe('menu — itens de módulo opcional', () => {
     expect(menuVisivel(MENU, { agenda: false }).every((g) => g.itens.length > 0)).toBe(true)
   })
 })
+
+describe('menu — Cockpit só para a gestão', () => {
+  const rotas = (g: ReturnType<typeof menuVisivel>) => g.flatMap((x) => x.itens.map((i) => i.rota))
+  it('é o primeiro item do grupo Gestão, pronto, com o ícone de gráfico', () => {
+    const gestao = MENU.find((g) => g.titulo === 'Gestão')!
+    expect(gestao.itens[0]).toMatchObject({ rota: 'cockpit', icone: 'bar-chart-3', status: 'pronto', soGestao: true })
+  })
+  it('some para quem não é gestão e aparece para a gestão', () => {
+    expect(rotas(menuVisivel(MENU, {}))).not.toContain('cockpit')
+    expect(rotas(menuVisivel(MENU, {}, false))).not.toContain('cockpit')
+    expect(rotas(menuVisivel(MENU, {}, true))).toContain('cockpit')
+  })
+})

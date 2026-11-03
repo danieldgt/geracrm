@@ -3,6 +3,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom, type Observable } from 'rxjs'
 import { mensagemDeErro } from '../../compartilhado/ui/index.js'
 import type { PedidoDoContato } from './funil-acoes.regras.js'
+import { FILTROS_VAZIOS, SEM_DONO, SEM_FILIAL, queryDaApi, type Agrupar, type FiltrosBoard, type GrupoPanorama } from './funil-filtros.regras.js'
 
 export interface Etapa {
   readonly id: string
@@ -84,6 +85,51 @@ export class FunilServico {
   /** Métrica é secundária: falhar não derruba o kanban, mas a tela DIZ que falhou. */
   readonly erroMetricas = signal<string | null>(null)
 
+  /** Filtros do board (B1). Valem para os totais e para cada coluna; a tela os espelha na URL. */
+  readonly filtros = signal<FiltrosBoard>(FILTROS_VAZIOS)
+
+  // ── Panorama (B1) ──
+  readonly panorama = signal<readonly GrupoPanorama[]>([])
+  readonly panoramaTruncado = signal(false)
+  readonly estadoPanorama = signal<'carregando' | 'pronto' | 'sem_permissao' | 'erro'>('carregando')
+  /** Etapas abertas, na ordem do funil: as colunas da contagem de cada cartão. */
+  readonly etapasPanorama = signal<readonly { id: string; nome: string }[]>([])
+  /** Opções dos selects de gestão: vendedores da equipe e filiais que o escopo enxerga. */
+  readonly vendedores = signal<{ valor: string; rotulo: string }[]>([])
+  readonly filiais = signal<{ valor: string; rotulo: string }[]>([])
+  #pedidoPanorama = 0
+
+  async carregarPanorama(agrupar: Agrupar): Promise<void> {
+    const pedido = ++this.#pedidoPanorama
+    this.estadoPanorama.set('carregando')
+    try {
+      const [r, etapas] = await Promise.all([
+        firstValueFrom(this.http.get<{ itens: GrupoPanorama[]; truncado: boolean }>(`/v1/funil/panorama?agrupar=${agrupar}`)),
+        firstValueFrom(this.http.get<{ itens: Etapa[] }>('/v1/funil/etapas')),
+      ])
+      if (pedido !== this.#pedidoPanorama) return // resposta atrasada: vale só a última
+      this.panorama.set(r.itens)
+      this.panoramaTruncado.set(r.truncado)
+      this.etapasPanorama.set(etapas.itens.filter((e) => e.tipo === 'aberto').map((e) => ({ id: e.id, nome: e.nome })))
+      this.estadoPanorama.set('pronto')
+    } catch (e) {
+      if (pedido !== this.#pedidoPanorama) return
+      this.estadoPanorama.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro')
+    }
+  }
+
+  /** Vendedores e filiais para os filtros da gestão. Falha não derruba o board: o select fica sem opções. */
+  async carregarOpcoesGestao(): Promise<void> {
+    if (this.vendedores().length > 0 || this.filiais().length > 0) return
+    const [eq, fi] = await Promise.all([
+      firstValueFrom(this.http.get<{ itens: { id: string; nome: string }[] }>('/v1/equipe')).catch(() => ({ itens: [] })),
+      firstValueFrom(this.http.get<{ itens: GrupoPanorama[] }>('/v1/funil/panorama?agrupar=filial')).catch(() => ({ itens: [] })),
+    ])
+    this.vendedores.set([{ valor: SEM_DONO, rotulo: 'Sem dono' }, ...eq.itens.map((u) => ({ valor: u.id, rotulo: u.nome }))])
+    this.filiais.set(fi.itens.filter((g) => g.chave !== SEM_DONO)
+      .map((g) => ({ valor: g.chave, rotulo: g.chave === SEM_FILIAL ? 'Sem filial' : g.rotulo })))
+  }
+
   // ── Configuração das raias (etapas e motivos) ──
   readonly config = signal<readonly EtapaConfig[]>([])
   readonly motivosConfig = signal<readonly MotivoConfig[]>([])
@@ -157,7 +203,7 @@ export class FunilServico {
     this.estado.set('carregando')
     try {
       const [etapas, motivos] = await Promise.all([
-        firstValueFrom(this.http.get<{ itens: Etapa[] }>('/v1/funil/etapas')),
+        firstValueFrom(this.http.get<{ itens: Etapa[] }>(`/v1/funil/etapas${queryDaApi(this.filtros())}`)),
         firstValueFrom(this.http.get<{ itens: Motivo[] }>('/v1/funil/motivos')).catch(() => ({ itens: [] })),
       ])
       this.motivos.set(motivos.itens)
@@ -173,9 +219,10 @@ export class FunilServico {
   }
 
   private buscarColuna(etapaId: string, cursor: string | null): Promise<{ itens: Card[]; proximoCursor: string | null }> {
-    const url = cursor
-      ? `/v1/funil/coluna/${etapaId}?cursor=${encodeURIComponent(cursor)}`
-      : `/v1/funil/coluna/${etapaId}`
+    const u = new URLSearchParams(queryDaApi(this.filtros()))
+    if (cursor) u.set('cursor', cursor)
+    const qs = u.toString()
+    const url = `/v1/funil/coluna/${etapaId}${qs ? `?${qs}` : ''}`
     return firstValueFrom(this.http.get<{ itens: Card[]; proximoCursor: string | null }>(url))
   }
 

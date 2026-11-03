@@ -1,8 +1,9 @@
 import {
   CODIGO_NAO_ENVIE, ETAPA_REGRAS_QUALIDADE, NumerosVistos, avaliarRegrasQualidade, extrairNumerosDeNegocio, lerComplianceExtra,
-  numerosSemFonte, perguntasJaRespondiveis, type MarcaGuardrail, type ViolacaoQualidade,
+  lerPlaybookVigente, numerosSemFonte, objecoesAtivas, perguntasJaRespondiveis, type MarcaGuardrail, type ViolacaoQualidade,
 } from '@geracrm/shared'
 import { fontesDoTurno } from './numeros-ampliados.js'
+import { textoDoCliente } from './gatilhos-entrada.js'
 import { abrirAlertaViolacaoCritica } from '../qualidade/alerta.js'
 import { marca, type ContextoPipeline, type EntradaPosResposta, type EtapaPosResposta } from './tipos.js'
 
@@ -46,6 +47,13 @@ function maxCaracteresDe(cfgExtra: Readonly<Record<string, unknown>>): number | 
   return typeof v === 'number' && v > 0 ? v : undefined
 }
 
+/** Insumo da regra `objecao_fora_do_catalogo`: só com objeção ATIVA no playbook do número. */
+function objecoesDoTurnoParaRegra(ctx: ContextoPipeline, entrada: EntradaPosResposta) {
+  const ativas = objecoesAtivas(lerPlaybookVigente(ctx.cfgExtra['playbook'])?.conteudo)
+  if (ativas.length === 0) return undefined
+  return { ativas, textoDoCliente: textoDoCliente(ctx), registradas: entrada.objecoesDoTurno?.length ?? 0 }
+}
+
 export interface ResultadoRegrasDoTurno {
   readonly violacoes: ViolacaoQualidade[]
   /** Números abonados SÓ pela memória do contato (P0c): não são violação, mas a métrica guarda o rastro. */
@@ -83,6 +91,8 @@ export async function violacoesDoTurno(ctx: ContextoPipeline, entrada: EntradaPo
     perguntasAnteriores: perguntasJaRespondiveis(ctx.historico),
     fontes,
     maxCaracteres: maxCaracteresDe(ctx.cfgExtra),
+    // G2: objeção do playbook publicado respondida sem registro e fora da referência (MEDIA).
+    objecoes: objecoesDoTurnoParaRegra(ctx, entrada),
   })
   return { violacoes, daMemoria }
 }

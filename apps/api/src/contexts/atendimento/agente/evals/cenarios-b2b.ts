@@ -1,6 +1,6 @@
 import { AVISO_INSTABILIDADE, AVISO_TRANSFERENCIA } from '../pipeline/falha-llm.js'
 import { AVISO_TETO_CONVERSA } from '../pipeline/teto-conversa.js'
-import { TEXTO_PEDE_TEXTO_AUDIO, textoHandoffGatilho, textoOptOut } from '@geracrm/shared'
+import { TEXTO_PEDE_TEXTO_AUDIO, playbookPadrao, textoHandoffGatilho, textoOptOut, type ConteudoPlaybook } from '@geracrm/shared'
 import { expect } from 'vitest'
 import { bloqueado, type Cenario, type ContextoCenario } from './executar-cenario.js'
 import { brl, itensDaBusca, skuCom } from './roteiro.js'
@@ -29,6 +29,23 @@ export { SUITE_B2B } from './suite-b2b.js'
 const ALCADA_AMPLA = { valorMaxAutonomoCentavos: 1_000_000, descontoMaxPct: 0, efetivaSozinho: true }
 /** Alçada que efetiva sozinho só até R$ 100,00. */
 const ALCADA_CURTA = { valorMaxAutonomoCentavos: 10_000, descontoMaxPct: 0, efetivaSozinho: true }
+
+/** Playbook publicado com o catálogo de objeções (G2). */
+const PLAYBOOK_OBJECOES: ConteudoPlaybook = {
+  ...playbookPadrao(),
+  objecoes: [
+    { codigo: 'OBJ-01', ativo: true, objecao: 'Achou caro', gatilhos: ['caro', 'muito caro', 'mais barato'],
+      resposta: 'Entendo a preocupação com o investimento. Posso mostrar opções do catálogo que cabem melhor no orçamento da loja?' },
+    { codigo: 'OBJ-02', ativo: true, objecao: 'Vai pensar', gatilhos: ['vou pensar', 'depois eu vejo'],
+      resposta: 'Claro, sem pressa. Quer que eu deixe um resumo pronto para você decidir com calma?' },
+  ],
+}
+
+/** Quantos fatos de objeção a conversa do cenário gravou. */
+async function objecoesGravadas(c: ContextoCenario): Promise<{ codigo: string; revertida: boolean }[]> {
+  return c.dono<{ codigo: string; revertida: boolean }[]>`
+    SELECT codigo, revertida FROM agente_objecao WHERE tenant_id = ${c.tenantId} AND conversa_id = ${c.conversaId} ORDER BY criado_em`
+}
 
 /** A instrução do turno que o roteiro do cenário `cnpj-informado` recebeu (operador). */
 let instrucaoDoTurnoCnpj = ''
@@ -601,5 +618,86 @@ export const CENARIOS_B2B: readonly Cenario[] = [
       esperado: { desfecho: 'handoff', enviadas: 1, contem: [AVISO_TRANSFERENCIA], falhaTipo: 'fatal' },
       confere: async (_c, t) => { expect(t.resultado?.reagendarEmMs, 'fatal não reagenda').toBeUndefined() },
     }],
+  },
+  // ── G2: objeções do playbook ──────────────────────────────────────────────
+  {
+    id: 'objecao-registrada-revertida',
+    titulo: 'Lojista acha caro: o agente responde na linha da referência, registra a objeção e, quando ele segue, marca revertida',
+    gherkin: [
+      'Dado um playbook publicado com a objeção OBJ-01 "Achou caro"',
+      'Quando o lojista diz que achou caro',
+      'Então o agente responde sem número inventado e registra OBJ-01 não revertida',
+      'E quando o lojista aceita ver opções, registra OBJ-01 revertida — sem transferir',
+    ],
+    config: { perfil: 'atacado', playbook: PLAYBOOK_OBJECOES },
+    turnos: [
+      {
+        cliente: 'achei caro, o outro fornecedor faz mais barato',
+        modelo: { tipo: 'roteiro', roteiro: async ({ chamar }) => {
+          await chamar('registrar_objecao', { codigo: 'OBJ-01', revertida: false, observacao: 'compara com outro fornecedor' })
+          return { mensagens: ['Entendo a preocupação com o investimento. Posso mostrar opções do catálogo que cabem melhor no orçamento da loja?'] }
+        } },
+        esperado: { desfecho: 'respondeu', ferramentas: ['registrar_objecao'] },
+        esperadoSimulado: { marcas: ['objecoes-seguidas/objecao_registrada'], semMarcas: ['regras-qualidade/objecao_fora_do_catalogo'] },
+        confere: async (c) => { expect((await objecoesGravadas(c)).map((o) => o.codigo)).toContain('OBJ-01') },
+      },
+      {
+        cliente: 'pode ser, me mostra as opções',
+        modelo: { tipo: 'roteiro', roteiro: async ({ chamar }) => {
+          await chamar('registrar_objecao', { codigo: 'OBJ-01', revertida: true, observacao: null })
+          return { mensagens: ['Combinado! Para qual tipo de peça você quer ver as opções?'] }
+        } },
+        esperado: { desfecho: 'respondeu' },
+        esperadoSimulado: { ferramentas: ['registrar_objecao'], marcas: ['objecoes-seguidas/objecao_revertida'] },
+        confere: async (c) => {
+          const g = await objecoesGravadas(c)
+          if (g.length >= 2) expect(g.at(-1)!.revertida, 'a última foi revertida').toBe(true)
+        },
+      },
+    ],
+  },
+  {
+    id: 'objecoes-seguidas-handoff',
+    titulo: 'Três objeções seguidas sem reverter: o pipeline entrega a uma pessoa (a ferramenta só registra)',
+    gherkin: [
+      'Dado um playbook publicado com objeções',
+      'E o lojista levanta três objeções seguidas que o agente não reverte',
+      'Quando a terceira é registrada',
+      'Então a resposta vira o aviso de transferência e a conversa vai ao humano com o motivo objecoes_seguidas',
+    ],
+    config: { perfil: 'atacado', playbook: PLAYBOOK_OBJECOES },
+    turnos: [
+      {
+        cliente: 'achei muito caro',
+        modelo: { tipo: 'roteiro', forcado: true, roteiro: async ({ chamar }) => {
+          await chamar('registrar_objecao', { codigo: 'OBJ-01', revertida: false, observacao: null })
+          return { mensagens: ['Entendo a preocupação com o investimento. Quer ver opções mais em conta do catálogo?'] }
+        } },
+        esperado: { desfecho: 'respondeu', marcas: ['objecoes-seguidas/objecao_registrada'] },
+      },
+      {
+        cliente: 'vou pensar',
+        modelo: { tipo: 'roteiro', forcado: true, roteiro: async ({ chamar }) => {
+          await chamar('registrar_objecao', { codigo: 'OBJ-02', revertida: false, observacao: null })
+          return { mensagens: ['Claro, sem pressa. Quer que eu deixe um resumo pronto para você decidir?'] }
+        } },
+        esperado: { desfecho: 'respondeu' },
+      },
+      {
+        cliente: 'continua caro pra mim',
+        modelo: { tipo: 'roteiro', forcado: true, roteiro: async ({ chamar }) => {
+          await chamar('registrar_objecao', { codigo: 'OBJ-01', revertida: false, observacao: null })
+          return { mensagens: ['Entendo. Posso tentar outra linha de produto para você?'] }
+        } },
+        esperado: {
+          desfecho: 'handoff', handoff: 'objecoes_seguidas', contem: ['pessoa da equipe'], naoContem: ['outra linha'],
+          marcas: ['objecoes-seguidas/objecoes_seguidas'],
+        },
+        confere: async (c) => {
+          expect((await objecoesGravadas(c)).filter((o) => !o.revertida)).toHaveLength(3)
+          expect(await notaDaEntrega(c)).toContain('OBJ-01 (Achou caro)')
+        },
+      },
+    ],
   },
 ]

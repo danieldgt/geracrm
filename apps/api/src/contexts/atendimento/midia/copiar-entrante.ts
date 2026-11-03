@@ -39,11 +39,22 @@ export async function copiarMidiaEntrante(tenantId: string, m: MidiaExterna): Pr
 
   // Troca a URL do provedor pela nossa chave no conteúdo. Match por (id,
   // criado_em) — criado_em é o valor que NÓS inserimos (recebidaEm), exato.
+  // ⚠️ LGPD (H2): contato anonimizado durante o download → a mensagem não volta a apontar para mídia,
+  //    e o objeto recém-subido entra na fila de remoção do bucket (mesma transação).
   await comTenantServico(tenantId, async (tx) => {
-    await tx`
+    const gravou = await tx`
       UPDATE mensagem
          SET conteudo = conteudo || ${JSON.stringify({ [m.tipo]: chave })}::text::jsonb
-       WHERE tenant_id = tenant_atual() AND id = ${m.mensagemId} AND criado_em = ${m.mensagemCriadoEm}`
+       WHERE tenant_id = tenant_atual() AND id = ${m.mensagemId} AND criado_em = ${m.mensagemCriadoEm}
+         AND NOT (conteudo ? 'removido_lgpd')`
+    if (gravou.count === 0) {
+      await tx`
+        INSERT INTO lgpd_midia_pendente (tenant_id, id, contato_id, chave_objeto, origem)
+        SELECT tenant_atual(), gen_random_uuid(), cv.contato_id, ${chave}, 'mensagem'
+          FROM mensagem m JOIN conversa cv ON cv.tenant_id = m.tenant_id AND cv.id = m.conversa_id
+         WHERE m.tenant_id = tenant_atual() AND m.id = ${m.mensagemId} AND m.criado_em = ${m.mensagemCriadoEm} AND cv.contato_id IS NOT NULL
+        ON CONFLICT (tenant_id, chave_objeto) DO NOTHING`
+    }
   })
   return true
 }

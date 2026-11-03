@@ -3,12 +3,16 @@ import { DatePipe } from '@angular/common'
 import { formatarTelefoneBR } from '@geracrm/shared'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
+import { evidenciaValida, rotuloBloqueio } from './lgpd.regras.js'
 
 interface Bloqueio {
   readonly chave: string
   readonly motivo: string
   readonly origem: string | null
   readonly bloqueadoEm: string
+  /** O titular pediu para ser esquecido (LGPD): só sai por novo consentimento, registrado por admin. */
+  readonly lgpd?: boolean
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
@@ -16,6 +20,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
  * Gestão de opt-out (EP-04). ⚠️ O envio já respeita a lista no servidor (gateway
  * E5-13) — esta tela é só para VER e MEXER. Bloquear é por telefone; o servidor
  * deriva a chave (55+DDD+8, vale com e sem o nono dígito).
+ *
+ * ⚠️ Desbloquear grava consentimento concedido no contato (e o tira da anonimização por opt-out).
+ *    Número com bloqueio LGPD não desbloqueia: o admin registra o NOVO CONSENTIMENTO do titular,
+ *    com a evidência (`POST /v1/bloqueios/:chave/novo-consentimento`), que fica auditado.
  */
 @Component({
   selector: 'app-bloqueios',
@@ -58,11 +66,32 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
             @for (b of itens(); track b.chave) {
               <li class="item">
                 <span class="tel">{{ formatarChave(b.chave) }}</span>
-                <span class="motivo">{{ rotuloMotivo(b.motivo) }}</span>
+                <span class="motivo">{{ rotuloMotivo(b.motivo, b.lgpd === true) }}</span>
                 <span class="quando">{{ b.bloqueadoEm | date: 'dd/MM/yy' }}</span>
-                <button class="btn btn--secundario btn--pequeno" (click)="remover(b.chave)" [disabled]="removendo().has(b.chave)">
-                  {{ removendo().has(b.chave) ? '…' : 'Desbloquear' }}
-                </button>
+                @if (b.lgpd) {
+                  <button class="btn btn--secundario btn--pequeno" type="button" (click)="abrirConsentimento(b.chave)"
+                          title="O titular pediu para ser esquecido. Só libera com o novo consentimento dele.">
+                    Novo consentimento
+                  </button>
+                } @else {
+                  <button class="btn btn--secundario btn--pequeno" (click)="remover(b.chave)" [disabled]="removendo().has(b.chave)">
+                    {{ removendo().has(b.chave) ? '…' : 'Desbloquear' }}
+                  </button>
+                }
+                @if (consentindo() === b.chave) {
+                  <form class="consentimento" (submit)="registrarConsentimento($event, b.chave)">
+                    <label class="campo rotulado">
+                      <span>Evidência do consentimento do titular (onde, quando, protocolo)</span>
+                      <textarea rows="2" maxlength="500" [value]="evidencia()" (input)="evidencia.set($any($event.target).value)"></textarea>
+                    </label>
+                    <div class="acoes-consentimento">
+                      <button class="btn btn--secundario btn--pequeno" type="button" (click)="consentindo.set(null)">Cancelar</button>
+                      <button class="btn btn--primario btn--pequeno" type="submit" [disabled]="registrando() || !evidenciaOk()">
+                        {{ registrando() ? 'Registrando…' : 'Registrar e liberar' }}
+                      </button>
+                    </div>
+                  </form>
+                }
               </li>
             }
           </ul>
@@ -98,10 +127,17 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .motivo { color: var(--texto-secundario); }
     .quando { color: var(--texto-suave); font-family: var(--tipografia-familia-dados); }
     .mais { margin-top: var(--espacamento-4); }
+    .consentimento { grid-column: 1 / -1; display: grid; gap: var(--espacamento-2); }
+    .consentimento .campo { display: flex; flex-direction: column; gap: 4px; }
+    .consentimento .campo > span { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
+    .consentimento textarea { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
+      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; resize: vertical; }
+    .acoes-consentimento { display: flex; justify-content: flex-end; gap: var(--espacamento-2); }
   `,
 })
 export class BloqueiosPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly toast = inject(ToastServico)
 
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Bloqueio[]>([])
@@ -111,6 +147,9 @@ export class BloqueiosPagina implements OnInit {
   readonly salvando = signal(false)
   readonly erroAdd = signal<string | null>(null)
   readonly removendo = signal<ReadonlySet<string>>(new Set())
+  readonly consentindo = signal<string | null>(null)
+  readonly evidencia = signal('')
+  readonly registrando = signal(false)
 
   ngOnInit(): void { void this.carregar() }
 
@@ -159,22 +198,34 @@ export class BloqueiosPagina implements OnInit {
     try {
       await firstValueFrom(this.http.delete(`/v1/bloqueios/${chave}`))
       this.itens.update((a) => a.filter((b) => b.chave !== chave))
-    } catch { /* mantém */ } finally {
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível desbloquear.'))
+    } finally {
       this.removendo.update((s) => { const n = new Set(s); n.delete(chave); return n })
     }
+  }
+
+  evidenciaOk(): boolean { return evidenciaValida(this.evidencia()) }
+
+  abrirConsentimento(chave: string): void { this.evidencia.set(''); this.consentindo.set(chave) }
+
+  async registrarConsentimento(ev: Event, chave: string): Promise<void> {
+    ev.preventDefault()
+    if (this.registrando() || !this.evidenciaOk()) return
+    this.registrando.set(true)
+    try {
+      await firstValueFrom(this.http.post(`/v1/bloqueios/${chave}/novo-consentimento`, { origem: 'titular', evidencia: this.evidencia().trim() }))
+      this.itens.update((a) => a.filter((b) => b.chave !== chave))
+      this.consentindo.set(null)
+      this.toast.sucesso('Consentimento registrado; o número foi liberado.')
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível registrar o consentimento.'))
+    } finally { this.registrando.set(false) }
   }
 
   /** ⚠️ A formatação mora em @geracrm/shared: era uma cópia local, e a segunda
    *  cópia (no card de leads) seria a divergência garantida em um mês. */
   formatarChave(c: string): string { return formatarTelefoneBR(c) }
 
-  rotuloMotivo(m: string): string {
-    switch (m) {
-      case 'opt_out': return 'Pediu para sair'
-      case 'denuncia': return 'Denúncia'
-      case 'manual': return 'Manual'
-      case 'invalido': return 'Número inválido'
-      default: return m
-    }
-  }
+  rotuloMotivo(m: string, lgpd = false): string { return rotuloBloqueio(m, lgpd) }
 }

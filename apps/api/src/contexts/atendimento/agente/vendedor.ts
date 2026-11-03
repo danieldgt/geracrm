@@ -20,6 +20,7 @@ import { resumirSessao } from './memoria/resumo.js'
 import type { Ligacoes } from './ferramentas/ligacoes-porta.js'
 import { montarSistema, instrucaoDoTurno, esquemaDaResposta } from './instrucao-vendedor.js'
 import { entregarParaHumano } from './handoff.js'
+import { gravarObjecoesDoTurno } from './objecoes.js'
 import { chegouMensagemNova, type Tarefa } from './fila.js'
 import { llmFerramentasDoAmbiente, criarLlmDoCatalogo } from './fabrica-ferramentas.js'
 import { resolverModelo } from './modelos.js'
@@ -430,6 +431,8 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
         if (sessao && sessao.turnos % 10 === 0) await resumirSessao(tx, sessaoId).catch(() => undefined)
       }
       guardrails.push(...await rodarEfeitos(tx, semEfeito ? null : sessaoId))
+      // G2: fatos de objeção só no turno que se confirma, na mesma transação da decisão.
+      if (!semEfeito) await gravarObjecoesDoTurno(tx, { modo, canalId, conversaId, contatoId: conv.contato_id, sessaoId, objecoes: registro.efeitos.objecoes, agora })
       const id = await registrarDecisao(tx, { tarefa, sessaoId: semEfeito ? null : sessaoId, modo, desfecho, rastro, custo, resposta, bloqueados, guardrails,
         // ⚠️ "Enviada" é o que o gateway ACEITOU: turno autônomo que conclui sem
         //    mensagem (ex.: confirmação de opt-out já enviada, pausa) não enviou nada (P0c-t).
@@ -599,6 +602,8 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     mensagens: resposta.mensagens, handoff, centavosVistos: registro.centavosVistos, numerosVistos: registro.numerosVistos,
     saldoBaixoVisto: registro.saldoBaixoVisto, mensagensFixas: pre.prefixo, numerosDoCliente: numerosDaMemoria,
     falasAnterioresDoAgente: historico.filter((h) => h.de === 'nos').map((h) => h.texto),
+    // G2: o que `registrar_objecao` registrou no laço — a etapa `objecoes-seguidas` decide a entrega.
+    objecoesDoTurno: registro.efeitos.objecoes,
   })
   guardrails.push(...cadeia.guardrails)
   if (cadeia.bloqueio) handoff = { motivo: cadeia.bloqueio.motivo, resumo: cadeia.bloqueio.resumo }

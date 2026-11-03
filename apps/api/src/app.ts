@@ -6,8 +6,10 @@ import { rotasIntegracao } from './contexts/integracao/rotas.js'
 import { rotasSync } from './contexts/integracao/rotas-sync.js'
 import { rotasWebhooksSaida } from './contexts/integracao/rotas-webhooks-saida.js'
 import { rotasContatos } from './contexts/crm/rotas-contatos.js'
+import { rotasContatosAcoesEmMassa } from './contexts/crm/rotas-contatos-massa.js'
 import { rotasConsultas } from './contexts/crm/rotas-consultas.js'
 import { rotasBloqueios } from './contexts/crm/rotas-bloqueios.js'
+import { rotasLgpd } from './contexts/crm/rotas-lgpd.js'
 import { rotasEtiquetas } from './contexts/crm/rotas-etiquetas.js'
 import { rotasContatoFeed } from './contexts/crm/rotas-contato-feed.js'
 import { rotasContatoArquivo } from './contexts/crm/rotas-contato-arquivo.js'
@@ -59,6 +61,8 @@ import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
 import { rotasCatalogoManual } from './contexts/catalogo/rotas-catalogo-manual.js'
 import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
 import { rotasLpPublica } from './contexts/aquisicao/rotas-lp-publica.js'
+import { rotasFormularios } from './contexts/aquisicao/rotas-formularios.js'
+import { rotasFormularioPublico } from './contexts/aquisicao/rotas-formulario-publico.js'
 import { rotasPush } from './contexts/plataforma/rotas-push.js'
 import { rotasAuth } from './contexts/identidade/rotas-auth.js'
 import { rotasUsuarios } from './contexts/identidade/rotas-usuarios.js'
@@ -75,9 +79,12 @@ import { rotasQualidade } from './contexts/atendimento/agente/rotas-qualidade.js
 import { rotasRevisao } from './contexts/atendimento/agente/rotas-revisao.js'
 import { rotasSugestao } from './contexts/atendimento/agente/rotas-sugestao.js'
 import { rotasPlaybook } from './contexts/atendimento/agente/rotas-playbook.js'
+import { rotasObjecoes } from './contexts/atendimento/agente/rotas-objecoes.js'
 import { rotasGoLive } from './contexts/atendimento/agente/rotas-go-live.js'
 import { rotasSaudeDetalhada } from './contexts/plataforma/rotas-saude-detalhada.js'
 import { rotasSla } from './contexts/atendimento/rotas-sla.js'
+import { rotasCarteiraHigienizacao } from './contexts/plataforma/rotas-carteira-higienizacao.js'
+import { rotasCockpit } from './contexts/plataforma/rotas-cockpit.js'
 
 /**
  * Builds the app without listening — so tests can use `app.inject()`
@@ -134,8 +141,10 @@ export async function criarApp(
   await app.register(rotasSync)
   await app.register(rotasWebhooksSaida)
   await app.register(rotasContatos)
+  await app.register(rotasContatosAcoesEmMassa)
   await app.register(rotasConsultas)
   await app.register(rotasBloqueios)
+  await app.register(rotasLgpd)
   await app.register(rotasEtiquetas)
   await app.register(rotasContatoFeed)
   await app.register(rotasContatoArquivo)
@@ -190,6 +199,8 @@ export async function criarApp(
   //    RESOLVIDO pela chave da URL (0062), como o webhook resolve pelo
   //    phone_number_id (0057) — nunca recebido em parâmetro (ADR-001).
   await app.register(rotasLpPublica)
+  await app.register(rotasFormularios)
+  await app.register(rotasFormularioPublico)
   await app.register(rotasPush)
   await app.register(rotasAuth)
   // Cadastro de usuários e filiais (D3) — admin; o login nasce atrás da porta.
@@ -207,9 +218,12 @@ export async function criarApp(
   await app.register(rotasRevisao)
   await app.register(rotasSugestao)
   await app.register(rotasPlaybook)
+  await app.register(rotasObjecoes)
   await app.register(rotasGoLive)
   await app.register(rotasSaudeDetalhada)
   await app.register(rotasSla)
+  await app.register(rotasCarteiraHigienizacao)
+  await app.register(rotasCockpit)
 
   /** Liveness — no database. Answers even with the bank down, on purpose. */
   /**

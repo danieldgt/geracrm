@@ -2,13 +2,15 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Sql } from 'postgres'
 import { classificarRfv, normalizarTelefone, normalizarDocumento, ehPerfilPreco, perfilDeCotacao } from '@geracrm/shared'
-import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
+import { atendePapel, papeisDoUsuario } from '../plataforma/papel.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { parseCsvContatos } from './importar-csv.js'
 import { condicaoContato, contatoNoEscopo, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
 import { validarCadastro } from './contato-cadastro.js'
 import { gravarDocumentoEEndereco } from './contato-gravacao.js'
 import { exigirPapel } from '../plataforma/papel.js'
+import { condicaoFiltros, contextoDosFiltros, lerFiltros } from './contatos-filtros.js'
 
 /** Teto de linhas por importação — evita engolir um arquivo gigante numa tx. */
 const MAX_LINHAS_CSV = 5000
@@ -35,6 +37,14 @@ interface LinhaMetrica {
   dias_sem_comprar: number | null; atraso_relativo: string | null
   media_entre_vendas_dias: string | null; ultima_venda_em: Date | null
   confiavel: boolean; ticket_medio_centavos: string | null
+}
+
+/** Linha da lista de contatos: métricas + o que a tabela mostra ao lado (A2). */
+interface LinhaContato extends LinhaMetrica {
+  email: string | null; qualificado: boolean | null; criado_em: Date
+  origem_nome: string | null; vendedor_nome: string | null; telefone: string | null
+  etiquetas_json: { id: string; nome: string; cor: string }[]; etiquetas_total: number
+  sem_proximo_passo: boolean
 }
 
 /** Converte a linha em item de API, já com o segmento RFV do domínio. */
@@ -288,8 +298,17 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
       let criados = 0
       let atualizados = 0
+      let bloqueadosLgpd = 0
       await req.comTenant(async (tx) => {
         for (const l of linhas) {
+          // ⚠️ LGPD (H2): número de contato anonimizado não volta por importação. A chave é a mesma
+          //    do opt-out (55+DDD+8); o retorno é só uma contagem — nunca ecoa o telefone.
+          if (l.chaveBloqueio) {
+            const [lgpd] = await tx<{ ok: number }[]>`
+              SELECT 1 AS ok FROM lista_bloqueio
+               WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${l.chaveBloqueio} AND lgpd_em IS NOT NULL`
+            if (lgpd) { bloqueadosLgpd++; continue }
+          }
           let contatoId: string | null = null
 
           if (l.documento) {
@@ -345,6 +364,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         total: linhas.length + rejeicoes.length,
         criados, atualizados,
         rejeitados: rejeicoes.length,
+        bloqueadosLgpd,
         rejeicoes: rejeicoes.slice(0, 50),
       })
     },
@@ -400,36 +420,92 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
     const q = (req.query ?? {}) as { cursor?: string; limite?: string }
     const limite = limiteDe(q.limite)
     const c = lerCursor(q.cursor)
+    const lf = lerFiltros(req.query)
+    if (!lf.ok) {
+      return reply.code(422).send({ erro: 'contatos.filtro_invalido', mensagem: 'Algum filtro é inválido.', campos: lf.campos })
+    }
+    const filtros = lf.filtros
 
-    const linhas = await req.comTenant(async (tx) => {
+    const { linhas, gestao } = await req.comTenant(async (tx) => {
       const escopo = await escopoDaRequisicao(tx, req)
-      return tx<LinhaMetrica[]>`
-      SELECT c.id, c.nome,
-             coalesce(m.qtd_vendas, 0)::text     AS qtd_vendas,
-             coalesce(m.total_centavos, 0)::text AS total_centavos,
-             m.dias_sem_comprar, m.atraso_relativo::text,
-             m.media_entre_vendas_dias::text, m.ultima_venda_em,
-             coalesce(m.confiavel, false) AS confiavel,
-             m.ticket_medio_centavos::text
-        FROM contato c
-        LEFT JOIN metricas_contato m
-          ON m.tenant_id = c.tenant_id AND m.contato_id = c.id
-       WHERE c.tenant_id = tenant_atual() AND c.ativo
-         AND coalesce(c.origem_carga, '') <> 'simulacao'
-         AND ${condicaoContato(tx, escopo, 'c')}
-         AND ${c === null ? tx`true`
-              : tx`(coalesce(m.total_centavos, 0), c.id) < (${Number(c[0])}, ${c[1]}::uuid)`}
-       ORDER BY coalesce(m.total_centavos, 0) DESC, c.id DESC
-       LIMIT ${limite + 1}
+      // A tela mostra transferir/criar tarefa/filtros de gestão só a quem a API deixa fazer (a API revalida).
+      const gestao = atendePapel(await papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff }), ['gestor', 'supervisor'])
+      const ctx = await contextoDosFiltros(tx, filtros)
+      // A página sai primeiro (LIMIT) e SÓ ENTÃO ganha origem, vendedor, etiquetas e
+      // "sem próximo passo" — o enriquecimento roda em ≤ 101 linhas, nunca na base toda.
+      const linhas = await tx<LinhaContato[]>`
+      WITH pag AS (
+        SELECT c.id, c.nome, c.email, c.qualificado, c.origem_id, c.criado_em,
+               coalesce(m.qtd_vendas, 0)::text     AS qtd_vendas,
+               coalesce(m.total_centavos, 0)::text AS total_centavos,
+               m.dias_sem_comprar, m.atraso_relativo::text,
+               m.media_entre_vendas_dias::text, m.ultima_venda_em,
+               coalesce(m.confiavel, false) AS confiavel,
+               m.ticket_medio_centavos::text
+          FROM contato c
+          LEFT JOIN metricas_contato m
+            ON m.tenant_id = c.tenant_id AND m.contato_id = c.id
+         WHERE c.tenant_id = tenant_atual() AND c.ativo
+           AND coalesce(c.origem_carga, '') <> 'simulacao'
+           AND ${condicaoContato(tx, escopo, 'c')}
+           AND ${condicaoFiltros(tx, filtros, ctx)}
+           AND ${c === null ? tx`true`
+                : tx`(coalesce(m.total_centavos, 0), c.id) < (${Number(c[0])}, ${c[1]}::uuid)`}
+         ORDER BY coalesce(m.total_centavos, 0) DESC, c.id DESC
+         LIMIT ${limite + 1}
+      )
+      SELECT pag.*,
+             o.nome AS origem_nome,
+             v.nome AS vendedor_nome,
+             tel.e164 AS telefone,
+             coalesce(et.itens, '[]'::json) AS etiquetas_json,
+             coalesce(et.total, 0)::int AS etiquetas_total,
+             (NOT EXISTS (SELECT 1 FROM tarefa ft WHERE ft.tenant_id = tenant_atual() AND ft.contato_id = pag.id
+                             AND ft.estado = 'aberta' AND ft.vence_em >= now())
+              ${ctx.agenda ? tx`AND NOT EXISTS (SELECT 1 FROM evento_agenda fe WHERE fe.tenant_id = tenant_atual()
+                             AND fe.contato_id = pag.id AND fe.status = 'agendado' AND fe.inicio >= now())` : tx``}) AS sem_proximo_passo
+        FROM pag
+        LEFT JOIN origem o ON o.tenant_id = tenant_atual() AND o.id = pag.origem_id
+        LEFT JOIN LATERAL (
+          SELECT u.nome FROM carteira_atribuicao ca
+            JOIN usuario u ON u.tenant_id = ca.tenant_id AND u.id = ca.usuario_id
+           WHERE ca.tenant_id = tenant_atual() AND ca.contato_id = pag.id AND ca.ate IS NULL AND ca.usuario_id IS NOT NULL
+           LIMIT 1) v ON true
+        LEFT JOIN LATERAL (
+          SELECT ct.e164 FROM contato_telefone ct
+           WHERE ct.tenant_id = tenant_atual() AND ct.contato_id = pag.id AND ct.principal LIMIT 1) tel ON true
+        LEFT JOIN LATERAL (
+          SELECT (SELECT json_agg(json_build_object('id', x.id, 'nome', x.nome, 'cor', x.cor) ORDER BY lower(x.nome), x.id)
+                    FROM (SELECT e.id, e.nome, e.cor FROM contato_etiqueta ce
+                            JOIN etiqueta e ON e.tenant_id = ce.tenant_id AND e.id = ce.etiqueta_id
+                           WHERE ce.tenant_id = tenant_atual() AND ce.contato_id = pag.id
+                           ORDER BY lower(e.nome), e.id LIMIT 3) x) AS itens,
+                 (SELECT count(*) FROM contato_etiqueta ce
+                   WHERE ce.tenant_id = tenant_atual() AND ce.contato_id = pag.id) AS total) et ON true
+       ORDER BY coalesce(pag.total_centavos::bigint, 0) DESC, pag.id DESC
     `
+      return { linhas, gestao }
     })
 
     const temMais = linhas.length > limite
     const pagina = temMais ? linhas.slice(0, limite) : linhas
     const ultimo = pagina[pagina.length - 1]
     return reply.send({
-      itens: pagina.map(paraItem),
+      itens: pagina.map((l) => ({
+        ...paraItem(l),
+        email: l.email,
+        telefone: l.telefone,
+        qualificacao: l.qualificado === null ? 'novo' : l.qualificado ? 'qualificado' : 'descartado',
+        origem: l.origem_nome,
+        vendedor: l.vendedor_nome,
+        etiquetas: l.etiquetas_json,
+        etiquetasTotal: l.etiquetas_total,
+        ultimaCompraEm: l.ultima_venda_em,
+        criadoEm: l.criado_em,
+        semProximoPasso: l.sem_proximo_passo,
+      })),
       proximoCursor: temMais && ultimo ? escreverCursor(ultimo.total_centavos, ultimo.id) : null,
+      gestao,
     })
   })
 

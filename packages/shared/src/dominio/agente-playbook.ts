@@ -5,12 +5,13 @@ import {
 } from './agente-filtro.js'
 import { textoAvisoPrivacidade } from './agente-gatilhos.js'
 import { PERGUNTA_DO_SLOT } from './agente-perguntas.js'
+import { LIMITES_OBJECOES, itemObjecao, normalizarGatilho, type ObjecaoPlaybook } from './agente-objecoes.js'
 
 /**
  * PLAYBOOK COMERCIAL VERSIONADO (raia P17; ADR-029, ADR-033).
  *
  * "Como vender" por tenant ou por número — estilo, persona, roteiro de
- * qualificação, mensagens prontas, compliance EXTRA e ações habilitáveis —
+ * qualificação, objeções (G2), mensagens prontas, compliance EXTRA e ações habilitáveis —
  * editado na tela num RASCUNHO, testado no sandbox (modo seco), PUBLICADO com
  * observação e guardado como versão IMUTÁVEL. Restaurar = publicar uma cópia de
  * versão antiga como versão nova.
@@ -43,6 +44,8 @@ export const LIMITES_PLAYBOOK = {
   observacaoMin: 10,
   observacaoMax: 500,
   resumoMudancas: 20,
+  /** Objeções (G2): itens, gatilhos e resposta de referência. */
+  ...LIMITES_OBJECOES,
 } as const
 
 /** Os únicos placeholders aceitos nas mensagens prontas. */
@@ -124,13 +127,19 @@ export const compliancePlaybook = z.object({
  *    (opt-out, pedido de humano, "é robô?") NÃO aparecem aqui: ficam sempre
  *    ligados. `.strict()` recusa qualquer chave fora desta lista.
  */
-export const ACOES_PLAYBOOK = ['catalogo', 'pedido', 'proposta', 'memoria', 'conhecimento'] as const
+export const ACOES_PLAYBOOK = ['catalogo', 'pedido', 'proposta', 'memoria', 'conhecimento', 'objecoes'] as const
 export type AcaoPlaybook = (typeof ACOES_PLAYBOOK)[number]
 export const acoesPlaybook = z.object({
   catalogo: z.boolean(), pedido: z.boolean(), proposta: z.boolean(), memoria: z.boolean(), conhecimento: z.boolean(),
+  /**
+   * `registrar_objecao` (G2). ⚠️ `default(true)`: versões publicadas antes da G2
+   * não têm a chave e continuam válidas — e sem objeção ativa cadastrada a
+   * ferramenta nem entra no menu.
+   */
+  objecoes: z.boolean().default(true),
 }).strict()
 export type AcoesPlaybook = z.output<typeof acoesPlaybook>
-export const ACOES_TODAS_LIGADAS: AcoesPlaybook = { catalogo: true, pedido: true, proposta: true, memoria: true, conhecimento: true }
+export const ACOES_TODAS_LIGADAS: AcoesPlaybook = { catalogo: true, pedido: true, proposta: true, memoria: true, conhecimento: true, objecoes: true }
 
 export const ROTULO_ACAO: Readonly<Record<AcaoPlaybook, { rotulo: string; descricao: string; ferramentas: readonly string[] }>> = {
   catalogo: { rotulo: 'Consultar catálogo', descricao: 'Buscar produtos, ver variações, preço e estoque.', ferramentas: ['catalogo_buscar', 'catalogo_detalhar', 'catalogo_preco_estoque'] },
@@ -138,6 +147,7 @@ export const ROTULO_ACAO: Readonly<Record<AcaoPlaybook, { rotulo: string; descri
   proposta: { rotulo: 'Enviar proposta', descricao: 'Mandar o resumo do pedido e pedir a confirmação do cliente (a efetivação nunca é do modelo).', ferramentas: ['pedido_propor'] },
   memoria: { rotulo: 'Anotar memória do cliente', descricao: 'Guardar preferências e objeções para as próximas conversas (nunca dado pessoal).', ferramentas: ['memoria_anotar'] },
   conhecimento: { rotulo: 'Consultar a base de conhecimento', descricao: 'Buscar políticas, prazos e condições nos documentos da loja.', ferramentas: ['conhecimento_buscar'] },
+  objecoes: { rotulo: 'Registrar objeções', descricao: 'Anotar a objeção do cliente pelo código do playbook e se foi revertida. Na 3ª seguida sem reverter, uma pessoa assume (regra do sistema).', ferramentas: ['registrar_objecao'] },
 }
 
 /** O que fica SEMPRE ligado e não aparece como opção — mostrado na tela, somente leitura. */
@@ -156,16 +166,18 @@ export const conteudoPlaybook = z.object({
   estilo: estiloPlaybook,
   persona: personaPlaybook,
   qualificacao: z.array(itemQualificacao).max(SLOTS_QUALIFICACAO.length),
+  /** Catálogo de objeções (G2). `default([])`: versões anteriores à G2 continuam válidas. */
+  objecoes: z.array(itemObjecao).max(LIMITES_OBJECOES.objecoesMax, `No máximo ${LIMITES_OBJECOES.objecoesMax} objeções.`).default([]),
   mensagens: mensagensPlaybook,
   compliance: compliancePlaybook,
   acoes: acoesPlaybook,
 }).strict()
 export type ConteudoPlaybook = z.output<typeof conteudoPlaybook>
 
-export const SECOES_PLAYBOOK = ['estilo', 'persona', 'qualificacao', 'mensagens', 'compliance', 'acoes'] as const
+export const SECOES_PLAYBOOK = ['estilo', 'persona', 'qualificacao', 'objecoes', 'mensagens', 'compliance', 'acoes'] as const
 export type SecaoPlaybook = (typeof SECOES_PLAYBOOK)[number]
 export const ROTULO_SECAO_PLAYBOOK: Readonly<Record<SecaoPlaybook, string>> = {
-  estilo: 'Tom e estilo', persona: 'Persona', qualificacao: 'Roteiro de qualificação',
+  estilo: 'Tom e estilo', persona: 'Persona', qualificacao: 'Roteiro de qualificação', objecoes: 'Objeções',
   mensagens: 'Mensagens prontas', compliance: 'Compliance extra', acoes: 'Ações permitidas',
 }
 
@@ -235,6 +247,7 @@ export function playbookPadrao(): ConteudoPlaybook {
     estilo: { tratamento: 'voce', maxCaracteres: null, maxPerguntas: null, orientacoes: '' },
     persona: { nome: 'Assistente', loja: '', tom: 'neutro', usaEmojis: false, saudacao: '' },
     qualificacao: [],
+    objecoes: [],
     mensagens: { ...MENSAGENS_PADRAO },
     compliance: { frasesProibidas: [], gatilhosHandoff: [] },
     acoes: { ...ACOES_TODAS_LIGADAS },
@@ -358,8 +371,13 @@ export function negaSerIa(texto: string): boolean {
 }
 
 const NUMERO_EXTENSO = String.raw`(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|cento|duzent[oa]s|trezent[oa]s|quinhent[oa]s|mil|meia\s+d[uú]zia|d[uú]zia)`
-/** Número por extenso com unidade de negócio ("dez por cento", "dois dias úteis", "cinco peças"). */
-const NUMERO_EXTENSO_RE = new RegExp(String.raw`(?:^|[^\p{L}])${NUMERO_EXTENSO}(?:\s+e\s+${NUMERO_EXTENSO})*\s+(?:por\s+cento|reais|real|centavos|dias?|horas?|semanas?|meses|m[eê]s|unidades?|pe[cç]as?|caixas?|pares|fardos?|pacotes?|kg|quilos?|metros?)(?![\p{L}])`, 'iu')
+const UNIDADE_EXTENSO = String.raw`(?:por\s+cento|reais|real|centavos|dias?|horas?|semanas?|meses|m[eê]s|anos?|vezes|parcelas?|minutos?|litros?|toneladas?|unidades?|pe[cç]as?|caixas?|pares|fardos?|pacotes?|kg|quilos?|metros?)`
+const ORDINAL_PARCELA = String.raw`(?:primeir[oa]|segund[oa]|terceir[oa]|quart[oa]|quint[oa]|sext[oa]|s[eé]tim[oa]|oitav[oa]|non[oa]|d[eé]cim[oa])\s+parcelas?`
+/**
+ * Número por extenso com unidade de negócio ("dez por cento", "dois dias úteis", "cinco peças",
+ * "em doze vezes", "dez anos", "primeira parcela"), mais "metade" e "meio por cento".
+ */
+export const NUMERO_EXTENSO_RE = new RegExp(String.raw`(?:^|[^\p{L}])(?:${NUMERO_EXTENSO}(?:\s+e\s+${NUMERO_EXTENSO})*\s+${UNIDADE_EXTENSO}|${ORDINAL_PARCELA}|meio\s+por\s+cento|metade)(?![\p{L}])`, 'iu')
 
 /** Verbo de entrega/envio/chegada/saída/expedição (texto normalizado sem acento). */
 const VERBO_ENTREGA_RE = /(?:^|[^\p{L}])(?:entreg\p{L}*|envi\p{L}*|mand\p{L}*|cheg\p{L}*|sai|saem|sair|saiu|sairá|saira|despach\p{L}*|exped\p{L}*|lev\p{L}*|post\p{L}*|recebe\p{L}*)(?![\p{L}])/iu
@@ -412,6 +430,79 @@ export function errosDasOrientacoes(texto: string): string | null {
   return null
 }
 
+/**
+ * Resposta de referência de uma objeção (G2): é o texto que o modelo imita, então
+ * vale a mesma régua do texto do agente — sem número de negócio literal (preço,
+ * percentual, prazo, quantidade, nem por extenso), sem promessa de prazo, sem frase
+ * que o filtro de saída bloqueia e sem negar ser IA. Diferente da mensagem pronta,
+ * pode FALAR de desconto ("desconto é com o vendedor") — oferecer, o filtro barra.
+ */
+export function errosDaRespostaObjecao(texto: string): string | null {
+  const desconhecidos = (texto.match(PLACEHOLDER_RE) ?? []).filter((p) => !(PLACEHOLDERS_PLAYBOOK as readonly string[]).includes(p))
+  if (desconhecidos.length) return `Marcador desconhecido: ${desconhecidos[0]}. Use só ${PLACEHOLDERS_PLAYBOOK.join(', ')}.`
+  const exemplo = renderizarMensagem(texto, { nome: 'Ana', assistente: 'Assistente', empresa: 'Loja' })
+  if (negaSerIa(exemplo)) {
+    return 'A resposta não pode negar que é uma assistente virtual (IA), se passar por pessoa nem mandar ignorar as regras.'
+  }
+  const semMarcadores = texto.replace(PLACEHOLDER_RE, ' ')
+  if (/\bR\$/i.test(exemplo) || verificarNumerosNaResposta(exemplo, new Set()).length > 0) {
+    return 'A resposta de referência não pode citar preço: o valor vem do catálogo, consultado pelo agente no turno. Escreva algo como "confiro o valor no sistema para você".'
+  }
+  if (PERCENTUAL_RE.test(exemplo) || /por\s*cento/i.test(exemplo)) {
+    return 'A resposta de referência não pode citar percentual (desconto, juros, margem): número de negócio só com fonte no turno.'
+  }
+  // "o prazo de entrega eu confiro" é conduta, não promessa: a palavra "prazo" sozinha não conta como data.
+  if (PROMESSA_PRAZO_RE.test(exemplo) || (VERBO_ENTREGA_RE.test(exemplo) && TEMPO_RE.test(exemplo.replace(/(?<![\p{L}])prazos?(?![\p{L}])/giu, ' ')))) {
+    return 'A resposta de referência não promete prazo de entrega nem de retorno: prazo vem da base de conhecimento ou do pedido.'
+  }
+  if (/\d/.test(semMarcadores) || NUMERO_EXTENSO_RE.test(exemplo)) {
+    return 'A resposta de referência não pode citar número (prazo, quantidade, parcelas), nem por extenso: o agente busca o número na ferramenta, no turno.'
+  }
+  const f = filtrarSaida(exemplo)
+  const proibida = f.ocorrencias.find((o) => o.gravidade === 'CRITICA' || o.acao === 'removido')
+  if (proibida) return `Contém uma frase que o filtro de segurança bloqueia (${proibida.id}). Reescreva sem prometer, garantir ou oferecer desconto.`
+  return null
+}
+
+/** Regras da seção de objeções que o schema não expressa. Campos no formato `objecoes[2].resposta`. */
+export function errosDasObjecoes(objecoes: readonly ObjecaoPlaybook[]): ErroCampoPlaybook[] {
+  const erros: ErroCampoPlaybook[] = []
+  // Teto agregado: a seção entra inteira no prompt, então o conjunto das ATIVAS tem limite.
+  const total = objecoes.filter((o) => o.ativo).reduce((n, o) => n + o.objecao.length + o.gatilhos.reduce((m, g) => m + g.length, 0) + o.resposta.length, 0)
+  if (total > LIMITES_OBJECOES.secaoMax) {
+    erros.push({ campo: 'objecoes', mensagem: `A seção de objeções ativas tem ${total} caracteres (objeção, gatilhos e resposta somados); o máximo é ${LIMITES_OBJECOES.secaoMax}. Encurte as respostas ou desative objeções.` })
+  }
+  const codigos = new Set<string>()
+  /** gatilho normalizado → código da objeção ATIVA que o usa primeiro. */
+  const gatilhoDe = new Map<string, { readonly codigo: string; readonly i: number }>()
+  objecoes.forEach((o, i) => {
+    if (codigos.has(o.codigo)) erros.push({ campo: `objecoes[${i}].codigo`, mensagem: `O código ${o.codigo} já está em uso: cada objeção tem um código só.` })
+    codigos.add(o.codigo)
+    if (negaSerIa(o.objecao)) {
+      erros.push({ campo: `objecoes[${i}].objecao`, mensagem: 'O texto não pode mandar negar que é IA, se passar por pessoa nem ignorar as regras.' })
+    }
+    const vistos = new Set<string>()
+    o.gatilhos.forEach((g, j) => {
+      const k = normalizarGatilho(g)
+      if (!k) { erros.push({ campo: `objecoes[${i}].gatilhos[${j}]`, mensagem: 'O gatilho precisa ter letras ou números.' }); return }
+      if (vistos.has(k)) { erros.push({ campo: `objecoes[${i}].gatilhos[${j}]`, mensagem: `O gatilho "${g}" está repetido nesta objeção.` }); return }
+      vistos.add(k)
+      if (!o.ativo) return
+      const dono = gatilhoDe.get(k)
+      if (dono && dono.i !== i) erros.push({ campo: `objecoes[${i}].gatilhos[${j}]`, mensagem: `O gatilho "${g}" já está em ${dono.codigo}: um gatilho aponta para uma objeção só.` })
+      else gatilhoDe.set(k, { codigo: o.codigo, i })
+    })
+    const e = errosDaRespostaObjecao(o.resposta)
+    if (e) erros.push({ campo: `objecoes[${i}].resposta`, mensagem: e })
+  })
+  return erros
+}
+
+/** Objeções ATIVAS, na ordem do playbook (o que vai para o prompt e para a ferramenta). */
+export function objecoesAtivas(c: ConteudoPlaybook | null | undefined): ObjecaoPlaybook[] {
+  return c ? c.objecoes.filter((o) => o.ativo) : []
+}
+
 /** Validação completa: schema + regras que o schema não expressa. Erros com campo no formato `qualificacao[2].pergunta`. */
 export function validarPlaybook(bruto: unknown): ResultadoValidacaoPlaybook {
   const p = conteudoPlaybook.safeParse(bruto)
@@ -450,6 +541,7 @@ export function validarPlaybook(bruto: unknown): ResultadoValidacaoPlaybook {
   }
   const eo = errosDasOrientacoes(c.estilo.orientacoes)
   if (eo) erros.push({ campo: 'estilo.orientacoes', mensagem: eo })
+  erros.push(...errosDasObjecoes(c.objecoes))
   if (c.acoes.proposta && !c.acoes.pedido) {
     erros.push({ campo: 'acoes.proposta', mensagem: 'Para enviar proposta o agente precisa montar o pedido: ligue também "Montar pedido".' })
   }
@@ -592,6 +684,11 @@ function camposDaSecao(c: ConteudoPlaybook, s: SecaoPlaybook): Map<string, strin
       for (const f of c.compliance.frasesProibidas) m.set(`Frase proibida: ${chaveLiteral(f)}`, f)
       for (const g of c.compliance.gatilhosHandoff) m.set(`Gatilho de transferência: ${chaveLiteral(g)}`, g)
       break
+    case 'objecoes':
+      for (const o of c.objecoes) {
+        m.set(o.codigo, `${o.objecao} · gatilhos: ${o.gatilhos.join(', ') || '—'} · resposta: ${o.resposta}${o.ativo ? '' : ' · inativa'}`)
+      }
+      break
     case 'acoes':
       for (const a of ACOES_PLAYBOOK) m.set(ROTULO_ACAO[a].rotulo, c.acoes[a] ? 'ligada' : 'desligada')
       break
@@ -615,6 +712,10 @@ export function diffPorSecao(antes: ConteudoPlaybook | null, depois: ConteudoPla
       && antes.qualificacao.map((q) => q.slot).join() !== depois.qualificacao.map((q) => q.slot).join()) {
       mudancas.push({ campo: 'Ordem', antes: antes.qualificacao.map((q) => q.slot).join(' → '), depois: depois.qualificacao.map((q) => q.slot).join(' → ') })
     }
+    if (secao === 'objecoes' && antes && mudancas.length === 0
+      && antes.objecoes.map((o) => o.codigo).join() !== depois.objecoes.map((o) => o.codigo).join()) {
+      mudancas.push({ campo: 'Ordem', antes: antes.objecoes.map((o) => o.codigo).join(' → '), depois: depois.objecoes.map((o) => o.codigo).join(' → ') })
+    }
     return { secao, rotulo: ROTULO_SECAO_PLAYBOOK[secao], mudou: mudancas.length > 0, mudancas }
   })
 }
@@ -627,11 +728,11 @@ export type PlaybookSimulacao = (typeof PLAYBOOK_SIMULACAO)[number]
 export const LIMITE_MENSAGENS_SIMULACAO = 20
 
 /** Ferramentas de ESCRITA: no sandbox viram registradores (nada é gravado). */
-export const FERRAMENTAS_DE_ESCRITA: readonly string[] = ['pedido_itens', 'pedido_propor', 'memoria_anotar', 'atendimento_transferir']
+export const FERRAMENTAS_DE_ESCRITA: readonly string[] = ['pedido_itens', 'pedido_propor', 'memoria_anotar', 'atendimento_transferir', 'registrar_objecao']
 
 // ── atualizar a partir de documento ────────────────────────────────────────
 
-/** Seções que um documento pode reescrever. Persona, limites de estilo e AÇÕES nunca. */
+/** Seções que um documento pode reescrever. Persona, limites de estilo, OBJEÇÕES e AÇÕES nunca. */
 export const SECOES_DOCUMENTO = ['orientacoes', 'qualificacao', 'mensagens', 'compliance'] as const
 export type SecaoDocumento = (typeof SECOES_DOCUMENTO)[number]
 export const LIMITE_TEXTO_DOCUMENTO = 60_000
@@ -654,7 +755,7 @@ export type SugestaoDoDocumento = z.output<typeof sugestaoDoDocumento>
 
 /**
  * Aplica a sugestão do LLM sobre o conteúdo atual: só as seções do documento.
- * ⚠️ Persona, limites de estilo e AÇÕES vêm SEMPRE do atual; compliance só
+ * ⚠️ Persona, limites de estilo, objeções e AÇÕES vêm SEMPRE do atual; compliance só
  *    GANHA itens (união) — o documento nunca remove frase nem desliga nada.
  */
 export function aplicarSugestao(atual: ConteudoPlaybook, s: SugestaoDoDocumento): unknown {
@@ -665,6 +766,7 @@ export function aplicarSugestao(atual: ConteudoPlaybook, s: SugestaoDoDocumento)
     estilo: { ...atual.estilo, orientacoes: s.orientacoes?.trim() ? s.orientacoes.trim() : atual.estilo.orientacoes },
     persona: atual.persona,
     qualificacao: s.qualificacao ?? atual.qualificacao,
+    objecoes: atual.objecoes,
     mensagens,
     compliance: {
       frasesProibidas: semDuplicatas([...atual.compliance.frasesProibidas, ...s.frasesProibidasNovas.map((x) => x.trim())]),

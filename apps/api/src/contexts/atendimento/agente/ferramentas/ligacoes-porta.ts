@@ -1,4 +1,4 @@
-import type { AcoesPlaybook, AtributosSku } from '@geracrm/shared'
+import type { AcoesPlaybook, AtributosSku, ObjecaoPlaybook } from '@geracrm/shared'
 import type { ContextoFerramenta } from './porta.js'
 
 /**
@@ -82,4 +82,9 @@ export interface Ligacoes {
    * perfil do cliente não são ação habilitável (sempre no menu).
    */
   readonly acoes?: AcoesPlaybook | undefined
+  /**
+   * Objeções do playbook publicado do número (G2) — o vocabulário de
+   * `registrar_objecao`. Ausente/vazio = a ferramenta não entra no menu.
+   */
+  readonly objecoes?: readonly ObjecaoPlaybook[] | undefined
 }

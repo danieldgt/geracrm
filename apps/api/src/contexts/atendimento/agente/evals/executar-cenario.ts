@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { expect } from 'vitest'
 import postgres from 'postgres'
-import { textoAbertura, type MarcaGuardrail } from '@geracrm/shared'
+import { textoAbertura, type ConteudoPlaybook, type MarcaGuardrail } from '@geracrm/shared'
 import { comTenantServico } from '../../../../db/index.js'
 import { criarProdutoManual } from '../../../catalogo/escrita-manual.js'
 import { reindexarTenant } from '../../../catalogo/indexador.js'
@@ -140,6 +140,11 @@ export interface ConfigCenario {
   readonly semAvisoPrivacidade?: boolean
   /** Pedido anterior do contato (recompra). */
   readonly pedidoAnterior?: { readonly totalCentavos: number; readonly estado: string }
+  /**
+   * Playbook PUBLICADO do número (o espelho em `agente_config.playbook`) — G2: as
+   * objeções e a ação "Registrar objeções". Ausente = sem playbook.
+   */
+  readonly playbook?: ConteudoPlaybook
 }
 
 export interface Cenario {
@@ -200,7 +205,7 @@ const ids = (suite: Suite) => ({
 
 const SEMPRE_FECHADO = { seg: null, ter: null, qua: null, qui: null, sex: null, sab: null, dom: null }
 const TABELAS_DO_TENANT = [
-  'agente_avaliacao', 'agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_retorno', 'conhecimento_trecho',
+  'agente_objecao', 'agente_avaliacao', 'agente_decisao', 'agente_tarefa', 'agente_sessao', 'agente_retorno', 'conhecimento_trecho',
   'conhecimento_documento_versao', 'conhecimento_documento', 'cliente_memoria', 'aviso_privacidade', 'agente_config',
   'notificacao', 'atendimento', 'pedido_proposta', 'pedido_item', 'pedido', 'mensagem', 'conversa', 'lista_bloqueio',
   'consentimento_contato', 'contato_telefone', 'contato', 'produto_indice', 'sku_preco', 'sku_saldo', 'sku', 'produto',
@@ -285,16 +290,19 @@ export class ExecutorDeCenarios {
 
   private async configurar(c: ConfigCenario): Promise<void> {
     const i = ids(this.suite)
+    const playbook = c.playbook
+      ? JSON.stringify({ versaoId: randomUUID(), numero: 1, escopo: 'numero', publicadaEm: new Date().toISOString(), conteudo: c.playbook })
+      : null
     await this.dono`
       INSERT INTO agente_config (tenant_id, canal_id, ativo, modo, politicas, so_quando_ninguem_disponivel, exigir_ausencia_antes, persona,
-                                 alcada, recorte, teto_sessao_centavos, qualificacao)
+                                 alcada, recorte, teto_sessao_centavos, qualificacao, playbook)
       VALUES (${i.tenant}, ${i.canal}, true, ${c.modo ?? 'autonomo'}, ${this.suite.politicas}, false, false,
               ${JSON.stringify(this.suite.persona)}::text::jsonb, ${JSON.stringify(c.alcada ?? {})}::text::jsonb,
               ${c.recorte === undefined ? null : JSON.stringify(c.recorte)}::text::jsonb, ${c.tetoSessaoCentavos ?? null},
-              ${JSON.stringify(c.qualificacao ?? [])}::text::jsonb)
+              ${JSON.stringify(c.qualificacao ?? [])}::text::jsonb, ${playbook}::text::jsonb)
       ON CONFLICT (tenant_id, canal_id) DO UPDATE SET
         modo = EXCLUDED.modo, ativo = true, alcada = EXCLUDED.alcada, recorte = EXCLUDED.recorte,
-        teto_sessao_centavos = EXCLUDED.teto_sessao_centavos, qualificacao = EXCLUDED.qualificacao`
+        teto_sessao_centavos = EXCLUDED.teto_sessao_centavos, qualificacao = EXCLUDED.qualificacao, playbook = EXCLUDED.playbook`
   }
 
   // ── um cenário ────────────────────────────────────────────────────────────

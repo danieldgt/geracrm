@@ -5,6 +5,7 @@ import { ferramentasDeCatalogo } from './catalogo.js'
 import { ferramentasDePedido, ferramentaDeTransferencia } from './pedido.js'
 import { ferramentaClientePerfil, ferramentaConhecimento } from './cliente.js'
 import { ferramentaMemoriaAnotar } from '../memoria/ferramenta-memoria.js'
+import { ferramentaRegistrarObjecao } from './objecao.js'
 import type { CapacidadesDoTurno } from '../instrucao-vendedor.js'
 
 /**
@@ -32,5 +33,7 @@ export function montarFerramentas(l: Ligacoes): { ferramentas: Ferramenta<never>
   ferramentas.push(ferramentaClientePerfil(l.pedido))
   if (a.conhecimento) ferramentas.push(ferramentaConhecimento(l.conhecimento))
   if (a.memoria) ferramentas.push(ferramentaMemoriaAnotar())
+  // Objeções (G2): só com a ação ligada E objeção ativa no playbook — sem catálogo de objeções, não há o que registrar.
+  if (a.objecoes && l.objecoes?.some((o) => o.ativo)) ferramentas.push(ferramentaRegistrarObjecao(l.objecoes))
   return { ferramentas, capacidades: { catalogo, pedido, conhecimento: a.conhecimento, proposta } }
 }
