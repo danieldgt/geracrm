@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core'
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core'
 import {
   ChipsEtiquetaComponente, EstadoComponente, EsqueletoComponente, ToastServico, mensagemDeErro, type OpcaoChip,
 } from '../../compartilhado/ui/index.js'
@@ -68,6 +68,8 @@ export class EtiquetasContatoComponente {
     for (const e of this.dasSalvas()) porId.set(e.id, e)
     return [...porId.values()].map((e) => ({ valor: e.id, rotulo: e.ativa ? e.nome : `${e.nome} (inativa)`, cor: tokenDaCor(e.cor) }))
   })
+  /** Emite depois de salvar (a ficha recarrega o feed, que registra a mudança). */
+  readonly salvou = output<void>()
   protected readonly mudou = computed(() => diferencaSelecao(this.selecao(), this.salvas()).mudou)
 
   constructor() {
@@ -110,6 +112,7 @@ export class EtiquetasContatoComponente {
     try {
       await this.api.salvarDoContato(this.contatoId(), this.selecao())
       this.toast.sucesso('Etiquetas salvas.')
+      this.salvou.emit()
       await this.carregar()
     } catch (e) {
       this.toast.erro(mensagemDeErro(e, 'Não foi possível salvar as etiquetas.'))

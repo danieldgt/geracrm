@@ -430,11 +430,17 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
           recebe_campanhas: boolean; recebe_automacoes: boolean; criado_em: Date; perfil_preco: string | null
           razao_social: string | null; nome_fantasia: string | null; email: string | null; prioridade: string | null
           temperatura: string | null; origem_id: string | null; valor_estimado_centavos: string | null; observacoes: string | null
+          origem_nome: string | null; vendedor_id: string | null; vendedor_nome: string | null
         }[]>`
-          SELECT id, nome, modalidade, qualificado, recebe_campanhas, recebe_automacoes, criado_em, perfil_preco,
+          SELECT contato.id, contato.nome, modalidade, qualificado, recebe_campanhas, recebe_automacoes, contato.criado_em, perfil_preco,
                  razao_social, nome_fantasia, email, prioridade, temperatura, origem_id,
-                 valor_estimado_centavos::text, observacoes
-            FROM contato WHERE id = ${id}
+                 valor_estimado_centavos::text, observacoes,
+                 (SELECT o.nome FROM origem o WHERE o.tenant_id = contato.tenant_id AND o.id = contato.origem_id) AS origem_nome,
+                 ca.usuario_id AS vendedor_id,
+                 (SELECT u.nome FROM usuario u WHERE u.tenant_id = contato.tenant_id AND u.id = ca.usuario_id) AS vendedor_nome
+            FROM contato
+            LEFT JOIN carteira_atribuicao ca ON ca.tenant_id = contato.tenant_id AND ca.contato_id = contato.id AND ca.ate IS NULL
+           WHERE contato.id = ${id}
         `
         if (!contato) return null
 
@@ -505,6 +511,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         prioridade: dados.contato.prioridade,
         temperatura: dados.contato.temperatura,
         origemId: dados.contato.origem_id,
+        origem: dados.contato.origem_nome,
+        criadoEm: dados.contato.criado_em,
+        vendedor: dados.contato.vendedor_id ? { id: dados.contato.vendedor_id, nome: dados.contato.vendedor_nome ?? 'Usuário' } : null,
         valorEstimadoCentavos: dados.contato.valor_estimado_centavos === null ? null : Number(dados.contato.valor_estimado_centavos),
         observacoes: dados.contato.observacoes,
         // Perfil de preço DECLARADO (ADR-025). null = cota pelo padrão (atacado).
