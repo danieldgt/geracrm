@@ -1,19 +1,25 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, computed, inject, signal, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
 import { RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import {
+  AbasComponente, type Aba, BadgeComponente, CabecalhoTelaComponente, CelulaDiretiva, EstadoComponente, PaginacaoComponente,
+  TabelaComponente, type ColunaTabela, type LinhaTabela,
+} from '../../compartilhado/ui/index.js'
 
 interface Msg {
   readonly id: string; readonly criadoEm: string; readonly tipo: string; readonly status: string | null
   readonly preview: string; readonly contatoId: string | null; readonly contato: string | null; readonly enviadaPor: string | null
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
-const ABAS = [
-  { chave: '', rotulo: 'Todas' },
-  { chave: 'enviada', rotulo: 'Enviadas' },
-  { chave: 'entregue', rotulo: 'Entregues' },
-  { chave: 'falhou', rotulo: 'Falhas' },
+type TomBadge = 'neutro' | 'sucesso' | 'atencao' | 'erro'
+
+const ABAS: Aba[] = [
+  { id: 'todas', rotulo: 'Todas' },
+  { id: 'enviada', rotulo: 'Enviadas' },
+  { id: 'entregue', rotulo: 'Entregues' },
+  { id: 'falhou', rotulo: 'Falhas' },
 ]
 const STATUS_ROTULO: Record<string, string> = { pendente: 'pendente', enviada: 'enviada', entregue: 'entregue', lida: 'lida', falhou: 'falhou' }
 
@@ -25,97 +31,123 @@ const STATUS_ROTULO: Record<string, string> = { pendente: 'pendente', enviada: '
 @Component({
   selector: 'app-mensagens-enviadas',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, RouterLink],
+  imports: [
+    AbasComponente, BadgeComponente, CabecalhoTelaComponente, CelulaDiretiva, DatePipe, EstadoComponente,
+    PaginacaoComponente, RouterLink, TabelaComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <h1 class="txt-titulo">Mensagens Enviadas</h1>
-      <p class="sub">Tudo o que saiu: individual e em massa, com status de entrega.</p>
-    </header>
+    <ui-cabecalho-tela titulo="Mensagens enviadas"
+      subtitulo="Tudo o que saiu: individual e em massa, com status de entrega." />
 
-    <div class="abas">
-      @for (a of abas; track a.chave) {
-        <button [class.on]="aba() === a.chave" (click)="trocar(a.chave)">{{ a.rotulo }}</button>
-      }
-    </div>
+    <ui-abas [abas]="abas" [ativa]="aba()" (ativaChange)="trocar($event)" />
 
-    @switch (estado()) {
-      @case ('carregando') { <div class="lista"><div class="esq"></div><div class="esq"></div><div class="esq"></div></div> }
-      @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="carregar()">Tentar de novo</button></div> }
-      @case ('pronto') {
-        @if (itens().length === 0) {
-          <div class="bloco"><h2 class="txt-secao">Nada por aqui</h2><p>Nenhuma mensagem enviada com esse filtro.</p></div>
-        } @else {
-          <ul class="lista">
-            @for (m of itens(); track m.id) {
-              <li class="msg">
-                <div class="col encolhe">
-                  <span class="prev encolhe">{{ m.preview }}</span>
-                  <span class="meta">
-                    @if (m.contato && m.contatoId) { <a [routerLink]="['/contato', m.contatoId]">{{ m.contato }}</a> }
-                    @else { <span class="sem">sem contato</span> }
-                    · {{ m.criadoEm | date: 'dd/MM HH:mm' }}
-                    @if (m.enviadaPor) { · {{ m.enviadaPor }} }
-                  </span>
-                </div>
-                <span class="status" [attr.data-s]="m.status">{{ m.status ? rotulo(m.status) : '—' }}</span>
-              </li>
-            }
-          </ul>
-          @if (temMais()) { <button class="btn btn--secundario btn--bloco" (click)="carregar(true)">Carregar mais</button> }
+    <div class="corpo">
+      @switch (estado()) {
+        @case ('carregando') {
+          <ui-tabela [colunas]="colunas" [linhas]="[]" [carregando]="true" />
+        }
+        @case ('sem_permissao') {
+          <ui-estado tipo="sem-permissao" titulo="Sem acesso às mensagens enviadas" descricao="Peça acesso a um administrador." />
+        }
+        @case ('erro') {
+          <ui-estado tipo="erro" titulo="Não foi possível carregar as mensagens" descricao="Verifique a conexão e tente de novo.">
+            <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+          </ui-estado>
+        }
+        @case ('pronto') {
+          <ui-tabela [colunas]="colunas" [linhas]="linhas()">
+            <ng-template uiCelula="preview" let-m>
+              <span class="prev">{{ m.preview }}</span>
+            </ng-template>
+            <ng-template uiCelula="contato" let-m>
+              @if (m.contato && m.contatoId) {
+                <a class="contato" [routerLink]="['/contato', m.contatoId]">{{ m.contato }}</a>
+              } @else {
+                <span class="sem">sem contato</span>
+              }
+            </ng-template>
+            <ng-template uiCelula="criadoEm" let-m>{{ m.criadoEm | date: 'dd/MM HH:mm' }}</ng-template>
+            <ng-template uiCelula="status" let-m>
+              @if (m.status) {
+                <ui-badge [tom]="tomDoStatus(m.status)">{{ rotulo(m.status) }}</ui-badge>
+              } @else {
+                —
+              }
+            </ng-template>
+            <div uiVazio>
+              <ui-estado titulo="Nada por aqui" descricao="Nenhuma mensagem enviada com esse filtro." />
+            </div>
+          </ui-tabela>
+          <ui-paginacao [mostrados]="itens().length" [temMais]="temMais()" [carregando]="carregandoMais()"
+            (mais)="carregarMais()" />
         }
       }
-    }
+    </div>
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { margin-bottom: var(--espacamento-4); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .abas { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-4); flex-wrap: wrap; }
-    .abas button { padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
-    .abas button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
-    .esq { height: 48px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
-    .lista { list-style: none; margin: 0; padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
-    .msg { display: flex; align-items: center; gap: var(--espacamento-3); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); }
-    .msg:last-child { border-bottom: none; }
-    .col { display: flex; flex-direction: column; gap: 2px; flex: 1; }
-    .prev { color: var(--texto); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .meta { font-size: 12px; color: var(--texto-suave); }
-    .meta a { color: var(--acao); text-decoration: none; }
+    .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-2); min-width: 0; }
+    .prev { display: block; max-width: 48ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .contato { color: var(--acao); text-decoration: none; }
+    .contato:hover { text-decoration: underline; }
     .sem { color: var(--texto-suave); }
-    .status { flex: none; font-size: 11px; padding: 2px 8px; border-radius: var(--raio-completo); background: var(--superficie); color: var(--texto-secundario); }
-    .status[data-s="enviada"], .status[data-s="entregue"], .status[data-s="lida"] { background: var(--sucesso-suave); color: var(--sucesso); }
-    .status[data-s="falhou"] { background: var(--erro-suave); color: var(--erro); }
-    .status[data-s="pendente"] { background: var(--atencao-suave); color: var(--atencao); }
-    .btn--bloco { margin-top: var(--espacamento-2); }
   `,
 })
 export class MensagensEnviadasPagina implements OnInit {
   private readonly http = inject(HttpClient)
   readonly abas = ABAS
+  protected readonly colunas: ColunaTabela[] = [
+    { chave: 'preview', rotulo: 'Mensagem' },
+    { chave: 'contato', rotulo: 'Para' },
+    { chave: 'criadoEm', rotulo: 'Enviada em', mono: true, largura: '130px' },
+    { chave: 'status', rotulo: 'Status', largura: '120px' },
+  ]
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Msg[]>([])
+  protected readonly linhas = computed(() => this.itens() as unknown as readonly LinhaTabela[])
   readonly temMais = signal(false)
-  readonly aba = signal('')
+  readonly carregandoMais = signal(false)
+  readonly aba = signal('todas')
   private cursor: string | null = null
 
   ngOnInit(): void { void this.carregar() }
   trocar(a: string): void { this.aba.set(a); void this.carregar() }
   rotulo(s: string): string { return STATUS_ROTULO[s] ?? s }
 
-  async carregar(anexar = false): Promise<void> {
-    if (!anexar) { this.estado.set('carregando'); this.cursor = null }
+  protected tomDoStatus(s: string): TomBadge {
+    if (s === 'falhou') return 'erro'
+    if (s === 'pendente') return 'atencao'
+    if (s === 'enviada' || s === 'entregue' || s === 'lida') return 'sucesso'
+    return 'neutro'
+  }
+
+  async carregar(): Promise<void> {
+    this.estado.set('carregando'); this.cursor = null
     try {
-      const qs = new URLSearchParams()
-      if (this.aba()) qs.set('status', this.aba())
-      if (anexar && this.cursor) qs.set('cursor', this.cursor)
-      const r = await firstValueFrom(this.http.get<{ itens: Msg[]; proximoCursor: string | null }>(`/v1/mensagens-enviadas?${qs}`))
-      this.itens.set(anexar ? [...this.itens(), ...r.itens] : r.itens)
+      const r = await firstValueFrom(this.http.get<{ itens: Msg[]; proximoCursor: string | null }>(`/v1/mensagens-enviadas?${this.qs()}`))
+      this.itens.set(r.itens)
       this.cursor = r.proximoCursor
       this.temMais.set(r.proximoCursor !== null)
       this.estado.set('pronto')
     } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
+  }
+
+  async carregarMais(): Promise<void> {
+    if (!this.cursor || this.carregandoMais()) return
+    this.carregandoMais.set(true)
+    try {
+      const r = await firstValueFrom(this.http.get<{ itens: Msg[]; proximoCursor: string | null }>(`/v1/mensagens-enviadas?${this.qs(this.cursor)}`))
+      this.itens.set([...this.itens(), ...r.itens])
+      this.cursor = r.proximoCursor
+      this.temMais.set(r.proximoCursor !== null)
+    } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
+    finally { this.carregandoMais.set(false) }
+  }
+
+  private qs(cursor: string | null = null): URLSearchParams {
+    const qs = new URLSearchParams()
+    if (this.aba() !== 'todas') qs.set('status', this.aba())
+    if (cursor) qs.set('cursor', cursor)
+    return qs
   }
 }

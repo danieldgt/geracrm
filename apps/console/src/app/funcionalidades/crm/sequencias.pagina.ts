@@ -1,7 +1,11 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, computed, inject, signal, OnInit } from '@angular/core'
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
-import { ConfirmacaoServico, ToastServico, ehStatus, mensagemDeErro, mesclarPagina, queryDeLista } from '../../compartilhado/ui/index.js'
+import {
+  CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente, GradeFormComponente,
+  IconeComponente, ModalComponente, PaginacaoComponente, TabelaComponente, ToastServico, ehStatus, mensagemDeErro,
+  mesclarPagina, queryDeLista, type ColunaTabela, type LinhaTabela,
+} from '../../compartilhado/ui/index.js'
 
 interface Sequencia { readonly id: string; readonly nome: string; readonly objetivo: string | null; readonly ativa: boolean; readonly passos: number }
 interface Passo { readonly seq: number; readonly offsetDias: number; readonly titulo: string; readonly descricao: string | null }
@@ -17,159 +21,198 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 @Component({
   selector: 'app-sequencias',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [
+    CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, GradeFormComponente,
+    IconeComponente, ModalComponente, PaginacaoComponente, TabelaComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <h1 class="txt-titulo">Sequências</h1>
-      <p class="sub">Réguas de relacionamento: um playbook de toques que você aplica a um cliente e vira tarefas.</p>
-    </header>
+    <ui-cabecalho-tela titulo="Sequências"
+      subtitulo="Réguas de relacionamento: um playbook de toques que você aplica a um cliente e vira tarefas.">
+      <button type="button" class="btn btn--primario" (click)="criarAberto.set(true)">
+        <ui-icone nome="plus" />Nova sequência
+      </button>
+    </ui-cabecalho-tela>
 
     @switch (estado()) {
-      @case ('carregando') { <div class="grade"><div class="col"><div class="esq"></div><div class="esq"></div></div></div> }
-      @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
+      @case ('carregando') {
+        <div class="grade">
+          <ui-tabela [colunas]="colunasSeqs" [linhas]="[]" [carregando]="true" />
+        </div>
+      }
+      @case ('sem_permissao') {
+        <ui-estado tipo="sem-permissao" titulo="Sem acesso às sequências" descricao="Peça acesso a um administrador." />
+      }
+      @case ('erro') {
+        <ui-estado tipo="erro" titulo="Não foi possível carregar as sequências" descricao="Verifique a conexão e tente de novo.">
+          <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+        </ui-estado>
+      }
       @case ('pronto') {
         <div class="grade">
           <section class="col">
-            <form class="nova" (submit)="criar($event)">
-              <label class="campo rotulado">
-                <span>Nome da sequência</span>
-                <input [value]="novoNome()" (input)="novoNome.set($any($event.target).value)" placeholder="Ex.: Pós-venda" />
-              </label>
-              <button class="btn btn--primario" type="submit" [disabled]="criando() || !novoNome().trim()">+</button>
-              @if (erroNova()) { <p class="erro" role="alert">{{ erroNova() }}</p> }
-            </form>
-            <ul class="seqs">
-              @for (s of seqs(); track s.id) {
-                <li class="sq" [class.on]="sel()?.id === s.id" (click)="abrir(s)">
-                  <span class="sq-nome encolhe">{{ s.nome }}</span>
-                  <span class="sq-qtd txt-dados">{{ s.passos }} passo{{ s.passos === 1 ? '' : 's' }}</span>
-                  <button class="x" (click)="excluir(s, $event)" title="Excluir" aria-label="Excluir sequência">×</button>
-                </li>
-              }
-              @if (seqs().length === 0) { <li class="vazio">Nenhuma sequência ainda.</li> }
-            </ul>
-            @if (proximoCursor()) {
-              <button class="btn btn--secundario btn--bloco mais" (click)="carregarMais()" [disabled]="carregandoMais()">
-                {{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
-              </button>
-            }
+            <ui-tabela [colunas]="colunasSeqs" [linhas]="linhasSeqs()" [selecionados]="marcadas()">
+              <ng-template uiCelula="nome" let-l>
+                <button type="button" class="nome" (click)="abrir(l)">{{ l.nome }}</button>
+              </ng-template>
+              <ng-template uiCelula="passos" let-l>{{ l.passos }} passo{{ l.passos === 1 ? '' : 's' }}</ng-template>
+              <ng-template uiCelula="acoes" let-l>
+                <button type="button" class="btn btn--secundario btn--pequeno" (click)="excluir(l, $event)">Excluir</button>
+              </ng-template>
+              <div uiVazio>
+                <ui-estado titulo="Nenhuma sequência ainda"
+                  descricao="Crie uma sequência de toques, como pós-venda ou reativação, e aplique a clientes.">
+                  <button type="button" class="btn btn--primario" (click)="criarAberto.set(true)">Nova sequência</button>
+                </ui-estado>
+              </div>
+            </ui-tabela>
+            <ui-paginacao [mostrados]="seqs().length" [temMais]="proximoCursor() !== null"
+              [carregando]="carregandoMais()" (mais)="carregarMais()" />
           </section>
 
-          <section class="col detalhe">
-            @if (sel() === null) {
-              <div class="bloco"><h2 class="txt-secao">Escolha uma sequência</h2><p>Selecione à esquerda para montar os passos e aplicar a um cliente.</p></div>
-            } @else {
+          <section class="col">
+            @if (sel(); as s) {
               <div class="det-topo">
-                <h2 class="txt-secao encolhe">{{ sel()!.nome }}</h2>
+                <h2 class="txt-secao encolhe">{{ s.nome }}</h2>
+                <button type="button" class="btn btn--primario btn--pequeno" (click)="abrirPasso()">
+                  <ui-icone nome="plus" />Novo passo
+                </button>
               </div>
 
               @if (erroPassos()) { <p class="erro" role="alert">{{ erroPassos() }}</p> }
-              <ol class="passos">
-                @for (p of passos(); track p.seq) {
-                  <li class="ps">
-                    <span class="dn txt-dados">D+{{ p.offsetDias }}</span>
-                    <div class="ps-txt encolhe">
-                      <span class="ps-tit">{{ p.titulo }}</span>
-                      @if (p.descricao) { <span class="ps-desc">{{ p.descricao }}</span> }
-                    </div>
-                    <button class="x" (click)="removerPasso(p)" title="Remover passo" aria-label="Remover passo">×</button>
-                  </li>
-                }
-                @if (passos().length === 0) { <li class="vazio">Sem passos. Adicione o primeiro abaixo.</li> }
-              </ol>
-
-              <form class="novo-passo" (submit)="addPasso($event)">
-                <span class="dp">D+</span>
-                <input class="off" type="number" min="0" [value]="pOffset()" (input)="pOffset.set(+$any($event.target).value)" aria-label="Dias" />
-                <input class="pt" [value]="pTitulo()" (input)="pTitulo.set($any($event.target).value)" placeholder="O que fazer neste toque" aria-label="Título do passo" />
-                <button class="btn btn--primario" type="submit" [disabled]="addP() || !pTitulo().trim()">Adicionar</button>
-                @if (erroPasso()) { <p class="erro" role="alert">{{ erroPasso() }}</p> }
-              </form>
+              <ui-tabela [colunas]="colunasPassos" [linhas]="linhasPassos()" [chaveLinha]="chaveDoPasso">
+                <ng-template uiCelula="dia" let-p>D+{{ p.offsetDias }}</ng-template>
+                <ng-template uiCelula="titulo" let-p>
+                  <span class="ps-tit">{{ p.titulo }}</span>
+                  @if (p.descricao) { <span class="ps-desc">{{ p.descricao }}</span> }
+                </ng-template>
+                <ng-template uiCelula="acoes" let-p>
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="removerPasso(p)">Remover</button>
+                </ng-template>
+                <div uiVazio>
+                  <ui-estado titulo="Sem passos" descricao="Adicione o primeiro toque com o botão Novo passo." />
+                </div>
+              </ui-tabela>
 
               <div class="aplicar">
                 <h3 class="txt-secao">Aplicar a um cliente</h3>
                 <p class="ap-sub">Cria uma tarefa por passo, com vencimento em D+N a partir de hoje.</p>
                 <div class="busca">
-                  <input [value]="termo()" (input)="buscar($any($event.target).value)" placeholder="Buscar contato…" aria-label="Buscar contato" [disabled]="passos().length === 0" />
+                  <input [value]="termo()" (input)="buscar($any($event.target).value)" placeholder="Buscar contato…"
+                    aria-label="Buscar contato" [disabled]="passos().length === 0" />
                   @if (achados().length > 0) {
                     <ul class="achados">
-                      @for (a of achados(); track a.id) { <li (click)="aplicar(a)">{{ a.nome }}</li> }
+                      @for (a of achados(); track a.id) {
+                        <li><button type="button" class="achado" (click)="aplicar(a)">{{ a.nome }}</button></li>
+                      }
                     </ul>
                   }
                 </div>
                 @if (erroBusca()) { <p class="erro" role="alert">{{ erroBusca() }}</p> }
                 @if (msg(); as m) { <p [class.ok]="m.ok" [class.erro]="!m.ok" [attr.role]="m.ok ? 'status' : 'alert'">{{ m.texto }}</p> }
               </div>
+            } @else {
+              <ui-estado titulo="Escolha uma sequência" descricao="Selecione uma sequência ao lado para montar os passos e aplicar a um cliente." />
             }
           </section>
         </div>
       }
     }
+
+    <ui-modal [aberto]="criarAberto()" titulo="Nova sequência" largura="p" (fechar)="fecharCriar()">
+      <form id="form-sequencia" (submit)="criar($event)">
+        <ui-grade-form>
+          <ui-campo class="largo" rotulo="Nome da sequência" placeholder="Ex.: Pós-venda" [obrigatorio]="true"
+            [(valor)]="novoNome" [erro]="erroNova()" />
+        </ui-grade-form>
+      </form>
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharCriar()">Cancelar</button>
+        <button type="submit" form="form-sequencia" class="btn btn--primario" [disabled]="criando()">
+          {{ criando() ? 'Criando…' : 'Criar sequência' }}
+        </button>
+      </div>
+    </ui-modal>
+
+    <ui-modal [aberto]="passoAberto()" titulo="Novo passo" largura="p" (fechar)="fecharPasso()">
+      <form id="form-passo" (submit)="addPasso($event)">
+        <ui-grade-form>
+          <ui-campo rotulo="Dia (D+N)" tipo="number" dica="Dias depois de aplicar a sequência." [obrigatorio]="true"
+            [valor]="pOffset().toString()" (valorChange)="pOffset.set(+$event)" />
+          <ui-campo rotulo="O que fazer" placeholder="Ex.: Ligar para confirmar o pedido" [obrigatorio]="true"
+            [(valor)]="pTitulo" [erro]="erroPasso()" />
+        </ui-grade-form>
+      </form>
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharPasso()">Cancelar</button>
+        <button type="submit" form="form-passo" class="btn btn--primario" [disabled]="addP()">
+          {{ addP() ? 'Adicionando…' : 'Adicionar passo' }}
+        </button>
+      </div>
+    </ui-modal>
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { margin-bottom: var(--espacamento-4); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; max-width: 60ch; }
-    .grade { display: grid; grid-template-columns: 300px 1fr; gap: var(--espacamento-4); align-items: start; }
-    @media (max-width: 720px) { .grade { grid-template-columns: 1fr; } }
-    .col { min-width: 0; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
-    .esq { height: 44px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
-    .nova { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-3); flex-wrap: wrap; align-items: end; }
-    .nova .campo { flex: 1; min-width: 140px; display: flex; flex-direction: column; gap: 4px; }
-    .nova .campo > span { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
-    .nova input { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .erro { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
-    .seqs { list-style: none; margin: 0; padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
-    .sq { display: flex; align-items: center; gap: var(--espacamento-2); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); cursor: pointer; }
-    .sq:last-child { border-bottom: none; }
-    .sq:hover { background: var(--superficie); }
-    .sq.on { background: var(--acao-suave); box-shadow: inset 3px 0 0 var(--acao); }
-    .sq-nome { flex: 1; color: var(--texto); font-size: 14px; }
-    .sq-qtd { color: var(--texto-secundario); font-size: 12px; }
-    .vazio { padding: var(--espacamento-6); text-align: center; color: var(--texto-suave); font-size: 13px; }
-    .mais { margin-top: var(--espacamento-2); }
-    .det-topo { margin-bottom: var(--espacamento-3); }
-    .det-topo h2 { margin: 0; }
-    .passos { list-style: none; margin: 0 0 var(--espacamento-3); padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
-    .ps { display: flex; align-items: center; gap: var(--espacamento-3); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); }
-    .ps:last-child { border-bottom: none; }
-    .dn { flex: none; min-width: 42px; color: var(--acao); font-weight: 600; font-size: 12px; }
-    .ps-txt { display: flex; flex-direction: column; gap: 2px; flex: 1; }
-    .ps-tit { color: var(--texto); font-size: 14px; }
-    .ps-desc { color: var(--texto-suave); font-size: 12px; }
-    .x { border: 0; background: transparent; color: var(--texto-suave); font-size: 16px; padding: 0 4px; cursor: pointer; flex: none; }
-    .x:hover { color: var(--erro); }
-    .novo-passo { display: flex; gap: var(--espacamento-2); align-items: center; margin-bottom: var(--espacamento-6); flex-wrap: wrap; padding: var(--espacamento-3); border: 1px dashed var(--borda-forte); border-radius: var(--raio-painel); }
-    .dp { color: var(--texto-secundario); font-size: 13px; }
-    .off { width: 60px; padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; text-align: center; }
-    .pt { flex: 1; min-width: 160px; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
+    .grade { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: var(--espacamento-4); align-items: start;
+      margin-top: var(--espacamento-4); }
+    @media (max-width: 720px) { .grade { grid-template-columns: minmax(0, 1fr); } }
+    .col { min-width: 0; display: grid; gap: var(--espacamento-3); align-content: start; }
+    .nome { padding: 0; border: 0; background: transparent; color: var(--texto); font: inherit; text-align: left; cursor: pointer; }
+    .nome:hover { color: var(--acao); text-decoration: underline; }
+    .det-topo { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-3); }
+    .det-topo h2 { margin: 0; min-width: 0; }
+    .ps-tit { color: var(--texto); }
+    .ps-desc { display: block; color: var(--texto-suave); font-size: 12px; }
+    .erro { margin: 0; color: var(--erro); font-size: 13px; }
+    .ok { margin: var(--espacamento-3) 0 0; color: var(--sucesso); font-size: 13px; }
     .aplicar { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie); }
     .aplicar h3 { margin: 0; }
     .ap-sub { margin: var(--espacamento-1) 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
     .busca { position: relative; }
-    .busca input { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; }
+    .busca input { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
+      border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; }
     .busca input:disabled { opacity: .6; }
-    .achados { position: absolute; z-index: 5; left: 0; right: 0; margin: var(--espacamento-1) 0 0; padding: 0; list-style: none; border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie-elevada); box-shadow: var(--elevacao-dropdown); max-height: 220px; overflow: auto; }
-    .achados li { padding: var(--espacamento-2) var(--espacamento-3); cursor: pointer; }
-    .achados li:hover { background: var(--acao-suave); }
-    .ok { margin: var(--espacamento-3) 0 0; color: var(--sucesso); font-size: 13px; }
-    .aplicar .erro { margin-top: var(--espacamento-3); }
+    .achados { position: absolute; z-index: 5; left: 0; right: 0; margin: var(--espacamento-1) 0 0; padding: 0; list-style: none;
+      border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie-elevada);
+      box-shadow: var(--elevacao-dropdown); max-height: 220px; overflow: auto; }
+    .achado { display: block; width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 0; background: transparent;
+      color: var(--texto); font: inherit; text-align: left; cursor: pointer; }
+    .achado:hover { background: var(--acao-suave); }
+    .encolhe { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   `,
 })
 export class SequenciasPagina implements OnInit {
   private readonly http = inject(HttpClient)
   private readonly toast = inject(ToastServico)
   private readonly confirmacao = inject(ConfirmacaoServico)
+
+  protected readonly colunasSeqs: ColunaTabela[] = [
+    { chave: 'nome', rotulo: 'Sequência' },
+    { chave: 'passos', rotulo: 'Passos', alinhamento: 'dir', mono: true, largura: '120px' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '120px' },
+  ]
+  protected readonly colunasPassos: ColunaTabela[] = [
+    { chave: 'dia', rotulo: 'Dia', mono: true, largura: '90px' },
+    { chave: 'titulo', rotulo: 'Passo' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '120px' },
+  ]
+  protected readonly chaveDoPasso = (l: LinhaTabela): string => String(l['seq'])
+
   readonly estado = signal<Estado>('carregando')
   readonly seqs = signal<readonly Sequencia[]>([])
+  protected readonly linhasSeqs = computed(() => this.seqs() as unknown as readonly LinhaTabela[])
+  protected readonly marcadas = computed<ReadonlySet<string>>(() => {
+    const s = this.sel()
+    return new Set(s ? [s.id] : [])
+  })
   readonly proximoCursor = signal<string | null>(null)
   readonly carregandoMais = signal(false)
   readonly sel = signal<Sequencia | null>(null)
   readonly passos = signal<readonly Passo[]>([])
+  protected readonly linhasPassos = computed(() => this.passos() as unknown as readonly LinhaTabela[])
   readonly erroPassos = signal<string | null>(null)
+  readonly criarAberto = signal(false)
   readonly novoNome = signal(''); readonly criando = signal(false); readonly erroNova = signal<string | null>(null)
+  readonly passoAberto = signal(false)
   readonly pOffset = signal(7); readonly pTitulo = signal(''); readonly addP = signal(false); readonly erroPasso = signal<string | null>(null)
   readonly termo = signal(''); readonly achados = signal<readonly AchadoContato[]>([]); readonly erroBusca = signal<string | null>(null)
   readonly msg = signal<{ ok: boolean; texto: string } | null>(null)
@@ -231,6 +274,8 @@ export class SequenciasPagina implements OnInit {
     if (sel?.id === id) this.sel.set({ ...sel, passos: sel.passos + delta })
   }
 
+  fecharCriar(): void { if (!this.criando()) this.criarAberto.set(false) }
+
   async criar(ev: Event): Promise<void> {
     ev.preventDefault()
     const nome = this.novoNome().trim()
@@ -239,6 +284,7 @@ export class SequenciasPagina implements OnInit {
     try {
       await firstValueFrom(this.http.post('/v1/sequencias', { nome }))
       this.novoNome.set('')
+      this.criarAberto.set(false)
       this.toast.sucesso('Sequência criada')
       await this.carregar()
     } catch (e) {
@@ -266,14 +312,20 @@ export class SequenciasPagina implements OnInit {
     }
   }
 
+  abrirPasso(): void { this.erroPasso.set(null); this.pTitulo.set(''); this.passoAberto.set(true) }
+
+  fecharPasso(): void { if (!this.addP()) this.passoAberto.set(false) }
+
   async addPasso(ev: Event): Promise<void> {
     ev.preventDefault()
     const s = this.sel(); const titulo = this.pTitulo().trim()
-    if (!s || this.addP() || !titulo) return
+    if (!s || this.addP()) return
+    if (!titulo) { this.erroPasso.set('Descreva o que fazer neste toque.'); return }
     this.addP.set(true); this.erroPasso.set(null)
     try {
       await firstValueFrom(this.http.post(`/v1/sequencias/${s.id}/passos`, { offsetDias: this.pOffset(), titulo }))
       this.pTitulo.set('')
+      this.passoAberto.set(false)
       this.toast.sucesso('Passo adicionado')
       this.atualizarContagem(s.id, 1)
       await this.carregarPassos()
