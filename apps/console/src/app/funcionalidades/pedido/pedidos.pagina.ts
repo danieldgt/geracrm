@@ -351,8 +351,8 @@ export class PedidosPagina implements OnInit {
     const pronto = this.estado() === 'pronto'
     const i = indicadoresDaLista(this.itens())
     return [
-      { rotulo: 'Efetivados nos carregados', valor: pronto ? i.efetivados : '—', tom: 'sucesso' },
-      { rotulo: 'Valor efetivado nos carregados', valor: pronto ? formatarReais(i.valorEfetivadoCentavos) : '—', tom: 'acao' },
+      { rotulo: 'Orçamentos no ERP (carregados)', valor: pronto ? i.efetivados : '—', tom: 'sucesso' },
+      { rotulo: 'Valor no ERP (carregados)', valor: pronto ? formatarReais(i.valorEfetivadoCentavos) : '—', tom: 'acao' },
       { rotulo: 'Rascunhos nos carregados', valor: pronto ? i.rascunhos : '—', tom: 'neutro' },
       { rotulo: 'Falharam nos carregados', valor: pronto ? i.falharam : '—', tom: pronto && i.falharam > 0 ? 'erro' : 'neutro' },
     ]
