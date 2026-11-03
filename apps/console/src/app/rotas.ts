@@ -39,6 +39,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/crm/etiquetas-origens.pagina.js').then((m) => m.EtiquetasOrigensPagina),
   webhooks: () =>
     import('./funcionalidades/integracao/webhooks.pagina.js').then((m) => m.WebhooksPagina),
+  importar: () =>
+    import('./funcionalidades/integracao/importacao.pagina.js').then((m) => m.ImportacaoPagina),
   funil: () =>
     import('./funcionalidades/crm/funil.pagina.js').then((m) => m.FunilPagina),
   crm: () =>

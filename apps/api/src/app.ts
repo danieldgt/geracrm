@@ -17,6 +17,7 @@ import { rotasLeads } from './contexts/crm/rotas-leads.js'
 import { rotasCrmAvancado } from './contexts/crm/rotas-crm-avancado.js'
 import { rotasSegmentos } from './contexts/crm/rotas-segmentos.js'
 import { rotasTarefa } from './contexts/crm/rotas-tarefa.js'
+import { rotasImportacao } from './contexts/crm/rotas-importacao.js'
 import { rotasAgenda } from './contexts/crm/rotas-agenda.js'
 import { rotasCarteira } from './contexts/crm/rotas-carteira.js'
 import { rotasMeta } from './contexts/crm/rotas-meta.js'
@@ -142,6 +143,7 @@ export async function criarApp(
   await app.register(rotasCrmAvancado)
   await app.register(rotasSegmentos)
   await app.register(rotasTarefa)
+  await app.register(rotasImportacao)
   await app.register(rotasAgenda)
   await app.register(rotasCarteira)
   await app.register(rotasMeta)
