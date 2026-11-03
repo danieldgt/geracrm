@@ -56,6 +56,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | X3 teste do worker de aquisição sem isolamento de tenant | — | ✅ | integrada |
 | D3.4b telas de usuário sem admin atribuído + nomear admin | 0 | ✅ | integrada; API passou a responder `acesso.admin_atribuido` no modo fundador; pendente: `GET /v1/plataforma/clientes/:id/usuarios` para trocar o campo de ID por select |
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
+| X4 cursor em listas/metas/segmentos + usuários do cliente para o staff | — | 🔄 | Sonnet; sem migration |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 > Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.
