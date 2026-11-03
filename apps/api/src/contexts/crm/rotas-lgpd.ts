@@ -33,7 +33,8 @@ function dia(v: unknown): Date | null {
 }
 
 /**
- * Admin ATRIBUÍDO (linha `admin` em `usuario_filial` de usuário ativo) ou sessão de staff. Ao
+ * Admin ATRIBUÍDO do TENANT INTEIRO (linha `admin` com `filial_id IS NULL` em `usuario_filial` de usuário
+ * ativo — admin de uma filial só não vale) ou sessão de staff. Ao
  * contrário de `exigirPapel('admin')`, o modo fundador NÃO vale: apagar dado de titular e ligar a
  * anonimização em massa pedem alguém que o tenant designou.
  * TODO(D3b): usar o helper estrito de papel quando integrar
@@ -46,7 +47,7 @@ export async function adminAtribuidoOuStaff(req: FastifyRequest): Promise<boolea
     SELECT EXISTS (SELECT 1 FROM usuario u
                      JOIN usuario_filial uf ON uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id
                     WHERE u.tenant_id = tenant_atual() AND u.cognito_sub = ${sub} AND u.ativo
-                      AND uf.papel = 'admin') AS ok`)
+                      AND uf.papel = 'admin' AND uf.filial_id IS NULL) AS ok`)
   return l?.ok ?? false
 }
 
@@ -55,7 +56,7 @@ export async function exigirAdminAtribuido(req: FastifyRequest, reply: FastifyRe
   if (await adminAtribuidoOuStaff(req)) return undefined
   return reply.code(403).send({
     erro: 'acesso.admin_atribuido',
-    mensagem: 'Só um administrador designado na equipe pode fazer isto. Peça a ele ou atribua o papel em Equipe.',
+    mensagem: 'Só um administrador designado para o tenant inteiro (não de uma filial só) pode fazer isto. Peça a ele ou atribua o papel em Equipe.',
     exige: ['admin'],
   })
 }

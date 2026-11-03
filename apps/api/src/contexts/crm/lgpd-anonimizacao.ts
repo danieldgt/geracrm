@@ -19,7 +19,8 @@ import { auditar } from '../plataforma/auditoria.js'
  *   (a) e (b) só rodam no tenant com `tenant.lgpd_auto` LIGADO (desligado por padrão; o admin liga
  *   depois da prévia — `previaAnonimizacao` — e de confirmação explícita).
  *
- * ⚠️ COMPRA = venda, pedido em `confirmado|validando|enviando|aguardando_conferencia|efetivado`,
+ * ⚠️ COMPRA = venda, pedido em `confirmado|validando|enviando|aguardando_conferencia|efetivado|falhou|
+ *    aguardando_confirmacao` (ou com `confirmado_em`/`efetivado_em`/`numero_externo`, em qualquer momento),
  *    oportunidade `ganha` OU identidade de ERP (`erp:%`): venda importada antes do cliente fica sem
  *    contato (`semContato`) e não tem como ser religada — então todo cliente que veio do ERP é tratado
  *    como possível comprador. Com compra: a retenção NUNCA anonimiza; opt-out e titular (com
@@ -52,14 +53,21 @@ export const DIAS_OPT_OUT_PARA_ANONIMIZAR = 15
 /** A prévia conta até aqui; acima disso diz "mais de". */
 export const LIMITE_PREVIA = 10_000
 /** Estados de pedido que significam compra (dado fiscal). */
-export const ESTADOS_PEDIDO_COMPRA = ['confirmado', 'validando', 'enviando', 'aguardando_conferencia', 'efetivado'] as const
+export const ESTADOS_PEDIDO_COMPRA = [
+  'confirmado', 'validando', 'enviando', 'aguardando_conferencia', 'efetivado', 'falhou', 'aguardando_confirmacao',
+] as const
+/** Pedido ainda em andamento: protege o contato no opt-out (modo canais) — o rascunho é trabalho do vendedor. */
+const ESTADOS_PEDIDO_PENDENTE = ['rascunho', 'aguardando_confirmacao', 'falhou'] as const
+
+/** Chaves do `mensagem.conteudo` que guardam objeto do bucket (o `texto` e a `legenda` são do cliente). */
+export const CHAVES_DE_MIDIA = ['imagem', 'audio', 'video', 'documento', 'sticker', 'arquivo', 'midia'] as const
 
 export type MotivoAnonimizacao = 'retencao' | 'opt_out' | 'titular'
 export type ModoAnonimizacao = 'completa' | 'canais'
 
 export type ResultadoAnonimizacao =
   | { readonly ok: true; readonly jaAnonimizado: boolean; readonly modo: ModoAnonimizacao; readonly midiasPendentes: number }
-  | { readonly ok: false; readonly erro: 'contato_nao_encontrado' | 'contato_com_compra' }
+  | { readonly ok: false; readonly erro: 'contato_nao_encontrado' | 'contato_com_compra' | 'nao_elegivel' }
 
 export interface OpcoesAnonimizacao {
   readonly motivo: MotivoAnonimizacao
@@ -68,6 +76,12 @@ export interface OpcoesAnonimizacao {
   readonly atorStaff?: boolean | undefined
   /** Apaga só canais e conversas, mantendo o vínculo fiscal. Implícito para contato com compra no opt-out. */
   readonly somenteCanais?: boolean | undefined
+  /**
+   * Caminho do worker: depois de travar o contato, reexecuta o predicado do motivo (`retencao`/`opt_out`)
+   * nesta transação; se o contato não casa mais (o cliente voltou a falar, comprou…) recusa com
+   * `nao_elegivel` sem apagar nada. O lote foi lido antes — o fato pode ter mudado desde então.
+   */
+  readonly reavaliarSeletor?: boolean | undefined
   /** Pedido do titular: protocolo e data da solicitação (vão para a auditoria). */
   readonly protocolo?: string | null | undefined
   readonly solicitadoEm?: Date | null | undefined
@@ -78,16 +92,30 @@ function semCompra(tx: Sql) {
   return tx`(c.qtd_vendas = 0 AND c.ultima_venda_em IS NULL
     AND NOT EXISTS (SELECT 1 FROM venda v WHERE v.tenant_id = c.tenant_id AND v.contato_id = c.id)
     AND NOT EXISTS (SELECT 1 FROM pedido p WHERE p.tenant_id = c.tenant_id AND p.contato_id = c.id
-                       AND p.estado = ANY(${ESTADOS_PEDIDO_COMPRA as unknown as string[]}::text[]))
+                       AND (p.estado = ANY(${ESTADOS_PEDIDO_COMPRA as unknown as string[]}::text[])
+                            OR p.confirmado_em IS NOT NULL OR p.efetivado_em IS NOT NULL OR p.numero_externo IS NOT NULL))
     AND NOT EXISTS (SELECT 1 FROM oportunidade o WHERE o.tenant_id = c.tenant_id AND o.contato_id = c.id AND o.estado = 'ganha')
     AND NOT EXISTS (SELECT 1 FROM contato_identidade_externa ie
                      WHERE ie.tenant_id = c.tenant_id AND ie.contato_id = c.id AND ie.sistema LIKE 'erp:%'))`
+}
+
+/** Fragmento: o contato `c` tem oportunidade aberta ou pedido pendente (rascunho/aguardando/falhou). */
+function comPendencia(tx: Sql) {
+  return tx`(EXISTS (SELECT 1 FROM oportunidade o WHERE o.tenant_id = c.tenant_id AND o.contato_id = c.id AND o.estado = 'aberta')
+    OR EXISTS (SELECT 1 FROM pedido p WHERE p.tenant_id = c.tenant_id AND p.contato_id = c.id
+                  AND p.estado = ANY(${ESTADOS_PEDIDO_PENDENTE as unknown as string[]}::text[])))`
 }
 
 /** Contato com compra (ou vindo do ERP) — dado fiscal. Sob tenant. */
 export async function contatoTemCompra(tx: Sql, contatoId: string): Promise<boolean> {
   const [l] = await tx<{ tem: boolean }[]>`
     SELECT NOT ${semCompra(tx)} AS tem FROM contato c WHERE c.tenant_id = tenant_atual() AND c.id = ${contatoId}`
+  return l?.tem ?? false
+}
+
+async function contatoTemPendencia(tx: Sql, contatoId: string): Promise<boolean> {
+  const [l] = await tx<{ tem: boolean }[]>`
+    SELECT ${comPendencia(tx)} AS tem FROM contato c WHERE c.tenant_id = tenant_atual() AND c.id = ${contatoId}`
   return l?.tem ?? false
 }
 
@@ -100,12 +128,22 @@ export async function anonimizarContato(tx: Sql, contatoId: string, o: OpcoesAno
     return { ok: true, jaAnonimizado: true, modo: c.anonimizacao_modo ?? 'completa', midiasPendentes: await midiasPendentesDoContato(tx, contatoId) }
   }
 
+  if (o.reavaliarSeletor && o.motivo !== 'titular') {
+    const filtro = { agora: o.agora }
+    const [ainda] = o.motivo === 'retencao'
+      ? await tx`SELECT 1 ${deRetencao(tx, filtro)} AND c.id = ${contatoId} LIMIT 1`
+      : await tx`SELECT 1 ${deOptOut(tx, filtro)} AND c.id = ${contatoId} LIMIT 1`
+    if (!ainda) return { ok: false, erro: 'nao_elegivel' }
+  }
+
   const temCompra = await contatoTemCompra(tx, contatoId)
   // Dado fiscal: a retenção nunca chega aqui com compra; se chegar, recusa em vez de apagar.
   if (temCompra && o.motivo === 'retencao') return { ok: false, erro: 'contato_com_compra' }
   // Pedido do titular com compra: só com o consentimento explícito de manter o vínculo fiscal.
   if (temCompra && o.motivo === 'titular' && !o.somenteCanais) return { ok: false, erro: 'contato_com_compra' }
-  const modo: ModoAnonimizacao = temCompra || o.somenteCanais ? 'canais' : 'completa'
+  // Opt-out com oportunidade aberta ou pedido pendente: só os canais (o trabalho do vendedor não some).
+  const pendente = o.motivo === 'opt_out' && await contatoTemPendencia(tx, contatoId)
+  const modo: ModoAnonimizacao = temCompra || o.somenteCanais || pendente ? 'canais' : 'completa'
   const completa = modo === 'completa'
   const agora = o.agora
 
@@ -132,7 +170,8 @@ export async function anonimizarContato(tx: Sql, contatoId: string, o: OpcoesAno
     SELECT tenant_atual(), gen_random_uuid(), ${contatoId}, r.chave, 'mensagem', ${agora}::timestamptz, ${agora}::timestamptz
       FROM (SELECT DISTINCT kv.value AS chave
               FROM mensagem m
-             CROSS JOIN LATERAL jsonb_each_text(m.conteudo) AS kv
+             -- SÓ as chaves de mídia: o texto e a legenda do cliente nunca vira chave de objeto a apagar
+             CROSS JOIN LATERAL (SELECT m.conteudo ->> k AS value FROM unnest(${CHAVES_DE_MIDIA as unknown as string[]}::text[]) AS k) AS kv
              WHERE m.tenant_id = tenant_atual() AND m.conversa_id IN (${conversas})
                AND kv.value LIKE 'tenant/' || tenant_atual()::text || '/%') r
     ON CONFLICT (tenant_id, chave_objeto) DO NOTHING`
@@ -341,6 +380,7 @@ function deRetencao(tx: Sql, p: FiltroCandidatos) {
        AND NOT EXISTS (SELECT 1 FROM pedido p WHERE p.tenant_id = c.tenant_id AND p.contato_id = c.id
                           AND p.criado_em > c.qualificado_em)
        AND NOT EXISTS (SELECT 1 FROM tarefa tf WHERE tf.tenant_id = c.tenant_id AND tf.contato_id = c.id
+                          AND tf.criado_por IS NOT NULL  -- tarefa de automação (sem pessoa) não é sinal de vida
                           AND (tf.estado = 'aberta' OR tf.criado_em > c.qualificado_em OR tf.concluida_em > c.qualificado_em))
        AND NOT EXISTS (SELECT 1 FROM oportunidade o WHERE o.tenant_id = c.tenant_id AND o.contato_id = c.id
                           AND (o.estado = 'aberta' OR o.criado_em > c.qualificado_em OR o.fechada_em > c.qualificado_em))
@@ -349,6 +389,7 @@ function deRetencao(tx: Sql, p: FiltroCandidatos) {
        AND NOT EXISTS (SELECT 1 FROM contato_arquivo ca WHERE ca.tenant_id = c.tenant_id AND ca.contato_id = c.id
                           AND ca.criado_em > c.qualificado_em)
        AND NOT EXISTS (SELECT 1 FROM evento_agenda ev WHERE ev.tenant_id = c.tenant_id AND ev.contato_id = c.id
+                          AND ev.status <> 'cancelado'
                           AND (ev.criado_em > c.qualificado_em OR ev.inicio > c.qualificado_em))`
 }
 
@@ -369,6 +410,9 @@ function deOptOut(tx: Sql, p: FiltroCandidatos) {
        AND NOT EXISTS (SELECT 1 FROM consentimento_contato cc2
                         WHERE cc2.tenant_id = cc.tenant_id AND cc2.contato_id = cc.contato_id
                           AND cc2.tipo = 'whatsapp' AND cc2.registrado_em > cc.registrado_em)
+       -- ao menos um telefone com chave (sem telefone, "todos bloqueados" seria vacuidade)
+       AND EXISTS (SELECT 1 FROM contato_telefone ct0
+                    WHERE ct0.tenant_id = c.tenant_id AND ct0.contato_id = c.id AND ct0.chave_bloqueio IS NOT NULL)
        -- TODOS os telefones com chave seguem bloqueados POR OPT-OUT (desbloqueado, inválido, denúncia: fora)
        AND NOT EXISTS (SELECT 1 FROM contato_telefone ct
                          LEFT JOIN lista_bloqueio lb ON lb.tenant_id = ct.tenant_id AND lb.chave_bloqueio = ct.chave_bloqueio

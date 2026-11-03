@@ -6,6 +6,7 @@ import { exigirNoEscopo } from '../plataforma/escopo.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { arquivosBucket } from './arquivos-bucket.js'
+import { CONTATO_ANONIMIZADO } from './contato-gravacao.js'
 import { TAMANHO_MAX_ARQUIVO, chaveDoArquivo, nomeSeguro, tipoPermitido } from './arquivos-regras.js'
 
 /**
@@ -104,8 +105,9 @@ export async function rotasContatoArquivo(app: FastifyInstance): Promise<void> {
       const chave = chaveDoArquivo(tenantId, req.params.id, id, nome)
 
       const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [c] = await tx<{ anonimizado_em: Date | null }[]>`SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return null
+        if (c.anonimizado_em) return 'anonimizado' as const
         const eu = await garantirUsuarioId(tx, req)
         // Bytes primeiro: se o bucket falhar nada fica no banco; se o banco falhar o objeto órfão é
         // removido abaixo (a transação desfaz a linha).
@@ -125,6 +127,7 @@ export async function rotasContatoArquivo(app: FastifyInstance): Promise<void> {
         return { id }
       })
       if (!r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if (r === 'anonimizado') return reply.code(409).send(CONTATO_ANONIMIZADO)
       return reply.code(201).send({ id: r.id, nome, tipoMime: parte.mimetype.toLowerCase(), tamanhoBytes: bytes.length, legenda })
     },
   )
