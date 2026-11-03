@@ -48,7 +48,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | E2 relatórios 1ª leva | 3 | ⬜ | |
 | E3 relatórios 2ª leva | 3 | ⬜ | |
 | L1 retrofit das telas restantes | 4 | ⬜ | |
-| X1 teste de ativas dependente de hora | — | 🔄 | Sonnet; falha também na main |
+| X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0 revisão adversarial da biblioteca L0 | 0 | 🔄 | Sonnet, só leitura |
 
 ## 1. Política de modelos
