@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { faixasDoSegmento, ehCodigoSegmentoRfv, ehQualificacaoContato, MAX_ETIQUETAS_NO_FILTRO, VENDEDOR_SEM_DONO, type CodigoSegmentoRfv, type QualificacaoContato } from '@geracrm/shared'
+import { faixasDoSegmento, ehCodigoSegmentoRfv, ehQualificacaoContato, MAX_ETIQUETAS_NO_FILTRO, VENDEDOR_SEM_DONO, type CodigoSegmentoRfv, type FaixaRfv, type QualificacaoContato } from '@geracrm/shared'
 import type { Sql } from '../../db/index.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import { moduloAtivo } from '../plataforma/modulos.js'
@@ -108,19 +108,22 @@ export function condicaoCarteiraAtiva(tx: Sql, aliasContato = 'c') {
 
 const escaparLike = (s: string): string => s.replace(/[\\%_]/g, (c) => `\\${c}`)
 
+/** Uma faixa de segmento como condição sobre `m` (métricas). */
+export function condicaoSegmentoDaFaixa(tx: Sql, f: FaixaRfv) {
+  if (f.tipo === 'sem_ritmo_recente') {
+    return tx`(m.atraso_relativo IS NULL AND m.dias_sem_comprar IS NOT NULL AND m.dias_sem_comprar <= ${f.diasAte})`
+  }
+  if (f.tipo === 'sem_ritmo_parado') {
+    return tx`(m.atraso_relativo IS NULL AND (m.dias_sem_comprar IS NULL OR m.dias_sem_comprar > ${f.diasApos}))`
+  }
+  return tx`(m.atraso_relativo IS NOT NULL
+             AND ${f.apos === null ? tx`true` : tx`m.atraso_relativo > ${f.apos}`}
+             AND ${f.ate === null ? tx`true` : tx`m.atraso_relativo <= ${f.ate}`})`
+}
+
 /** Segmento como condição sobre `m` (métricas): as fronteiras saem de `faixasDoSegmento`. */
 function condicaoSegmento(tx: Sql, codigo: CodigoSegmentoRfv) {
-  const partes = faixasDoSegmento(codigo).map((f) => {
-    if (f.tipo === 'sem_ritmo_recente') {
-      return tx`(m.atraso_relativo IS NULL AND m.dias_sem_comprar IS NOT NULL AND m.dias_sem_comprar <= ${f.diasAte})`
-    }
-    if (f.tipo === 'sem_ritmo_parado') {
-      return tx`(m.atraso_relativo IS NULL AND (m.dias_sem_comprar IS NULL OR m.dias_sem_comprar > ${f.diasApos}))`
-    }
-    return tx`(m.atraso_relativo IS NOT NULL
-               AND ${f.apos === null ? tx`true` : tx`m.atraso_relativo > ${f.apos}`}
-               AND ${f.ate === null ? tx`true` : tx`m.atraso_relativo <= ${f.ate}`})`
-  })
+  const partes = faixasDoSegmento(codigo).map((f) => condicaoSegmentoDaFaixa(tx, f))
   return partes.reduce((acc, p, i) => (i === 0 ? p : tx`${acc} OR ${p}`), tx`false`)
 }
 
