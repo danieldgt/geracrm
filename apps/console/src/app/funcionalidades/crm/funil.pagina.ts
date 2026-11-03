@@ -1,8 +1,20 @@
-import { Component, ChangeDetectionStrategy, ElementRef, effect, inject, signal, viewChild, OnInit } from '@angular/core'
-import { Router, RouterLink } from '@angular/router'
+import { Component, ChangeDetectionStrategy, DestroyRef, ElementRef, computed, effect, inject, signal, viewChild, OnInit } from '@angular/core'
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop'
+import { FormsModule } from '@angular/forms'
+import { ActivatedRoute, Router, RouterLink, type ParamMap } from '@angular/router'
 import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop'
 import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConfig } from './funil.servico.js'
-import { ConfirmacaoServico, IconeComponente, ToastServico } from '../../compartilhado/ui/index.js'
+import {
+  AbasComponente, ConfirmacaoServico, EstadoComponente, FiltrosComponente, IconeComponente, SelectComponente, SelectPaginadoComponente, ToastServico,
+  type Aba, type CarregarOpcoes, type OpcaoPaginada,
+} from '../../compartilhado/ui/index.js'
+import { PresencaServico } from '../../nucleo/presenca.servico.js'
+import { EtiquetasServico } from './etiquetas.servico.js'
+import { FunilPanoramaComponente } from './funil-panorama.componente.js'
+import {
+  FILTROS_VAZIOS, contarFiltros, filtrosDoGrupo, lerQueryParams, montarCartoes, paraQueryParams,
+  type Agrupar, type EstadoDaUrl, type FiltrosBoard, type Visao,
+} from './funil-filtros.regras.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { ClientesServico } from './clientes.servico.js'
 import { TarefaModalComponente } from './tarefa-modal.componente.js'
@@ -22,7 +34,8 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
   selector: 'app-funil',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    CdkDropListGroup, CdkDropList, CdkDrag, RouterLink, IconeComponente, TarefaModalComponente, FunilGanharModalComponente,
+    CdkDropListGroup, CdkDropList, CdkDrag, RouterLink, FormsModule, IconeComponente, AbasComponente, EstadoComponente, FiltrosComponente,
+    SelectComponente, SelectPaginadoComponente, FunilPanoramaComponente, TarefaModalComponente, FunilGanharModalComponente,
     FunilPerderModalComponente, FunilTransferirModalComponente, FunilNovaOportunidadeModalComponente,
   ],
   template: `
@@ -39,6 +52,30 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
         <button class="btn btn--secundario" (click)="abrirConfig()">⚙️ Configurar funil</button>
       </div>
     </header>
+
+    <ui-abas class="abas-visao" [abas]="abasVisao" [ativa]="visao()" (ativaChange)="mudarVisao($any($event))" />
+
+    @if (visao() === 'panorama') {
+      <app-funil-panorama [agrupar]="agrupar()" [estado]="servico.estadoPanorama()" [cartoes]="cartoes()"
+        [truncado]="servico.panoramaTruncado()" (trocarAgrupar)="trocarAgrupar($event)"
+        (abrir)="abrirGrupo($event)" (tentarDeNovo)="servico.carregarPanorama(agrupar())" />
+    } @else {
+    <ui-filtros class="filtros-board" rotuloBusca="Buscar no board" placeholder="Nome ou telefone do cliente"
+      (buscar)="rascunhar('busca', $event)" (aplicar)="aplicarFiltros()" (limpar)="limparFiltros()">
+      @if (gestao()) {
+        <ui-select rotulo="Vendedor" placeholder="Todos" [opcoes]="servico.vendedores()"
+          [valor]="rascunho().vendedorId" (valorChange)="rascunhar('vendedorId', $event)" />
+        <ui-select rotulo="Filial" placeholder="Todas" [opcoes]="servico.filiais()"
+          [valor]="rascunho().filialId" (valorChange)="rascunhar('filialId', $event)" />
+      }
+      <ui-select-paginado rotulo="Etiqueta" placeholder="Todas" [carregar]="carregarEtiquetas" [opcaoInjetada]="etiquetaInjetada()"
+        [ngModel]="rascunho().etiquetaId || null" (ngModelChange)="rascunhar('etiquetaId', $event ?? '')" [ngModelOptions]="{ standalone: true }" />
+      <ui-select-paginado rotulo="Origem" placeholder="Todas" [carregar]="carregarOrigens" [opcaoInjetada]="origemInjetada()"
+        [ngModel]="rascunho().origemId || null" (ngModelChange)="rascunhar('origemId', $event ?? '')" [ngModelOptions]="{ standalone: true }" />
+    </ui-filtros>
+    @if (filtrosAtivos() > 0) {
+      <p class="resumo-filtros txt-denso" role="status">{{ filtrosAtivos() }} {{ filtrosAtivos() === 1 ? 'filtro aplicado' : 'filtros aplicados' }} · o link desta tela leva os filtros junto.</p>
+    }
 
     @if (mostrarMetricas()) {
       @if (servico.carregandoMetricas() && !servico.metricas()) {
@@ -107,6 +144,12 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
       @case ('erro') { <div class="bloco aviso"><h2 class="txt-secao">Não foi possível carregar</h2>
         <button (click)="servico.carregar()">Tentar de novo</button></div> }
       @case ('pronto') {
+        @if (semResultado()) {
+          <ui-estado tipo="vazio" titulo="Nenhum card com esses filtros"
+                     descricao="Ajuste a busca ou limpe os filtros para ver o funil inteiro.">
+            <button type="button" class="btn btn--secundario" (click)="limparFiltros()">Limpar filtros</button>
+          </ui-estado>
+        } @else {
         <div class="board rolagem-x" cdkDropListGroup>
           @for (col of servico.colunas(); track col.etapa.id) {
             <section class="coluna" [class]="'coluna--' + col.etapa.tipo">
@@ -143,7 +186,9 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
             </section>
           }
         </div>
+        }
       }
+    }
     }
 
     <!-- Menu do card (⋯): posicionado na tela, fora da coluna que rola. -->
@@ -265,6 +310,9 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
     .dica-m { margin: var(--espacamento-3) 0 0; font-size: 11px; color: var(--texto-suave); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
+    .abas-visao { margin-bottom: var(--espacamento-4); }
+    .filtros-board { margin-bottom: var(--espacamento-3); }
+    .resumo-filtros { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); }
     .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
     .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .board { display: flex; gap: var(--espacamento-3); align-items: stretch; flex: 1; min-height: 0; overflow-x: auto; padding-bottom: var(--espacamento-2); }
@@ -374,6 +422,44 @@ export class FunilPagina implements OnInit {
   readonly novoTipo = signal<EtapaConfig['tipo']>('aberto')
   readonly novoMotivo = signal('')
 
+  private readonly route = inject(ActivatedRoute)
+  private readonly destroyRef = inject(DestroyRef)
+  private readonly presenca = inject(PresencaServico)
+  private readonly catalogos = inject(EtiquetasServico)
+
+  /** Estado vindo da URL (fonte da verdade): visão, agrupamento e filtros. */
+  private readonly estadoUrl = signal<EstadoDaUrl>(lerQueryParams({}))
+  readonly visao = computed<Visao>(() => this.estadoUrl().visao)
+  readonly agrupar = computed<Agrupar>(() => this.estadoUrl().agrupar)
+  /** Filtros ainda não aplicados (a barra edita o rascunho; Filtrar/Enter grava na URL). */
+  readonly rascunho = signal<FiltrosBoard>(FILTROS_VAZIOS)
+  readonly filtrosAtivos = computed(() => contarFiltros(this.estadoUrl().filtros))
+  readonly gestao = this.presenca.gestao
+  readonly cartoes = computed(() => montarCartoes(this.servico.panorama(), this.servico.etapasPanorama()))
+  readonly semResultado = computed(() => this.filtrosAtivos() > 0 && this.servico.colunas().every((c) => c.cards.length === 0))
+  readonly etiquetaInjetada = signal<OpcaoPaginada | null>(null)
+  readonly origemInjetada = signal<OpcaoPaginada | null>(null)
+  protected readonly abasVisao: readonly Aba[] = [
+    { id: 'panorama', rotulo: 'Panorama' }, { id: 'board', rotulo: 'Board' },
+  ]
+
+  protected readonly carregarEtiquetas: CarregarOpcoes = async (cursor, termo) => {
+    const p = await this.catalogos.etiquetas(cursor, true)
+    const t = termo.trim().toLowerCase()
+    return {
+      itens: p.itens.filter((e) => !t || e.nome.toLowerCase().includes(t)).map((e) => ({ valor: e.id, rotulo: e.nome })),
+      proximoCursor: p.proximoCursor,
+    }
+  }
+  protected readonly carregarOrigens: CarregarOpcoes = async (cursor, termo) => {
+    const p = await this.catalogos.origens(cursor, true)
+    const t = termo.trim().toLowerCase()
+    return {
+      itens: p.itens.filter((o) => !t || o.nome.toLowerCase().includes(t)).map((o) => ({ valor: o.id, rotulo: o.nome })),
+      proximoCursor: p.proximoCursor,
+    }
+  }
+
   constructor() {
     // Menu recém-aberto: o foco vai ao primeiro item (teclado e leitor de tela entram no menu).
     effect(() => { this.itensDoContainer()[0]?.focus() })
@@ -384,7 +470,67 @@ export class FunilPagina implements OnInit {
     return el ? Array.from(el.querySelectorAll<HTMLElement>('[role="menuitem"]')) : []
   }
 
-  ngOnInit(): void { void this.servico.carregar() }
+  ngOnInit(): void {
+    this.route.queryParamMap.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((m) => this.aoMudarUrl(m))
+  }
+
+  /** A URL mudou (clique, link compartilhado, voltar do navegador): sincroniza a tela e recarrega só o que mudou. */
+  private aoMudarUrl(m: ParamMap): void {
+    const novo = lerQueryParams(Object.fromEntries(m.keys.map((k) => [k, m.get(k)])))
+    const antigo = this.estadoUrl()
+    const primeira = !this.carregouUmaVez
+    this.carregouUmaVez = true
+    this.estadoUrl.set(novo)
+    this.rascunho.set(novo.filtros)
+    if (novo.visao === 'panorama') {
+      if (primeira || antigo.visao !== 'panorama' || antigo.agrupar !== novo.agrupar) void this.servico.carregarPanorama(novo.agrupar)
+      return
+    }
+    const mudouFiltros = JSON.stringify(antigo.filtros) !== JSON.stringify(novo.filtros)
+    if (primeira || antigo.visao !== 'board' || mudouFiltros) {
+      this.servico.filtros.set(novo.filtros)
+      void this.servico.carregar()
+    }
+    if (this.gestao()) void this.servico.carregarOpcoesGestao()
+    void this.rotularFiltrosDeCatalogo(novo.filtros)
+  }
+  private carregouUmaVez = false
+
+  /** Filtro vindo do link: acha o nome da etiqueta/origem para a opção aparecer escolhida (varre poucas páginas). */
+  private async rotularFiltrosDeCatalogo(f: FiltrosBoard): Promise<void> {
+    const achar = async (carregar: CarregarOpcoes, id: string): Promise<OpcaoPaginada | null> => {
+      let cursor: string | null = null
+      for (let i = 0; i < 5; i++) {
+        const p = await carregar(cursor, '')
+        const o = p.itens.find((x) => x.valor === id)
+        if (o) return o
+        if (!p.proximoCursor) return null
+        cursor = p.proximoCursor
+      }
+      return null
+    }
+    try {
+      this.etiquetaInjetada.set(f.etiquetaId ? await achar(this.carregarEtiquetas, f.etiquetaId) : null)
+      this.origemInjetada.set(f.origemId ? await achar(this.carregarOrigens, f.origemId) : null)
+    } catch { /* o select segue funcionando sem o rótulo */ }
+  }
+
+  private navegar(e: EstadoDaUrl): void {
+    void this.router.navigate([], { relativeTo: this.route, queryParams: paraQueryParams(e), queryParamsHandling: 'merge' })
+  }
+  mudarVisao(v: Visao): void {
+    if (v !== this.visao()) this.navegar({ ...this.estadoUrl(), visao: v })
+  }
+  trocarAgrupar(a: Agrupar): void { this.navegar({ ...this.estadoUrl(), agrupar: a }) }
+  /** Cartão do panorama: abre o board já filtrado por aquele grupo. */
+  abrirGrupo(chave: string): void {
+    this.navegar({ visao: 'board', agrupar: this.agrupar(), filtros: filtrosDoGrupo(this.agrupar(), chave) })
+  }
+  rascunhar(campo: keyof FiltrosBoard, valor: string): void {
+    this.rascunho.update((r) => ({ ...r, [campo]: valor }))
+  }
+  aplicarFiltros(): void { this.navegar({ ...this.estadoUrl(), visao: 'board', filtros: this.rascunho() }) }
+  limparFiltros(): void { this.navegar({ ...this.estadoUrl(), visao: 'board', filtros: FILTROS_VAZIOS }) }
 
   alternarMetricas(): void {
     this.mostrarMetricas.update((v) => !v)

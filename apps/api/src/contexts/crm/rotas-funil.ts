@@ -8,6 +8,8 @@ import { exigirPapel } from '../plataforma/papel.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import { garantirEtapasFunil } from './funil-modelos.js'
+import { condicaoFiltrosFunil, lerFiltrosFunil } from './funil-filtros.js'
+import { rotasFunilPanorama } from './funil-panorama.js'
 import { gravarEndereco, acrescentarCnpj } from './contato-gravacao.js'
 import { condicaoOportunidade, contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 import type { FastifyRequest } from 'fastify'
@@ -191,8 +193,13 @@ interface CorpoGanho {
  * 409, não sobrescreve.
  */
 export async function rotasFunil(app: FastifyInstance): Promise<void> {
+  await rotasFunilPanorama(app)
+
   /** Estágios (ordenados) + contagem de cards por estágio. */
   app.get('/v1/funil/etapas', { preHandler: exigirTenant }, async (req, reply) => {
+    const lidos = lerFiltrosFunil(req.query as Record<string, unknown>)
+    if (!lidos.ok) return reply.code(422).send({ erro: 'filtro.invalido', campo: lidos.campo })
+    const filtros = lidos.filtros
     const linhas = await req.comTenant(async (tx) => {
       await garantirEtapasFunil(tx)
       // ⚠️ O total de cada estágio conta o que a coluna MOSTRA (escopo D3).
@@ -202,7 +209,8 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
       }[]>`
       SELECT e.id, e.chave, e.nome, e.tipo, e.criterio,
              (SELECT count(*) FROM oportunidade o
-               WHERE o.tenant_id = e.tenant_id AND o.etapa_id = e.id AND ${condicaoOportunidade(tx, escopo, 'o')})::int AS total
+               WHERE o.tenant_id = e.tenant_id AND o.etapa_id = e.id AND ${condicaoOportunidade(tx, escopo, 'o')}
+                 AND ${condicaoFiltrosFunil(tx, filtros, 'o')})::int AS total
         FROM funil_etapa e
        WHERE e.tenant_id = tenant_atual() AND e.ativo
        ORDER BY e.ordem`
@@ -227,6 +235,9 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
     '/v1/funil/coluna/:etapaId',
     { preHandler: exigirTenant },
     async (req, reply) => {
+      const lidos = lerFiltrosFunil(req.query as Record<string, unknown>)
+      if (!lidos.ok) return reply.code(422).send({ erro: 'filtro.invalido', campo: lidos.campo })
+      const filtros = lidos.filtros
       let curPos: string | null = null
       let curId: string | null = null
       if (req.query.cursor) {
@@ -248,6 +259,7 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
           LEFT JOIN usuario u ON u.tenant_id = o.tenant_id AND u.id = o.responsavel_id
          WHERE o.tenant_id = tenant_atual() AND o.etapa_id = ${req.params.etapaId}
            AND ${condicaoOportunidade(tx, escopo, 'o')}
+           AND ${condicaoFiltrosFunil(tx, filtros, 'o')}
            AND ${curPos === null ? tx`true` : tx`(o.posicao, o.id) > (${curPos}::double precision, ${curId}::uuid)`}
          ORDER BY o.posicao ASC, o.id ASC
          LIMIT ${PAGINA + 1}`
