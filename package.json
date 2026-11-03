@@ -10,7 +10,8 @@
     "build": "turbo build",
     "test": "turbo test",
     "lint": "turbo lint",
-    "typecheck": "turbo typecheck"
+    "typecheck": "turbo typecheck",
+    "e2e": "pnpm --filter @geracrm/api e2e"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

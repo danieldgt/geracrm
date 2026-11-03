@@ -21,7 +21,14 @@ export interface CredencialMetaOficial {
 }
 
 const API_VERSION = 'v21.0'
-const BASE = 'https://graph.facebook.com'
+
+/**
+ * Base da Graph API. ⚠️ `META_GRAPH_BASE_URL` é costura de TESTE (e2e: a Meta é
+ * sempre falsa no CI) e é IGNORADA em produção — nunca redireciona tráfego real.
+ */
+const BASE = process.env.NODE_ENV !== 'production' && process.env.META_GRAPH_BASE_URL
+  ? process.env.META_GRAPH_BASE_URL.replace(/\/$/, '')
+  : 'https://graph.facebook.com'
 
 export const CAPACIDADES_META_OFICIAL: CapacidadesCanal = {
   janela24h: true,

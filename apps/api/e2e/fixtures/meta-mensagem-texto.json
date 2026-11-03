@@ -1,0 +1,27 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "__WABA_ID__",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": { "display_phone_number": "558533330000", "phone_number_id": "__PHONE_NUMBER_ID__" },
+            "contacts": [{ "profile": { "name": "Cliente E2E" }, "wa_id": "__WA_ID__" }],
+            "messages": [
+              {
+                "from": "__WA_ID__",
+                "id": "__WAMID__",
+                "timestamp": "__TIMESTAMP__",
+                "type": "text",
+                "text": { "body": "__TEXTO__" }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
