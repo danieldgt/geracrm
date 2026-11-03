@@ -63,7 +63,7 @@ type Estado = 'carregando' | 'pronto' | 'erro'
               <ui-campo rotulo="Encarregado (DPO): e-mail" tipo="email" [valor]="lgpd().dpoEmail" [erro]="erros()['dpoEmail'] ?? null"
                         [desabilitado]="leitura()" (valorChange)="mudar('dpoEmail', $event)" />
               <ui-campo rotulo="Retenção (meses)" tipo="text" [valor]="lgpd().retencaoMeses" [erro]="erros()['retencaoMeses'] ?? null"
-                        dica="De 6 a 120. Depois disso os dados pessoais de contatos descartados são anonimizados."
+                        dica="De 6 a 120. Prazo da anonimização automática de descartados (abaixo), que é desligada por padrão."
                         [desabilitado]="leitura()" (valorChange)="mudar('retencaoMeses', $event)" />
               <ui-campo class="largo" rotulo="Texto de consentimento" tipo="textarea" [valor]="lgpd().textoConsentimento"
                         [erro]="erros()['textoConsentimento'] ?? null" placeholder="Autorizo receber mensagens da empresa pelo WhatsApp."

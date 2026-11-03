@@ -2,10 +2,11 @@ import { ChangeDetectionStrategy, Component, inject, input, output, signal, OnIn
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { ConfirmacaoServico, ToastServico, codigoDoErro, mensagemDeErro } from '../../compartilhado/ui/index.js'
-import { ERRO_CONTATO_COM_COMPRA, TEXTO_CONFIRMACAO_ANONIMIZAR } from './lgpd.regras.js'
+import { ERRO_CONTATO_COM_COMPRA, TEXTO_CONFIRMACAO_ANONIMIZAR, mensagemAnonimizado } from './lgpd.regras.js'
 
 /**
- * Botão "Anonimizar (LGPD)" da ficha do contato (raia H2) — só para ADMIN.
+ * Botão "Anonimizar (LGPD)" da ficha do contato (raia H2) — só para ADMIN (a API exige admin
+ * ATRIBUÍDO ou staff; no modo fundador ela responde 403 e a tela mostra a mensagem dela).
  *
  * Pedido do titular: apaga os dados pessoais já, sem esperar o prazo de retenção. É IRREVERSÍVEL,
  * por isso a confirmação é DIGITADA. Contato com compra (dado fiscal): a API responde 422
@@ -15,6 +16,8 @@ import { ERRO_CONTATO_COM_COMPRA, TEXTO_CONFIRMACAO_ANONIMIZAR } from './lgpd.re
  * Montar na ficha: `<app-anonimizar-contato [contatoId]="f.id" (anonimizou)="recarregar()" />`.
  * O papel só decide o que MOSTRAR; a API barra com 403 de qualquer forma.
  */
+interface RespostaAnonimizar { readonly modo: 'completa' | 'canais'; readonly midiasPendentes?: number }
+
 @Component({
   selector: 'app-anonimizar-contato',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -56,8 +59,9 @@ export class AnonimizarContatoComponente implements OnInit {
     if (!ok) return
     this.trabalhando.set(true)
     try {
+      let r: RespostaAnonimizar
       try {
-        await this.pedir(false)
+        r = await this.pedir(false)
       } catch (e) {
         if (codigoDoErro(e) !== ERRO_CONTATO_COM_COMPRA) throw e
         // Dado fiscal: só com a confirmação de que o vínculo fiscal fica.
@@ -68,17 +72,18 @@ export class AnonimizarContatoComponente implements OnInit {
           acao: 'Apagar canais e conversas', perigo: true, digitar: TEXTO_CONFIRMACAO_ANONIMIZAR,
         })
         if (!soCanais) return
-        await this.pedir(true)
+        r = await this.pedir(true)
       }
-      this.toast.sucesso('Contato anonimizado.')
+      // ⚠️ "Apagado" só quando nada ficou pendente no armazenamento; senão "em remoção".
+      this.toast.sucesso(mensagemAnonimizado(r.midiasPendentes ?? 0))
       this.anonimizou.emit()
     } catch (e) {
       this.toast.erro(mensagemDeErro(e, 'Não foi possível anonimizar o contato.'))
     } finally { this.trabalhando.set(false) }
   }
 
-  private pedir(somenteCanais: boolean): Promise<unknown> {
+  private pedir(somenteCanais: boolean): Promise<RespostaAnonimizar> {
     const url = `/v1/contatos/${this.contatoId()}/anonimizar${somenteCanais ? '?somenteCanais=true' : ''}`
-    return firstValueFrom(this.http.post(url, {}))
+    return firstValueFrom(this.http.post<RespostaAnonimizar>(url, {}))
   }
 }

@@ -283,7 +283,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
           if (l.chaveBloqueio) {
             const [lgpd] = await tx<{ ok: number }[]>`
               SELECT 1 AS ok FROM lista_bloqueio
-               WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${l.chaveBloqueio} AND motivo = 'lgpd'`
+               WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${l.chaveBloqueio} AND lgpd_em IS NOT NULL`
             if (lgpd) { bloqueadosLgpd++; continue }
           }
           let contatoId: string | null = null

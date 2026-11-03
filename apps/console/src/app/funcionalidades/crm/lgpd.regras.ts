@@ -14,6 +14,53 @@ export interface RelatorioAnonimizacao {
   readonly porMotivo: Readonly<Record<MotivoAnonimizacao, number>>
   readonly porModo: Readonly<Record<'completa' | 'canais', number>>
   readonly midiasPendentes: number
+  readonly midiasRemovidas: number
+  readonly falhas: number
+}
+
+/** `GET /v1/lgpd/previa` — modo relatório da anonimização automática. */
+export interface PreviaLgpd {
+  readonly ativa: boolean
+  readonly alteradaEm: string | null
+  readonly retencaoMeses: number
+  readonly porMotivo: Readonly<Record<'retencao' | 'opt_out', number>>
+  readonly total: number
+  /** A contagem bateu no teto: "mais de". */
+  readonly limitado: boolean
+}
+
+/** O que a pessoa digita para LIGAR a anonimização automática. */
+export const TEXTO_CONFIRMACAO_AUTOMATICA = 'LIGAR'
+
+/**
+ * Texto da tela depois de anonimizar. ⚠️ Só diz "apagado" quando não há objeto do armazenamento
+ * pendente; senão diz "em remoção" — o worker apaga os arquivos depois, fora da transação.
+ */
+export function mensagemAnonimizado(midiasPendentes: number): string {
+  if (midiasPendentes <= 0) return 'Dados pessoais apagados.'
+  return midiasPendentes === 1
+    ? 'Dados pessoais apagados; 1 arquivo em remoção do armazenamento.'
+    : `Dados pessoais apagados; ${midiasPendentes} arquivos em remoção do armazenamento.`
+}
+
+/** Frase da prévia: quantos a primeira passada anonimizaria. */
+export function resumoPrevia(p: Pick<PreviaLgpd, 'porMotivo' | 'total' | 'limitado'>): string {
+  if (p.total === 0) return 'Hoje nenhum contato seria anonimizado.'
+  const mais = p.limitado ? 'mais de ' : ''
+  return `A primeira passada anonimizaria ${mais}${p.total} contato(s): ${p.porMotivo.retencao} pelo fim do prazo de retenção `
+    + `e ${p.porMotivo.opt_out} que pediram para sair há mais de 15 dias.`
+}
+
+/** Rótulo do motivo de bloqueio; o LGPD aparece junto do motivo original (que é preservado). */
+export function rotuloBloqueio(motivo: string, lgpd: boolean): string {
+  const base = ({ opt_out: 'Pediu para sair', denuncia: 'Denúncia', manual: 'Manual', invalido: 'Número inválido', lgpd: 'LGPD' } as Record<string, string>)[motivo] ?? motivo
+  return lgpd && motivo !== 'lgpd' ? `${base} · LGPD` : base
+}
+
+/** Evidência do novo consentimento: 5 a 500 caracteres (a API é a regra; isto é conveniência). */
+export function evidenciaValida(texto: string): boolean {
+  const t = texto.trim()
+  return t.length >= 5 && t.length <= 500
 }
 
 const ROTULO_MOTIVO: Readonly<Record<MotivoAnonimizacao, string>> = {
