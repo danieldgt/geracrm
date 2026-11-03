@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core'
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
-import type { CorpoConferenciaGoLive, GoLiveDto, MetricasAgenteDto } from '@geracrm/shared'
+import type { CorpoConferenciaGoLive, GoLiveDto, MetricasAgenteDto, ResumoObjecoesDto } from '@geracrm/shared'
 import { queryDeLista } from '../../../compartilhado/ui/index.js'
 import { falhaDe, type Resultado } from './agente.servico.js'
 
@@ -11,6 +11,7 @@ import { falhaDe, type Resultado } from './agente.servico.js'
  *   GET  /v1/agente/go-live?canalId          — fase atual e critérios para avançar (ADR-031)
  *   POST /v1/agente/go-live/conferencia      — admin registra a última rodada das douradas ou do smoke
  *   GET  /v1/agente/metricas?dias&canalId    — agregados do agente na janela
+ *   GET  /v1/agente/objecoes/resumo?dias&canalId — objeções registradas por código (G2)
  *
  * ⚠️ Leituras lançam; a tela distingue 403 ("sem permissão") de erro. A
  *    conferência volta tipificada (403 só admin, 422 campo).
@@ -26,6 +27,10 @@ export class MetricasServico {
 
   metricas(canalId: string, dias: number): Promise<MetricasAgenteDto> {
     return firstValueFrom(this.#http.get<MetricasAgenteDto>(`/v1/agente/metricas${queryDeLista({ canalId, dias })}`))
+  }
+
+  objecoes(canalId: string, dias: number): Promise<ResumoObjecoesDto> {
+    return firstValueFrom(this.#http.get<ResumoObjecoesDto>(`/v1/agente/objecoes/resumo${queryDeLista({ canalId, dias })}`))
   }
 
   async conferir(corpo: CorpoConferenciaGoLive): Promise<Resultado<{ atualizadoEm: string }>> {

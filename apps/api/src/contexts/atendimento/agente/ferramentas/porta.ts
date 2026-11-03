@@ -59,8 +59,16 @@ export type SaidaFerramenta =
       /** Efeito colateral que o turno precisa saber (handoff pedido, proposta enviada). */
       readonly efeito?: 'handoff' | 'proposta_enviada' | 'pedido_alterado' | undefined
       readonly handoff?: { motivo: string; resumo: string } | undefined
+      /**
+       * Objeção registrada nesta chamada (`registrar_objecao`, G2). O turno a
+       * entrega à etapa `objecoes-seguidas`, que decide a entrega ao humano.
+       */
+      readonly objecao?: ObjecaoDoTurno | undefined
     }
   | { readonly ok: false; readonly erro: string }
+
+/** Uma objeção registrada no turno pela ferramenta (só código e se foi revertida). */
+export interface ObjecaoDoTurno { readonly codigo: string; readonly revertida: boolean }
 
 export interface Ferramenta<I = unknown> {
   readonly nome: string
@@ -108,7 +116,11 @@ export interface RegistroDeFerramentas {
   readonly numerosVistos: NumerosVistos
   /** Alguma ferramenta de catálogo/estoque devolveu saldo BAIXO apurado neste turno (P0c-j). */
   readonly saldoBaixoVisto: boolean
-  readonly efeitos: { handoff: { motivo: string; resumo: string } | null; propostaEnviada: boolean; pedidoAlterado: boolean }
+  readonly efeitos: {
+    handoff: { motivo: string; resumo: string } | null; propostaEnviada: boolean; pedidoAlterado: boolean
+    /** Objeções registradas no turno, na ordem das chamadas (G2). */
+    readonly objecoes: ObjecaoDoTurno[]
+  }
   executar(nome: string, entradaBruta: unknown): Promise<ResultadoExecucaoFerramenta>
 }
 
@@ -123,7 +135,7 @@ export function registroDeFerramentas(
   const porNome = new Map(ferramentas.map((f) => [f.nome, f]))
   const centavosVistos = new Set<number>()
   const numerosVistos = new NumerosVistos()
-  const efeitos = { handoff: null as { motivo: string; resumo: string } | null, propostaEnviada: false, pedidoAlterado: false }
+  const efeitos = { handoff: null as { motivo: string; resumo: string } | null, propostaEnviada: false, pedidoAlterado: false, objecoes: [] as ObjecaoDoTurno[] }
   let saldoBaixo = false
   return {
     lista: ferramentas,
@@ -147,6 +159,7 @@ export function registroDeFerramentas(
         if (r.efeito === 'handoff' && r.handoff) efeitos.handoff = r.handoff
         if (r.efeito === 'proposta_enviada') efeitos.propostaEnviada = true
         if (r.efeito === 'pedido_alterado') efeitos.pedidoAlterado = true
+        if (r.objecao) efeitos.objecoes.push(r.objecao)
         return { ok: true, saida: r.saida }
       } catch (e) {
         return { ok: false, erro: e instanceof Error ? e.message : String(e) }

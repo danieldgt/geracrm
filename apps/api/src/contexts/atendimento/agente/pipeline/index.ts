@@ -9,6 +9,7 @@ import { etapaNumerosAmpliados } from './numeros-ampliados.js'
 import { etapaFiltroSaida } from './filtro-saida.js'
 import { etapaPerguntaRepetida } from './pergunta-repetida.js'
 import { etapaRegrasQualidade } from './regras-qualidade.js'
+import { etapaObjecoesSeguidas } from './objecoes-seguidas.js'
 import { politicaFalhaLlm } from './falha-llm.js'
 import type {
   ContextoPipeline, DecisaoPreLlm, EfeitoPosEnvio, EntradaPosResposta, EtapaPosResposta, EtapaPreLlm, PatchEstado, PipelineDoTurno,
@@ -21,7 +22,7 @@ export * from './tipos.js'
  * O PIPELINE DO TURNO, MONTADO — a ordem é esta e só muda aqui (raia P0).
  *
  *   modoEfetivo → [portão] → gatilhos → slots → teto(pré) → devolução → LLM →
- *   [guardrail R$] → números → filtro → pergunta → qualidade → envio → teto(pós)
+ *   [guardrail R$] → números → filtro → pergunta → qualidade → objeções → envio → teto(pós)
  *
  * Cada etapa mora no seu arquivo e tem uma raia dona; editar a etapa NÃO exige
  * tocar aqui nem em `vendedor.ts`. Testes trocam etapas por falsas com
@@ -37,6 +38,7 @@ export const PIPELINE_PADRAO: PipelineDoTurno = {
   filtro: etapaFiltroSaida,
   pergunta: etapaPerguntaRepetida,
   qualidade: etapaRegrasQualidade,
+  objecoes: etapaObjecoesSeguidas,
   falha: politicaFalhaLlm,
 }
 
@@ -53,9 +55,13 @@ function etapasPreLlm(p: PipelineDoTurno): readonly EtapaPreLlm[] {
   return [p.gatilhos, p.slots, { nome: p.teto.nome, executar: (ctx) => p.teto.antes(ctx) }, p.devolucao]
 }
 
-/** Etapas depois do modelo (e do guardrail de R$), na ordem. */
+/**
+ * Etapas depois do modelo (e do guardrail de R$), na ordem. As objeções (G2) são
+ * as ÚLTIMAS: a pausa crítica da qualidade vence (nada sai), e a entrega na 3ª
+ * objeção troca uma resposta que já passou por todas as outras.
+ */
 function etapasPosResposta(p: PipelineDoTurno): readonly EtapaPosResposta[] {
-  return [p.numeros, p.filtro, p.pergunta, p.qualidade]
+  return [p.numeros, p.filtro, p.pergunta, p.qualidade, p.objecoes]
 }
 
 export interface ResultadoPreLlm {
@@ -122,7 +128,7 @@ export interface ResultadoCadeiaPos {
 }
 
 /**
- * Roda números → filtro → pergunta → qualidade sobre a resposta. Cada etapa
+ * Roda números → filtro → pergunta → qualidade → objeções sobre a resposta. Cada etapa
  * recebe as mensagens que a anterior devolveu. `bloquear` encerra a cadeia.
  */
 export async function rodarPosResposta(
