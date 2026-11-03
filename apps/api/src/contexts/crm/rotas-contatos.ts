@@ -71,37 +71,172 @@ const escreverCursor = (a: string | number, id: string) =>
   Buffer.from(`${a}:${id}`, 'utf8').toString('base64url')
 
 /**
- * Grava documento (CNPJ/CPF) e endereço principal de fonte 'manual'. Só toca nas
- * linhas manuais — o que veio do ERP não é pisado. Vazio remove a linha manual.
+ * Documento (CNPJ/CPF) e endereço de uma edição manual.
+ *
+ * ⚠️ Linha do ERP NUNCA é reescrita. A edição do usuário VENCE para exibição
+ *    (ele corrigiu o dado): a linha manual vira a principal/fiscal e a do ERP é
+ *    só DEMOVIDA (principal/fiscal = false), intacta, na mesma transação.
+ *    A ingestão do ERP (`ingestao-clientes.ts`) só INSERE telefone/documento
+ *    quando faltam e não toca em endereço — não re-promove sobre o manual.
+ *    Reenviar o mesmo valor que o ERP já mostra (o formulário devolve tudo)
+ *    não cria linha manual: seria um override sem mudança.
+ *    Vazio remove só a linha manual; se sobrar linha do ERP sem principal, ela
+ *    volta a ser a principal.
  */
-async function gravarDocumentoEEndereco(tx: Sql, id: string, d: ContatoCadastro): Promise<void> {
-  const doc = d.documento ? apenasDigitos(d.documento) : null
-  await tx`DELETE FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fonte = 'manual'`
-  if (doc) {
-    const tipo = doc.length === 14 ? 'cnpj' : 'cpf'
-    const [{ prox } = { prox: 1 }] = await tx<{ prox: number }[]>`
-      SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id}`
-    const [fiscal] = await tx`SELECT 1 FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fiscal`
-    await tx`
-      INSERT INTO contato_documento (tenant_id, contato_id, seq, tipo, numero, fiscal, fonte)
-      VALUES (tenant_atual(), ${id}, ${prox}, ${tipo}, ${doc}, ${!fiscal}, 'manual')`
-  }
+interface EnderecoLinha {
+  seq: number; logradouro: string | null; numero: string | null; complemento: string | null
+  bairro: string | null; cidade: string | null; uf: string | null; cep: string | null
+  principal: boolean; fonte: string
+}
 
-  const e = d.endereco
-  const preenchido = !!e && Object.values(e).some((x) => typeof x === 'string' && x.trim() !== '')
-  if (!preenchido) {
-    await tx`DELETE FROM contato_endereco WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = 1 AND fonte = 'manual'`
+const trimOuNull = (x: string | null | undefined) => (typeof x === 'string' && x.trim() !== '' ? x.trim() : null)
+
+async function gravarDocumento(tx: Sql, id: string, d: ContatoCadastro): Promise<void> {
+  const doc = d.documento ? apenasDigitos(d.documento) : null
+  const linhas = await tx<{ seq: number; tipo: string; numero: string; fiscal: boolean; fonte: string }[]>`
+    SELECT seq, tipo, numero, fiscal, fonte FROM contato_documento
+     WHERE tenant_id = tenant_atual() AND contato_id = ${id} ORDER BY seq`
+  const manual = linhas.find((l) => l.fonte === 'manual')
+
+  if (!doc) {
+    if (!manual) return
+    await tx`DELETE FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${manual.seq}`
+    const resto = linhas.filter((l) => l.seq !== manual.seq)
+    if (resto.length > 0 && !resto.some((l) => l.fiscal)) {
+      await tx`UPDATE contato_documento SET fiscal = true WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${resto[0]!.seq}`
+    }
     return
   }
-  const cep = e.cep ? apenasDigitos(e.cep) : null
-  await tx`
-    INSERT INTO contato_endereco (tenant_id, contato_id, seq, logradouro, numero, complemento, bairro, cidade, uf, cep, principal, fonte)
-    VALUES (tenant_atual(), ${id}, 1, ${e.logradouro ?? null}, ${e.numero ?? null}, ${e.complemento ?? null},
-            ${e.bairro ?? null}, ${e.cidade ?? null}, ${e.uf ?? null}, ${cep}, true, 'manual')
-    ON CONFLICT (tenant_id, contato_id, seq) DO UPDATE SET
-      logradouro = EXCLUDED.logradouro, numero = EXCLUDED.numero, complemento = EXCLUDED.complemento,
-      bairro = EXCLUDED.bairro, cidade = EXCLUDED.cidade, uf = EXCLUDED.uf, cep = EXCLUDED.cep`
+
+  const tipo = doc.length === 14 ? 'cnpj' : 'cpf'
+  if (!manual) {
+    const fiscalAtual = linhas.find((l) => l.fiscal)
+    if (fiscalAtual && fiscalAtual.tipo === tipo && fiscalAtual.numero === doc) return // já é o que a ficha mostra
+  }
+  let seq: number
+  if (manual) {
+    seq = manual.seq
+    await tx`UPDATE contato_documento SET fiscal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fiscal AND seq <> ${seq}`
+    await tx`UPDATE contato_documento SET tipo = ${tipo}, numero = ${doc}, fiscal = true, visto_em = now()
+              WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${seq}`
+  } else {
+    seq = Math.max(0, ...linhas.map((l) => l.seq)) + 1
+    await tx`UPDATE contato_documento SET fiscal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fiscal`
+    await tx`
+      INSERT INTO contato_documento (tenant_id, contato_id, seq, tipo, numero, fiscal, fonte)
+      VALUES (tenant_atual(), ${id}, ${seq}, ${tipo}, ${doc}, true, 'manual')`
+  }
 }
+
+async function gravarEndereco(tx: Sql, id: string, d: ContatoCadastro): Promise<void> {
+  const e = d.endereco
+  const novo = {
+    logradouro: trimOuNull(e?.logradouro), numero: trimOuNull(e?.numero), complemento: trimOuNull(e?.complemento),
+    bairro: trimOuNull(e?.bairro), cidade: trimOuNull(e?.cidade), uf: trimOuNull(e?.uf),
+    cep: e?.cep ? apenasDigitos(e.cep) : null,
+  }
+  const preenchido = Object.values(novo).some((x) => x !== null)
+  const linhas = await tx<EnderecoLinha[]>`
+    SELECT seq, logradouro, numero, complemento, bairro, cidade, uf, cep, principal, fonte FROM contato_endereco
+     WHERE tenant_id = tenant_atual() AND contato_id = ${id} ORDER BY seq`
+  const manual = linhas.find((l) => l.fonte === 'manual')
+
+  if (!preenchido) {
+    if (!manual) return
+    await tx`DELETE FROM contato_endereco WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${manual.seq}`
+    const resto = linhas.filter((l) => l.seq !== manual.seq)
+    if (resto.length > 0 && !resto.some((l) => l.principal)) {
+      await tx`UPDATE contato_endereco SET principal = true WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${resto[0]!.seq}`
+    }
+    return
+  }
+
+  if (!manual) {
+    const principal = linhas.find((l) => l.principal)
+    const igual = principal && (Object.keys(novo) as (keyof typeof novo)[]).every((k) => trimOuNull(principal[k]) === novo[k])
+    if (igual) return // já é o que a ficha mostra
+  }
+  let seq: number
+  if (manual) {
+    seq = manual.seq
+    await tx`UPDATE contato_endereco SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND principal AND seq <> ${seq}`
+    await tx`
+      UPDATE contato_endereco SET logradouro = ${novo.logradouro}, numero = ${novo.numero}, complemento = ${novo.complemento},
+             bairro = ${novo.bairro}, cidade = ${novo.cidade}, uf = ${novo.uf}, cep = ${novo.cep}, principal = true
+       WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${seq} AND fonte = 'manual'`
+  } else {
+    seq = Math.max(0, ...linhas.map((l) => l.seq)) + 1
+    await tx`UPDATE contato_endereco SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND principal`
+    await tx`
+      INSERT INTO contato_endereco (tenant_id, contato_id, seq, logradouro, numero, complemento, bairro, cidade, uf, cep, principal, fonte)
+      VALUES (tenant_atual(), ${id}, ${seq}, ${novo.logradouro}, ${novo.numero}, ${novo.complemento},
+              ${novo.bairro}, ${novo.cidade}, ${novo.uf}, ${novo.cep}, true, 'manual')`
+  }
+}
+
+async function gravarDocumentoEEndereco(tx: Sql, id: string, d: ContatoCadastro): Promise<void> {
+  await gravarDocumento(tx, id, d)
+  await gravarEndereco(tx, id, d)
+}
+
+/**
+ * Telefone principal de uma edição. A linha do ERP não é reescrita: a antiga é
+ * demovida e uma linha 'manual' (nova ou reativada) vira a principal. Linha
+ * principal já manual é atualizada no lugar. Mesmo número e mesmo WhatsApp que o
+ * ERP já mostra → nada a fazer.
+ */
+async function gravarTelefonePrincipal(tx: Sql, id: string, tel: { e164: string; chaveBloqueio: string }, whatsapp: boolean | undefined): Promise<void> {
+  const linhas = await tx<{ seq: number; e164: string; chave_bloqueio: string; whatsapp: boolean | null; principal: boolean; fonte: string }[]>`
+    SELECT seq, e164, chave_bloqueio, whatsapp, principal, fonte FROM contato_telefone
+     WHERE tenant_id = tenant_atual() AND contato_id = ${id} ORDER BY seq`
+  const atual = linhas.find((l) => l.principal)
+  const whats = whatsapp ?? atual?.whatsapp ?? true
+  const proximo = Math.max(0, ...linhas.map((l) => l.seq)) + 1
+
+  if (atual && atual.fonte === 'manual') {
+    await tx`
+      UPDATE contato_telefone SET e164 = ${tel.e164}, chave_bloqueio = ${tel.chaveBloqueio}, whatsapp = ${whats}, visto_em = now()
+       WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${atual.seq}`
+    return
+  }
+  if (atual && atual.e164 === tel.e164 && (atual.whatsapp ?? true) === whats) return
+
+  if (atual) {
+    await tx`UPDATE contato_telefone SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${atual.seq}`
+  }
+  const reativar = linhas.find((l) => l.fonte === 'manual' && l.e164 === tel.e164)
+  if (reativar) {
+    await tx`UPDATE contato_telefone SET principal = true, whatsapp = ${whats}, visto_em = now()
+              WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${reativar.seq}`
+  } else {
+    await tx`
+      INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
+      VALUES (tenant_atual(), ${id}, ${proximo}, ${tel.e164}, ${tel.chaveBloqueio}, true, ${whats}, 'manual')`
+  }
+}
+
+/** Violação de unicidade do telefone principal (corrida entre dois cadastros do mesmo número). */
+const ehTelefonePrincipalDuplicado = (err: unknown) =>
+  typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505' &&
+  (err as { constraint_name?: string }).constraint_name === 'contato_telefone_principal_unico'
+
+const respostaTelefoneDuplicado = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
+  reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.',
+    campos: { telefone: 'Este telefone já é o principal de outro contato.' } })
+
+/**
+ * Origem informada tem de existir, ser do tenant (RLS) e estar ativa — ou ser a
+ * que o contato já tem gravada (mesmo desativada, para não travar a edição).
+ */
+async function origemValida(tx: Sql, origemId: string, atualDoContato: string | null): Promise<boolean> {
+  if (origemId === atualDoContato) return true
+  const [o] = await tx`SELECT 1 FROM origem WHERE tenant_id = tenant_atual() AND id = ${origemId} AND ativa`
+  return !!o
+}
+
+const respostaOrigemInvalida = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
+  reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.',
+    campos: { origemId: 'Origem inexistente ou inativa.' } })
 
 export async function rotasContatos(app: FastifyInstance): Promise<void> {
   /**
@@ -120,12 +255,15 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       const d = v.dados
       const tel = normalizarTelefone(d.telefone)!
 
-      const r = await req.comTenant(async (tx) => {
+      let r: { id: string; novo: boolean } | { erro: 'origem' }
+      try {
+        r = await req.comTenant(async (tx) => {
         const [existe] = await tx<{ contato_id: string }[]>`
           SELECT contato_id FROM contato_telefone
            WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal
            LIMIT 1`
         if (existe) return { id: existe.contato_id, novo: false }
+        if (d.origemId && !(await origemValida(tx, d.origemId, null))) return { erro: 'origem' as const }
 
         const id = randomUUID()
         await tx`
@@ -136,11 +274,15 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
                   ${d.valorEstimadoCentavos ?? null}, ${d.observacoes ?? null}, 'manual', true)`
         await tx`
           INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
-          VALUES (tenant_atual(), ${id}, 1, ${tel.e164}, ${tel.chaveBloqueio}, true, ${d.whatsapp ?? true}, 'manual')
-          ON CONFLICT DO NOTHING`
+          VALUES (tenant_atual(), ${id}, 1, ${tel.e164}, ${tel.chaveBloqueio}, true, ${d.whatsapp ?? true}, 'manual')`
         await gravarDocumentoEEndereco(tx, id, d)
         return { id, novo: true }
-      })
+        })
+      } catch (err) {
+        if (ehTelefonePrincipalDuplicado(err)) return respostaTelefoneDuplicado(reply)
+        throw err
+      }
+      if ('erro' in r) return respostaOrigemInvalida(reply)
 
       return reply.code(r.novo ? 201 : 200).send({ id: r.id, nome: d.nome, novo: r.novo })
     },
@@ -148,9 +290,12 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /**
    * Edição COMPLETA do cadastro (formulário-página). Substitui os campos
-   * editáveis: opcional omitido/vazio vira NULL. Telefone principal trocado
+   * editáveis: opcional omitido/vazio vira NULL — EXCETO `origemId`, em que omitido
+   * preserva e só `null`/'' limpa (o formulário sempre envia tudo; um cliente de
+   * API que não conhece a origem não a apaga por esquecimento). Telefone principal trocado
    * vira o novo principal; se já é principal de OUTRO contato → 422 no campo.
-   * Documento/endereço só mexem nas linhas de fonte 'manual' (não pisa no ERP).
+   * Telefone/documento/endereço do ERP não são reescritos: a edição manual vira
+   * a principal e a do ERP é só demovida (ver `gravarDocumento`).
    */
   app.put<{ Params: { id: string }; Body: unknown }>(
     '/v1/contatos/:id', { preHandler: exigirTenant },
@@ -162,8 +307,10 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       const d = v.dados
       const tel = normalizarTelefone(d.telefone)!
 
-      const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
+      let r: { ok: true } | { erro: 'contato.nao_encontrado' | 'telefone_duplicado' | 'origem' }
+      try {
+        r = await req.comTenant(async (tx) => {
+        const [c] = await tx<{ origem_id: string | null }[]>`SELECT origem_id FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
         if (!c) return { erro: 'contato.nao_encontrado' as const }
 
         const [outro] = await tx`
@@ -171,36 +318,29 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
            WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal AND contato_id <> ${id} LIMIT 1`
         if (outro) return { erro: 'telefone_duplicado' as const }
 
+        // Ausente ≠ null: omitir `origemId` preserva; `null`/'' limpa.
+        const origemFinal = d.origemId === undefined ? c.origem_id : d.origemId
+        if (origemFinal && !(await origemValida(tx, origemFinal, c.origem_id))) return { erro: 'origem' as const }
+
         await tx`
           UPDATE contato SET
             nome = ${d.nome}, razao_social = ${d.razaoSocial ?? null}, nome_fantasia = ${d.nomeFantasia ?? null},
             email = ${d.email ?? null}, modalidade = ${d.modalidade ?? null}, prioridade = ${d.prioridade ?? null},
-            temperatura = ${d.temperatura ?? null}, origem_id = ${d.origemId ?? null},
+            temperatura = ${d.temperatura ?? null}, origem_id = ${origemFinal},
             valor_estimado_centavos = ${d.valorEstimadoCentavos ?? null}, observacoes = ${d.observacoes ?? null}
            WHERE tenant_id = tenant_atual() AND id = ${id}`
 
-        const [atual] = await tx<{ seq: number; chave_bloqueio: string; whatsapp: boolean | null }[]>`
-          SELECT seq, chave_bloqueio, whatsapp FROM contato_telefone
-           WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND principal LIMIT 1`
-        const whats = d.whatsapp ?? atual?.whatsapp ?? true
-        if (!atual) {
-          const [{ prox } = { prox: 1 }] = await tx<{ prox: number }[]>`
-            SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${id}`
-          await tx`
-            INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
-            VALUES (tenant_atual(), ${id}, ${prox}, ${tel.e164}, ${tel.chaveBloqueio}, true, ${whats}, 'manual')`
-        } else {
-          await tx`
-            UPDATE contato_telefone SET e164 = ${tel.e164}, chave_bloqueio = ${tel.chaveBloqueio}, whatsapp = ${whats}
-             WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${atual.seq}`
-        }
+        await gravarTelefonePrincipal(tx, id, tel, d.whatsapp)
         await gravarDocumentoEEndereco(tx, id, d)
         return { ok: true as const }
-      })
+        })
+      } catch (err) {
+        if (ehTelefonePrincipalDuplicado(err)) return respostaTelefoneDuplicado(reply)
+        throw err
+      }
       if ('erro' in r) {
-        if (r.erro === 'telefone_duplicado') {
-          return reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.', campos: { telefone: 'Telefone já cadastrado em outro contato' } })
-        }
+        if (r.erro === 'telefone_duplicado') return respostaTelefoneDuplicado(reply)
+        if (r.erro === 'origem') return respostaOrigemInvalida(reply)
         return reply.code(404).send({ erro: 'contato.nao_encontrado', mensagem: 'Contato não encontrado.' })
       }
       return reply.send({ ok: true, id })
