@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core'
-import { RouterLink } from '@angular/router'
+import { Router, RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import {
@@ -15,6 +15,7 @@ import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { AgendaDetalheModalComponente } from '../agenda/agenda-detalhe-modal.componente.js'
 import { TarefaModalComponente } from '../crm/tarefa-modal.componente.js'
+import { recorteDoGrupo } from './carteira-higienizacao.regras.js'
 import {
   EVENTOS_DO_COCKPIT, ROTULO_FAIXA, TOM_FAIXA, acoesDoItem, cartoesDoCockpit, colunasDosGrupos, criarRecargaAgendada,
   linhasDosGrupos, queryDosItens, resumoPorFaixa, textoAtualizado, textoHa, type AcaoItem, type RecargaAgendada,
@@ -188,6 +189,7 @@ type EstadoItens = 'ocioso' | 'carregando' | 'pronto' | 'erro'
 })
 export class CockpitPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly router = inject(Router)
   private readonly eventos = inject(EventosServico)
   private readonly inbox = inject(InboxServico)
 
@@ -290,6 +292,14 @@ export class CockpitPagina implements OnInit {
   }
 
   protected selecionar(card: CardCockpit, grupo: string | null, faixa: FaixaAguardando | null): void {
+    // "Sem próximo passo" tem tela própria (D2): agendar, descartar ou transferir em lote.
+    if (card === 'semProximoPasso') {
+      const r = grupo === null ? null : recorteDoGrupo(this.agrupar(), grupo)
+      void this.router.navigate(['/carteira-higienizacao'], {
+        queryParams: { ...(r?.vendedorId ? { vendedorId: r.vendedorId } : {}), ...(r?.filialId ? { filialId: r.filialId } : {}) },
+      })
+      return
+    }
     this.cardSel.set(card)
     this.grupoSel.set(grupo)
     this.faixaSel.set(faixa)

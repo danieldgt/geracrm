@@ -153,6 +153,8 @@ export const MENU: readonly GrupoMenu[] = [
     itens: [
       { rota: 'cockpit', rotulo: 'Cockpit', icone: 'bar-chart-3', status: 'pronto', onda: 'D1', soGestao: true,
         descricao: 'SLA, esquecidos, reuniões e quem está sem próximo passo — agora' },
+      { rota: 'carteira-higienizacao', rotulo: 'Higienização da carteira', icone: 'filter', status: 'pronto', onda: 'D2', soGestao: true,
+        descricao: 'Quem está sem próximo passo — agende, descarte ou transfira em lote' },
       { rota: 'bi', rotulo: 'Painéis (BI)', icone: 'line-chart', status: 'pronto', onda: 'O2',
         descricao: 'Vendas, ranking, top produtos, exportações.' },
       { rota: 'relatorios', rotulo: 'Relatórios', icone: 'bar-chart-3', status: 'pronto', onda: 'E1',

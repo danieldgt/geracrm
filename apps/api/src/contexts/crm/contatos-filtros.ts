@@ -37,6 +37,7 @@ const esquema = z.object({
   origemId: uuid.optional(),
   etiquetaId: z.preprocess(lista, z.array(uuid).max(MAX_ETIQUETAS_NO_FILTRO)).optional(),
   semProximoPasso: z.enum(['true', 'false']).optional(),
+  carteiraAtiva: z.enum(['true', 'false']).optional(),
   criadoDe: z.string().refine(diaReal).optional(),
   criadoAte: z.string().refine(diaReal).optional(),
 })
@@ -50,6 +51,8 @@ export interface FiltrosContato {
   readonly origemId: string | null
   readonly etiquetaIds: readonly string[]
   readonly semProximoPasso: boolean
+  /** Carteira ATIVA (D2): qualificado OU com oportunidade aberta — o denominador do indicador de próximo passo. */
+  readonly carteiraAtiva: boolean
   readonly criadoDe: string | null
   readonly criadoAte: string | null
 }
@@ -75,10 +78,32 @@ export function lerFiltros(query: unknown): ResultadoFiltros {
       origemId: d.origemId ?? null,
       etiquetaIds: [...new Set((d.etiquetaId ?? []).map((e) => e.toLowerCase()))],
       semProximoPasso: d.semProximoPasso === 'true',
+      carteiraAtiva: d.carteiraAtiva === 'true',
       criadoDe: d.criadoDe ?? null,
       criadoAte: d.criadoAte ?? null,
     },
   }
+}
+
+/**
+ * Filial EFETIVA do contato (alias `c`): a gravada nele ou, na falta, a do dono vigente da carteira
+ * (a primeira filial dele, por id). É a mesma régua do cockpit (D1) e do indicador da D2 — clicar numa
+ * filial do indicador e filtrar a lista dão o mesmo recorte.
+ */
+export function filialEfetivaDoContato(tx: Sql, aliasContato = 'c') {
+  const a = tx.unsafe(aliasContato)
+  return tx`coalesce(${a}.filial_id, (
+    SELECT fef.filial_id FROM carteira_atribuicao fea
+      JOIN usuario_filial fef ON fef.tenant_id = fea.tenant_id AND fef.usuario_id = fea.usuario_id AND fef.filial_id IS NOT NULL
+     WHERE fea.tenant_id = ${a}.tenant_id AND fea.contato_id = ${a}.id AND fea.ate IS NULL AND fea.usuario_id IS NOT NULL
+     ORDER BY fef.filial_id LIMIT 1))`
+}
+
+/** Carteira ativa: qualificado OU oportunidade aberta (alias `c`). */
+export function condicaoCarteiraAtiva(tx: Sql, aliasContato = 'c') {
+  const a = tx.unsafe(aliasContato)
+  return tx`(${a}.qualificado IS TRUE OR EXISTS (
+    SELECT 1 FROM oportunidade fop WHERE fop.tenant_id = ${a}.tenant_id AND fop.contato_id = ${a}.id AND fop.estado = 'aberta'))`
 }
 
 const escaparLike = (s: string): string => s.replace(/[\\%_]/g, (c) => `\\${c}`)
@@ -153,10 +178,11 @@ export function condicaoFiltros(tx: Sql, f: FiltrosContato, ctx: { fuso: string;
     AND ${qualificacao}
     AND ${f.segmento === null ? tx`true` : tx`(${condicaoSegmento(tx, f.segmento)})`}
     AND ${vendedor}
-    AND ${f.filialId === null ? tx`true` : tx`c.filial_id = ${f.filialId}::uuid`}
+    AND ${f.filialId === null ? tx`true` : tx`${filialEfetivaDoContato(tx, 'c')} = ${f.filialId}::uuid`}
     AND ${f.origemId === null ? tx`true` : tx`c.origem_id = ${f.origemId}::uuid`}
     AND ${etiquetas}
     AND ${semPasso}
+    AND ${f.carteiraAtiva ? condicaoCarteiraAtiva(tx, 'c') : tx`true`}
     AND ${f.criadoDe === null ? tx`true` : tx`c.criado_em >= (${f.criadoDe}::date)::timestamp AT TIME ZONE ${ctx.fuso}::text`}
     AND ${f.criadoAte === null ? tx`true` : tx`c.criado_em < ((${f.criadoAte}::date + 1))::timestamp AT TIME ZONE ${ctx.fuso}::text`}
   )`

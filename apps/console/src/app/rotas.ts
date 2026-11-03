@@ -49,6 +49,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/atendimento/templates.pagina.js').then((m) => m.TemplatesPagina),
   cockpit: () =>
     import('./funcionalidades/gestao/cockpit.pagina.js').then((m) => m.CockpitPagina),
+  'carteira-higienizacao': () =>
+    import('./funcionalidades/gestao/carteira-higienizacao.pagina.js').then((m) => m.CarteiraHigienizacaoPagina),
   'atendimento-kanban': () =>
     import('./funcionalidades/atendimento/atendimento-kanban.pagina.js').then((m) => m.AtendimentoKanbanPagina),
   campanhas: () =>

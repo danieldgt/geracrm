@@ -236,7 +236,8 @@ describe('GET /v1/contatos — filtros', () => {
   })
 
   it('filialId e origemId', async () => {
-    expect(await listar('adm', `filialId=${FX}`)).toEqual(so('c1'))
+    // Filial EFETIVA (D2): a gravada no contato ou, na falta, a do dono vigente — c4 é de va (FX).
+    expect(await listar('adm', `filialId=${FX}`)).toEqual(so('c1', 'c4'))
     expect(await listar('adm', `origemId=${O2}`)).toEqual(so('c2'))
   })
 
