@@ -27,7 +27,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | B2 modais do funil + ganho | 1 | ⏸ | correção pronta (017b2ff, 0122 corrigida no lugar); aguarda D3 para integrar |
 | A3 ficha 2+1 | 1 | ✅ | integrada (0115); feed lê a auditoria de `qualificarContato`; 'Enviar no WhatsApp' do arquivo fica para quando o inbox enviar mídia por id |
 | D5 configurações com abas + módulos | 2 | ✅ | integrada (0116); `exigirModulo('agenda')` e `ModulosServico` prontos |
-| H2 LGPD retenção/anonimização | 2 | 🔄 | Sonnet, migration 0125 |
+| H2 LGPD retenção/anonimização | 2 | 🔍 | pronta (1c78f17, 0125); revisão Opus em curso; aguarda D3; consumidor da fila de mídia pendente falta |
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
 | B1 panorama do funil | 2 | ⬜ | |
 | C2 agenda (módulo) | 2 | ⏸ | pronta (77a1592, 0117); aguarda D3; `app-agenda-contato` a montar na ficha |
