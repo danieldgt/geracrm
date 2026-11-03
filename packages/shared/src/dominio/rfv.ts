@@ -101,3 +101,40 @@ const ROTULO_SEGMENTO: Record<CodigoSegmentoRfv, string> = {
 export function rotuloSegmento(codigo: string): string {
   return ROTULO_SEGMENTO[codigo as CodigoSegmentoRfv] ?? codigo
 }
+
+/**
+ * Faixa de um segmento nas MÉTRICAS — para a API filtrar por segmento no SQL sem
+ * reescrever a régua: as fronteiras saem do mesmo `LIMITE` que `classificarRfv`
+ * usa (o teste cruza as duas).
+ *
+ *  · `sem_ritmo_recente` — sem ritmo (atraso nulo) e `diasSemComprar` ≤ `diasAte`.
+ *  · `sem_ritmo_parado`  — sem ritmo e `diasSemComprar` nulo OU > `diasApos`
+ *    (inclui quem nunca comprou, que `classificarRfv` põe em "em-risco").
+ *  · `ritmo`             — atraso > `apos` (ou sem piso) e ≤ `ate` (ou sem teto).
+ */
+export type FaixaRfv =
+  | { readonly tipo: 'sem_ritmo_recente'; readonly diasAte: number }
+  | { readonly tipo: 'sem_ritmo_parado'; readonly diasApos: number }
+  | { readonly tipo: 'ritmo'; readonly apos: number | null; readonly ate: number | null }
+
+const FAIXAS: Readonly<Record<CodigoSegmentoRfv, readonly FaixaRfv[]>> = {
+  'cliente-recente': [{ tipo: 'sem_ritmo_recente', diasAte: LIMITE.recenteDias }],
+  'cliente-fiel': [{ tipo: 'ritmo', apos: null, ate: LIMITE.emDia }],
+  'nao-perder': [{ tipo: 'ritmo', apos: LIMITE.emDia, ate: LIMITE.naHora }],
+  'em-risco': [
+    { tipo: 'sem_ritmo_parado', diasApos: LIMITE.recenteDias },
+    { tipo: 'ritmo', apos: LIMITE.naHora, ate: LIMITE.atrasado },
+  ],
+  'semi-perdido': [{ tipo: 'ritmo', apos: LIMITE.atrasado, ate: LIMITE.sumindo }],
+  'hibernando': [{ tipo: 'ritmo', apos: LIMITE.sumindo, ate: null }],
+}
+
+export const CODIGOS_SEGMENTO_RFV = Object.keys(FAIXAS) as readonly CodigoSegmentoRfv[]
+
+export function ehCodigoSegmentoRfv(v: unknown): v is CodigoSegmentoRfv {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(FAIXAS, v)
+}
+
+export function faixasDoSegmento(codigo: CodigoSegmentoRfv): readonly FaixaRfv[] {
+  return FAIXAS[codigo]
+}

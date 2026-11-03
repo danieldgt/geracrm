@@ -12,7 +12,7 @@ import { condicaoContato, condicaoTarefa, contatoNoEscopo, escopoDaRequisicao, t
 import { moduloAtivo } from '../plataforma/modulos.js'
 
 const PAGINA = 30
-const LOTE_MAX = 500
+export const LOTE_MAX = 500
 const CONSULTA_MAX = 200
 const RESULTADO_MAX = 2000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -46,7 +46,7 @@ const corpoTarefa = z.object({
   contatoId: uuid.nullish(), titulo: z.string().trim().min(1).max(200), descricao: z.string().max(5000).nullish(),
   venceEm: iso, tipo: tipoSchema.optional(), responsavelId: uuid.nullish(),
 })
-const corpoLote = corpoTarefa.omit({ contatoId: true }).extend({ contatoIds: z.array(uuid).min(1).max(LOTE_MAX) })
+export const corpoLote = corpoTarefa.omit({ contatoId: true }).extend({ contatoIds: z.array(uuid).min(1).max(LOTE_MAX) })
 const corpoConcluir = z.object({ resultado: z.string().trim().max(RESULTADO_MAX).nullish() }).nullish()
 const paramId = z.object({ id: uuid })
 
@@ -104,6 +104,32 @@ async function tarefaNoEscopo(tx: Sql, escopo: Escopo, id: string): Promise<bool
   const [l] = await tx`SELECT 1 FROM tarefa t
                         WHERE t.tenant_id = tenant_atual() AND t.id = ${id} AND ${condicaoTarefa(tx, escopo, 't')}`
   return Boolean(l)
+}
+
+/**
+ * Uma tarefa por contato, na transação do chamador. Só contatos do tenant (RLS) E do
+ * escopo do chamador (D3): ids desconhecidos ou fora do escopo são ignorados — quem
+ * chama conta o que sobrou. Regra única do `/v1/tarefas/lote` e da ação em massa
+ * "criar tarefa" da lista de contatos.
+ */
+export async function criarTarefasEmLote(
+  tx: Sql, escopo: Escopo, atorId: string, ids: readonly string[],
+  v: { titulo: string; descricao?: string | null | undefined; venceEm: string; tipo: string; responsavelId?: string | null | undefined },
+): Promise<{ id: string }[]> {
+  return tx<{ id: string }[]>`
+    INSERT INTO tarefa (tenant_id, id, contato_id, responsavel_id, titulo, descricao, vence_em, criado_por, tipo)
+    SELECT tenant_atual(), gen_random_uuid(), c.id, ${v.responsavelId ?? atorId}, ${v.titulo}, ${v.descricao?.trim() || null},
+           ${v.venceEm}, ${atorId}, ${v.tipo}
+      FROM contato c
+     WHERE c.tenant_id = tenant_atual() AND c.id = ANY(${[...ids]}::uuid[])
+       AND ${condicaoContato(tx, escopo, 'c')}
+    RETURNING id`
+}
+
+/** O responsável informado existe neste tenant? (RLS) */
+export async function responsavelDoTenantExiste(tx: Sql, id: string): Promise<boolean> {
+  const [u] = await tx`SELECT 1 FROM usuario WHERE tenant_id = tenant_atual() AND id = ${id}`
+  return !!u
 }
 
 /**
@@ -265,10 +291,7 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
     },
   )
 
-  const responsavelExiste = async (tx: Sql, id: string): Promise<boolean> => {
-    const [u] = await tx`SELECT 1 FROM usuario WHERE tenant_id = tenant_atual() AND id = ${id}`
-    return !!u
-  }
+  const responsavelExiste = responsavelDoTenantExiste
   const contatoExiste = async (tx: Sql, id: string): Promise<boolean> => {
     const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
     return !!c
@@ -312,16 +335,7 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
         const escopo = await escopoDaRequisicao(tx, req)
         const eu = await garantirUsuarioId(tx, req)
         if (v.responsavelId && !(await responsavelExiste(tx, v.responsavelId))) return null
-        // Only this tenant's contacts (RLS + filter) AND the caller's scope (D3): unknown or
-        // out-of-scope ids are ignored and counted in `ignorados`.
-        const criadas = await tx<{ id: string }[]>`
-          INSERT INTO tarefa (tenant_id, id, contato_id, responsavel_id, titulo, descricao, vence_em, criado_por, tipo)
-          SELECT tenant_atual(), gen_random_uuid(), c.id, ${v.responsavelId ?? eu}, ${v.titulo}, ${v.descricao?.trim() || null},
-                 ${v.venceEm}, ${eu}, ${tipo}
-            FROM contato c
-           WHERE c.tenant_id = tenant_atual() AND c.id = ANY(${ids}::uuid[])
-             AND ${condicaoContato(tx, escopo, 'c')}
-          RETURNING id`
+        const criadas = await criarTarefasEmLote(tx, escopo, eu, ids, { ...v, tipo })
         await auditar(tx, {
           atorId: eu, acao: 'tarefa.lote', entidade: 'tarefa',
           dados: { solicitados: ids.length, criadas: criadas.length, tipo, titulo: v.titulo },

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classificarRfv } from './rfv.js'
+import { classificarRfv, faixasDoSegmento, CODIGOS_SEGMENTO_RFV, ehCodigoSegmentoRfv, type FaixaRfv, type MetricasRfv } from './rfv.js'
 
 /**
  * ⚠️ O que se testa aqui é a REGRA de negócio — onde cada cliente cai no ciclo
@@ -53,5 +53,36 @@ describe('classificarRfv', () => {
       expect(s.rotulo.length).toBeGreaterThan(2)
       expect(s.acao.length).toBeGreaterThan(5)
     }
+  })
+})
+
+describe('faixasDoSegmento — a faixa que a API usa no SQL concorda com classificarRfv', () => {
+  const dentro = (f: FaixaRfv, m: MetricasRfv): boolean => {
+    if (f.tipo === 'ritmo') {
+      const a = m.atrasoRelativo
+      return a !== null && (f.apos === null || a > f.apos) && (f.ate === null || a <= f.ate)
+    }
+    if (m.atrasoRelativo !== null) return false
+    if (f.tipo === 'sem_ritmo_recente') return m.diasSemComprar !== null && m.diasSemComprar <= f.diasAte
+    return m.diasSemComprar === null || m.diasSemComprar > f.diasApos
+  }
+  const atrasos = [null, 0, 0.5, 0.9, 0.91, 1.4, 1.41, 2.5, 2.51, 5, 5.01, 9]
+  const dias = [null, 0, 30, 60, 61, 400]
+
+  it('cada métrica cai em exatamente o segmento que classificarRfv devolve', () => {
+    for (const a of atrasos) for (const d of dias) {
+      const m = { qtdVendas: a === null ? 1 : 3, diasSemComprar: d, atrasoRelativo: a }
+      const codigo = classificarRfv(m).codigo
+      for (const c of CODIGOS_SEGMENTO_RFV) {
+        const casa = faixasDoSegmento(c).some((f) => dentro(f, m))
+        expect(casa, `${c} para atraso=${a} dias=${d}`).toBe(c === codigo)
+      }
+    }
+  })
+
+  it('ehCodigoSegmentoRfv rejeita o que não é código', () => {
+    expect(ehCodigoSegmentoRfv('em-risco')).toBe(true)
+    expect(ehCodigoSegmentoRfv('toString')).toBe(false)
+    expect(ehCodigoSegmentoRfv(1)).toBe(false)
   })
 })
