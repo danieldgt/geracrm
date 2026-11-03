@@ -14,6 +14,7 @@ import { MENU } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
 import { MenuUsuarioComponente } from './menu-usuario.componente.js'
 import { MarcaComponente } from '../compartilhado/ui/marca.componente.js'
+import { IconeComponente } from '../compartilhado/ui/icone.componente.js'
 import { ToastsComponente } from '../compartilhado/ui/toast.js'
 import { ConfirmarComponente } from '../compartilhado/ui/confirmar.componente.js'
 import { ChatRailComponente } from '../funcionalidades/atendimento/chat-rail.componente.js'
@@ -37,7 +38,7 @@ import { AuthServico } from './auth.servico.js'
 @Component({
   selector: 'app-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente, MarcaComponente, ChatRailComponente, ToastsComponente, ConfirmarComponente],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, SinoNotificacoesComponente, MenuUsuarioComponente, MarcaComponente, IconeComponente, ChatRailComponente, ToastsComponente, ConfirmarComponente],
   template: `
     <div class="grade" [class.celular]="celular()">
       <!-- Celular (< 720px): o menu sai da grade e vira GAVETA por cima do
@@ -82,7 +83,7 @@ import { AuthServico } from './auth.servico.js'
                 <button type="button" class="item" [class.ativo]="inbox.railAberto()"
                         [title]="item.rotulo + ' — ' + item.descricao"
                         (click)="inbox.alternarRail(); filtro.set(''); mudarGaveta('navegou')">
-                  <span class="icone">{{ item.icone }}</span>
+                  <span class="icone"><ui-icone [nome]="item.icone" [tamanho]="18" /></span>
                   @if (!recolhidaEfetiva()) {
                     <span class="rotulo">{{ item.rotulo }}</span>
                     @if (inbox.naoLidasTotal() > 0) { <span class="ponto" [title]="inbox.naoLidasTotal() + ' não lidas'"></span> }
@@ -91,7 +92,7 @@ import { AuthServico } from './auth.servico.js'
               } @else {
                 <a [routerLink]="item.rota" routerLinkActive="ativo" class="item"
                    [title]="item.rotulo + ' — ' + item.descricao" (click)="filtro.set(''); mudarGaveta('navegou')">
-                  <span class="icone">{{ item.icone }}</span>
+                  <span class="icone"><ui-icone [nome]="item.icone" [tamanho]="18" /></span>
                   @if (!recolhidaEfetiva()) {
                     <span class="rotulo">{{ item.rotulo }}</span>
                     @if (item.status === 'construcao') { <span class="ponto" title="Em construção"></span> }
@@ -265,7 +266,7 @@ import { AuthServico } from './auth.servico.js'
     .item:hover { background: var(--superficie-hover); color: var(--texto); }
     .item.ativo { color: var(--marca); background: var(--acao-suave); font-weight: 600; box-shadow: inset 3px 0 0 var(--acao); }
     .item:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: -2px; }
-    .icone { width: 22px; font-size: 15px; text-align: center; flex: none; }
+    .icone { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
     .rotulo { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ponto { width: 6px; height: 6px; border-radius: var(--raio-completo); background: var(--atencao); flex: none; }
     .conteudo { grid-column: 2; grid-row: 2; overflow-y: auto; min-width: 0; background: var(--fundo); }

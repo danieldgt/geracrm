@@ -19,3 +19,5 @@ export {
   agruparPorPreco, badgesDoModelo, permitidosDe, alternarCodigo, codigosParaSalvar, mudouPermissao,
   type ModeloIa, type ModeloComPermissao, type ProvedorIa,
 } from './modelos-ia.regras.js'
+export { IconeComponente } from './icone.componente.js'
+export { ICONES } from './icones-lucide.js'
