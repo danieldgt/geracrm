@@ -30,6 +30,7 @@ import {
   processarParticoes, ALERTA_PARTICOES, ATRASO_PRIMEIRA_PASSADA_PARTICOES_MS, INTERVALO_PARTICOES_MS,
 } from './workers/particoes.js'
 import { atualizarConsumoDiario, ATRASO_PRIMEIRA_PASSADA_CONSUMO_MS, INTERVALO_CONSUMO_MS } from './workers/consumo.js'
+import { processarLgpd, INTERVALO_LGPD_MS, ATRASO_PRIMEIRA_PASSADA_LGPD_MS } from './workers/lgpd.js'
 
 const porta = Number(process.env.PORT ?? 3000)
 
@@ -318,6 +319,20 @@ if (process.env.DATABASE_ADMIN_URL) {
   }
   intervalosAquisicao.push(setTimeout(passadaConsumo, ATRASO_PRIMEIRA_PASSADA_CONSUMO_MS))
   intervalosAquisicao.push(setInterval(passadaConsumo, INTERVALO_CONSUMO_MS))
+  // RETENÇÃO LGPD (H2): anonimiza descartados além de `tenant.retencao_meses` e opt-outs com mais de
+  // 15 dias, em lotes por tenant (sob RLS), contato a contato. 1×/dia; o que passar do orçamento de
+  // tempo retoma na passada seguinte. Log só com contagens — nunca dado de contato.
+  let anonimizando = false
+  const passadaLgpd = () => {
+    if (anonimizando) return
+    anonimizando = true
+    void processarLgpd(donoAquisicao as never, {}, new Date())
+      .then((r) => { if (r.processadas > 0) app.log.info({ ...r, contexto: 'crm.lgpd' }, 'retenção LGPD') })
+      .catch((e) => app.log.warn({ erro: e, contexto: 'crm.lgpd' }, 'worker de retenção LGPD falhou'))
+      .finally(() => { anonimizando = false; batimento('lgpd') })
+  }
+  intervalosAquisicao.push(setTimeout(passadaLgpd, ATRASO_PRIMEIRA_PASSADA_LGPD_MS))
+  intervalosAquisicao.push(setInterval(passadaLgpd, INTERVALO_LGPD_MS))
 
   // Push nativo (PLT-07) — a notificação que chega com o navegador fechado.
   // ⚠️ 20s: é a mesma ordem de grandeza do despachante de webhooks. Push de

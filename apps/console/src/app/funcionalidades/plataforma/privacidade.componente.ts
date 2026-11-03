@@ -5,6 +5,7 @@ import { textoAvisoPrivacidade } from '@geracrm/shared'
 import {
   CampoComponente, GradeFormComponente, PainelComponente, ToastServico,
 } from '../../compartilhado/ui/index.js'
+import { AnonimizacoesComponente } from './anonimizacoes.componente.js'
 import { mensagemFalhaAoSalvar } from './config.regras.js'
 import {
   corpoDaLgpd, errosDoCorpo, errosDoServidor, formDaLgpd, resumoDosErros, FORM_LGPD_VAZIO,
@@ -34,7 +35,7 @@ type Estado = 'carregando' | 'pronto' | 'erro'
 @Component({
   selector: 'app-privacidade',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CampoComponente, GradeFormComponente, PainelComponente],
+  imports: [AnonimizacoesComponente, CampoComponente, GradeFormComponente, PainelComponente],
   template: `
     <ui-painel>
       <h2 class="txt-secao">Privacidade e LGPD</h2>
@@ -79,6 +80,7 @@ type Estado = 'carregando' | 'pronto' | 'erro'
               </div>
             }
           </form>
+          @if (!leitura()) { <app-anonimizacoes /> }
         }
       }
     </ui-painel>

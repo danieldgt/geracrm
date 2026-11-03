@@ -275,8 +275,17 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
       let criados = 0
       let atualizados = 0
+      let bloqueadosLgpd = 0
       await req.comTenant(async (tx) => {
         for (const l of linhas) {
+          // ⚠️ LGPD (H2): número de contato anonimizado não volta por importação. A chave é a mesma
+          //    do opt-out (55+DDD+8); o retorno é só uma contagem — nunca ecoa o telefone.
+          if (l.chaveBloqueio) {
+            const [lgpd] = await tx<{ ok: number }[]>`
+              SELECT 1 AS ok FROM lista_bloqueio
+               WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${l.chaveBloqueio} AND motivo = 'lgpd'`
+            if (lgpd) { bloqueadosLgpd++; continue }
+          }
           let contatoId: string | null = null
 
           if (l.documento) {
@@ -332,6 +341,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         total: linhas.length + rejeicoes.length,
         criados, atualizados,
         rejeitados: rejeicoes.length,
+        bloqueadosLgpd,
         rejeicoes: rejeicoes.slice(0, 50),
       })
     },

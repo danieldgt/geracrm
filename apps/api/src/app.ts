@@ -8,6 +8,7 @@ import { rotasWebhooksSaida } from './contexts/integracao/rotas-webhooks-saida.j
 import { rotasContatos } from './contexts/crm/rotas-contatos.js'
 import { rotasConsultas } from './contexts/crm/rotas-consultas.js'
 import { rotasBloqueios } from './contexts/crm/rotas-bloqueios.js'
+import { rotasLgpd } from './contexts/crm/rotas-lgpd.js'
 import { rotasEtiquetas } from './contexts/crm/rotas-etiquetas.js'
 import { rotasContatoFeed } from './contexts/crm/rotas-contato-feed.js'
 import { rotasContatoArquivo } from './contexts/crm/rotas-contato-arquivo.js'
@@ -129,6 +130,7 @@ export async function criarApp(
   await app.register(rotasContatos)
   await app.register(rotasConsultas)
   await app.register(rotasBloqueios)
+  await app.register(rotasLgpd)
   await app.register(rotasEtiquetas)
   await app.register(rotasContatoFeed)
   await app.register(rotasContatoArquivo)

@@ -10,6 +10,7 @@ import {
   EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, PainelComponente, ToastServico, mensagemDeErro,
   type ItemTrilha,
 } from '../../compartilhado/ui/index.js'
+import { AnonimizarContatoComponente } from './anonimizar-contato.componente.js'
 import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
 import { EtiquetasContatoComponente } from './etiquetas-contato.componente.js'
 import { TarefaModalComponente } from './tarefa-modal.componente.js'
@@ -36,7 +37,7 @@ import {
   selector: 'app-ficha-contato',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink, DatePipe, AbasComponente, BadgeComponente, BotaoComponente, BreadcrumbComponente, CabecalhoTelaComponente,
+    RouterLink, DatePipe, AnonimizarContatoComponente, AbasComponente, BadgeComponente, BotaoComponente, BreadcrumbComponente, CabecalhoTelaComponente,
     EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, PainelComponente,
     AvisosPrivacidadeComponente, EtiquetasContatoComponente, TarefaModalComponente, FichaFeedComponente,
     FichaPerfilCompraComponente, FichaArquivosComponente, FichaPedidosComponente, FichaTarefasComponente, FichaWhatsappComponente,
@@ -102,6 +103,7 @@ import {
                       }
                     }
                   }
+                  <app-anonimizar-contato [contatoId]="f.id" (anonimizou)="recarregar()" />
                 </div>
                 @if (dicaDesabilitada(); as d) { <p class="txt-denso dica">{{ d }}</p> }
                 @if (erroAcao(); as e) { <p class="txt-denso erro" role="alert">{{ e }}</p> }
