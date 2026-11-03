@@ -33,7 +33,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | C2 agenda (módulo) | 2 | ⬜ | |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | ⬜ | |
 | D4 notificações, perfil, esqueci a senha | 2 | ⬜ | |
-| D6 auditoria v2 | 2 | 🔄 | Haiku |
+| D6 auditoria v2 | 2 | ✅ | integrada; cursor com µs corrigido; pendente: login/logout (vai com D4), janela padrão da busca `q` |
 | D1 cockpit | 2 | ⬜ | |
 | D2 higienização da carteira | 2 | ⬜ | |
 | F2 preços, templates, consumo | 3 | ⬜ | |
