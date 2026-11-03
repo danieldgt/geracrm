@@ -17,17 +17,17 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | L0d ícones Lucide | 0 | ✅ | integrada; desenhos de memória — revisão aponta os suspeitos |
 | L0e docs e skill de formulários | 0 | ✅ | integrada; skill `geracrm-formularios` criada; docs ajustados ao contrato por cursor |
 | D3 escopo por papel + usuários + filiais | 0 | 🔄 | API pronta (0111); devolvida para trazer feat/paridade-am e escopar as rotas novas antes de integrar |
-| G1 devolver ao agente / reatribuir / filtro | 0 | 🔍 | revisão REPROVOU (motivo sem leitor, sem guarda de concorrência); correção Opus em curso |
+| G1 devolver ao agente / reatribuir / filtro | 0 | ✅ | integrada com correções (etapa `devolucao-da-equipe` no pipeline, guarda de concorrência, turno enfileirado) |
 | H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
 | A1 cadastro do contato | 1 | ✅ | integrada com correções (ERP preservado, 422 no telefone, origem validada); 0112 corrigida no lugar |
 | A4 etiquetas e origens | 1 | ✅ | integrada (0113); revisão aprovou |
-| C1 tarefas v2 | 1 | 🔍 | revisão aprovou com correções (validação, cursor µs, responsável nulo, autorização, NOT VALID); correção Sonnet em curso |
+| C1 tarefas v2 | 1 | ✅ | integrada com correções (validação Zod, cursor µs, responsável nulo, autorização); 0114 corrigida no lugar |
 | A5 pedidos em lista | 1 | ✅ | integrada; API não tem busca/período/contadores — cards e busca só no carregado |
 | A2 lista de contatos + massa | 1 | ⬜ | |
-| B2 modais do funil + ganho | 1 | 🔄 | entregue; devolvida para trazer feat (conflito com correção da A1 e select por cursor); migration 0122 |
+| B2 modais do funil + ganho | 1 | 🔍 | integrada (0122); revisão Sonnet em curso |
 | A3 ficha 2+1 | 1 | 🔄 | Sonnet, migration 0115 |
 | D5 configurações com abas + módulos | 2 | ✅ | integrada (0116); `exigirModulo('agenda')` e `ModulosServico` prontos |
-| H2 LGPD retenção/anonimização | 2 | ⬜ | |
+| H2 LGPD retenção/anonimização | 2 | 🔄 | Sonnet, migration 0125 |
 | E1 início v2 + base de relatórios | 2 | 🔄 | Sonnet; migration 0123 reservada |
 | B1 panorama do funil | 2 | ⬜ | |
 | C2 agenda (módulo) | 2 | 🔄 | Sonnet, migration 0117 |
@@ -50,7 +50,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | L1 retrofit das telas restantes | 4 | ⬜ | |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
-| G1b correções da G1 | 0 | 🔄 | Opus (etapa de pipeline + concorrência) |
+| G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 > Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.
