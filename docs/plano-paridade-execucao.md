@@ -42,7 +42,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | G2 objeções | 3 | ⬜ | |
 | G3 pós-venda, NPS, indicações, prova social | 3 | ⬜ | |
 | G4 roteamento e rodízio | 3 | ⬜ | |
-| G5 cadência descarte/reativação | 3 | 🔄 | Sonnet; migration 0121 se indispensável |
+| G5 cadência descarte/reativação | 3 | 🔍 | integrada (0121); revisão Sonnet em curso (cota de aquecimento, descarte padrão ligado) |
 | H1 importador | 3 | ⬜ | |
 | H4 e2e no CI | 3 | ⬜ | |
 | E2 relatórios 1ª leva | 3 | ⬜ | |
