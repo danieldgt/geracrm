@@ -4,6 +4,7 @@ import { exigirTenant } from '../../plugins/tenant.js'
 import { efetivarPedido } from './efetivacao.js'
 import { conectorDoTenant } from '../integracao/conector-do-tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { condicaoPedido, contatoNoEscopo, conversaNoEscopo, escopoDaRequisicao, exigirNoEscopo, pedidoNoEscopo } from '../plataforma/escopo.js'
 import { ETAPAS_POS_CONFIRMACAO, etapaPos } from './proximas-etapas.js'
 import { fragmentoPrecoDeVenda } from './preco-de-venda.js'
 import {
@@ -22,6 +23,9 @@ import { proporPedido } from './proposta.js'
  */
 
 const LIMITE_CATALOGO = 20
+
+/** Rotas de UM pedido: fora do escopo do usuário = 404, como inexistente (D3). */
+const ESCOPO_PEDIDO = exigirNoEscopo('pedido')
 
 export async function rotasPedido(app: FastifyInstance): Promise<void> {
   // Busca no catálogo: produtos com suas variações (grade cor × tamanho).
@@ -171,16 +175,32 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     const corpo = (req.body ?? {}) as { contatoId?: string; conversaId?: string; nome?: string; novo?: boolean }
     // ⚠️ A rota só cria por gente: `origem` é 'humano' aqui. O agente cria pelo
     //    mesmo caso de uso com origem 'agente' (ADR-027), nunca por esta rota.
-    const pedido = await req.comTenant((tx) => obterOuCriarRascunho(tx, {
-      contatoId: corpo.contatoId ?? null, conversaId: corpo.conversaId ?? null,
-      nome: corpo.nome ?? null, novo: corpo.novo === true, origem: 'humano',
-    }))
+    const pedido = await req.comTenant(async (tx) => {
+      // ⚠️ Escopo (D3): rascunho só para cliente/conversa que a pessoa enxerga —
+      //    senão o "reaproveita o rascunho da conversa" devolveria o id de um
+      //    pedido alheio. Fora do escopo = 404, como inexistente.
+      const escopo = await escopoDaRequisicao(tx, req)
+      if (corpo.contatoId && !(await contatoNoEscopo(tx, escopo, corpo.contatoId))) return null
+      if (corpo.conversaId && !(await conversaNoEscopo(tx, escopo, corpo.conversaId))) return null
+      const r = await obterOuCriarRascunho(tx, {
+        contatoId: corpo.contatoId ?? null, conversaId: corpo.conversaId ?? null,
+        nome: corpo.nome ?? null, novo: corpo.novo === true, origem: 'humano',
+      })
+      // `vendedor_id` = quem montou (0021). Só no rascunho NOVO: é o que deixa o
+      // pedido de balcão (sem cliente nem conversa) visível a quem o criou.
+      if (r.criado) {
+        await tx`UPDATE pedido SET vendedor_id = ${await garantirUsuarioId(tx, req)}
+                  WHERE tenant_id = tenant_atual() AND id = ${r.id} AND vendedor_id IS NULL`
+      }
+      return r
+    })
+    if (!pedido) return reply.code(404).send({ erro: 'contato.nao_encontrado', mensagem: 'Cliente ou conversa não encontrado.' })
     return reply.code(201).send({ id: pedido.id })
   })
 
   // Rascunhos (e recentes) de um cliente — para a tela robusta escolher/abrir.
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/pedidos', { preHandler: exigirTenant },
+    '/v1/contatos/:id/pedidos', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       const linhas = await req.comTenant((tx) => tx<{
         id: string; nome: string | null; estado: string; total_centavos: string; itens: number; atualizado_em: Date
@@ -213,7 +233,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Params: { id: string } }>(
     '/v1/pedidos/:id/itens',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, ESCOPO_PEDIDO] },
     async (req, reply) => {
       const corpo = (req.body ?? {}) as {
         skuId?: string; skuSnapshot?: string; descricaoSnapshot?: string; perfil?: string
@@ -284,6 +304,8 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
     { preHandler: exigirTenant },
     async (req, reply) => {
       const dados = await req.comTenant(async (tx) => {
+        // ⚠️ Fora do escopo do usuário = 404, igual a inexistente (D3).
+        if (!(await pedidoNoEscopo(tx, await escopoDaRequisicao(tx, req), req.params.id))) return null
         const [pedido] = await tx<{
           id: string; estado: string; total_centavos: string; total_pecas: string; contato_id: string | null
           ultimo_erro: unknown; forma_pagamento: string | null; observacao: string | null; nome: string | null
@@ -351,7 +373,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
    * motivo, sem fingir que gerou nada. É o ponto de costura para o conector.
    */
   app.post<{ Params: { id: string; etapa: string } }>(
-    '/v1/pedidos/:id/etapa/:etapa', { preHandler: exigirTenant },
+    '/v1/pedidos/:id/etapa/:etapa', { preHandler: [exigirTenant, ESCOPO_PEDIDO] },
     async (req, reply) => {
       const def = etapaPos(req.params.etapa)
       if (!def) return reply.code(400).send({ erro: 'etapa.desconhecida', mensagem: 'Etapa inválida.' })
@@ -377,7 +399,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Params: { id: string } }>(
     '/v1/pedidos/:id/efetivar',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, ESCOPO_PEDIDO] },
     async (req, reply) => {
       const r = await req.comTenant(async (tx) => {
         // ⚠️ O conector REAL do tenant, com a credencial cifrada dele. Antes isto
@@ -424,7 +446,9 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
         curEm = em; curId = id
       }
       const { estado, contatoId } = req.query
-      const linhas = await req.comTenant((tx) => tx<{
+      const linhas = await req.comTenant(async (tx) => {
+        const escopo = await escopoDaRequisicao(tx, req)
+        return tx<{
         id: string; estado: string; total_centavos: string; total_pecas: string
         contato_id: string | null; contato: string | null; rotulo: string | null
         numero_externo: string | null; criado_em: Date; itens: number; origem: string; desconto_pct: string
@@ -436,8 +460,10 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
          WHERE p.tenant_id = tenant_atual()
            AND ${estado ? tx`p.estado = ${estado}` : tx`true`}
            AND ${contatoId ? tx`p.contato_id = ${contatoId}` : tx`true`}
+           AND ${condicaoPedido(tx, escopo, 'p')}
            AND ${curEm === null ? tx`true` : tx`(p.criado_em, p.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
-         ORDER BY p.criado_em DESC, p.id DESC LIMIT 31`)
+         ORDER BY p.criado_em DESC, p.id DESC LIMIT 31`
+      })
       const temMais = linhas.length > 30
       const pagina = temMais ? linhas.slice(0, 30) : linhas
       const ultimo = pagina[pagina.length - 1]
@@ -456,7 +482,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
 
   /** Altera a quantidade de um item do rascunho (recalcula totais). */
   app.patch<{ Params: { id: string; seq: string }; Body: { quantidade?: number } }>(
-    '/v1/pedidos/:id/itens/:seq', { preHandler: exigirTenant },
+    '/v1/pedidos/:id/itens/:seq', { preHandler: [exigirTenant, ESCOPO_PEDIDO] },
     async (req, reply) => {
       const qtd = Number(req.body?.quantidade)
       if (!Number.isFinite(qtd) || qtd <= 0) return reply.code(422).send({ erro: 'item.quantidade_invalida', mensagem: 'Quantidade deve ser maior que zero.' })
@@ -474,7 +500,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
 
   /** Remove um item do rascunho (recalcula totais). */
   app.delete<{ Params: { id: string; seq: string } }>(
-    '/v1/pedidos/:id/itens/:seq', { preHandler: exigirTenant },
+    '/v1/pedidos/:id/itens/:seq', { preHandler: [exigirTenant, ESCOPO_PEDIDO] },
     async (req, reply) => {
       const r = await req.comTenant((tx) => removerItem(tx, req.params.id, Number(req.params.seq)))
       switch (r.tipo) {
@@ -488,7 +514,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
 
   /** Contexto de venda do rascunho: forma de pagamento e observação. */
   app.patch<{ Params: { id: string }; Body: { formaPagamento?: string | null; observacao?: string | null; nome?: string | null } }>(
-    '/v1/pedidos/:id', { preHandler: exigirTenant },
+    '/v1/pedidos/:id', { preHandler: [exigirTenant, ESCOPO_PEDIDO] },
     async (req, reply) => {
       const b = req.body ?? {}
       const r = await req.comTenant(async (tx) => {
@@ -520,7 +546,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
    * motivo" seria só uma lápide bonita.
    */
   app.post<{ Params: { id: string } }>(
-    '/v1/pedidos/:id/reabrir', { preHandler: exigirTenant },
+    '/v1/pedidos/:id/reabrir', { preHandler: [exigirTenant, ESCOPO_PEDIDO] },
     async (req, reply) => {
       const [r] = await req.comTenant((tx) => tx<{ id: string }[]>`
         UPDATE pedido
@@ -545,7 +571,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
   )
 
   app.post<{ Params: { id: string } }>(
-    '/v1/pedidos/:id/cancelar', { preHandler: exigirTenant },
+    '/v1/pedidos/:id/cancelar', { preHandler: [exigirTenant, ESCOPO_PEDIDO] },
     async (req, reply) => {
       const [r] = await req.comTenant((tx) => tx`
         UPDATE pedido SET estado = 'cancelado', atualizado_em = now(),
@@ -570,7 +596,7 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
    *    Regra comercial violada (PED-05) volta 422 com o que falta.
    */
   app.post<{ Params: { id: string } }>(
-    '/v1/pedidos/:id/enviar-resumo', { preHandler: exigirTenant },
+    '/v1/pedidos/:id/enviar-resumo', { preHandler: [exigirTenant, ESCOPO_PEDIDO] },
     async (req, reply) => {
       const quem = await req.comTenant(async (tx) => {
         const eu = await garantirUsuarioId(tx, req)

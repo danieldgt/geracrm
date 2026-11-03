@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { exigirPapel } from '../plataforma/papel.js'
+import { exigirNoEscopo } from '../plataforma/escopo.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 
@@ -181,7 +182,7 @@ export async function rotasEtiquetas(app: FastifyInstance): Promise<void> {
 
   // ------------------------------------------------------ etiquetas do contato
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/etiquetas', { preHandler: exigirTenant },
+    '/v1/contatos/:id/etiquetas', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
       const r = await req.comTenant(async (tx) => {
@@ -204,7 +205,7 @@ export async function rotasEtiquetas(app: FastifyInstance): Promise<void> {
    * 422 `etiqueta.inexistente` com os ids; nada é gravado.
    */
   app.put<{ Params: { id: string }; Body: { etiquetaIds?: unknown } }>(
-    '/v1/contatos/:id/etiquetas', { preHandler: exigirTenant },
+    '/v1/contatos/:id/etiquetas', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
       const bruto = req.body?.etiquetaIds

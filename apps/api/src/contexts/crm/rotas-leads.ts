@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { condicaoContato, contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { qualificarContato } from './qualificacao.js'
 
@@ -23,12 +24,16 @@ const NOME: Record<Chave, string> = { novo: 'Leads', qualificado: 'Qualificados'
 export async function rotasLeads(app: FastifyInstance): Promise<void> {
   /** As três colunas + contagem de cada uma (só contatos ativos). */
   app.get('/v1/leads/colunas', { preHandler: exigirTenant }, async (req, reply) => {
-    const [c] = await req.comTenant((tx) => tx<{ novo: number; qualificado: number; descartado: number }[]>`
-      SELECT count(*) FILTER (WHERE qualificado IS NULL)  ::int AS novo,
-             count(*) FILTER (WHERE qualificado IS TRUE)  ::int AS qualificado,
-             count(*) FILTER (WHERE qualificado IS FALSE) ::int AS descartado
-        FROM contato
-       WHERE tenant_id = tenant_atual() AND ativo`)
+    // ⚠️ A contagem conta o que a coluna MOSTRA (escopo D3).
+    const [c] = await req.comTenant(async (tx) => {
+      const escopo = await escopoDaRequisicao(tx, req)
+      return tx<{ novo: number; qualificado: number; descartado: number }[]>`
+      SELECT count(*) FILTER (WHERE c.qualificado IS NULL)  ::int AS novo,
+             count(*) FILTER (WHERE c.qualificado IS TRUE)  ::int AS qualificado,
+             count(*) FILTER (WHERE c.qualificado IS FALSE) ::int AS descartado
+        FROM contato c
+       WHERE c.tenant_id = tenant_atual() AND c.ativo AND ${condicaoContato(tx, escopo, 'c')}`
+    })
     return reply.send({
       colunas: CHAVES.map((chave) => ({ chave, nome: NOME[chave], total: c ? c[chave] : 0 })),
     })
@@ -50,7 +55,9 @@ export async function rotasLeads(app: FastifyInstance): Promise<void> {
         curEm = em; curId = id
       }
 
-      const linhas = await req.comTenant((tx) => tx<{
+      const linhas = await req.comTenant(async (tx) => {
+        const escopo = await escopoDaRequisicao(tx, req)
+        return tx<{
         id: string; nome: string; qtd_vendas: number; ultimo_toque_em: Date | null
         criado_em: Date; telefone: string | null; uf: string | null
         responsavel: string | null; conversa_id: string | null
@@ -71,13 +78,15 @@ export async function rotasLeads(app: FastifyInstance): Promise<void> {
                  ORDER BY cv.ultima_mensagem_em DESC NULLS LAST, cv.id DESC LIMIT 1) AS conversa_id
           FROM contato c
          WHERE c.tenant_id = tenant_atual() AND c.ativo
+           AND ${condicaoContato(tx, escopo, 'c')}
            AND ${chave === 'novo' ? tx`c.qualificado IS NULL`
                 : chave === 'qualificado' ? tx`c.qualificado IS TRUE`
                 : tx`c.qualificado IS FALSE`}
            AND ${curEm === null ? tx`true`
                 : tx`(c.criado_em, c.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
          ORDER BY c.criado_em DESC, c.id DESC
-         LIMIT ${PAGINA + 1}`)
+         LIMIT ${PAGINA + 1}`
+      })
 
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
@@ -107,6 +116,8 @@ export async function rotasLeads(app: FastifyInstance): Promise<void> {
       }
       // Mesmo caminho de domínio do descarte automático (G5): `qualificarContato`.
       const r = await req.comTenant(async (tx) => {
+        // ⚠️ Fora do escopo (D3) = 404, como inexistente.
+        if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), req.params.contatoId))) return { tipo: 'nao_encontrado' as const }
         const atorId = await garantirUsuarioId(tx, req)
         return qualificarContato(tx, { contatoId: req.params.contatoId, estado, atorId, atorStaff: req.atorStaff === true })
       })

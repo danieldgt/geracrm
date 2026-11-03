@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Sql } from '../../db/index.js'
 import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { atendePapel, exigirPapel, papeisDoUsuario } from '../plataforma/papel.js'
+import { condicaoConversa, escopoDaRequisicao, podeAtenderConversa } from '../plataforma/escopo.js'
 import { mascararTexto } from './agente/pipeline/tipos.js'
 import { modoEfetivoDoCanal, type ModoEfetivoDoCanal } from './agente/pipeline/modo-efetivo.js'
 import {
@@ -46,15 +47,15 @@ import { alvosDoHandoff, armarSlaDoHandoff, fragmentoForaDaSimulacao, respostaHu
  *     Permissão e 404 vêm ANTES do retorno idempotente: `jaDevolvida` só responde
  *     a quem poderia ter devolvido (gestão ou o autor da devolução); os demais
  *     recebem 409 `conversa.sem_atendimento_humano` — nunca um "ok" que não deram.
- *   - Gestão agindo sobre conversa que NÃO conduz só alcança o que VÊ na listagem
- *     (`GET /v1/conversas`: não arquivada e fora do playground) — o resto é 404.
- *   - Reatribuir: só gestão; o DESTINO precisa ter acesso ao número
- *     (`usuario_canal`, 0011 — mesma régua das notificações e do pool do SLA:
- *     número sem ninguém declarado é de todos).
- *   - TODO(D3): o escopo por FILIAL (`contexts/plataforma/escopo.ts`, raia D3) ainda
- *     não existe neste branch. Quando integrar, a visibilidade da gestão e o destino
- *     da reatribuição passam a exigir a filial do número no escopo de quem age —
- *     trocar `visivelNaListagem` e `temAcessoAoNumero` pela regra de lá.
+ *   - Escopo (D3, `contexts/plataforma/escopo.ts`): quem age só alcança a conversa
+ *     que VÊ na listagem (`GET /v1/conversas`: não arquivada, fora do playground E
+ *     no escopo de quem pede — `condicaoConversa`) — o resto é 404, antes de
+ *     permissão e de idempotência. Vale para quem conduz também (conduzir já põe
+ *     a conversa no escopo dele).
+ *   - Reatribuir: só gestão; o DESTINO precisa poder atender
+ *     (`podeAtenderConversa`): o cliente no escopo dele, ou o número que ele atende
+ *     (`usuario_canal`, 0011 — número sem ninguém declarado é de todos), ou o número
+ *     de uma filial que ele gere.
  */
 
 export { MOTIVOS_DEVOLUCAO }
@@ -130,15 +131,6 @@ async function entrantesSemResposta(tx: Sql, conversaId: string, agora: Date): P
   return linhas.map((l) => l.id).reverse()
 }
 
-/** O destino da reatribuição pode atender este número? Número sem ninguém declarado é de todos. */
-async function temAcessoAoNumero(tx: Sql, usuarioId: string, canalId: string): Promise<boolean> {
-  const [l] = await tx<{ ok: boolean }[]>`
-    SELECT NOT EXISTS (SELECT 1 FROM usuario_canal WHERE tenant_id = tenant_atual() AND canal_id = ${canalId})
-        OR EXISTS (SELECT 1 FROM usuario_canal
-                    WHERE tenant_id = tenant_atual() AND canal_id = ${canalId} AND usuario_id = ${usuarioId}) AS ok`
-  return l?.ok === true
-}
-
 /** Por que o agente não fala sozinho agora — código estável + texto para a tela. */
 function motivoDaFila(e: ModoEfetivoDoCanal): { codigo: string; texto: string } {
   const m = e.motivo
@@ -196,12 +188,17 @@ function classificar(s: Situacao): Estado {
   return 'sem_humano'
 }
 
-/** A conversa aparece em `GET /v1/conversas`? (não arquivada e fora do playground) */
-async function visivelNaListagem(tx: Sql, conversaId: string): Promise<boolean> {
+/**
+ * A conversa aparece em `GET /v1/conversas` para QUEM PEDE? (não arquivada, fora do
+ * playground e no escopo dele — a mesma régua da listagem, escopo D3).
+ */
+async function visivelNaListagem(tx: Sql, req: FastifyRequest, conversaId: string): Promise<boolean> {
+  const escopo = await escopoDaRequisicao(tx, req)
   const [l] = await tx<{ ok: boolean }[]>`
     SELECT true AS ok FROM conversa cv
      WHERE cv.tenant_id = tenant_atual() AND cv.id = ${conversaId} AND NOT cv.arquivada
-       AND ${fragmentoForaDaSimulacao(tx)}`
+       AND ${fragmentoForaDaSimulacao(tx)}
+       AND ${condicaoConversa(tx, escopo)}`
   return l?.ok === true
 }
 
@@ -248,7 +245,9 @@ export async function rotasDevolucao(app: FastifyInstance): Promise<void> {
         const conduzo = antes.aberto?.atendente_id === usuarioId
 
         // ── 404 e permissão ANTES de qualquer retorno idempotente (M1/M2) ──
-        if (!conduzo && gestao && !(await visivelNaListagem(tx, conversaId))) return { tipo: 'nao_encontrada' }
+        // ⚠️ Escopo (D3): fora da listagem de quem pede = 404, para todos (quem conduz
+        //    está no escopo por conduzir; a gestão, só no que a sua régua alcança).
+        if (!(await visivelNaListagem(tx, req, conversaId))) return { tipo: 'nao_encontrada' }
         const estado = classificar(antes)
         if (estado === 'humano' && !conduzo && !gestao) return { tipo: 'sem_permissao' }
         const ja = jaDevolvida(estado)
@@ -375,16 +374,17 @@ export async function rotasDevolucao(app: FastifyInstance): Promise<void> {
       }
 
       const r = await req.comTenant(async (tx) => {
-        // Gestão só reatribui o que VÊ (mesma régua da listagem) — 404 antes de tudo.
-        const [conv] = await tx<{ canal_id: string }[]>`
-          SELECT canal_id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
-        if (!conv || !(await visivelNaListagem(tx, conversaId))) return { tipo: 'nao_encontrada' as const }
+        // Gestão só reatribui o que VÊ (mesma régua da listagem, com o escopo D3 —
+        // gestor de filial = a filial) — 404 antes de tudo.
+        if (!(await visivelNaListagem(tx, req, conversaId))) return { tipo: 'nao_encontrada' as const }
 
         const [destino] = await tx<{ id: string; nome: string; ativo: boolean; ausente: boolean }[]>`
           SELECT id, nome, ativo, ausente FROM usuario WHERE tenant_id = tenant_atual() AND id = ${destinoId}`
         if (!destino) return { tipo: 'usuario_nao_encontrado' as const }
         if (!destino.ativo) return { tipo: 'usuario_inativo' as const }
-        if (!(await temAcessoAoNumero(tx, destino.id, conv.canal_id))) return { tipo: 'sem_acesso_ao_numero' as const, nome: destino.nome }
+        // ⚠️ Escopo (D3): o DESTINO precisa poder atender — o cliente no escopo dele, o
+        //    número que ele atende ou o número de uma filial que ele gere.
+        if (!(await podeAtenderConversa(tx, destino.id, conversaId))) return { tipo: 'sem_acesso_ao_numero' as const, nome: destino.nome }
 
         const [aberto] = await tx<{ id: string; atendente_id: string | null }[]>`
           SELECT id, atendente_id FROM atendimento
@@ -422,7 +422,7 @@ export async function rotasDevolucao(app: FastifyInstance): Promise<void> {
       if (r.tipo === 'sem_acesso_ao_numero') {
         return reply.code(422).send({
           erro: 'reatribuicao.sem_acesso_ao_numero',
-          mensagem: `${r.nome} não atende este número. Dê acesso ao número em Equipe, ou escolha outra pessoa.`,
+          mensagem: `${r.nome} não atende este número nem tem este cliente no escopo dele. Dê acesso ao número em Equipe, ou escolha outra pessoa.`,
         })
       }
       if (r.tipo === 'sem_atendimento') {

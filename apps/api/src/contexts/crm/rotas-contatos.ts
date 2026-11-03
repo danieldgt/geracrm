@@ -5,6 +5,7 @@ import { classificarRfv, normalizarTelefone, normalizarDocumento, ehPerfilPreco,
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { parseCsvContatos } from './importar-csv.js'
+import { condicaoContato, contatoNoEscopo, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
 import { validarCadastro } from './contato-cadastro.js'
 import { gravarDocumentoEEndereco } from './contato-gravacao.js'
 
@@ -70,6 +71,9 @@ function lerCursor(cursor: string | undefined): [string, string] | null {
 }
 const escreverCursor = (a: string | number, id: string) =>
   Buffer.from(`${a}:${id}`, 'utf8').toString('base64url')
+
+/** Sub-rotas do contato: fora do escopo do usuário = 404, como inexistente (D3). */
+const ESCOPO_CONTATO = exigirNoEscopo('contato')
 
 /**
  * Telefone principal de uma edição. A linha do ERP não é reescrita: a antiga é
@@ -190,7 +194,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
    * a principal e a do ERP é só demovida (ver `gravarDocumento`).
    */
   app.put<{ Params: { id: string }; Body: unknown }>(
-    '/v1/contatos/:id', { preHandler: exigirTenant },
+    '/v1/contatos/:id', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const id = req.params.id
       if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(400).send({ erro: 'contato.id_invalido', mensagem: 'Id de contato inválido.' })
@@ -341,7 +345,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
     const q = String((req.query as { q?: string })?.q ?? '').trim()
     if (q.length < 2) return reply.send({ itens: [] })
     const digitos = q.replace(/\D/g, '')
-    const linhas = await req.comTenant((tx) => tx<{ id: string; nome: string; e164: string | null }[]>`
+    const linhas = await req.comTenant(async (tx) => {
+      const escopo = await escopoDaRequisicao(tx, req)
+      return tx<{ id: string; nome: string; e164: string | null }[]>`
       SELECT c.id, c.nome, ct.e164
         FROM contato c
         LEFT JOIN contato_telefone ct
@@ -349,11 +355,13 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
        WHERE c.tenant_id = tenant_atual() AND c.ativo
          -- ⚠️ O contato de simulação do playground não é cliente: fica fora de toda lista.
          AND coalesce(c.origem_carga, '') <> 'simulacao'
+         AND ${condicaoContato(tx, escopo, 'c')}
          AND ( c.nome ILIKE ${'%' + q + '%'}
                ${digitos.length >= 4 ? tx`OR ct.e164 LIKE ${'%' + digitos + '%'}` : tx``} )
        ORDER BY c.nome ASC
        LIMIT 20
-    `)
+    `
+    })
     return reply.send({ itens: linhas.map((l) => ({ id: l.id, nome: l.nome, telefone: l.e164 })) })
   })
 
@@ -380,7 +388,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
     const limite = limiteDe(q.limite)
     const c = lerCursor(q.cursor)
 
-    const linhas = await req.comTenant((tx) => tx<LinhaMetrica[]>`
+    const linhas = await req.comTenant(async (tx) => {
+      const escopo = await escopoDaRequisicao(tx, req)
+      return tx<LinhaMetrica[]>`
       SELECT c.id, c.nome,
              coalesce(m.qtd_vendas, 0)::text     AS qtd_vendas,
              coalesce(m.total_centavos, 0)::text AS total_centavos,
@@ -393,11 +403,13 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
           ON m.tenant_id = c.tenant_id AND m.contato_id = c.id
        WHERE c.tenant_id = tenant_atual() AND c.ativo
          AND coalesce(c.origem_carga, '') <> 'simulacao'
+         AND ${condicaoContato(tx, escopo, 'c')}
          AND ${c === null ? tx`true`
               : tx`(coalesce(m.total_centavos, 0), c.id) < (${Number(c[0])}, ${c[1]}::uuid)`}
        ORDER BY coalesce(m.total_centavos, 0) DESC, c.id DESC
        LIMIT ${limite + 1}
-    `)
+    `
+    })
 
     const temMais = linhas.length > limite
     const pagina = temMais ? linhas.slice(0, limite) : linhas
@@ -425,6 +437,8 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       }
 
       const dados = await req.comTenant(async (tx) => {
+        // ⚠️ Fora do escopo do usuário = 404, igual a inexistente (D3).
+        if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), id))) return null
         const [contato] = await tx<{
           id: string; nome: string; modalidade: string | null; qualificado: boolean
           recebe_campanhas: boolean; recebe_automacoes: boolean; criado_em: Date; perfil_preco: string | null
@@ -549,7 +563,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
    *    requisição de item nunca carrega preço.
    */
   app.patch<{ Params: { id: string }; Body: { nome?: string; ativo?: boolean; perfilPreco?: string | null } }>(
-    '/v1/contatos/:id', { preHandler: exigirTenant },
+    '/v1/contatos/:id', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const nome = req.body?.nome?.trim()
       const ativo = req.body?.ativo
@@ -572,7 +586,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Adiciona um telefone ao contato (idempotente por chave_bloqueio). */
   app.post<{ Params: { id: string }; Body: { telefone?: string; principal?: boolean } }>(
-    '/v1/contatos/:id/telefones', { preHandler: exigirTenant },
+    '/v1/contatos/:id/telefones', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const tel = normalizarTelefone(req.body?.telefone ?? '')
       if (!tel) return reply.code(422).send({ erro: 'telefone.invalido', mensagem: 'Telefone inválido.' })
@@ -597,7 +611,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Define qual telefone é o principal. */
   app.post<{ Params: { id: string; seq: string } }>(
-    '/v1/contatos/:id/telefones/:seq/principal', { preHandler: exigirTenant },
+    '/v1/contatos/:id/telefones/:seq/principal', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       await req.comTenant(async (tx) => {
         await tx`UPDATE contato_telefone SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
@@ -609,7 +623,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Remove um telefone. */
   app.delete<{ Params: { id: string; seq: string } }>(
-    '/v1/contatos/:id/telefones/:seq', { preHandler: exigirTenant },
+    '/v1/contatos/:id/telefones/:seq', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       await req.comTenant((tx) => tx`
         DELETE FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`)
@@ -619,7 +633,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Adiciona um documento (CNPJ/CPF) validando o dígito. */
   app.post<{ Params: { id: string }; Body: { tipo?: 'cnpj' | 'cpf'; numero?: string } }>(
-    '/v1/contatos/:id/documentos', { preHandler: exigirTenant },
+    '/v1/contatos/:id/documentos', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const tipo = req.body?.tipo
       if (tipo !== 'cnpj' && tipo !== 'cpf') return reply.code(422).send({ erro: 'documento.tipo_invalido' })
@@ -642,7 +656,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Remove um documento. */
   app.delete<{ Params: { id: string; seq: string } }>(
-    '/v1/contatos/:id/documentos/:seq', { preHandler: exigirTenant },
+    '/v1/contatos/:id/documentos/:seq', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       await req.comTenant((tx) => tx`
         DELETE FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`)
@@ -652,7 +666,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Define/atualiza o endereço principal (um por contato, seq 1). */
   app.put<{ Params: { id: string }; Body: Record<string, string | undefined> }>(
-    '/v1/contatos/:id/endereco', { preHandler: exigirTenant },
+    '/v1/contatos/:id/endereco', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const b = req.body ?? {}
       const r = await req.comTenant(async (tx) => {
@@ -674,7 +688,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Comentários/notas do contato — histórico simples. */
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/comentarios', { preHandler: exigirTenant },
+    '/v1/contatos/:id/comentarios', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const linhas = await req.comTenant((tx) => tx<{ id: string; texto: string; autor: string | null; criado_em: Date }[]>`
         SELECT c.id, c.texto, u.nome AS autor, c.criado_em
@@ -687,7 +701,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Trajetória do segmento RFV (transições ao longo do tempo). Skill funil-de-vendas. */
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/segmento/historico', { preHandler: exigirTenant },
+    '/v1/contatos/:id/segmento/historico', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const linhas = await req.comTenant((tx) => tx<{ segmento: string; capturado_em: Date }[]>`
         SELECT segmento, capturado_em
@@ -699,7 +713,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
   )
 
   app.post<{ Params: { id: string }; Body: { texto?: string } }>(
-    '/v1/contatos/:id/comentarios', { preHandler: exigirTenant },
+    '/v1/contatos/:id/comentarios', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const texto = req.body?.texto?.trim()
       if (!texto) return reply.code(422).send({ erro: 'comentario.vazio', mensagem: 'Escreva algo.' })
@@ -728,7 +742,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
     const limite = limiteDe(q.limite)
     const c = lerCursor(q.cursor)
 
-    const linhas = await req.comTenant((tx) => tx<(LinhaMetrica & { urgencia: string })[]>`
+    const linhas = await req.comTenant(async (tx) => {
+      const escopo = await escopoDaRequisicao(tx, req)
+      return tx<(LinhaMetrica & { urgencia: string })[]>`
       WITH fila AS (
         SELECT c.id, c.nome, m.qtd_vendas::text, m.total_centavos::text,
                m.dias_sem_comprar, m.atraso_relativo::text,
@@ -739,6 +755,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
                --    entrar na fila em vez de sumir por não ter média.
                coalesce(m.atraso_relativo, m.dias_sem_comprar::numeric / 30) AS urgencia
           FROM metricas_contato m JOIN contato c ON c.id = m.contato_id
+         WHERE ${condicaoContato(tx, escopo, 'c')}
       )
       SELECT * FROM fila
        -- Só quem precisa de ação: quem está dentro do ritmo (<= 0.9) fica fora.
@@ -746,7 +763,8 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
          AND ${c === null ? tx`true` : tx`(urgencia, id) < (${Number(c[0])}, ${c[1]}::uuid)`}
        ORDER BY urgencia DESC, id DESC
        LIMIT ${limite + 1}
-    `)
+    `
+    })
 
     const temMais = linhas.length > limite
     const pagina = temMais ? linhas.slice(0, limite) : linhas

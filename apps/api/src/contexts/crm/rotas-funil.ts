@@ -8,6 +8,8 @@ import { exigirPapel } from '../plataforma/papel.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { garantirEtapasFunil } from './funil-modelos.js'
 import { gravarDocumento, gravarEndereco } from './contato-gravacao.js'
+import { condicaoOportunidade, contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
+import type { FastifyRequest } from 'fastify'
 
 const PAGINA = 50 // cards por página de coluna (kanban paginado por coluna, ADR)
 
@@ -51,6 +53,23 @@ function responderFalha(reply: FastifyReply, f: Falha, prefixo = 'move') {
 }
 
 interface DadosAtuais { contatoId: string; dados: DadosDoGanho }
+
+const UUID_OPORTUNIDADE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * A oportunidade está no escopo de quem pediu (D3)? Escopo `tudo` não consulta —
+ * a rota segue com as respostas de sempre. Fora do escopo a rota responde o MESMO
+ * "não encontrada" de inexistente.
+ */
+async function oportunidadeNoEscopo(tx: Sql, req: FastifyRequest, id: string): Promise<boolean> {
+  const escopo = await escopoDaRequisicao(tx, req)
+  if (escopo.tipo === 'tudo') return true
+  if (!UUID_OPORTUNIDADE.test(id)) return false
+  const [l] = await tx`SELECT 1 FROM oportunidade o
+                        WHERE o.tenant_id = tenant_atual() AND o.id = ${id}
+                          AND ${condicaoOportunidade(tx, escopo, 'o')}`
+  return Boolean(l)
+}
 
 /** O que o contato da oportunidade já tem dos dados mínimos do ganho (CNPJ fiscal primeiro). */
 async function dadosDoContato(tx: Sql, oportunidadeId: string): Promise<DadosAtuais | null> {
@@ -171,11 +190,14 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
   app.get('/v1/funil/etapas', { preHandler: exigirTenant }, async (req, reply) => {
     const linhas = await req.comTenant(async (tx) => {
       await garantirEtapasFunil(tx)
+      // ⚠️ O total de cada estágio conta o que a coluna MOSTRA (escopo D3).
+      const escopo = await escopoDaRequisicao(tx, req)
       return tx<{
         id: string; chave: string; nome: string; tipo: string; criterio: string | null; total: number
       }[]>`
       SELECT e.id, e.chave, e.nome, e.tipo, e.criterio,
-             (SELECT count(*) FROM oportunidade o WHERE o.tenant_id = e.tenant_id AND o.etapa_id = e.id)::int AS total
+             (SELECT count(*) FROM oportunidade o
+               WHERE o.tenant_id = e.tenant_id AND o.etapa_id = e.id AND ${condicaoOportunidade(tx, escopo, 'o')})::int AS total
         FROM funil_etapa e
        WHERE e.tenant_id = tenant_atual() AND e.ativo
        ORDER BY e.ordem`
@@ -207,7 +229,9 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
         if (!p || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curPos = p; curId = id
       }
-      const linhas = await req.comTenant((tx) => tx<{
+      const linhas = await req.comTenant(async (tx) => {
+        const escopo = await escopoDaRequisicao(tx, req)
+        return tx<{
         id: string; contato_id: string; nome: string; titulo: string | null
         valor_estimado_centavos: string | null; responsavel: string | null
         posicao: number; entrou_etapa_em: Date; versao: string
@@ -218,9 +242,11 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
           JOIN contato c ON c.tenant_id = o.tenant_id AND c.id = o.contato_id
           LEFT JOIN usuario u ON u.tenant_id = o.tenant_id AND u.id = o.responsavel_id
          WHERE o.tenant_id = tenant_atual() AND o.etapa_id = ${req.params.etapaId}
+           AND ${condicaoOportunidade(tx, escopo, 'o')}
            AND ${curPos === null ? tx`true` : tx`(o.posicao, o.id) > (${curPos}::double precision, ${curId}::uuid)`}
          ORDER BY o.posicao ASC, o.id ASC
-         LIMIT ${PAGINA + 1}`)
+         LIMIT ${PAGINA + 1}`
+      })
 
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
@@ -270,6 +296,8 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
         if (!etapa) return { erro: etapaPedida ? ('etapa_invalida' as const) : ('sem_etapa' as const) }
         const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${contatoId}`
         if (!c) return { erro: 'contato_nao_encontrado' as const }
+        // ⚠️ Escopo (D3): oportunidade só para cliente que a pessoa enxerga.
+        if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), contatoId))) return { erro: 'contato_nao_encontrado' as const }
 
         const id = randomUUID()
         // ⚠️ Vencedor atômico: uma aberta por contato (índice parcial).
@@ -305,9 +333,13 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
         return reply.code(422).send({ erro: 'move.invalido', mensagem: 'Estágio e versão são obrigatórios.' })
       }
 
-      const r = await req.comTenant(async (tx) => aplicarMovimento(tx, await garantirUsuarioId(tx, req), {
-        id: req.params.id, etapaId, posicao: posicao ?? 0, versao, motivo: motivo ?? null, descricao: null, validarGanho: true,
-      }))
+      const r = await req.comTenant(async (tx): Promise<{ ok: true } | Falha> => {
+        // ⚠️ Escopo (D3): card fora do escopo = 404, como inexistente.
+        if (!(await oportunidadeNoEscopo(tx, req, req.params.id))) return { erro: 'nao_encontrada' }
+        return aplicarMovimento(tx, await garantirUsuarioId(tx, req), {
+          id: req.params.id, etapaId, posicao: posicao ?? 0, versao, motivo: motivo ?? null, descricao: null, validarGanho: true,
+        })
+      })
       if ('erro' in r) return responderFalha(reply, r)
       return reply.send({ ok: true })
     },
@@ -327,6 +359,8 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
       const d = b.dados
       {
         const r = await req.comTenant(async (tx) => {
+          // ⚠️ Escopo (D3): fora do escopo responde como inexistente.
+          if (!(await oportunidadeNoEscopo(tx, req, req.params.id))) return { erro: 'nao_encontrada' } satisfies Falha
           const atual = await dadosDoContato(tx, req.params.id)
           if (!atual) return { erro: 'nao_encontrada' } satisfies Falha
           const etapaId = await etapaDoTipo(tx, 'ganho')
@@ -401,6 +435,8 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
         return reply.code(422).send({ erro: 'perda.descricao_grande', mensagem: 'Máximo de 1000 caracteres.' })
       }
       const r = await req.comTenant(async (tx) => {
+        // ⚠️ Escopo (D3): fora do escopo responde como inexistente.
+        if (!(await oportunidadeNoEscopo(tx, req, req.params.id))) return { erro: 'nao_encontrada' } satisfies Falha
         const [m] = await tx`SELECT 1 FROM motivo_perda WHERE tenant_id = tenant_atual() AND codigo = ${motivo} AND ativo`
         if (!m) return { erro: 'motivo_invalido' as const }
         const etapaId = await etapaDoTipo(tx, 'perdido')
@@ -442,6 +478,8 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
             JOIN contato c ON c.tenant_id = o.tenant_id AND c.id = o.contato_id
            WHERE o.tenant_id = tenant_atual() AND o.id = ${req.params.id}`
         if (!o) return { erro: 'nao_encontrada' as const }
+        // ⚠️ Escopo (D3): a gestão só transfere card que ela enxerga (gestor de filial = a filial).
+        if (!(await oportunidadeNoEscopo(tx, req, req.params.id))) return { erro: 'nao_encontrada' as const }
         const [u] = await tx`SELECT 1 FROM usuario WHERE tenant_id = tenant_atual() AND id = ${destino} AND ativo`
         if (!u) return { erro: 'usuario_invalido' as const }
         const eu = await garantirUsuarioId(tx, req)

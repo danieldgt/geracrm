@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { descartarSugestaoEntrada, type RespostaSugestao } from '@geracrm/shared'
 import { exigirTenant } from '../../../plugins/tenant.js'
+import { exigirNoEscopo } from '../../plataforma/escopo.js'
 import { auditar } from '../../plataforma/auditoria.js'
 import { garantirUsuarioId } from '../rotas-fila.js'
 import {
@@ -29,7 +30,7 @@ const MENSAGEM_SEM_SUGESTAO: Record<string, string> = {
 
 export async function rotasSugestao(app: FastifyInstance, opcoes: { copiloto?: OpcoesCopiloto } = {}): Promise<void> {
   app.get<{ Params: { id: string } }>(
-    '/v1/conversas/:id/sugestao', { preHandler: exigirTenant },
+    '/v1/conversas/:id/sugestao', { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       const lido = await req.comTenant(async (tx) => {
@@ -52,7 +53,7 @@ export async function rotasSugestao(app: FastifyInstance, opcoes: { copiloto?: O
   )
 
   app.post<{ Params: { id: string } }>(
-    '/v1/conversas/:id/sugestao/gerar', { preHandler: exigirTenant },
+    '/v1/conversas/:id/sugestao/gerar', { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       const eu = await req.comTenant((tx) => garantirUsuarioId(tx, req))

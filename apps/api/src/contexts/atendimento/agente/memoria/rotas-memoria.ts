@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../../../plugins/tenant.js'
+import { exigirNoEscopo } from '../../../plataforma/escopo.js'
 import { listarMemoria, revogarMemoria } from './memoria.js'
 
 /**
@@ -13,7 +14,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export async function rotasMemoria(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string }; Querystring: { cursor?: string } }>(
-    '/v1/contatos/:id/memoria', { preHandler: exigirTenant },
+    '/v1/contatos/:id/memoria', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
       let cursor: { criadoEm: string; id: string } | null = null
@@ -36,7 +37,7 @@ export async function rotasMemoria(app: FastifyInstance): Promise<void> {
   )
 
   app.delete<{ Params: { id: string; memoriaId: string } }>(
-    '/v1/contatos/:id/memoria/:memoriaId', { preHandler: exigirTenant },
+    '/v1/contatos/:id/memoria/:memoriaId', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id) || !UUID.test(req.params.memoriaId)) return reply.code(404).send({ erro: 'memoria.nao_encontrada' })
       const revogada = await req.comTenant(async (tx) => {

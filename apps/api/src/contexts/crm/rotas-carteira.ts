@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { condicaoContato, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
 
 const PAGINA = 30
 
@@ -72,7 +73,10 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
         if (!nome || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curNome = nome; curId = id
       }
-      const linhas = await req.comTenant((tx) => {
+      const linhas = await req.comTenant(async (tx) => {
+        // ⚠️ Escopo (D3): o vendedor que pede a carteira de OUTRO (ou os órfãos)
+        //    recebe a lista vazia — a carteira alheia não está no escopo dele.
+        const escopo = await escopoDaRequisicao(tx, req)
         // Órfão = sem dono vigente com usuario_id não-nulo.
         const filtroDono = orfaos === '1'
           ? tx`NOT EXISTS (
@@ -87,6 +91,7 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
           SELECT c.id, c.nome, c.qtd_vendas, c.ultima_venda_em
             FROM contato c
            WHERE c.tenant_id = tenant_atual() AND ${filtroDono}
+             AND ${condicaoContato(tx, escopo, 'c')}
              AND ${curNome === null ? tx`true` : tx`(c.nome, c.id) > (${curNome}, ${curId}::uuid)`}
            ORDER BY c.nome ASC, c.id ASC LIMIT ${PAGINA + 1}`
       })
@@ -105,7 +110,7 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
 
   // Histórico de posse de UM cliente (para a ficha).
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/carteira/historico', { preHandler: exigirTenant },
+    '/v1/contatos/:id/carteira/historico', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       const linhas = await req.comTenant((tx) => tx<{
         id: string; usuario_id: string | null; usuario: string | null
@@ -130,7 +135,7 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
 
   // Atribuir/transferir o dono. usuarioId null (ou ausente) = remover o dono.
   app.post<{ Params: { id: string }; Body: { usuarioId?: string | null; motivo?: string } }>(
-    '/v1/contatos/:id/carteira', { preHandler: exigirTenant },
+    '/v1/contatos/:id/carteira', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       const novoDono = req.body?.usuarioId ?? null
       const motivo = req.body?.motivo?.trim() || null
@@ -158,7 +163,7 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
 
   // Soltar o cliente (vira órfão). Atalho para transferir com dono NULL.
   app.delete<{ Params: { id: string } }>(
-    '/v1/contatos/:id/carteira', { preHandler: exigirTenant },
+    '/v1/contatos/:id/carteira', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       const resultado = await req.comTenant(async (tx) => {
         const eu = await garantirUsuarioId(tx, req)

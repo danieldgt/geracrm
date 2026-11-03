@@ -8,6 +8,7 @@ import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import { atendePapel, exigirPapel, papeisDoUsuario } from '../plataforma/papel.js'
+import { condicaoContato, condicaoTarefa, contatoNoEscopo, escopoDaRequisicao, type Escopo } from '../plataforma/escopo.js'
 
 const PAGINA = 30
 const LOTE_MAX = 500
@@ -93,6 +94,18 @@ async function limitesDoTenant(tx: Sql): Promise<Limites> {
 const escaparLike = (s: string): string => s.replace(/[\\%_]/g, (c) => `\\${c}`)
 
 /**
+ * A tarefa está no escopo do usuário (D3)? Com escopo `tudo` não consulta (a rota
+ * segue com as respostas de sempre). Fora do escopo = 404, como inexistente.
+ */
+async function tarefaNoEscopo(tx: Sql, escopo: Escopo, id: string): Promise<boolean> {
+  if (escopo.tipo === 'tudo') return true
+  if (!UUID.test(id)) return false
+  const [l] = await tx`SELECT 1 FROM tarefa t
+                        WHERE t.tenant_id = tenant_atual() AND t.id = ${id} AND ${condicaoTarefa(tx, escopo, 't')}`
+  return Boolean(l)
+}
+
+/**
  * Tarefas de follow-up. ⚠️ "Situação" é derivada, no fuso do tenant:
  *   • abertas    = estado 'aberta'
  *   • atrasadas  = 'aberta' E vence_em < now()   (alias legado: 'vencidas')
@@ -124,6 +137,8 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
 
       const linhas = await req.comTenant(async (tx) => {
         const lim = await limitesDoTenant(tx)
+        // ⚠️ Escopo (D3): só as tarefas que a pessoa enxerga (ver condicaoTarefa).
+        const escopo = await escopoDaRequisicao(tx, req)
         const filtroSituacao =
           situacao === 'concluidas' ? tx`t.estado = 'concluida'`
           : situacao === 'vencidas' || situacao === 'atrasadas' ? tx`t.estado = 'aberta' AND t.vence_em < now()`
@@ -147,6 +162,7 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
              AND ${contatoId ? tx`t.contato_id = ${contatoId}` : tx`true`}
              AND ${tipo ? tx`t.tipo = ${tipo}` : tx`true`}
              AND ${responsavelId ? tx`(t.responsavel_id = ${responsavelId} OR t.responsavel_id IS NULL)` : tx`true`}
+             AND ${condicaoTarefa(tx, escopo, 't')}
              AND ${q ? tx`(t.titulo ILIKE ${'%' + escaparLike(q) + '%'} OR c.nome ILIKE ${'%' + escaparLike(q) + '%'})` : tx`true`}
              AND ${de ? tx`t.vence_em >= (${de}::date::timestamp AT TIME ZONE ${lim.fuso}::text)` : tx`true`}
              AND ${ate ? tx`t.vence_em < ((${ate}::date + 1)::timestamp AT TIME ZONE ${lim.fuso}::text)` : tx`true`}
@@ -180,6 +196,8 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
       const { responsavelId } = parsed.data
       const c = await req.comTenant(async (tx) => {
         const lim = await limitesDoTenant(tx)
+        // ⚠️ Os cartões contam o que a lista MOSTRA (escopo D3).
+        const escopo = await escopoDaRequisicao(tx, req)
         const [r] = await tx<{ pendentes: number; atrasadas: number; hoje: number; semana: number }[]>`
           SELECT count(*)::int AS pendentes,
                  (count(*) FILTER (WHERE t.vence_em < now()))::int AS atrasadas,
@@ -187,7 +205,8 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
                  (count(*) FILTER (WHERE t.vence_em >= ${lim.inicioSemana} AND t.vence_em < ${lim.fimSemana}))::int AS semana
             FROM tarefa t
            WHERE t.tenant_id = tenant_atual() AND t.estado = 'aberta'
-             AND ${responsavelId ? tx`(t.responsavel_id = ${responsavelId} OR t.responsavel_id IS NULL)` : tx`true`}`
+             AND ${responsavelId ? tx`(t.responsavel_id = ${responsavelId} OR t.responsavel_id IS NULL)` : tx`true`}
+             AND ${condicaoTarefa(tx, escopo, 't')}`
         return r!
       })
       return reply.send(c)
@@ -204,15 +223,23 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
       if (ids.length === 0) return reply.send({ itens: [] })
       if (ids.length > CONSULTA_MAX) return reply.code(422).send({ erro: 'tarefa.consulta_grande', mensagem: `Máximo de ${CONSULTA_MAX} contatos por consulta.`, campos: ['contatoIds'] })
       if (ids.some((i) => !UUID.test(i))) return reply.code(422).send({ erro: 'tarefa.id_invalido', campos: ['contatoIds'] })
-      const linhas = await req.comTenant((tx) => tx<{ contato_id: string; futuras: number }[]>`
-        SELECT t.contato_id, count(*)::int AS futuras
-          FROM tarefa t
-         WHERE t.tenant_id = tenant_atual() AND t.estado = 'aberta' AND t.vence_em >= now()
-           AND t.contato_id = ANY(${ids}::uuid[])
-         GROUP BY t.contato_id`)
+      const { linhas, visiveis } = await req.comTenant(async (tx) => {
+        // ⚠️ Escopo (D3): contato fora do escopo some da resposta (como inexistente).
+        const escopo = await escopoDaRequisicao(tx, req)
+        const visiveis = escopo.tipo === 'tudo' ? ids : (await tx<{ id: string }[]>`
+          SELECT c.id FROM contato c
+           WHERE c.tenant_id = tenant_atual() AND c.id = ANY(${ids}::uuid[]) AND ${condicaoContato(tx, escopo, 'c')}`).map((l) => l.id)
+        const linhas = visiveis.length === 0 ? [] : await tx<{ contato_id: string; futuras: number }[]>`
+          SELECT t.contato_id, count(*)::int AS futuras
+            FROM tarefa t
+           WHERE t.tenant_id = tenant_atual() AND t.estado = 'aberta' AND t.vence_em >= now()
+             AND t.contato_id = ANY(${visiveis}::uuid[])
+           GROUP BY t.contato_id`
+        return { linhas, visiveis: new Set(visiveis) }
+      })
       const futuras = new Map(linhas.map((l) => [l.contato_id, l.futuras]))
       return reply.send({
-        itens: ids.map((contatoId) => {
+        itens: ids.filter((contatoId) => visiveis.has(contatoId)).map((contatoId) => {
           const tarefasAbertasFuturas = futuras.get(contatoId) ?? 0
           return {
             contatoId, tarefasAbertasFuturas,
@@ -242,7 +269,10 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
       const id = randomUUID()
       const falha = await req.comTenant(async (tx): Promise<'contatoId' | 'responsavelId' | null> => {
         const eu = await garantirUsuarioId(tx, req)
-        if (v.contatoId && !(await contatoExiste(tx, v.contatoId))) return 'contatoId'
+        // ⚠️ Escopo (D3): contato fora do escopo responde como inexistente — a lista
+        //    devolveria o nome de um cliente alheio.
+        if (v.contatoId && !(await contatoExiste(tx, v.contatoId)
+          && await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), v.contatoId))) return 'contatoId'
         if (v.responsavelId && !(await responsavelExiste(tx, v.responsavelId))) return 'responsavelId'
         await tx`INSERT INTO tarefa (tenant_id, id, contato_id, responsavel_id, titulo, descricao, vence_em, criado_por, tipo)
                  VALUES (tenant_atual(), ${id}, ${v.contatoId ?? null}, ${v.responsavelId ?? eu}, ${v.titulo},
@@ -265,15 +295,18 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
       const ids = [...new Set(contatoIds)]
       const tipo = v.tipo ?? 'outro'
       const res = await req.comTenant(async (tx) => {
+        const escopo = await escopoDaRequisicao(tx, req)
         const eu = await garantirUsuarioId(tx, req)
         if (v.responsavelId && !(await responsavelExiste(tx, v.responsavelId))) return null
-        // Only this tenant's contacts (RLS + filter): unknown ids are ignored and counted.
+        // Only this tenant's contacts (RLS + filter) AND the caller's scope (D3): unknown or
+        // out-of-scope ids are ignored and counted in `ignorados`.
         const criadas = await tx<{ id: string }[]>`
           INSERT INTO tarefa (tenant_id, id, contato_id, responsavel_id, titulo, descricao, vence_em, criado_por, tipo)
           SELECT tenant_atual(), gen_random_uuid(), c.id, ${v.responsavelId ?? eu}, ${v.titulo}, ${v.descricao?.trim() || null},
                  ${v.venceEm}, ${eu}, ${tipo}
             FROM contato c
            WHERE c.tenant_id = tenant_atual() AND c.id = ANY(${ids}::uuid[])
+             AND ${condicaoContato(tx, escopo, 'c')}
           RETURNING id`
         await auditar(tx, {
           atorId: eu, acao: 'tarefa.lote', entidade: 'tarefa',
@@ -295,6 +328,8 @@ export async function rotasTarefa(app: FastifyInstance): Promise<void> {
     novo: 'concluida' | 'cancelada', resultado: string | null,
   ): Promise<FastifyReply> {
     const r = await req.comTenant(async (tx): Promise<'nao_encontrada' | 'nao_aberta' | 'proibido' | 'ok'> => {
+      // ⚠️ Escopo (D3): tarefa fora do escopo = 404, antes de qualquer outra resposta.
+      if (!(await tarefaNoEscopo(tx, await escopoDaRequisicao(tx, req), id))) return 'nao_encontrada'
       const eu = await garantirUsuarioId(tx, req)
       const [t] = await tx<{ estado: string; responsavel_id: string | null; criado_por: string | null }[]>`
         SELECT estado, responsavel_id, criado_por FROM tarefa

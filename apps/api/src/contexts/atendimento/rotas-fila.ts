@@ -4,6 +4,7 @@ import type { Sql } from '../../db/index.js'
 import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { atendePapel, papeisDoUsuario } from '../plataforma/papel.js'
+import { condicaoConversa, conversaNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 import { operadorAusente, RECUSA_OPERADOR_AUSENTE } from './presenca-operador.js'
 import { garantirEtapasAtendimento } from './rotas-atendimento-kanban.js'
 import { fragmentoForaDaSimulacao, fragmentoNaFila, respostaHumanaDoAtendimento } from './sla-handoff.js'
@@ -63,10 +64,15 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const p = Number(req.query.p)
       if (!Number.isSafeInteger(p) || p <= 0) return reply.code(422).send({ erro: 'protocolo.invalido' })
-      const [row] = await req.comTenant((tx) => tx<{ conversa_id: string }[]>`
-        SELECT conversa_id FROM atendimento
-         WHERE tenant_id = tenant_atual() AND protocolo = ${p}
-         ORDER BY criado_em DESC LIMIT 1`)
+      const row = await req.comTenant(async (tx) => {
+        const [r] = await tx<{ conversa_id: string }[]>`
+          SELECT conversa_id FROM atendimento
+           WHERE tenant_id = tenant_atual() AND protocolo = ${p}
+           ORDER BY criado_em DESC LIMIT 1`
+        // ⚠️ Escopo (D3): protocolo de conversa fora do escopo = não encontrado.
+        if (!r || !(await conversaNoEscopo(tx, await escopoDaRequisicao(tx, req), r.conversa_id))) return null
+        return r
+      })
       if (!row) return reply.code(404).send({ erro: 'protocolo.nao_encontrado' })
       return reply.send({ conversaId: row.conversa_id })
     },
@@ -76,9 +82,12 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
   app.get('/v1/fila/contadores', { preHandler: exigirTenant }, async (req, reply) => {
     const sub = subDoUsuario(req) // a MESMA regra do assumir (dev: "dev-<tenant>")
     const r = await req.comTenant(async (tx) => {
+      // ⚠️ A contagem da aba "Fila" conta o que a aba MOSTRA (escopo D3).
+      const escopo = await escopoDaRequisicao(tx, req)
       const [fila] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM conversa cv
-         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}`
+         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}
+           AND ${condicaoConversa(tx, escopo)}`
       const [meus] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM atendimento a
          JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import multipart from '@fastify/multipart'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirNoEscopo } from '../plataforma/escopo.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { arquivosBucket } from './arquivos-bucket.js'
@@ -26,7 +27,7 @@ export async function rotasContatoArquivo(app: FastifyInstance): Promise<void> {
   await app.register(multipart, { limits: { fileSize: TAMANHO_MAX_ARQUIVO, files: 1, fields: 4 } })
 
   app.get<{ Params: { id: string }; Querystring: { cursor?: string } }>(
-    '/v1/contatos/:id/arquivos', { preHandler: exigirTenant },
+    '/v1/contatos/:id/arquivos', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
       let cur: [string, string] | null = null
@@ -67,7 +68,7 @@ export async function rotasContatoArquivo(app: FastifyInstance): Promise<void> {
   )
 
   app.post<{ Params: { id: string } }>(
-    '/v1/contatos/:id/arquivos', { preHandler: exigirTenant },
+    '/v1/contatos/:id/arquivos', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
       const bucket = arquivosBucket()
@@ -129,7 +130,7 @@ export async function rotasContatoArquivo(app: FastifyInstance): Promise<void> {
   )
 
   app.delete<{ Params: { id: string; arquivoId: string } }>(
-    '/v1/contatos/:id/arquivos/:arquivoId', { preHandler: exigirTenant },
+    '/v1/contatos/:id/arquivos/:arquivoId', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id) || !UUID.test(req.params.arquivoId)) return reply.code(404).send({ erro: 'arquivo.nao_encontrado' })
       const chave = await req.comTenant(async (tx) => {
@@ -153,7 +154,7 @@ export async function rotasContatoArquivo(app: FastifyInstance): Promise<void> {
   )
 
   app.get<{ Params: { id: string; arquivoId: string } }>(
-    '/v1/contatos/:id/arquivos/:arquivoId/url', { preHandler: exigirTenant },
+    '/v1/contatos/:id/arquivos/:arquivoId/url', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id) || !UUID.test(req.params.arquivoId)) return reply.code(404).send({ erro: 'arquivo.nao_encontrado' })
       const bucket = arquivosBucket()

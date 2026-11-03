@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirNoEscopo } from '../plataforma/escopo.js'
 import { garantirUsuarioId } from './rotas-fila.js'
 
 /**
@@ -18,7 +19,7 @@ const TTL_SEGUNDOS = 40
 export async function rotasPresenca(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>(
     '/v1/conversas/:id/presenca',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       const conversaId = req.params.id
       const r = await req.comTenant(async (tx) => {
@@ -57,7 +58,7 @@ export async function rotasPresenca(app: FastifyInstance): Promise<void> {
   /** Saída explícita — ao fechar a conversa, some na hora (sem esperar o TTL). */
   app.delete<{ Params: { id: string } }>(
     '/v1/conversas/:id/presenca',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       const conversaId = req.params.id
       await req.comTenant(async (tx) => {

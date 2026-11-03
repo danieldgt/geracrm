@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { resolverPeriodo, validarEntradaPeriodo } from './periodo-relatorio.js'
 import { contatosPorDimensao, taxaDe } from './rotas-relatorios.js'
+import { condicaoContato, condicaoPedido, condicaoTarefa, escopoDaRequisicao } from './escopo.js'
 
 /**
  * Painel Início v2 (raia E1) — o negócio num período livre, em poucas leituras agregadas.
@@ -24,7 +25,9 @@ import { contatosPorDimensao, taxaDe } from './rotas-relatorios.js'
  *   contatosRecentes / proximasTarefas   10 itens cada (recentes: os últimos criados; tarefas: abertas
  *                      por vencimento, atrasadas primeiro). São lista curta de painel, não grid de domínio.
  *
- * TODO(D3): aplicar `escopoDoUsuario` (vendedor só o próprio) quando a raia D3 entrar.
+ * ESCOPO (D3): todo número sai do escopo de quem pede (`escopo.ts`) — vendedor a própria carteira
+ * (contatos, os pedidos e as tarefas dela), gestor a filial, admin o tenant. O ranking também: o
+ * vendedor vê só a própria linha; o gestor, os da filial.
  */
 export async function rotasPainel(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { inicio?: string; fim?: string } }>(
@@ -36,23 +39,26 @@ export async function rotasPainel(app: FastifyInstance): Promise<void> {
 
       const dados = await req.comTenant(async (tx) => {
         const p = await resolverPeriodo(tx, inicio, fim)
+        const escopo = await escopoDaRequisicao(tx, req)
 
         const [novos] = await tx<{ n: number }[]>`
-          SELECT count(*)::int AS n FROM contato
-           WHERE tenant_id = tenant_atual() AND ativo AND coalesce(origem_carga, '') <> 'simulacao'
-             AND criado_em >= ${p.desde} AND criado_em < ${p.ate}`
+          SELECT count(*)::int AS n FROM contato c
+           WHERE c.tenant_id = tenant_atual() AND c.ativo AND coalesce(c.origem_carga, '') <> 'simulacao'
+             AND c.criado_em >= ${p.desde} AND c.criado_em < ${p.ate}
+             AND ${condicaoContato(tx, escopo, 'c')}`
 
         const [ped] = await tx<{ n: number; total: string }[]>`
-          SELECT count(*)::int AS n, coalesce(sum(total_centavos), 0)::text AS total FROM pedido
-           WHERE tenant_id = tenant_atual() AND estado = 'efetivado'
-             AND efetivado_em >= ${p.desde} AND efetivado_em < ${p.ate}`
+          SELECT count(*)::int AS n, coalesce(sum(p.total_centavos), 0)::text AS total FROM pedido p
+           WHERE p.tenant_id = tenant_atual() AND p.estado = 'efetivado'
+             AND p.efetivado_em >= ${p.desde} AND p.efetivado_em < ${p.ate}
+             AND ${condicaoPedido(tx, escopo, 'p')}`
 
         // Conversão = a coorte dos "contatos por qualificação" (mesma função do relatório).
-        const qualificacao = await contatosPorDimensao(tx, 'qualificacao', p)
+        const qualificacao = await contatosPorDimensao(tx, 'qualificacao', p, escopo)
 
         const [tar] = await tx<{ pendentes: number; atrasadas: number }[]>`
-          SELECT count(*)::int AS pendentes, (count(*) FILTER (WHERE vence_em < now()))::int AS atrasadas
-            FROM tarefa WHERE tenant_id = tenant_atual() AND estado = 'aberta'`
+          SELECT count(*)::int AS pendentes, (count(*) FILTER (WHERE t.vence_em < now()))::int AS atrasadas
+            FROM tarefa t WHERE t.tenant_id = tenant_atual() AND t.estado = 'aberta' AND ${condicaoTarefa(tx, escopo, 't')}`
 
         // 6 meses civis no fuso do tenant, terminando no mês de `fim`; meses vazios entram com zero.
         const porMes = await tx<{ mes: string; n: number; total: string }[]>`
@@ -63,12 +69,13 @@ export async function rotasPainel(app: FastifyInstance): Promise<void> {
           SELECT to_char(m.mes, 'YYYY-MM') AS mes, coalesce(a.n, 0)::int AS n, coalesce(a.total, 0)::text AS total
             FROM meses m
             LEFT JOIN (
-              SELECT date_trunc('month', efetivado_em AT TIME ZONE ${p.fuso}::text)::date AS mes,
-                     count(*) AS n, sum(total_centavos) AS total
-                FROM pedido
-               WHERE tenant_id = tenant_atual() AND estado = 'efetivado'
-                 AND efetivado_em >= (date_trunc('month', ${p.fim}::date::timestamp) - interval '5 months')::timestamp AT TIME ZONE ${p.fuso}::text
-                 AND efetivado_em <  (date_trunc('month', ${p.fim}::date::timestamp) + interval '1 month')::timestamp AT TIME ZONE ${p.fuso}::text
+              SELECT date_trunc('month', pm.efetivado_em AT TIME ZONE ${p.fuso}::text)::date AS mes,
+                     count(*) AS n, sum(pm.total_centavos) AS total
+                FROM pedido pm
+               WHERE pm.tenant_id = tenant_atual() AND pm.estado = 'efetivado'
+                 AND pm.efetivado_em >= (date_trunc('month', ${p.fim}::date::timestamp) - interval '5 months')::timestamp AT TIME ZONE ${p.fuso}::text
+                 AND pm.efetivado_em <  (date_trunc('month', ${p.fim}::date::timestamp) + interval '1 month')::timestamp AT TIME ZONE ${p.fuso}::text
+                 AND ${condicaoPedido(tx, escopo, 'pm')}
                GROUP BY 1
             ) a ON a.mes = m.mes
            ORDER BY m.mes`
@@ -79,19 +86,21 @@ export async function rotasPainel(app: FastifyInstance): Promise<void> {
             LEFT JOIN usuario u ON u.tenant_id = pd.tenant_id AND u.id = pd.vendedor_id
            WHERE pd.tenant_id = tenant_atual() AND pd.estado = 'efetivado'
              AND pd.efetivado_em >= ${p.desde} AND pd.efetivado_em < ${p.ate}
+             AND ${condicaoPedido(tx, escopo, 'pd')}
            GROUP BY pd.vendedor_id, u.nome
            ORDER BY sum(pd.total_centavos) DESC, pd.vendedor_id NULLS LAST LIMIT 10`
 
         const recentes = await tx<{ id: string; nome: string; criado_em: Date; qualificado: boolean | null }[]>`
-          SELECT id, nome, criado_em, qualificado FROM contato
-           WHERE tenant_id = tenant_atual() AND ativo AND coalesce(origem_carga, '') <> 'simulacao'
-           ORDER BY criado_em DESC, id DESC LIMIT 10`
+          SELECT c.id, c.nome, c.criado_em, c.qualificado FROM contato c
+           WHERE c.tenant_id = tenant_atual() AND c.ativo AND coalesce(c.origem_carga, '') <> 'simulacao'
+             AND ${condicaoContato(tx, escopo, 'c')}
+           ORDER BY c.criado_em DESC, c.id DESC LIMIT 10`
 
         const proximas = await tx<{ id: string; titulo: string; vence_em: Date; tipo: string; contato_id: string | null; contato_nome: string | null }[]>`
           SELECT t.id, t.titulo, t.vence_em, t.tipo, t.contato_id, c.nome AS contato_nome
             FROM tarefa t
             LEFT JOIN contato c ON c.tenant_id = t.tenant_id AND c.id = t.contato_id
-           WHERE t.tenant_id = tenant_atual() AND t.estado = 'aberta'
+           WHERE t.tenant_id = tenant_atual() AND t.estado = 'aberta' AND ${condicaoTarefa(tx, escopo, 't')}
            ORDER BY t.vence_em, t.id LIMIT 10`
 
         return { p, novos, ped, qualificacao, tar, porMes, ranking, recentes, proximas }

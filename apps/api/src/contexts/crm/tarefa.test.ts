@@ -375,6 +375,10 @@ describe('Tarefas v2 — revisão adversarial (validação, cursor, responsável
     expect((await lista(`responsavelId=${eu}`)).sort()).toEqual(['de ninguém', 'minha'])
     const c = json<{ pendentes: number }>(await chamar(T, 'GET', `/v1/tarefas/contadores?responsavelId=${eu}`))
     expect(c.pendentes).toBe(2)
+    // ⚠️ Escopo (D3): sem papel (tenant com admin) o EU não vê a tarefa da colega — o
+    //    total do tenant inteiro é da gestão.
+    expect(json<{ pendentes: number }>(await chamar(T, 'GET', '/v1/tarefas/contadores')).pendentes).toBe(2)
+    await papelDe(eu, 'gestor')
     expect(json<{ pendentes: number }>(await chamar(T, 'GET', '/v1/tarefas/contadores')).pendentes).toBe(3)
   })
 
@@ -392,13 +396,14 @@ describe('Tarefas v2 — revisão adversarial (validação, cursor, responsável
     }
   })
 
-  it('concluir/cancelar: responsável, criador ou gestão; os demais levam 403', async () => {
+  it('concluir/cancelar: responsável, criador ou gestão; os demais levam 403 (ou 404 fora do escopo)', async () => {
     const dosOutros = () => inserir('alheia', em(H), { resp: COLEGA, criador: COLEGA })
     for (const acao of ['concluir', 'cancelar']) {
       const alheia = await dosOutros()
-      expect((await chamar(T, 'POST', `/v1/tarefas/${alheia}/${acao}`)).statusCode, `${acao} sem papel`).toBe(403)
+      // ⚠️ Escopo (D3): a tarefa da colega nem existe para quem não é gestão → 404 (nunca 403).
+      expect((await chamar(T, 'POST', `/v1/tarefas/${alheia}/${acao}`)).statusCode, `${acao} sem papel`).toBe(404)
       await papelDe(eu, 'vendedor')
-      expect((await chamar(T, 'POST', `/v1/tarefas/${alheia}/${acao}`)).statusCode, `${acao} vendedor`).toBe(403)
+      expect((await chamar(T, 'POST', `/v1/tarefas/${alheia}/${acao}`)).statusCode, `${acao} vendedor`).toBe(404)
       expect((await dono`SELECT 1 FROM tarefa WHERE id=${alheia} AND estado='aberta'`).length).toBe(1)
       const minha = await inserir('minha', em(H), { resp: eu, criador: COLEGA })
       expect((await chamar(T, 'POST', `/v1/tarefas/${minha}/${acao}`)).statusCode, `${acao} responsável`).toBe(200)

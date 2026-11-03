@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { previewMensagem } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirNoEscopo } from '../plataforma/escopo.js'
 import { lerCursorFeed, lerFeedDoContato } from './contato-feed.js'
 
 const PAGINA = 30
@@ -10,7 +11,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** Feed do contato: linha do tempo cronológica (mais novo primeiro), por cursor. Ver `contato-feed.ts`. */
 export async function rotasContatoFeed(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string }; Querystring: { cursor?: string } }>(
-    '/v1/contatos/:id/feed', { preHandler: exigirTenant },
+    '/v1/contatos/:id/feed', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
       const cursor = lerCursorFeed(req.query.cursor)
@@ -31,7 +32,7 @@ export async function rotasContatoFeed(app: FastifyInstance): Promise<void> {
    * É leitura do mesmo dado que o chat já mostra a quem tem acesso; fica fora do feed de propósito.
    */
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/whatsapp', { preHandler: exigirTenant },
+    '/v1/contatos/:id/whatsapp', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
       const r = await req.comTenant(async (tx) => {

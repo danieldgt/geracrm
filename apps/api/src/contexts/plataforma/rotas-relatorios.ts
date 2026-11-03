@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import type { Sql } from '../../db/index.js'
 import { resolverPeriodo, validarEntradaPeriodo, type PeriodoResolvido } from './periodo-relatorio.js'
+import { condicaoContato, escopoDaRequisicao, type Escopo } from './escopo.js'
 
 /**
  * RELATÓRIOS "CONTATOS POR DIMENSÃO" (raia E1) — a base genérica dos relatórios do gestor.
@@ -17,8 +18,8 @@ import { resolverPeriodo, validarEntradaPeriodo, type PeriodoResolvido } from '.
  * Limite de 100 grupos (os de mais contatos); `truncado` avisa quando houve corte.
  * Dimensões de domínio fechado (dia-semana, qualificacao) saem sempre completas, na ordem natural.
  *
- * TODO(D3): aplicar `escopoDoUsuario` (vendedor só a própria carteira, gestor a filial) quando a raia D3
- * entrar — hoje o relatório enxerga o tenant inteiro, como o Início.
+ * ESCOPO (D3): a coorte é só dos contatos que quem pede enxerga (`condicaoContato`): vendedor a
+ * própria carteira, gestor a filial, admin o tenant. Os pedidos contados são os desses contatos.
  */
 export const DIMENSOES = ['origem', 'etapa', 'vendedor', 'dia-semana', 'qualificacao', 'uf'] as const
 export type Dimensao = (typeof DIMENSOES)[number]
@@ -100,7 +101,9 @@ function fragmentos(tx: Sql, dim: Dimensao, fuso: string) {
 interface LinhaBruta { chave: string; rotulo: string; contatos: number; convertidos: number; valor: string }
 
 /** Contatos criados no período agrupados por dimensão, com conversão. Só LEITURA, sempre filtrada por período. */
-export async function contatosPorDimensao(tx: Sql, dim: Dimensao, p: PeriodoResolvido): Promise<{ itens: ItemRelatorio[]; truncado: boolean }> {
+export async function contatosPorDimensao(
+  tx: Sql, dim: Dimensao, p: PeriodoResolvido, escopo: Escopo,
+): Promise<{ itens: ItemRelatorio[]; truncado: boolean }> {
   const f = fragmentos(tx, dim, p.fuso)
   const linhas = await tx<LinhaBruta[]>`
     WITH coorte AS (
@@ -109,6 +112,7 @@ export async function contatosPorDimensao(tx: Sql, dim: Dimensao, p: PeriodoReso
        WHERE c.tenant_id = tenant_atual() AND c.ativo
          AND coalesce(c.origem_carga, '') <> 'simulacao'
          AND c.criado_em >= ${p.desde} AND c.criado_em < ${p.ate}
+         AND ${condicaoContato(tx, escopo, 'c')}
     ), compras AS (
       SELECT pd.contato_id, sum(pd.total_centavos) AS valor
         FROM pedido pd
@@ -155,7 +159,7 @@ export async function rotasRelatorios(app: FastifyInstance): Promise<void> {
 
       const r = await req.comTenant(async (tx) => {
         const p = await resolverPeriodo(tx, inicio, fim)
-        return { p, ...(await contatosPorDimensao(tx, dimensao, p)) }
+        return { p, ...(await contatosPorDimensao(tx, dimensao, p, await escopoDaRequisicao(tx, req))) }
       })
       return reply.send({
         dimensao, periodo: { inicio: r.p.inicio, fim: r.p.fim, fuso: r.p.fuso },

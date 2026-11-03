@@ -40,10 +40,17 @@ const papel = (u: string, p: string | null) => p === null
   : dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${T}, ${u}, NULL, ${p})
          ON CONFLICT (tenant_id, usuario_id) WHERE filial_id IS NULL DO UPDATE SET papel = EXCLUDED.papel`
 
-/** Conversa nova; `atendente` = quem conduz (null = sem atendimento). */
+/**
+ * Conversa nova; `atendente` = quem conduz (null = sem atendimento).
+ *
+ * ⚠️ O cliente nasce na CARTEIRA do EU (escopo D3): com um admin no tenant, o EU
+ *    sem papel só enxerga a própria carteira — sem isto as rotas responderiam 404
+ *    antes de chegar à regra que cada teste exercita.
+ */
 async function conversa(canal: string, atendente: string | null, opts: { conduzida?: string; estado?: string; origem?: string } = {}) {
   const contato = randomUUID(); const id = randomUUID(); const at = randomUUID()
   await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${contato}, 'Cliente G1', ${opts.origem ?? 'teste'}, true)`
+  await dono`INSERT INTO carteira_atribuicao (tenant_id, id, contato_id, usuario_id) VALUES (${T}, ${randomUUID()}, ${contato}, ${EU})`
   await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao, conduzida_por)
              VALUES (${T}, ${id}, ${canal}, ${contato}, 0, ${opts.conduzida ?? 'humano'})`
   if (atendente) {
@@ -134,7 +141,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  for (const t of ['notificacao', 'outbox', 'auditoria', 'agente_tarefa', 'agente_sessao', 'mensagem', 'atendimento', 'conversa_leitura', 'conversa', 'contato',
+  for (const t of ['notificacao', 'outbox', 'auditoria', 'agente_tarefa', 'agente_sessao', 'mensagem', 'atendimento', 'conversa_leitura', 'conversa', 'carteira_atribuicao', 'contato',
     'usuario_canal', 'usuario_filial', 'agente_config', 'usuario', 'canal_conectado']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id IN ('${T}', '${T2}')`)
   }
