@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { garantirEtapasFunil } from './funil-modelos.js'
+import { condicaoOportunidade, contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 
 const PAGINA = 50 // cards por página de coluna (kanban paginado por coluna, ADR)
 
@@ -34,11 +35,14 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
   app.get('/v1/funil/etapas', { preHandler: exigirTenant }, async (req, reply) => {
     const linhas = await req.comTenant(async (tx) => {
       await garantirEtapasFunil(tx)
+      // ⚠️ O total de cada estágio conta o que a coluna MOSTRA (escopo D3).
+      const escopo = await escopoDaRequisicao(tx, req)
       return tx<{
         id: string; chave: string; nome: string; tipo: string; criterio: string | null; total: number
       }[]>`
       SELECT e.id, e.chave, e.nome, e.tipo, e.criterio,
-             (SELECT count(*) FROM oportunidade o WHERE o.tenant_id = e.tenant_id AND o.etapa_id = e.id)::int AS total
+             (SELECT count(*) FROM oportunidade o
+               WHERE o.tenant_id = e.tenant_id AND o.etapa_id = e.id AND ${condicaoOportunidade(tx, escopo, 'o')})::int AS total
         FROM funil_etapa e
        WHERE e.tenant_id = tenant_atual() AND e.ativo
        ORDER BY e.ordem`
@@ -70,7 +74,9 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
         if (!p || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curPos = p; curId = id
       }
-      const linhas = await req.comTenant((tx) => tx<{
+      const linhas = await req.comTenant(async (tx) => {
+        const escopo = await escopoDaRequisicao(tx, req)
+        return tx<{
         id: string; contato_id: string; nome: string; titulo: string | null
         valor_estimado_centavos: string | null; responsavel: string | null
         posicao: number; entrou_etapa_em: Date; versao: string
@@ -81,9 +87,11 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
           JOIN contato c ON c.tenant_id = o.tenant_id AND c.id = o.contato_id
           LEFT JOIN usuario u ON u.tenant_id = o.tenant_id AND u.id = o.responsavel_id
          WHERE o.tenant_id = tenant_atual() AND o.etapa_id = ${req.params.etapaId}
+           AND ${condicaoOportunidade(tx, escopo, 'o')}
            AND ${curPos === null ? tx`true` : tx`(o.posicao, o.id) > (${curPos}::double precision, ${curId}::uuid)`}
          ORDER BY o.posicao ASC, o.id ASC
-         LIMIT ${PAGINA + 1}`)
+         LIMIT ${PAGINA + 1}`
+      })
 
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
@@ -127,6 +135,8 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
         if (!etapa) return { erro: 'sem_etapa' as const }
         const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${contatoId}`
         if (!c) return { erro: 'contato_nao_encontrado' as const }
+        // ⚠️ Escopo (D3): oportunidade só para cliente que a pessoa enxerga.
+        if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), contatoId))) return { erro: 'contato_nao_encontrado' as const }
 
         const id = randomUUID()
         // ⚠️ Vencedor atômico: uma aberta por contato (índice parcial).
@@ -163,6 +173,14 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
       }
 
       const r = await req.comTenant(async (tx) => {
+        // ⚠️ Escopo (D3): card fora do escopo = 404, como inexistente.
+        const escopo = await escopoDaRequisicao(tx, req)
+        if (escopo.tipo !== 'tudo') {
+          const [visivel] = await tx`SELECT 1 FROM oportunidade o
+                                      WHERE o.tenant_id = tenant_atual() AND o.id = ${req.params.id}
+                                        AND ${condicaoOportunidade(tx, escopo, 'o')}`
+          if (!visivel) return { erro: 'nao_encontrada' as const }
+        }
         const [etapa] = await tx<{ tipo: string }[]>`
           SELECT tipo FROM funil_etapa WHERE tenant_id = tenant_atual() AND id = ${etapaId}`
         if (!etapa) return { erro: 'etapa_nao_encontrada' as const }

@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { enviarMensagemEntrada, criarAcaoEntrada } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../../db/index.js'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirNoEscopo } from '../plataforma/escopo.js'
 import { decifrar } from '../integracao/cofre.js'
 import { criarCanal } from './canais/fabrica.js'
 import { enviarPeloGateway, type ContextoEnvio } from './canais/gateway.js'
@@ -102,7 +103,7 @@ async function marcarStatus(
 export async function rotasMensagens(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string } }>(
     '/v1/conversas/:id/mensagens',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       const parsed = enviarMensagemEntrada.safeParse(req.body)
       if (!parsed.success) {
@@ -270,7 +271,7 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
 
   app.delete<{ Params: { id: string; mid: string }; Body: { paraTodos?: boolean } }>(
     '/v1/conversas/:id/mensagens/:mid',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       const { id: conversaId, mid } = req.params
       const tenantId = req.tenantId!
@@ -299,7 +300,7 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
 
   app.patch<{ Params: { id: string; mid: string }; Body: { texto?: string } }>(
     '/v1/conversas/:id/mensagens/:mid',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       const { id: conversaId, mid } = req.params
       const tenantId = req.tenantId!
@@ -338,7 +339,7 @@ export async function rotasMensagens(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Params: { id: string } }>(
     '/v1/conversas/:id/acoes',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       const parsed = criarAcaoEntrada.safeParse(req.body)
       if (!parsed.success) return reply.code(422).send({ erro: 'acao.invalida', mensagem: 'Dados da ação inválidos.' })

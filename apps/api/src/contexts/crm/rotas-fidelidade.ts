@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirNoEscopo } from '../plataforma/escopo.js'
 
 /**
  * Fidelidade / Cashback — leitura do saldo LIDO do ERP (ADR-020). A alavancagem
@@ -58,7 +59,7 @@ export async function rotasFidelidade(app: FastifyInstance): Promise<void> {
 
   // Saldo de UM contato (para a ficha). null quando não há saldo/indisponível.
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/fidelidade', { preHandler: exigirTenant },
+    '/v1/contatos/:id/fidelidade', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       const dados = await req.comTenant(async (tx) => {
         const [cap] = await tx<{ tem: boolean }[]>`

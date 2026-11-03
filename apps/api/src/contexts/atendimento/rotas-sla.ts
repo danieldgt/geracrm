@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { SLA_PADRAO, corpoSlaConfig, type CronometroSla, type EstadoSlaConfig } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirNoEscopo } from '../plataforma/escopo.js'
 import { exigirPapel } from '../plataforma/papel.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
@@ -78,7 +79,7 @@ export async function rotasSla(app: FastifyInstance): Promise<void> {
   )
 
   app.get<{ Params: { id: string } }>(
-    '/v1/conversas/:id/sla', { preHandler: exigirTenant },
+    '/v1/conversas/:id/sla', { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       const r = await req.comTenant(async (tx) => {
