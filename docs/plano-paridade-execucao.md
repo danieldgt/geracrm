@@ -51,7 +51,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
-| D3.4 telas de usuários e filiais | 0 | 🔄 | Sonnet; só console, contra o contrato da D3 |
+| D3.4 telas de usuários e filiais | 0 | ✅ | integrada (console 656); conferir códigos de erro com a API quando D3 entrar |
 | X2 cursores de pedidos e memória com µs | — | ⏸ | pronta (9f3c061); aguarda D3 |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
