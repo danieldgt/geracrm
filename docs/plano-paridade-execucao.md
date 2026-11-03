@@ -16,7 +16,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | L0c lista (tabela, filtros, paginação) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
 | L0d ícones Lucide | 0 | ✅ | integrada; desenhos de memória — revisão aponta os suspeitos |
 | L0e docs e skill de formulários | 0 | ✅ | integrada; skill `geracrm-formularios` criada; docs ajustados ao contrato por cursor |
-| D3 escopo por papel + usuários + filiais | 0 | 🔍 | integrada; revisão de segurança REPROVOU (staff takeover via redefinir senha, assumir sem escopo, SSE por tenant, rotas sem escopo, modo fundador nas rotas de usuário); correção Opus em curso — **não levar à main antes** |
+| D3 escopo por papel + usuários + filiais | 0 | ✅ | integrada com as correções de segurança (staff fora do cadastro, assumir no escopo, SSE filtrado, modo fundador fora do cadastro); suíte verde api 2676; **dono: IAM ListUsers+AdminListGroupsForUser e semear admin de cada cliente (runbook §18)** |
 | G1 devolver ao agente / reatribuir / filtro | 0 | ✅ | integrada com correções (etapa `devolucao-da-equipe` no pipeline, guarda de concorrência, turno enfileirado) |
 | H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
 | A1 cadastro do contato | 1 | ✅ | integrada com correções (ERP preservado, 422 no telefone, origem validada); 0112 corrigida no lugar |
@@ -41,7 +41,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | F3 formulários públicos | 3 | 🔍 | revisão de segurança: aprovado com correções (upload fora da transação, IP real, contato existente intocado); correção Opus em curso — não divulgar link antes |
 | G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
 | G3 pós-venda, NPS, indicações, prova social | 3 | 🔄 | Opus; migration 0130 |
-| G4 roteamento e rodízio | 3 | ⬜ | |
+| G4 roteamento e rodízio | 3 | 🔄 | Opus; migration 0136 |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
 | H1 importador | 3 | 🔄 | Sonnet; migration 0133 |
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
@@ -54,6 +54,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D3.4 telas de usuários e filiais | 0 | ✅ | integrada (console 656); conferir códigos de erro com a API quando D3 entrar |
 | C2b agenda no escopo comum + na ficha | 2 | ✅ | integrada; contato fora do escopo → 422 e nome oculto na leitura |
 | X3 teste do worker de aquisição sem isolamento de tenant | — | ✅ | integrada |
+| D3.4b telas de usuário sem admin atribuído + nomear admin | 0 | 🔄 | Haiku |
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
