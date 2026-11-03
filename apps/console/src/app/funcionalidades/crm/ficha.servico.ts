@@ -8,6 +8,13 @@ export interface FichaContato {
   readonly id: string
   readonly nome: string
   readonly modalidade: string | null
+  readonly razaoSocial: string | null
+  readonly nomeFantasia: string | null
+  readonly email: string | null
+  readonly prioridade: string | null
+  readonly temperatura: string | null
+  readonly valorEstimadoCentavos: number | null
+  readonly observacoes: string | null
   readonly qualificado: boolean | null
   readonly recebeCampanhas: boolean
   readonly recebeAutomacoes: boolean
@@ -15,7 +22,7 @@ export interface FichaContato {
   readonly documentos: readonly { seq: number; tipo: string; numero: string; fiscal: boolean }[]
   readonly totalDocumentos: number
   readonly endereco: {
-    logradouro: string | null; numero: string | null; bairro: string | null
+    logradouro: string | null; numero: string | null; complemento: string | null; bairro: string | null
     cidade: string | null; uf: string | null; cep: string | null
   } | null
   readonly metricas: {

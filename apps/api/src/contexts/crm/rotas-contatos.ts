@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { classificarRfv, normalizarTelefone, normalizarDocumento, ehPerfilPreco, perfilDeCotacao } from '@geracrm/shared'
+import type { Sql } from 'postgres'
+import { classificarRfv, normalizarTelefone, normalizarDocumento, apenasDigitos, ehPerfilPreco, perfilDeCotacao } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { parseCsvContatos } from './importar-csv.js'
+import { validarCadastro, type ContatoCadastro } from './contato-cadastro.js'
 
 /** Teto de linhas por importação — evita engolir um arquivo gigante numa tx. */
 const MAX_LINHAS_CSV = 5000
@@ -68,20 +70,55 @@ function lerCursor(cursor: string | undefined): [string, string] | null {
 const escreverCursor = (a: string | number, id: string) =>
   Buffer.from(`${a}:${id}`, 'utf8').toString('base64url')
 
+/**
+ * Grava documento (CNPJ/CPF) e endereço principal de fonte 'manual'. Só toca nas
+ * linhas manuais — o que veio do ERP não é pisado. Vazio remove a linha manual.
+ */
+async function gravarDocumentoEEndereco(tx: Sql, id: string, d: ContatoCadastro): Promise<void> {
+  const doc = d.documento ? apenasDigitos(d.documento) : null
+  await tx`DELETE FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fonte = 'manual'`
+  if (doc) {
+    const tipo = doc.length === 14 ? 'cnpj' : 'cpf'
+    const [{ prox } = { prox: 1 }] = await tx<{ prox: number }[]>`
+      SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id}`
+    const [fiscal] = await tx`SELECT 1 FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND fiscal`
+    await tx`
+      INSERT INTO contato_documento (tenant_id, contato_id, seq, tipo, numero, fiscal, fonte)
+      VALUES (tenant_atual(), ${id}, ${prox}, ${tipo}, ${doc}, ${!fiscal}, 'manual')`
+  }
+
+  const e = d.endereco
+  const preenchido = !!e && Object.values(e).some((x) => typeof x === 'string' && x.trim() !== '')
+  if (!preenchido) {
+    await tx`DELETE FROM contato_endereco WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = 1 AND fonte = 'manual'`
+    return
+  }
+  const cep = e.cep ? apenasDigitos(e.cep) : null
+  await tx`
+    INSERT INTO contato_endereco (tenant_id, contato_id, seq, logradouro, numero, complemento, bairro, cidade, uf, cep, principal, fonte)
+    VALUES (tenant_atual(), ${id}, 1, ${e.logradouro ?? null}, ${e.numero ?? null}, ${e.complemento ?? null},
+            ${e.bairro ?? null}, ${e.cidade ?? null}, ${e.uf ?? null}, ${cep}, true, 'manual')
+    ON CONFLICT (tenant_id, contato_id, seq) DO UPDATE SET
+      logradouro = EXCLUDED.logradouro, numero = EXCLUDED.numero, complemento = EXCLUDED.complemento,
+      bairro = EXCLUDED.bairro, cidade = EXCLUDED.cidade, uf = EXCLUDED.uf, cep = EXCLUDED.cep`
+}
+
 export async function rotasContatos(app: FastifyInstance): Promise<void> {
   /**
-   * Cadastra um contato (nome + telefone). ⚠️ Idempotente pelo telefone: se já
-   * existe um contato com esse número principal, DEVOLVE o existente em vez de
-   * duplicar — telefone é identidade no WhatsApp.
+   * Cadastra um contato. Corpo completo (`contato-cadastro.ts`) com só nome +
+   * telefone obrigatórios — o POST antigo (nome+telefone) segue valendo.
+   * ⚠️ Idempotente pelo telefone: se já existe um contato com esse número
+   * principal, DEVOLVE o existente (200, `novo:false`) em vez de duplicar —
+   * telefone é identidade no WhatsApp. Erro de validação: 422 por campo.
    */
-  app.post<{ Body: { nome?: string; telefone?: string } }>(
+  app.post<{ Body: unknown }>(
     '/v1/contatos',
     { preHandler: exigirTenant },
     async (req, reply) => {
-      const nome = req.body?.nome?.trim()
-      const tel = normalizarTelefone(req.body?.telefone ?? '')
-      if (!nome) return reply.code(422).send({ erro: 'contato.nome_obrigatorio', mensagem: 'Informe o nome.' })
-      if (!tel) return reply.code(422).send({ erro: 'contato.telefone_invalido', mensagem: 'Telefone inválido. Use DDD + número.' })
+      const v = validarCadastro(req.body)
+      if (!v.ok) return reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.', campos: v.campos })
+      const d = v.dados
+      const tel = normalizarTelefone(d.telefone)!
 
       const r = await req.comTenant(async (tx) => {
         const [existe] = await tx<{ contato_id: string }[]>`
@@ -92,16 +129,81 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
         const id = randomUUID()
         await tx`
-          INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo)
-          VALUES (tenant_atual(), ${id}, ${nome}, 'manual', true)`
+          INSERT INTO contato (tenant_id, id, nome, razao_social, nome_fantasia, email, modalidade, prioridade, temperatura,
+                               origem_id, valor_estimado_centavos, observacoes, origem_carga, ativo)
+          VALUES (tenant_atual(), ${id}, ${d.nome}, ${d.razaoSocial ?? null}, ${d.nomeFantasia ?? null}, ${d.email ?? null},
+                  ${d.modalidade ?? null}, ${d.prioridade ?? null}, ${d.temperatura ?? null}, ${d.origemId ?? null},
+                  ${d.valorEstimadoCentavos ?? null}, ${d.observacoes ?? null}, 'manual', true)`
         await tx`
           INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
-          VALUES (tenant_atual(), ${id}, 1, ${tel.e164}, ${tel.chaveBloqueio}, true, true, 'manual')
+          VALUES (tenant_atual(), ${id}, 1, ${tel.e164}, ${tel.chaveBloqueio}, true, ${d.whatsapp ?? true}, 'manual')
           ON CONFLICT DO NOTHING`
+        await gravarDocumentoEEndereco(tx, id, d)
         return { id, novo: true }
       })
 
-      return reply.code(r.novo ? 201 : 200).send({ id: r.id, nome, novo: r.novo })
+      return reply.code(r.novo ? 201 : 200).send({ id: r.id, nome: d.nome, novo: r.novo })
+    },
+  )
+
+  /**
+   * Edição COMPLETA do cadastro (formulário-página). Substitui os campos
+   * editáveis: opcional omitido/vazio vira NULL. Telefone principal trocado
+   * vira o novo principal; se já é principal de OUTRO contato → 422 no campo.
+   * Documento/endereço só mexem nas linhas de fonte 'manual' (não pisa no ERP).
+   */
+  app.put<{ Params: { id: string }; Body: unknown }>(
+    '/v1/contatos/:id', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const id = req.params.id
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(400).send({ erro: 'contato.id_invalido', mensagem: 'Id de contato inválido.' })
+      const v = validarCadastro(req.body)
+      if (!v.ok) return reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.', campos: v.campos })
+      const d = v.dados
+      const tel = normalizarTelefone(d.telefone)!
+
+      const r = await req.comTenant(async (tx) => {
+        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
+        if (!c) return { erro: 'contato.nao_encontrado' as const }
+
+        const [outro] = await tx`
+          SELECT 1 FROM contato_telefone
+           WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal AND contato_id <> ${id} LIMIT 1`
+        if (outro) return { erro: 'telefone_duplicado' as const }
+
+        await tx`
+          UPDATE contato SET
+            nome = ${d.nome}, razao_social = ${d.razaoSocial ?? null}, nome_fantasia = ${d.nomeFantasia ?? null},
+            email = ${d.email ?? null}, modalidade = ${d.modalidade ?? null}, prioridade = ${d.prioridade ?? null},
+            temperatura = ${d.temperatura ?? null}, origem_id = ${d.origemId ?? null},
+            valor_estimado_centavos = ${d.valorEstimadoCentavos ?? null}, observacoes = ${d.observacoes ?? null}
+           WHERE tenant_id = tenant_atual() AND id = ${id}`
+
+        const [atual] = await tx<{ seq: number; chave_bloqueio: string; whatsapp: boolean | null }[]>`
+          SELECT seq, chave_bloqueio, whatsapp FROM contato_telefone
+           WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND principal LIMIT 1`
+        const whats = d.whatsapp ?? atual?.whatsapp ?? true
+        if (!atual) {
+          const [{ prox } = { prox: 1 }] = await tx<{ prox: number }[]>`
+            SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${id}`
+          await tx`
+            INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
+            VALUES (tenant_atual(), ${id}, ${prox}, ${tel.e164}, ${tel.chaveBloqueio}, true, ${whats}, 'manual')`
+        } else {
+          await tx`
+            UPDATE contato_telefone SET e164 = ${tel.e164}, chave_bloqueio = ${tel.chaveBloqueio}, whatsapp = ${whats}
+             WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${atual.seq}`
+        }
+        await gravarDocumentoEEndereco(tx, id, d)
+        return { ok: true as const }
+      })
+      if ('erro' in r) {
+        if (r.erro === 'telefone_duplicado') {
+          return reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.', campos: { telefone: 'Telefone já cadastrado em outro contato' } })
+        }
+        return reply.code(404).send({ erro: 'contato.nao_encontrado', mensagem: 'Contato não encontrado.' })
+      }
+      return reply.send({ ok: true, id })
     },
   )
 
@@ -294,8 +396,12 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         const [contato] = await tx<{
           id: string; nome: string; modalidade: string | null; qualificado: boolean
           recebe_campanhas: boolean; recebe_automacoes: boolean; criado_em: Date; perfil_preco: string | null
+          razao_social: string | null; nome_fantasia: string | null; email: string | null; prioridade: string | null
+          temperatura: string | null; origem_id: string | null; valor_estimado_centavos: string | null; observacoes: string | null
         }[]>`
-          SELECT id, nome, modalidade, qualificado, recebe_campanhas, recebe_automacoes, criado_em, perfil_preco
+          SELECT id, nome, modalidade, qualificado, recebe_campanhas, recebe_automacoes, criado_em, perfil_preco,
+                 razao_social, nome_fantasia, email, prioridade, temperatura, origem_id,
+                 valor_estimado_centavos::text, observacoes
             FROM contato WHERE id = ${id}
         `
         if (!contato) return null
@@ -322,10 +428,10 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         const [{ n: totalDocumentos } = { n: 0 }] = await tx<{ n: number }[]>`
           SELECT count(DISTINCT numero)::int AS n FROM contato_documento WHERE contato_id = ${id}`
         const [endereco] = await tx<{
-          logradouro: string | null; numero: string | null; bairro: string | null
+          logradouro: string | null; numero: string | null; complemento: string | null; bairro: string | null
           cidade: string | null; uf: string | null; cep: string | null
         }[]>`
-          SELECT logradouro, numero, bairro, cidade, uf, cep FROM contato_endereco
+          SELECT logradouro, numero, complemento, bairro, cidade, uf, cep FROM contato_endereco
            WHERE contato_id = ${id} ORDER BY principal DESC, seq LIMIT 1`
 
         const ultimasVendas = await tx<{ id: string; ocorrida_em: Date; valor_centavos: string; cancelada: boolean }[]>`
@@ -361,6 +467,14 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         id: dados.contato.id,
         nome: dados.contato.nome,
         modalidade: dados.contato.modalidade,
+        razaoSocial: dados.contato.razao_social,
+        nomeFantasia: dados.contato.nome_fantasia,
+        email: dados.contato.email,
+        prioridade: dados.contato.prioridade,
+        temperatura: dados.contato.temperatura,
+        origemId: dados.contato.origem_id,
+        valorEstimadoCentavos: dados.contato.valor_estimado_centavos === null ? null : Number(dados.contato.valor_estimado_centavos),
+        observacoes: dados.contato.observacoes,
         // Perfil de preço DECLARADO (ADR-025). null = cota pelo padrão (atacado).
         perfilPreco: dados.contato.perfil_preco,
         qualificado: dados.contato.qualificado,

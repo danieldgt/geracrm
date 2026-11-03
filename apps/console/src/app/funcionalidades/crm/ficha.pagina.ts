@@ -57,6 +57,8 @@ import { TarefaModalComponente } from './tarefa-modal.componente.js'
                           [disabled]="abrindoConversa()" title="Abrir o chat com este cliente">
                     {{ abrindoConversa() ? 'Abrindo…' : '💬 Abrir conversa' }}
                   </button>
+                  <a class="btn btn--secundario btn--pequeno" [routerLink]="['/contato', f.id, 'editar']"
+                     title="Editar o cadastro completo deste contato">✎ Editar</a>
                   <a class="btn btn--secundario btn--pequeno" routerLink="/pedido" [queryParams]="{ contato: f.id }"
                      title="Montar um pedido para este cliente">🛒 Novo pedido</a>
                   <a class="btn btn--secundario btn--pequeno" routerLink="/pedidos" [queryParams]="{ contatoId: f.id }"
@@ -69,12 +71,27 @@ import { TarefaModalComponente } from './tarefa-modal.componente.js'
                 @if (erroConversa(); as e) { <p class="erro-edit" role="alert">{{ e }}</p> }
                 <div class="tags">
                   @if (f.modalidade) { <span class="tag">{{ f.modalidade }}</span> }
+                  @if (f.prioridade) { <span class="tag">Prioridade {{ f.prioridade }}</span> }
+                  @if (f.temperatura) { <span class="tag">{{ f.temperatura }}</span> }
                   @if (f.qualificado) { <span class="tag ok">Qualificado</span> }
                   @if (f.metricas; as m) {
                     <span class="tag rfv" [style.--c]="cor(m.segmento.codigo)">{{ m.segmento.rotulo }}</span>
                   }
                 </div>
               </div>
+
+              @if (f.razaoSocial || f.nomeFantasia || f.email || f.valorEstimadoCentavos !== null || f.observacoes) {
+                <div class="cartao">
+                  <h3>Dados cadastrais</h3>
+                  <dl class="cadastro">
+                    @if (f.razaoSocial) { <dt>Razão social</dt><dd>{{ f.razaoSocial }}</dd> }
+                    @if (f.nomeFantasia) { <dt>Nome fantasia</dt><dd>{{ f.nomeFantasia }}</dd> }
+                    @if (f.email) { <dt>E-mail</dt><dd>{{ f.email }}</dd> }
+                    @if (f.valorEstimadoCentavos !== null) { <dt>Valor estimado</dt><dd>{{ reais(f.valorEstimadoCentavos) }}</dd> }
+                    @if (f.observacoes) { <dt>Observações</dt><dd class="obs">{{ f.observacoes }}</dd> }
+                  </dl>
+                </div>
+              }
 
               <div class="cartao">
                 <h3>Contato</h3>
@@ -269,6 +286,10 @@ import { TarefaModalComponente } from './tarefa-modal.componente.js'
     .mini.can { color: var(--erro); border-color: var(--erro); }
     .vazio-mini { font-size: 13px; color: var(--texto-suave); margin: 0; }
     .alerta-mini { font-size: 12px; color: var(--atencao); margin: var(--espacamento-2) 0 0; }
+    .cadastro { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--espacamento-1) var(--espacamento-3); margin: 0; font-size: 13px; }
+    .cadastro dt { color: var(--texto-secundario); }
+    .cadastro dd { margin: 0; color: var(--texto); overflow-wrap: anywhere; }
+    .cadastro .obs { white-space: pre-wrap; }
     .endereco { font-size: 13px; color: var(--texto-secundario); margin: 0; }
     .metricas { display: grid; grid-template-columns: 1fr 1fr; gap: var(--espacamento-3); margin: 0; }
     .metricas dt { font-size: 11px; color: var(--texto-suave); }
@@ -391,7 +412,7 @@ export class FichaContatoPagina {
   enderecoTexto(e: NonNullable<FichaContato['endereco']>): string {
     return [
       [e.logradouro, e.numero].filter(Boolean).join(', '),
-      e.bairro, [e.cidade, e.uf].filter(Boolean).join('/'), e.cep,
+      e.complemento, e.bairro, [e.cidade, e.uf].filter(Boolean).join('/'), e.cep,
     ].filter(Boolean).join(' · ')
   }
 }

@@ -6,6 +6,7 @@ import { rotasIntegracao } from './contexts/integracao/rotas.js'
 import { rotasSync } from './contexts/integracao/rotas-sync.js'
 import { rotasWebhooksSaida } from './contexts/integracao/rotas-webhooks-saida.js'
 import { rotasContatos } from './contexts/crm/rotas-contatos.js'
+import { rotasConsultas } from './contexts/crm/rotas-consultas.js'
 import { rotasBloqueios } from './contexts/crm/rotas-bloqueios.js'
 import { rotasEtiquetas } from './contexts/crm/rotas-etiquetas.js'
 import { rotasFunil } from './contexts/crm/rotas-funil.js'
@@ -112,6 +113,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasSync)
   await app.register(rotasWebhooksSaida)
   await app.register(rotasContatos)
+  await app.register(rotasConsultas)
   await app.register(rotasBloqueios)
   await app.register(rotasEtiquetas)
   await app.register(rotasFunil)
