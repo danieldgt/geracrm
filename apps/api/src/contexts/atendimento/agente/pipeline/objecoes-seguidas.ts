@@ -14,8 +14,10 @@ import { marca, type ContextoPipeline, type EtapaPosResposta, type MarcaGuardrai
  * ferramenta `registrar_objecao` só registra; o registro do turno chega aqui por
  * `entrada.objecoesDoTurno`. A etapa:
  *
- *   1. acumula as objeções do turno em `estado_agente.objecoes` (código,
- *      revertida, turno da sessão) — lista com teto, as mais recentes ficam;
+ *   1. acumula UMA objeção do turno em `estado_agente.objecoes` (código,
+ *      revertida, turno da sessão) — lista com teto, as mais recentes ficam.
+ *      Várias chamadas no mesmo turno contam uma (se houver uma revertida, ela
+ *      prevalece): três chamadas num turno só NÃO são três objeções seguidas;
  *   2. conta as NÃO revertidas seguidas no fim da lista (uma revertida zera);
  *   3. na 3ª, troca a resposta pelo aviso de transferência (mensagem pronta do
  *      playbook ou o texto do código) e BLOQUEIA com o motivo
@@ -63,7 +65,8 @@ export function criarEtapaObjecoesSeguidas(deps: DepsObjecoesSeguidas = {}): Eta
   return {
     nome: ETAPA_OBJECOES,
     async executar(ctx, entrada) {
-      const doTurno = entrada.objecoesDoTurno ?? []
+      const todas = entrada.objecoesDoTurno ?? []
+      const doTurno = todas.length === 0 ? [] : [todas.find((o) => o.revertida) ?? todas[0]!]
       if (doTurno.length === 0) return { mensagens: entrada.mensagens, guardrails: [] }
 
       const turno = await turnoAtual(ctx).catch(() => 1)

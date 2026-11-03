@@ -43,7 +43,7 @@ import { adicionarGatilho, contadorDaResposta, erroDoPrefixo, indicesDaBusca, mo
       }
 
       <ol class="lista">
-        @for (i of visiveis(); track objecoes()[i]!.codigo) {
+        @for (i of visiveis(); track i) {
           @let o = objecoes()[i]!;
           <li class="item" [class.inativo]="!o.ativo" [attr.aria-label]="o.codigo">
             <div class="item-topo">
@@ -159,8 +159,21 @@ export class PlaybookObjecoesComponente {
   readonly contador = contadorDaResposta
   /** Erro do campo (ou dos filhos: `objecoes[2].gatilhos` cobre `objecoes[2].gatilhos[1]`); a raiz `objecoes` só exata. */
   erro(campo: string): string | null {
-    return campo === 'objecoes' ? this.erros()[campo] ?? null : erroDoPrefixo(this.erros(), campo)
+    const e = this.errosEfetivos()
+    return campo === 'objecoes' ? e[campo] ?? null : erroDoPrefixo(e, campo)
   }
+
+  /**
+   * Os erros chegam indexados (`objecoes[2].resposta`); ao mover/remover, o índice
+   * muda e o erro grudaria no item errado. Descarta os indexados do lote atual (a
+   * próxima validação do pai traz outro objeto e reaparece com os índices certos).
+   */
+  private readonly lotePodado = signal<object | null>(null)
+  private readonly errosEfetivos = computed(() => {
+    const e = this.erros()
+    if (e !== this.lotePodado()) return e
+    return Object.fromEntries(Object.entries(e).filter(([k]) => !k.startsWith('objecoes[')))
+  })
 
   private emitir(fn: (l: readonly ObjecaoPlaybook[]) => readonly ObjecaoPlaybook[]): void {
     if (!this.editavel()) return
@@ -170,8 +183,8 @@ export class PlaybookObjecoesComponente {
   mudar(i: number, p: Partial<ObjecaoPlaybook>): void {
     this.emitir((l) => l.map((o, j) => (j === i ? { ...o, ...p } : o)))
   }
-  mover(i: number, d: -1 | 1): void { this.emitir((l) => moverItem(l, i, d)) }
-  remover(i: number): void { this.emitir((l) => l.filter((_o, j) => j !== i)) }
+  mover(i: number, d: -1 | 1): void { this.lotePodado.set(this.erros()); this.erroGatilho.set({}); this.emitir((l) => moverItem(l, i, d)) }
+  remover(i: number): void { this.lotePodado.set(this.erros()); this.erroGatilho.set({}); this.emitir((l) => l.filter((_o, j) => j !== i)) }
   adicionar(): void {
     const nova = novaObjecao(this.objecoes())
     if (!nova) return

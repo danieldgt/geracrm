@@ -36,6 +36,29 @@ export async function gravarObjecao(tx: Sql, f: FatoObjecao): Promise<string> {
   return id
 }
 
+const MODOS_QUE_GRAVAM: ReadonlySet<string> = new Set(['autonomo', 'assistido'])
+
+/**
+ * Grava os fatos do turno CONFIRMADO (chamar de dentro da transação da decisão,
+ * só no caminho que persiste o turno). Autônomo e assistido gravam; sombra,
+ * simulação e copiloto não. Um fato por código no turno.
+ */
+export async function gravarObjecoesDoTurno(tx: Sql, p: {
+  modo: string; canalId: string; conversaId: string; contatoId: string; sessaoId: string | null; agora: Date
+  objecoes: readonly { codigo: string; revertida: boolean; objecao?: string | undefined; observacao?: string | null | undefined }[]
+}): Promise<void> {
+  if (!MODOS_QUE_GRAVAM.has(p.modo)) return
+  const vistos = new Set<string>()
+  for (const o of p.objecoes) {
+    if (vistos.has(o.codigo)) continue
+    vistos.add(o.codigo)
+    await gravarObjecao(tx, {
+      canalId: p.canalId, conversaId: p.conversaId, contatoId: p.contatoId, sessaoId: p.sessaoId,
+      codigo: o.codigo, objecao: o.objecao ?? o.codigo, revertida: o.revertida, observacao: o.observacao ?? null, agora: p.agora,
+    })
+  }
+}
+
 /** Janela do resumo: inteiro 1–90; ausente/inválido = 30. */
 export function janelaDoResumo(bruto: unknown): number {
   const n = Number(bruto)

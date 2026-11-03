@@ -68,7 +68,13 @@ export type SaidaFerramenta =
   | { readonly ok: false; readonly erro: string }
 
 /** Uma objeção registrada no turno pela ferramenta (só código e se foi revertida). */
-export interface ObjecaoDoTurno { readonly codigo: string; readonly revertida: boolean }
+export interface ObjecaoDoTurno {
+  readonly codigo: string
+  readonly revertida: boolean
+  /** Texto da objeção no playbook e observação do modelo — só para a gravação do turno confirmado. */
+  readonly objecao?: string | undefined
+  readonly observacao?: string | null | undefined
+}
 
 export interface Ferramenta<I = unknown> {
   readonly nome: string
@@ -159,7 +165,7 @@ export function registroDeFerramentas(
         if (r.efeito === 'handoff' && r.handoff) efeitos.handoff = r.handoff
         if (r.efeito === 'proposta_enviada') efeitos.propostaEnviada = true
         if (r.efeito === 'pedido_alterado') efeitos.pedidoAlterado = true
-        if (r.objecao) efeitos.objecoes.push(r.objecao)
+        if (r.objecao && !efeitos.objecoes.some((o) => o.codigo === r.objecao!.codigo)) efeitos.objecoes.push(r.objecao)
         return { ok: true, saida: r.saida }
       } catch (e) {
         return { ok: false, erro: e instanceof Error ? e.message : String(e) }

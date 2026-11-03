@@ -48,6 +48,14 @@ describe('Objeções do playbook — validação da seção (G2)', () => {
     ['por cento por extenso', 'Consigo verificar, mas o reajuste foi de cinco por cento para todos.', /percentual/],
     ['prazo literal', 'Fica tranquilo: a separação leva 2 dias úteis depois do pagamento.', /número|prazo/],
     ['prazo por extenso', 'Fica tranquilo: a separação leva dois dias úteis depois do pagamento.', /número|prazo/],
+    ['vezes por extenso', 'Entendo. Dá para pagar em doze vezes no cartão, pode ficar tranquilo.', /número|prazo/],
+    ['parcelas por extenso', 'Entendo. Dá para dividir em três parcelas, pode ficar tranquilo.', /número|prazo/],
+    ['anos por extenso', 'Entendo. A garantia dura dez anos, pode ficar tranquilo.', /número|prazo/],
+    ['semanas por extenso', 'Entendo. A reposição chega em duas semanas, pode ficar tranquilo.', /número|prazo/],
+    ['minutos por extenso', 'Entendo. A confirmação sai em cinco minutos, pode ficar tranquilo.', /número|prazo/],
+    ['ordinal de parcela', 'Entendo. A primeira parcela só vence depois, pode ficar tranquilo.', /número|prazo/],
+    ['metade', 'Entendo. Dá para pagar metade do valor na entrada, pode ficar tranquilo.', /número|prazo/],
+    ['meio por cento', 'Entendo. O ajuste foi de meio por cento, pode ficar tranquilo.', /percentual|número|prazo/],
     ['promessa de entrega', 'Pode confiar, entregamos amanhã sem falta na sua loja.', /prazo/],
   ])('dado resposta com %s, então a publicação recusa e explica no item', (_n, resposta, explica) => {
     const r = validarPlaybook(comObjecoes([{ ...caro, resposta }]))
@@ -57,6 +65,21 @@ describe('Objeções do playbook — validação da seção (G2)', () => {
       expect(e, JSON.stringify(r.erros)).toBeDefined()
       expect(e!.mensagem).toMatch(explica)
     }
+  })
+
+  it('dado a soma das objeções ATIVAS acima de 20.000 caracteres, então a publicação recusa no campo objecoes; inativas não contam', () => {
+    const resposta = 'Entendo a sua preocupação e posso ajudar com as opções do catálogo. '.repeat(17).slice(0, 1190).trim()
+    const grande = (i: number): ObjecaoPlaybook => ({
+      codigo: `OBJ-${String(i + 1).padStart(2, '0')}`, ativo: true, objecao: `Objeção número ${i}`.padEnd(190, 'x'),
+      gatilhos: Array.from({ length: 10 }, (_, j) => `gatilho${'a'.repeat(30)}${i}-${j}`), resposta,
+    })
+    const muitas = Array.from({ length: 13 }, (_, i) => grande(i))
+    const r = validarPlaybook(comObjecoes(muitas))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.erros.find((x) => x.campo === 'objecoes')?.mensagem).toMatch(/20000|20\.000/)
+    const inativas = muitas.map((o, i) => (i >= 5 ? { ...o, ativo: false } : o))
+    const r2 = validarPlaybook(comObjecoes(inativas))
+    if (!r2.ok) expect(r2.erros.find((x) => x.campo === 'objecoes')).toBeUndefined()
   })
 
   it('dado resposta que FALA de prazo e desconto sem número nem promessa, então passa', () => {
