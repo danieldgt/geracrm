@@ -24,13 +24,13 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | C1 tarefas v2 | 1 | ✅ | integrada com correções (validação Zod, cursor µs, responsável nulo, autorização); 0114 corrigida no lugar |
 | A5 pedidos em lista | 1 | ✅ | integrada; API não tem busca/período/contadores — cards e busca só no carregado |
 | A2 lista de contatos + massa | 1 | ⬜ | |
-| B2 modais do funil + ganho | 1 | 🔍 | revisão aprovou com correções (FK PG14, pedido efetivado, CPF preservado, idempotência, menu acessível); correção Sonnet em curso |
+| B2 modais do funil + ganho | 1 | ⏸ | correção pronta (017b2ff, 0122 corrigida no lugar); aguarda D3 para integrar |
 | A3 ficha 2+1 | 1 | ✅ | integrada (0115); feed lê a auditoria de `qualificarContato`; 'Enviar no WhatsApp' do arquivo fica para quando o inbox enviar mídia por id |
 | D5 configurações com abas + módulos | 2 | ✅ | integrada (0116); `exigirModulo('agenda')` e `ModulosServico` prontos |
 | H2 LGPD retenção/anonimização | 2 | 🔄 | Sonnet, migration 0125 |
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
 | B1 panorama do funil | 2 | ⬜ | |
-| C2 agenda (módulo) | 2 | 🔄 | Sonnet, migration 0117 |
+| C2 agenda (módulo) | 2 | ⏸ | pronta (77a1592, 0117); aguarda D3; `app-agenda-contato` a montar na ficha |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | ⬜ | |
 | D4 notificações, perfil, esqueci a senha | 2 | ⬜ | |
 | D6 auditoria v2 | 2 | ✅ | integrada; cursor com µs corrigido; pendente: login/logout (vai com D4), janela padrão da busca `q` |
