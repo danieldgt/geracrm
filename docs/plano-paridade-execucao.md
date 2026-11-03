@@ -37,7 +37,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
 | D2 higienização da carteira | 2 | 🔄 | Sonnet |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
-| F1 campanhas v2 | 3 | ⬜ | |
+| F1 campanhas v2 | 3 | 🔄 | F1a API+despachante (Opus, migration 0134) em curso; F1b wizard (Sonnet) depois |
 | F3 formulários públicos | 3 | 🔍 | revisão de segurança: aprovado com correções (upload fora da transação, IP real, contato existente intocado); correção Opus em curso — não divulgar link antes |
 | G2 objeções | 3 | 🔍 | integrada (0126); revisão Sonnet em curso; seções de texto do playbook ficam no Conhecimento (decisão 9) |
 | G3 pós-venda, NPS, indicações, prova social | 3 | 🔄 | Opus; migration 0130 |
