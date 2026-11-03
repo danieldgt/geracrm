@@ -14,15 +14,15 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | L0a primitivos de formulário | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
 | L0b composição (página, modal, abas) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
 | L0c lista (tabela, filtros, paginação) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
-| L0d ícones Lucide | 0 | 🔄 | Haiku, worktree |
-| L0e docs e skill de formulários | 0 | ⬜ | depois de L0a–d |
+| L0d ícones Lucide | 0 | ✅ | integrada; desenhos de memória — revisão aponta os suspeitos |
+| L0e docs e skill de formulários | 0 | 🔄 | Haiku |
 | D3 escopo por papel + usuários + filiais | 0 | 🔄 | Opus, worktree — só API (D3.1–D3.3); telas D3.4 depois de L0 |
 | G1 devolver ao agente / reatribuir / filtro | 0 | 🔄 | Sonnet, worktree |
-| H3 monitor | 0 | 🔄 | Sonnet, worktree — backup fora (decisão) |
-| A1 cadastro do contato | 1 | ⬜ | |
-| A4 etiquetas e origens | 1 | ⬜ | |
-| C1 tarefas v2 | 1 | ⬜ | |
-| A5 pedidos em lista | 1 | ⬜ | |
+| H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
+| A1 cadastro do contato | 1 | 🔄 | Sonnet, migration 0112 |
+| A4 etiquetas e origens | 1 | 🔄 | Sonnet, migration 0113 |
+| C1 tarefas v2 | 1 | 🔄 | Sonnet, migration 0114 |
+| A5 pedidos em lista | 1 | 🔄 | Haiku |
 | A2 lista de contatos + massa | 1 | ⬜ | |
 | B2 modais do funil + ganho | 1 | ⬜ | |
 | A3 ficha 2+1 | 1 | ⬜ | |
@@ -48,6 +48,8 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | E2 relatórios 1ª leva | 3 | ⬜ | |
 | E3 relatórios 2ª leva | 3 | ⬜ | |
 | L1 retrofit das telas restantes | 4 | ⬜ | |
+| X1 teste de ativas dependente de hora | — | 🔄 | Sonnet; falha também na main |
+| R0 revisão adversarial da biblioteca L0 | 0 | 🔄 | Sonnet, só leitura |
 
 ## 1. Política de modelos
 
