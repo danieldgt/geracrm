@@ -26,7 +26,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | A2 lista de contatos + massa | 1 | ⬜ | |
 | B2 modais do funil + ganho | 1 | 🔄 | Sonnet; ganho = CNPJ, razão social, fantasia, endereço |
 | A3 ficha 2+1 | 1 | 🔄 | Sonnet, migration 0115 |
-| D5 configurações com abas + módulos | 2 | ⬜ | |
+| D5 configurações com abas + módulos | 2 | 🔄 | Sonnet, migration 0116 (destrava C2 e H2) |
 | H2 LGPD retenção/anonimização | 2 | ⬜ | |
 | E1 início v2 + base de relatórios | 2 | ⬜ | |
 | B1 panorama do funil | 2 | ⬜ | |
