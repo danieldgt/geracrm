@@ -21,6 +21,8 @@ export interface FiltrosContatos {
   readonly origemId: string
   readonly etiquetaIds: readonly string[]
   readonly semProximoPasso: boolean
+  /** Carteira ativa (qualificado ou em funil) — usado pela Higienização (D2); ausente = sem o filtro. */
+  readonly carteiraAtiva?: boolean
   readonly criadoDe: string
   readonly criadoAte: string
 }
@@ -55,6 +57,7 @@ export function filtrosDaQuery(query: QueryContatos): FiltrosContatos {
     origemId: uuidOuVazio(unico(query['origemId'])),
     etiquetaIds: [...new Set(etiquetas)].slice(0, MAX_ETIQUETAS_NO_FILTRO),
     semProximoPasso: unico(query['semProximoPasso']) === 'true',
+    ...(unico(query['carteiraAtiva']) === 'true' ? { carteiraAtiva: true } : {}),
     criadoDe: diaOuVazio(unico(query['criadoDe'])),
     criadoAte: diaOuVazio(unico(query['criadoAte'])),
   }
@@ -71,6 +74,7 @@ export function queryDosFiltros(f: FiltrosContatos): QueryContatos {
   if (f.origemId) q['origemId'] = f.origemId
   if (f.etiquetaIds.length > 0) q['etiquetaId'] = [...f.etiquetaIds]
   if (f.semProximoPasso) q['semProximoPasso'] = 'true'
+  if (f.carteiraAtiva) q['carteiraAtiva'] = 'true'
   if (f.criadoDe) q['criadoDe'] = f.criadoDe
   if (f.criadoAte) q['criadoAte'] = f.criadoAte
   return q

@@ -81,6 +81,7 @@ import { rotasPlaybook } from './contexts/atendimento/agente/rotas-playbook.js'
 import { rotasGoLive } from './contexts/atendimento/agente/rotas-go-live.js'
 import { rotasSaudeDetalhada } from './contexts/plataforma/rotas-saude-detalhada.js'
 import { rotasSla } from './contexts/atendimento/rotas-sla.js'
+import { rotasCarteiraHigienizacao } from './contexts/plataforma/rotas-carteira-higienizacao.js'
 import { rotasCockpit } from './contexts/plataforma/rotas-cockpit.js'
 
 /**
@@ -210,6 +211,7 @@ export async function criarApp(
   await app.register(rotasGoLive)
   await app.register(rotasSaudeDetalhada)
   await app.register(rotasSla)
+  await app.register(rotasCarteiraHigienizacao)
   await app.register(rotasCockpit)
 
   /** Liveness — no database. Answers even with the bank down, on purpose. */
