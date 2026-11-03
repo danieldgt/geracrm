@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { exigirTenant } from '../../../plugins/tenant.js'
 import { exigirPapel } from '../../plataforma/papel.js'
 import { auditar } from '../../plataforma/auditoria.js'
-import { garantirUsuarioId } from '../rotas-fila.js'
+import { atorDaRequisicao, garantirUsuarioId } from '../rotas-fila.js'
 import { fusoSeguro } from '../../plataforma/fuso.js'
 import { cambioBrl, situacaoMensal, tetoSessaoDoAmbiente, tetoSessaoEfetivo, limiarAtingido } from './custo.js'
 import { travarPlaybookDoTenant } from './playbook/repositorio.js'
@@ -40,7 +40,7 @@ const corpoCusto = z.object({
  * de custo direto (nota de integração do plano, §4 P14).
  */
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
-  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+  if (req.tenantId && !req.atorStaff) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 
 function invalido(reply: FastifyReply, e: z.ZodError): FastifyReply {
@@ -78,7 +78,7 @@ export async function rotasCusto(app: FastifyInstance): Promise<void> {
           INSERT INTO agente_orcamento (tenant_id, mensal_centavos, atualizado_em)
           VALUES (tenant_atual(), ${novo}, now())
           ON CONFLICT (tenant_id) DO UPDATE SET mensal_centavos = EXCLUDED.mensal_centavos, atualizado_em = now()`
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         await auditar(tx, {
           atorId, atorStaff: req.atorStaff ?? false, acao: 'agente.orcamento_alterado', entidade: 'agente_orcamento',
           dados: { antes: antes?.mensal === undefined || antes.mensal === null ? null : Number(antes.mensal), depois: novo },
@@ -152,7 +152,7 @@ export async function rotasCusto(app: FastifyInstance): Promise<void> {
           INSERT INTO agente_config (tenant_id, canal_id, teto_sessao_centavos, atualizado_em)
           VALUES (tenant_atual(), ${req.params.id}, ${novo}, now())
           ON CONFLICT (tenant_id, canal_id) DO UPDATE SET teto_sessao_centavos = EXCLUDED.teto_sessao_centavos, atualizado_em = now()`
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         await auditar(tx, {
           atorId, atorStaff: req.atorStaff ?? false, acao: 'agente.teto_sessao_alterado', entidade: 'agente_config', entidadeId: req.params.id,
           dados: { antes: antes?.teto === undefined || antes.teto === null ? null : Number(antes.teto), depois: novo },

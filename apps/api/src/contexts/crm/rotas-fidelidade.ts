@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
-import { exigirNoEscopo } from '../plataforma/escopo.js'
+import { condicaoContato, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
 
 /**
  * Fidelidade / Cashback — leitura do saldo LIDO do ERP (ADR-020). A alavancagem
@@ -32,6 +32,8 @@ export async function rotasFidelidade(app: FastifyInstance): Promise<void> {
           FROM fidelidade_saldo f
           JOIN contato c ON c.tenant_id = f.tenant_id AND c.id = f.contato_id
          WHERE f.tenant_id = tenant_atual() AND f.saldo > 0
+           -- ⚠️ Escopo (D3): o ranking com nome mostra só os clientes visíveis.
+           AND ${condicaoContato(tx, await escopoDaRequisicao(tx, req), 'c')}
          ORDER BY f.saldo DESC LIMIT 10`
       return { cap, resumo, top }
     })

@@ -2,13 +2,21 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Sql } from '../../db/index.js'
 import { exigirTenant } from '../../plugins/tenant.js'
-import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { atorDaRequisicao, garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { auditar } from '../plataforma/auditoria.js'
-import { exigirPapel, PAPEIS, type Papel } from '../plataforma/papel.js'
-import type { ProvedorIdentidade, ResultadoOperacao } from './provedor-identidade.js'
+import { exigirAdminAtribuido, PAPEIS, type Papel } from '../plataforma/papel.js'
+import type { AlvoIdentidade, ProvedorIdentidade, ResultadoOperacao } from './provedor-identidade.js'
+import { naoEhLinhaDeStaff } from './linha-staff.js'
 
 /**
- * CADASTRO DE USUÁRIOS (raia D3, #97/#103) — só ADMIN (`exigirPapel('admin')`).
+ * CADASTRO DE USUÁRIOS (raia D3, #97/#103) — só ADMIN ATRIBUÍDO ou sessão de
+ * staff (`exigirAdminAtribuido`): o modo fundador NÃO vale aqui.
+ *
+ * ⚠️ STAFF FORA DO CADASTRO (revisão de segurança D3): linhas legadas que a
+ *    sessão de staff gravou no cliente (`naoEhLinhaDeStaff`) não aparecem na
+ *    lista e respondem 404 em toda ação; o provedor só opera sobre o login pelo
+ *    `sub` da linha, do MESMO tenant e fora do grupo `staff` (`recusado` → 403).
+ *    E-mail que já tem login no provedor (outro tenant, staff) → 409 genérico.
  *
  * ⚠️ Gestão de usuários SEMPRE pela aplicação (skill geracrm-identidade-acesso):
  *    o login nasce no provedor de identidade atrás da porta `ProvedorIdentidade`
@@ -98,20 +106,21 @@ async function gravarVinculos(tx: Sql, usuarioId: string, vinculos: readonly Vin
 
 /** A linha de `usuario` do chamador precisa existir antes de `exigirPapel` (mesmo padrão de rotas-config). */
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
-  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+  if (req.tenantId && !req.atorStaff) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 
 const RESPOSTA_PROVEDOR: Record<Exclude<ResultadoOperacao['tipo'], 'ok'>, Recusa> = {
   nao_encontrado: recusa(404, 'identidade.usuario_nao_encontrado', 'Este usuário não tem login no provedor de identidade.'),
   senha_invalida: recusa(422, 'usuario.senha_invalida', 'A senha não atende à política: mínimo de 8 caracteres, com maiúscula, minúscula, número e símbolo.'),
   indisponivel: recusa(503, 'identidade.indisponivel', 'O provedor de identidade não está configurado no servidor.'),
+  recusado: recusa(403, 'identidade.login_de_outra_conta', 'O login deste usuário não pertence a esta empresa. Fale com o suporte.'),
 }
 
 export interface OpcoesRotasUsuarios { readonly provedor: ProvedorIdentidade }
 
 export async function rotasUsuarios(app: FastifyInstance, opcoes: OpcoesRotasUsuarios): Promise<void> {
   const { provedor } = opcoes
-  const SO_ADMIN = { preHandler: [exigirTenant, garantirUsuario, exigirPapel('admin')] }
+  const SO_ADMIN = { preHandler: [exigirTenant, garantirUsuario, exigirAdminAtribuido()] }
 
   /** Lista por cursor `(nome, id)`. Filtros: `busca` (nome/e-mail), `ativo`. */
   app.get<{ Querystring: { cursor?: string; busca?: string; ativo?: string } }>(
@@ -137,7 +146,7 @@ export async function rotasUsuarios(app: FastifyInstance, opcoes: OpcoesRotasUsu
                            LEFT JOIN filial f ON f.tenant_id = uf.tenant_id AND f.id = uf.filial_id
                           WHERE uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id), '[]'::json) AS papeis
           FROM usuario u
-         WHERE u.tenant_id = tenant_atual()
+         WHERE u.tenant_id = tenant_atual() AND ${naoEhLinhaDeStaff(tx, 'u')}
            AND ${busca ? tx`(u.nome ILIKE ${'%' + busca + '%'} OR u.email ILIKE ${'%' + busca + '%'})` : tx`true`}
            AND ${ativo === null ? tx`true` : tx`u.ativo = ${ativo}`}
            AND ${curNome === null ? tx`true` : tx`(u.nome, u.id) > (${curNome}, ${curId}::uuid)`}
@@ -177,7 +186,7 @@ export async function rotasUsuarios(app: FastifyInstance, opcoes: OpcoesRotasUsu
         return reply.code(422).send({ ...RESPOSTA_PROVEDOR.senha_invalida, campos: ['senhaTemporaria'] })
       }
       const tenantId = req.tenantId!
-      let loginCriado = false
+      let loginCriado: AlvoIdentidade | null = null
 
       try {
         const r = await req.comTenant(async (tx): Promise<Recusa | { id: string }> => {
@@ -187,12 +196,14 @@ export async function rotasUsuarios(app: FastifyInstance, opcoes: OpcoesRotasUsu
           if (!(await filiaisExistem(tx, vinculos))) return recusa(422, 'usuario.filial_invalida', 'Filial não encontrada.')
 
           const criado = await provedor.criarUsuario({ email, nome, tenantId, senhaTemporaria: b.senhaTemporaria })
+          // ⚠️ Já tem login no provedor (de outra empresa, do staff…): 409
+          //    GENÉRICO, que não diz de quem é, e o login NUNCA é reaproveitado.
           if (criado.tipo === 'email_em_uso') {
-            return recusa(409, 'usuario.email_em_uso', 'Este e-mail já tem login no GeraCRM (talvez em outra empresa). Use outro e-mail.')
+            return recusa(409, 'usuario.email_indisponivel', 'Não é possível usar este e-mail. Use outro endereço.')
           }
           if (criado.tipo === 'senha_invalida') return RESPOSTA_PROVEDOR.senha_invalida
           if (criado.tipo === 'indisponivel') return RESPOSTA_PROVEDOR.indisponivel
-          loginCriado = true
+          loginCriado = { sub: criado.sub, tenantId }
 
           const id = randomUUID()
           await tx`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email, telefone, cargo)
@@ -200,7 +211,7 @@ export async function rotasUsuarios(app: FastifyInstance, opcoes: OpcoesRotasUsu
                            ${textoOpcional(b.telefone) ?? null}, ${textoOpcional(b.cargo) ?? null})`
           await gravarVinculos(tx, id, vinculos)
           await auditar(tx, {
-            atorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+            atorId: await atorDaRequisicao(tx, req), atorStaff: req.atorStaff ?? false,
             acao: 'usuario.criado', entidade: 'usuario', entidadeId: id,
             dados: { email, papeis: vinculos },
           })
@@ -211,7 +222,7 @@ export async function rotasUsuarios(app: FastifyInstance, opcoes: OpcoesRotasUsu
       } catch (e) {
         // ⚠️ Compensação: o login existe no provedor mas o vínculo não gravou.
         //    Desativado, ele não entra num tenant onde não existe usuário.
-        if (loginCriado) await provedor.desativar(email).catch(() => undefined)
+        if (loginCriado) await provedor.desativar(loginCriado).catch(() => undefined)
         throw e
       }
     },
@@ -241,7 +252,7 @@ export async function rotasUsuarios(app: FastifyInstance, opcoes: OpcoesRotasUsu
           SELECT u.email, u.ativo, u.cognito_sub,
                  EXISTS (SELECT 1 FROM usuario_filial uf
                           WHERE uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id AND uf.papel = 'admin') AS admin
-            FROM usuario u WHERE u.tenant_id = tenant_atual() AND u.id = ${id}`
+            FROM usuario u WHERE u.tenant_id = tenant_atual() AND u.id = ${id} AND ${naoEhLinhaDeStaff(tx, 'u')}`
         if (!atual) return recusa(404, 'usuario.nao_encontrado', 'Usuário não encontrado.')
         if (vinculos !== undefined && !(await filiaisExistem(tx, vinculos))) return recusa(422, 'usuario.filial_invalida', 'Filial não encontrada.')
 
@@ -261,6 +272,18 @@ export async function rotasUsuarios(app: FastifyInstance, opcoes: OpcoesRotasUsu
           }
         }
 
+        // ⚠️ O banco é a autoridade (inativo não tem papel nem escopo na próxima
+        //    requisição); o bloqueio no provedor é a segunda camada — impede o
+        //    login. Resultado do provedor vai na resposta para a tela avisar.
+        //    O login é localizado pelo `sub` da linha e conferido (tenant, grupo
+        //    staff) ANTES de operar: `recusado` não grava nada, nem no banco.
+        let resultadoProvedor: ResultadoOperacao['tipo'] | null = null
+        if (b.ativo !== undefined && b.ativo !== atual.ativo && atual.cognito_sub) {
+          const alvo = { sub: atual.cognito_sub, tenantId: req.tenantId! }
+          resultadoProvedor = (b.ativo ? await provedor.reativar(alvo) : await provedor.desativar(alvo)).tipo
+          if (resultadoProvedor === 'recusado') return RESPOSTA_PROVEDOR.recusado
+        }
+
         await tx`UPDATE usuario SET
                    nome     = ${nome ?? tx`nome`},
                    telefone = ${telefone === undefined ? tx`telefone` : telefone},
@@ -268,16 +291,8 @@ export async function rotasUsuarios(app: FastifyInstance, opcoes: OpcoesRotasUsu
                    ativo    = ${b.ativo === undefined ? tx`ativo` : b.ativo}
                  WHERE tenant_id = tenant_atual() AND id = ${id}`
         if (vinculos !== undefined) await gravarVinculos(tx, id, vinculos)
-
-        // ⚠️ O banco é a autoridade (inativo não tem papel nem escopo na próxima
-        //    requisição); o bloqueio no provedor é a segunda camada — impede o
-        //    login. Resultado do provedor vai na resposta para a tela avisar.
-        let resultadoProvedor: ResultadoOperacao['tipo'] | null = null
-        if (b.ativo !== undefined && b.ativo !== atual.ativo && atual.cognito_sub) {
-          resultadoProvedor = (b.ativo ? await provedor.reativar(atual.email) : await provedor.desativar(atual.email)).tipo
-        }
         await auditar(tx, {
-          atorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+          atorId: await atorDaRequisicao(tx, req), atorStaff: req.atorStaff ?? false,
           acao: 'usuario.alterado', entidade: 'usuario', entidadeId: id,
           dados: {
             campos: Object.keys(b).filter((k) => k !== 'papeis' || vinculos !== undefined),
@@ -304,12 +319,17 @@ export async function rotasUsuarios(app: FastifyInstance, opcoes: OpcoesRotasUsu
         return reply.code(422).send({ ...RESPOSTA_PROVEDOR.senha_invalida, campos: ['senhaTemporaria'] })
       }
       const r = await req.comTenant(async (tx): Promise<Recusa | null> => {
-        const [u] = await tx<{ email: string }[]>`SELECT email FROM usuario WHERE tenant_id = tenant_atual() AND id = ${id}`
+        const [u] = await tx<{ cognito_sub: string | null }[]>`
+          SELECT u.cognito_sub FROM usuario u
+           WHERE u.tenant_id = tenant_atual() AND u.id = ${id} AND ${naoEhLinhaDeStaff(tx, 'u')}`
         if (!u) return recusa(404, 'usuario.nao_encontrado', 'Usuário não encontrado.')
-        const res = await provedor.redefinirSenha(u.email, senha)
+        if (!u.cognito_sub) return RESPOSTA_PROVEDOR.nao_encontrado
+        // ⚠️ Pelo `sub` da linha — nunca pelo e-mail — e o adaptador confere
+        //    tenant e grupo staff antes de tocar a senha.
+        const res = await provedor.redefinirSenha({ sub: u.cognito_sub, tenantId: req.tenantId! }, senha)
         if (res.tipo !== 'ok') return RESPOSTA_PROVEDOR[res.tipo]
         await auditar(tx, {
-          atorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+          atorId: await atorDaRequisicao(tx, req), atorStaff: req.atorStaff ?? false,
           acao: 'usuario.senha_redefinida', entidade: 'usuario', entidadeId: id,
         })
         return null

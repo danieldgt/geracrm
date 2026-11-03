@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { condicaoContato, escopoDaRequisicao } from './escopo.js'
 
 /**
  * BI de vendas — rankings de leitura sobre `venda`/`item_venda` (fonte de verdade
@@ -20,6 +21,16 @@ export async function rotasBi(app: FastifyInstance): Promise<void> {
       const dias = DIAS_VALIDOS.has(Number(req.query.dias)) ? Number(req.query.dias) : 30
       const dados = await req.comTenant(async (tx) => {
         const desde = tx`now() - (${dias} || ' days')::interval`
+        // ⚠️ Escopo (D3): os rankings COM NOME (clientes, vendedores) mostram só
+        //    o que quem pede enxerga. O de produtos é agregado sem pessoa.
+        const escopo = await escopoDaRequisicao(tx, req)
+        const vendedorVisivel = escopo.tipo === 'tudo' ? tx`true`
+          : escopo.usuarioId === null ? tx`false`
+          : escopo.tipo === 'carteira' ? tx`v.usuario_id = ${escopo.usuarioId}::uuid`
+          : tx`(v.usuario_id = ${escopo.usuarioId}::uuid OR EXISTS (
+                  SELECT 1 FROM usuario_filial bi_uf
+                   WHERE bi_uf.tenant_id = v.tenant_id AND bi_uf.usuario_id = v.usuario_id
+                     AND bi_uf.filial_id = ANY(${[...escopo.filialIds]}::uuid[])))`
 
         const topClientes = await tx<{ contato_id: string; nome: string; receita: string; qtd: number }[]>`
           SELECT v.contato_id, c.nome, sum(v.valor_centavos)::text AS receita, count(*)::int AS qtd
@@ -27,6 +38,7 @@ export async function rotasBi(app: FastifyInstance): Promise<void> {
             JOIN contato c ON c.tenant_id = v.tenant_id AND c.id = v.contato_id
            WHERE v.tenant_id = tenant_atual() AND v.cancelada_em IS NULL
              AND v.contato_id IS NOT NULL AND v.ocorrida_em >= ${desde}
+             AND ${condicaoContato(tx, escopo, 'c')}
            GROUP BY v.contato_id, c.nome
            ORDER BY sum(v.valor_centavos) DESC LIMIT 10`
 
@@ -49,7 +61,7 @@ export async function rotasBi(app: FastifyInstance): Promise<void> {
             FROM venda v
             LEFT JOIN usuario u ON u.tenant_id = v.tenant_id AND u.id = v.usuario_id
            WHERE v.tenant_id = tenant_atual() AND v.cancelada_em IS NULL
-             AND v.ocorrida_em >= ${desde}
+             AND v.ocorrida_em >= ${desde} AND ${vendedorVisivel}
            GROUP BY v.usuario_id, u.nome
            ORDER BY sum(v.valor_centavos) DESC LIMIT 10`
 

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { condicaoConversa, escopoDaRequisicao } from '../plataforma/escopo.js'
 
 const PAGINA = 30
 const STATUS_FILTRO = new Set(['pendente', 'enviada', 'entregue', 'lida', 'falhou'])
@@ -21,7 +22,8 @@ export async function rotasMensagensLog(app: FastifyInstance): Promise<void> {
         if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curEm = em; curId = id
       }
-      const linhas = await req.comTenant((tx) => tx<{
+      // ⚠️ Escopo (D3): só mensagens de conversas que quem pede enxerga.
+      const linhas = await req.comTenant(async (tx) => tx<{
         id: string; criado_em: Date; tipo: string; status: string | null; preview: string | null
         contato_id: string | null; contato: string | null; enviada_por: string | null
       }[]>`
@@ -33,6 +35,7 @@ export async function rotasMensagensLog(app: FastifyInstance): Promise<void> {
           LEFT JOIN contato ct ON ct.tenant_id = cv.tenant_id AND ct.id = cv.contato_id
           LEFT JOIN usuario u  ON u.tenant_id = m.tenant_id AND u.id = m.enviada_por_id
          WHERE m.tenant_id = tenant_atual() AND m.direcao = 'saliente'
+           AND ${condicaoConversa(tx, await escopoDaRequisicao(tx, req))}
            AND ${status === null ? tx`true` : tx`m.status = ${status}`}
            AND ${curEm === null ? tx`true` : tx`(m.criado_em, m.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
          ORDER BY m.criado_em DESC, m.id DESC LIMIT ${PAGINA + 1}`)

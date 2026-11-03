@@ -466,8 +466,15 @@ describe('assumir o handoff (fila + reatribuição)', () => {
     const { conversa } = await novaConversa({ dono: ANA })
     await handoff(conversa, new Date())
     const r = await pedir('POST', `/v1/conversas/${conversa}/assumir`)
-    expect(r.statusCode).toBe(409)
-    expect(r.json()).toMatchObject({ erro: 'atendimento.reservado', para: 'Ana' })
+    // ⚠️ Escopo D3 (M7): o cliente é da carteira da Ana (ativa e disponível) — para o
+    //    vendedor, a fila nem o mostra até a liberação: 404, não "reservado".
+    expect(r.statusCode).toBe(404)
+    expect(r.json()).toMatchObject({ erro: 'conversa.nao_encontrada' })
+    // Handoff roteado ao POOL (cliente sem dono): aí a reserva aparece, nomeada.
+    await dono`UPDATE carteira_atribuicao SET ate = now() WHERE contato_id = (SELECT contato_id FROM conversa WHERE id = ${conversa}) AND ate IS NULL`
+    const reservado = await pedir('POST', `/v1/conversas/${conversa}/assumir`)
+    expect(reservado.statusCode).toBe(409)
+    expect(reservado.json()).toMatchObject({ erro: 'atendimento.reservado', para: 'Ana' })
     await dono`UPDATE atendimento SET responsavel_id = ${EU} WHERE conversa_id = ${conversa}`
     const ok = await pedir('POST', `/v1/conversas/${conversa}/assumir`)
     expect(ok.statusCode).toBe(201)
@@ -496,8 +503,8 @@ describe('assumir o handoff (fila + reatribuição)', () => {
     await dono`INSERT INTO atendimento_etapa (tenant_id, id, ordem, chave, nome, tipo) VALUES (${A}, ${etapa}, 5, 'p18_aguardando', 'Aguardando nós', 'atendimento')`
     await dono`UPDATE atendimento SET atendente_id = ${ANA}, estado = 'em_atendimento', etapa_id = ${etapa}, entrou_etapa_em = now() - interval '2 hours'
                 WHERE conversa_id = ${conversa}`
-    // Antes da liberação: é da Ana.
-    expect((await pedir('POST', `/v1/conversas/${conversa}/assumir`)).json()).toMatchObject({ erro: 'atendimento.ja_assumido' })
+    // Antes da liberação: é da Ana — e, cliente da carteira dela, o vendedor nem o enxerga (escopo D3).
+    expect((await pedir('POST', `/v1/conversas/${conversa}/assumir`)).json()).toMatchObject({ erro: 'conversa.nao_encontrada' })
     await passada(new Date())
     const r = await pedir('POST', `/v1/conversas/${conversa}/assumir`)
     expect(r.statusCode).toBe(201)
@@ -658,7 +665,11 @@ describe('conversa do playground fora da operação (Pvis2)', () => {
     const realMeu = await novaConversa({ conduzida: 'humano' })
     const simMeu = await novaConversa({ conduzida: 'humano', origem: 'simulacao' })
     expect((await pedir('POST', `/v1/conversas/${realMeu.conversa}/assumir`)).statusCode).toBe(201)
+    // ⚠️ A conversa do playground não está na fila de ninguém (escopo D3): só a gestão a
+    //    alcança — o setup assume como supervisor e volta a vendedor.
+    await dono`UPDATE usuario_filial SET papel = 'supervisor' WHERE usuario_id = ${EU}`
     expect((await pedir('POST', `/v1/conversas/${simMeu.conversa}/assumir`)).statusCode).toBe(201)
+    await dono`UPDATE usuario_filial SET papel = 'vendedor' WHERE usuario_id = ${EU}`
 
     const ids = (r: { json(): { itens: { id?: string; conversaId?: string }[] } }) => r.json().itens.map((i) => i.id ?? i.conversaId)
     const todas = ids(await pedir('GET', '/v1/conversas'))

@@ -42,6 +42,12 @@ declare module 'fastify' {
     /** Id da sessão de acesso em uso, para encerrá-la. */
     sessaoStaffId?: string | undefined
     /**
+     * `exp` do token Cognito (segundos desde a época). Para conexões LONGAS
+     * (SSE) se encerrarem quando o token vence — a requisição comum já é
+     * recusada pelo verificador.
+     */
+    tokenExpiraEm?: number | undefined
+    /**
      * Runs a callback inside a transaction already scoped to this tenant.
      * Every domain query goes through here — RLS depends on it.
      */
@@ -91,7 +97,7 @@ async function lerTenant(
   permiteHeader: boolean,
 ): Promise<{
   tenantId?: string; sub?: string; email?: string | undefined
-  grupos?: readonly string[]; atorStaff?: boolean; sessaoStaffId?: string
+  grupos?: readonly string[]; atorStaff?: boolean; sessaoStaffId?: string; expiraEm?: number | undefined
 }> {
   const token = extrairToken(req)
 
@@ -114,7 +120,7 @@ async function lerTenant(
   if (verificador && token) {
     try {
       const id = await verificador.verificar(token)
-      return { tenantId: id.tenantId, sub: id.sub, email: id.email, grupos: id.grupos }
+      return { tenantId: id.tenantId, sub: id.sub, email: id.email, grupos: id.grupos, expiraEm: id.expiraEm }
     } catch (erro) {
       // ⚠️ Token inválido/expirado NÃO cai no header de dev: seria um caminho
       //    para escalar de "token ruim" para "escolho meu tenant". Fica sem
@@ -181,6 +187,7 @@ export const pluginTenant: FastifyPluginAsync = fp(
       req.usuarioGrupos = id.grupos ?? []
       req.atorStaff = id.atorStaff ?? false
       req.sessaoStaffId = id.sessaoStaffId
+      req.tokenExpiraEm = id.expiraEm
       // ⚠️ Toda ação do staff dentro de um cliente fica no log, não só na
       //    trilha: é a pergunta "o que a Gera3 andou vendo?" respondida sem
       //    depender de a rota ter lembrado de auditar.

@@ -22,20 +22,25 @@ const PV_B = 'd3a00000-0003-4000-8000-00000000000b'
 const ADM_A = 'd3a00000-0005-4000-8000-000000000001'
 const VEND_A = 'd3a00000-0005-4000-8000-000000000002'
 const ADM_B = 'd3a00000-0005-4000-8000-000000000003'
-const SUB = { admA: 'd3a-sub-adm-a', vendA: 'd3a-sub-vend-a', admB: 'd3a-sub-adm-b' }
+const C = 'd3a00000-0000-4000-8000-00000000000c' // tenant SEM admin (modo fundador)
+const PV_C = 'd3a00000-0003-4000-8000-00000000000c'
+const FUND_C = 'd3a00000-0005-4000-8000-000000000004'
+const SUB = { admA: 'd3a-sub-adm-a', vendA: 'd3a-sub-vend-a', admB: 'd3a-sub-adm-b', fundC: 'd3a-sub-fund-c', staff: 'd3a-sub-staff' }
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
 const provedor = new ProvedorIdentidadeFalso()
 let app: FastifyInstance
 
 async function pedir(quem: keyof typeof SUB, method: 'GET' | 'POST' | 'PATCH', url: string, payload?: unknown) {
-  const headers = { 'x-tenant-id': quem === 'admB' ? B : A, 'x-teste-sub': SUB[quem] }
+  const headers: Record<string, string> = { 'x-tenant-id': quem === 'admB' ? B : quem === 'fundC' ? C : A, 'x-teste-sub': SUB[quem] }
+  if (quem === 'staff') headers['x-teste-staff'] = '1'
   const r = await app.inject({ method, url, headers, ...(payload !== undefined ? { payload: payload as object } : {}) })
   return { status: r.statusCode, corpo: r.json() as Record<string, unknown> }
 }
 
 async function limpar(): Promise<void> {
-  for (const t of [A, B]) {
+  for (const t of [A, B, C]) {
+    await dono`DELETE FROM staff_sessao WHERE tenant_id = ${t}`
     await dono`DELETE FROM auditoria WHERE tenant_id = ${t}`
     await dono`DELETE FROM usuario_filial WHERE tenant_id = ${t}`
     await dono`DELETE FROM usuario WHERE tenant_id = ${t}`
@@ -51,7 +56,7 @@ beforeAll(async () => {
   await limpar()
   await dono`INSERT INTO plano (id, codigo, nome) VALUES (${PLANO}, 'plano-usuarios-d3', 'Pro') ON CONFLICT DO NOTHING`
   await dono`INSERT INTO perfil_vertical_modelo (id, codigo, nome) VALUES (${MODELO}, 'modelo-usuarios-d3', 'Varejo') ON CONFLICT DO NOTHING`
-  for (const [t, pv, nome] of [[A, PV_A, 'Usuarios A'], [B, PV_B, 'Usuarios B']] as const) {
+  for (const [t, pv, nome] of [[A, PV_A, 'Usuarios A'], [B, PV_B, 'Usuarios B'], [C, PV_C, 'Usuarios C']] as const) {
     await dono.begin(async (tx) => {
       await tx`SET CONSTRAINTS ALL DEFERRED`
       await tx`INSERT INTO tenant (id, nome, plano_id, perfil_vertical_id) VALUES (${t}, ${nome}, ${PLANO}, ${pv})`
@@ -61,7 +66,8 @@ beforeAll(async () => {
   await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES
     (${A}, ${ADM_A}, ${SUB.admA}, 'Ana Admin', ${SUB.admA + '@d3a.test'}),
     (${A}, ${VEND_A}, ${SUB.vendA}, 'Vitor Vendas', ${SUB.vendA + '@d3a.test'}),
-    (${B}, ${ADM_B}, ${SUB.admB}, 'Bia Admin', ${SUB.admB + '@d3a.test'})`
+    (${B}, ${ADM_B}, ${SUB.admB}, 'Bia Admin', ${SUB.admB + '@d3a.test'}),
+    (${C}, ${FUND_C}, ${SUB.fundC}, 'Fundador C', ${SUB.fundC + '@d3a.test'})`
   await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES
     (${A}, ${ADM_A}, NULL, 'admin'), (${A}, ${VEND_A}, NULL, 'vendedor'), (${B}, ${ADM_B}, NULL, 'admin')`
 
@@ -70,6 +76,7 @@ beforeAll(async () => {
   app.addHook('onRequest', async (req) => {
     const s = req.headers['x-teste-sub']
     if (typeof s === 'string') { req.usuarioSub = s; req.usuarioEmail = `${s}@d3a.test` }
+    if (req.headers['x-teste-staff'] === '1') req.atorStaff = true
   })
   await app.register(rotasUsuarios, { provedor })
   await app.register(rotasFiliais)
@@ -94,6 +101,98 @@ describe('acesso: só admin', () => {
       expect(r.status, `${m} ${url}`).toBe(403)
       expect(r.corpo.erro).toBe('acesso.papel_insuficiente')
     }
+  })
+})
+
+describe('revisão de segurança D3 — M6: o modo fundador NÃO abre o cadastro', () => {
+  it('tenant sem admin: o usuário ativo (que valeria admin pelo fundador) recebe 403 em usuários e filiais', async () => {
+    for (const [m, url] of [['GET', '/v1/usuarios'], ['POST', '/v1/usuarios'], ['PATCH', `/v1/usuarios/${FUND_C}`],
+      ['POST', `/v1/usuarios/${FUND_C}/redefinir-senha`], ['GET', '/v1/filiais'], ['POST', '/v1/filiais']] as const) {
+      const r = await pedir('fundC', m, url, m === 'GET' ? undefined : { nome: 'x', papeis: [{ papel: 'admin', filialId: null }] })
+      expect(r.status, `${m} ${url}`).toBe(403)
+      expect(r.corpo.erro).toBe('acesso.papel_insuficiente')
+    }
+    // E ninguém virou admin pelo caminho.
+    const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM usuario_filial WHERE tenant_id = ${C}`
+    expect(n!.n).toBe(0)
+  })
+})
+
+describe('revisão de segurança D3 — C1: staff fora do cadastro do cliente', () => {
+  const STAFF_LEGADO = 'd3a00000-0005-4000-8000-0000000000aa'
+  const ALHEIO = 'd3a00000-0005-4000-8000-0000000000bb'
+  const DO_STAFF = 'd3a00000-0005-4000-8000-0000000000cc'
+
+  it('a sessão de staff cadastra pelo cliente SEM ganhar linha em `usuario` (trilha com ator_staff)', async () => {
+    const r = await pedir('staff', 'POST', '/v1/usuarios', { nome: 'Dani Suporte Criou', email: 'dani.cliente@exemplo.com' })
+    expect(r.status).toBe(201)
+    const [staff] = await dono`SELECT 1 FROM usuario WHERE tenant_id = ${A} AND cognito_sub = ${SUB.staff}`
+    expect(staff).toBeUndefined()
+    const [aud] = await dono<{ ator_id: string | null; ator_staff: boolean }[]>`
+      SELECT ator_id, ator_staff FROM auditoria WHERE tenant_id = ${A} AND acao = 'usuario.criado' AND entidade_id = ${r.corpo.id as string}`
+    expect(aud).toEqual({ ator_id: null, ator_staff: true })
+    // Listar pelo staff também não grava.
+    expect((await pedir('staff', 'GET', '/v1/usuarios')).status).toBe(200)
+    const [ainda] = await dono`SELECT 1 FROM usuario WHERE tenant_id = ${A} AND cognito_sub = ${SUB.staff}`
+    expect(ainda).toBeUndefined()
+  })
+
+  it('linha LEGADA do staff (gravada por sessão antiga) some da lista e responde 404 em toda ação, sem tocar o provedor', async () => {
+    const login = provedor.semear('staff.legado@drezz.test', { tenantId: B, grupos: ['staff'] })
+    await dono`INSERT INTO staff_sessao (tenant_id, id, token_hash, ator_sub, ator_email, motivo, expira_em)
+               VALUES (${A}, gen_random_uuid(), 'hash-d3a-legado', ${login.sub}, 'staff.legado@drezz.test', 'suporte', now() - interval '1 day')`
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
+               VALUES (${A}, ${STAFF_LEGADO}, ${login.sub}, 'Staff Legado', 'staff.legado@drezz.test')`
+    const antes = provedor.chamadas.length
+
+    const lista = await pedir('admA', 'GET', '/v1/usuarios')
+    expect((lista.corpo.itens as { id: string }[]).map((u) => u.id)).not.toContain(STAFF_LEGADO)
+    const senha = await pedir('admA', 'POST', `/v1/usuarios/${STAFF_LEGADO}/redefinir-senha`, { senhaTemporaria: 'Roubo#2026x' })
+    expect(senha.status).toBe(404)
+    expect(senha.corpo.erro).toBe('usuario.nao_encontrado')
+    const bloqueio = await pedir('admA', 'PATCH', `/v1/usuarios/${STAFF_LEGADO}`, { ativo: false })
+    expect(bloqueio.status).toBe(404)
+    expect(bloqueio.corpo.erro).toBe('usuario.nao_encontrado')
+
+    expect(provedor.chamadas.length).toBe(antes)
+    expect(login.senhaTemporaria).toBeNull()
+    expect(login.ativo).toBe(true)
+  })
+
+  it('provedor: login de OUTRO tenant ou do grupo staff → 403 tipificado, operação NÃO chamada, nada gravado', async () => {
+    // Linha de A apontando (por sub) para um login de B — e outra para um login do staff no próprio A.
+    const deB = provedor.semear('alguem@empresa-b.test', { tenantId: B })
+    const staffEmA = provedor.semear('staff.em.a@drezz.test', { tenantId: A, grupos: ['staff'] })
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES
+      (${A}, ${ALHEIO}, ${deB.sub}, 'Login Alheio', 'digitado.errado@empresa-a.test'),
+      (${A}, ${DO_STAFF}, ${staffEmA.sub}, 'Login do Staff', 'outro.email@empresa-a.test')`
+
+    for (const [id, login] of [[ALHEIO, deB], [DO_STAFF, staffEmA]] as const) {
+      const senha = await pedir('admA', 'POST', `/v1/usuarios/${id}/redefinir-senha`, { senhaTemporaria: 'Roubo#2026x' })
+      expect(senha.status).toBe(403)
+      expect(senha.corpo.erro).toBe('identidade.login_de_outra_conta')
+      const bloqueio = await pedir('admA', 'PATCH', `/v1/usuarios/${id}`, { ativo: false })
+      expect(bloqueio.status).toBe(403)
+      expect(bloqueio.corpo.erro).toBe('identidade.login_de_outra_conta')
+      expect(login.senhaTemporaria).toBeNull()
+      expect(login.ativo).toBe(true)
+      const [u] = await dono<{ ativo: boolean }[]>`SELECT ativo FROM usuario WHERE tenant_id = ${A} AND id = ${id}`
+      expect(u!.ativo).toBe(true)
+    }
+    // Pelo SUB da linha, nunca pelo e-mail: nenhuma chamada operou.
+    expect(provedor.chamadas.filter((c) => c.operou)).toEqual([])
+  })
+
+  it('POST com e-mail que já tem login de outro tenant ou do staff → 409 genérico; o login nunca é reaproveitado', async () => {
+    provedor.semear('ja.do.staff@drezz.test', { tenantId: B, grupos: ['staff'] })
+    for (const email of ['ja.do.staff@drezz.test', 'alguem@empresa-b.test']) {
+      const r = await pedir('admA', 'POST', '/v1/usuarios', { nome: 'Tentativa', email })
+      expect(r.status).toBe(409)
+      expect(r.corpo.erro).toBe('usuario.email_indisponivel')
+      const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM usuario WHERE tenant_id = ${A} AND email = ${email}`
+      expect(n!.n).toBe(0)
+    }
+    expect(provedor.usuarios.get('ja.do.staff@drezz.test')!.tenantId).toBe(B)
   })
 })
 
@@ -157,7 +256,7 @@ describe('usuários', () => {
     expect(aud!.n).toBe(1)
   })
 
-  it('e-mail duplicado no tenant → 409 sem chamar o provedor; e-mail já no provedor → 409 próprio', async () => {
+  it('e-mail duplicado no tenant → 409 sem chamar o provedor; e-mail já no provedor → 409 genérico', async () => {
     const antes = provedor.chamadas.length
     const dup = await pedir('admA', 'POST', '/v1/usuarios', { nome: 'Outra', email: 'CARLA@exemplo.com' })
     expect(dup.status).toBe(409)
@@ -168,7 +267,7 @@ describe('usuários', () => {
     await provedor.criarUsuario({ email: 'ja@outra.com', nome: 'X', tenantId: B })
     const emUso = await pedir('admA', 'POST', '/v1/usuarios', { nome: 'Já', email: 'ja@outra.com' })
     expect(emUso.status).toBe(409)
-    expect(emUso.corpo.erro).toBe('usuario.email_em_uso')
+    expect(emUso.corpo.erro).toBe('usuario.email_indisponivel')
     const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM usuario WHERE tenant_id = ${A} AND email = 'ja@outra.com'`
     expect(n!.n).toBe(0)
   })

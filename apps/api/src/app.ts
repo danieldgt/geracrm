@@ -114,6 +114,13 @@ export async function criarApp(
     // ⚠️ 403 precisa do próprio código: `exigirStaff` LANÇA (não usa reply.send),
     //    então cair no genérico fazia a tela receber status 403 com a mensagem
     //    "Erro interno." — o estado certo com o texto errado.
+    // Erro lançado com código próprio (ex.: `StaffSemUsuario`) leva o código dele.
+    const proprio = erro as { codigo?: unknown; mensagemTela?: unknown }
+    if (status < 500 && typeof proprio.codigo === 'string') {
+      return reply.code(status).send({
+        erro: proprio.codigo, mensagem: typeof proprio.mensagemTela === 'string' ? proprio.mensagemTela : '',
+      })
+    }
     const tipado: Record<number, { erro: string; mensagem: string }> = {
       401: { erro: 'autenticacao.ausente', mensagem: 'Autenticação ausente ou inválida.' },
       403: { erro: 'autorizacao.sem_permissao', mensagem: 'Você não tem acesso a esta área.' },

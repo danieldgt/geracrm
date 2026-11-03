@@ -13,7 +13,8 @@
  *
  * ⚠️ O login no provedor é o E-MAIL (minúsculo). O `custom:tenant_id` é gravado
  *    na criação e é IMUTÁVEL no pool — um e-mail pertence a um tenant para
- *    sempre (ver cognito-admin.ts).
+ *    sempre (ver cognito-admin.ts). As operações sobre um login existente
+ *    localizam pelo `sub` (`AlvoIdentidade`), nunca pelo e-mail.
  */
 
 export interface DadosNovoUsuario {
@@ -41,12 +42,37 @@ export type ResultadoOperacao =
   | { readonly tipo: 'nao_encontrado' }
   | { readonly tipo: 'senha_invalida' }
   | { readonly tipo: 'indisponivel' }
+  /**
+   * O login existe, mas NÃO é deste tenant (`custom:tenant_id` diferente) ou é
+   * do grupo `staff`. A operação NÃO foi chamada (revisão de segurança D3).
+   */
+  | { readonly tipo: 'recusado' }
+
+/**
+ * QUEM é o alvo de uma operação administrativa: o `sub` gravado na linha de
+ * `usuario` (nunca o e-mail — e-mail é texto que o cadastro controla) e o
+ * tenant da REQUISIÇÃO (`req.tenantId`, ADR-001).
+ *
+ * ⚠️ Todo adaptador, ANTES de qualquer operação, confere no provedor que o
+ *    `custom:tenant_id` do login é `tenantId` e que ele NÃO está no grupo
+ *    `staff` — senão responde `recusado` sem operar. É a segunda camada contra
+ *    o admin de um cliente redefinir a senha (ou bloquear) a conta de alguém de
+ *    outra empresa ou do staff.
+ */
+export interface AlvoIdentidade {
+  readonly sub: string
+  readonly tenantId: string
+}
 
 export interface ProvedorIdentidade {
+  /**
+   * Cria o login. E-mail que JÁ existe no provedor — de qualquer tenant, ou do
+   * staff — é `email_em_uso`: o login existente NUNCA é reaproveitado.
+   */
   criarUsuario(dados: DadosNovoUsuario): Promise<ResultadoCriacao>
   /** Bloqueia o login no provedor (o usuário continua existindo). */
-  desativar(email: string): Promise<ResultadoOperacao>
-  reativar(email: string): Promise<ResultadoOperacao>
+  desativar(alvo: AlvoIdentidade): Promise<ResultadoOperacao>
+  reativar(alvo: AlvoIdentidade): Promise<ResultadoOperacao>
   /** Define uma senha TEMPORÁRIA: o próximo login exige trocar. */
-  redefinirSenha(email: string, senhaTemporaria: string): Promise<ResultadoOperacao>
+  redefinirSenha(alvo: AlvoIdentidade, senhaTemporaria: string): Promise<ResultadoOperacao>
 }

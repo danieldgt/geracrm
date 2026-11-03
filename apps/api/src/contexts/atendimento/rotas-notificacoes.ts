@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
-import { garantirUsuarioId } from './rotas-fila.js'
+import { atorDaRequisicao } from './rotas-fila.js'
 
 const PAGINA = 30
 
@@ -28,7 +28,7 @@ export async function rotasNotificacoes(app: FastifyInstance): Promise<void> {
       }
 
       const r = await req.comTenant(async (tx) => {
-        const eu = await garantirUsuarioId(tx, req)
+        const eu = await atorDaRequisicao(tx, req)
         const linhas = await tx<{
           id: string; tipo: string; titulo: string; conversa_id: string | null
           lida_em: Date | null; criado_em: Date
@@ -63,7 +63,7 @@ export async function rotasNotificacoes(app: FastifyInstance): Promise<void> {
   /** Contador de não-lidas — a bolinha do sino. */
   app.get('/v1/notificacoes/contador', { preHandler: exigirTenant }, async (req, reply) => {
     const total = await req.comTenant(async (tx) => {
-      const eu = await garantirUsuarioId(tx, req)
+      const eu = await atorDaRequisicao(tx, req)
       const [c] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM notificacao
          WHERE tenant_id = tenant_atual() AND usuario_id = ${eu} AND lida_em IS NULL`
@@ -82,7 +82,7 @@ export async function rotasNotificacoes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const ids = req.body?.ids
       const marcadas = await req.comTenant(async (tx) => {
-        const eu = await garantirUsuarioId(tx, req)
+        const eu = await atorDaRequisicao(tx, req)
         const linhas = await tx<{ id: string }[]>`
           UPDATE notificacao SET lida_em = now()
            WHERE tenant_id = tenant_atual() AND usuario_id = ${eu} AND lida_em IS NULL

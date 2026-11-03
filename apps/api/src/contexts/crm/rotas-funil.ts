@@ -9,7 +9,7 @@ import { auditar } from '../plataforma/auditoria.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import { garantirEtapasFunil } from './funil-modelos.js'
 import { gravarEndereco, acrescentarCnpj } from './contato-gravacao.js'
-import { condicaoOportunidade, contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
+import { condicaoOportunidade, contatoNoEscopo, escopoDaRequisicao, responsavelNoEscopo } from '../plataforma/escopo.js'
 import type { FastifyRequest } from 'fastify'
 
 const PAGINA = 50 // cards por página de coluna (kanban paginado por coluna, ADR)
@@ -497,6 +497,9 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
         if (!(await oportunidadeNoEscopo(tx, req, req.params.id))) return { erro: 'nao_encontrada' as const }
         const [u] = await tx`SELECT 1 FROM usuario WHERE tenant_id = tenant_atual() AND id = ${destino} AND ativo`
         if (!u) return { erro: 'usuario_invalido' as const }
+        // ⚠️ Escopo (D3): o DESTINO precisa estar no escopo de quem transfere (gestor
+        //    de filial → alguém da filial) — mesma regra de `POST /v1/contatos/:id/carteira`.
+        if (!(await responsavelNoEscopo(tx, await escopoDaRequisicao(tx, req), destino))) return { erro: 'usuario_invalido' as const }
         const eu = await garantirUsuarioId(tx, req)
         const [t] = await tx<{ transferir_carteira: string | null }[]>`
           SELECT transferir_carteira(tenant_atual(), ${o.contato_id}, ${destino}, ${eu}, 'manual', ${motivo})`

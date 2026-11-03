@@ -57,6 +57,12 @@ beforeAll(async () => {
     })
   }
   await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${T}, ${ATOR}, 'sub-audit', 'Ana', 'ana@t.local') ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
+  // ⚠️ A trilha exige gestão (revisão D3, M4): quem chama pelo header de dev
+  //    ("dev-<tenant>") existe — sem admin no tenant, o modo fundador o faz admin.
+  for (const t of [T, OUTRO]) {
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
+               VALUES (${t}, ${randomUUID()}, ${`dev-${t}`}, 'Quem consulta', ${`dev-${t}@t.local`}) ON CONFLICT (tenant_id, cognito_sub) DO NOTHING`
+  }
   app = await criarApp()
   await app.ready()
 })

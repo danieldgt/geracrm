@@ -27,6 +27,11 @@ export interface IdentidadeCognito {
    * de nenhum estado no nosso banco poder ficar dessincronizado.
    */
   readonly grupos: readonly string[]
+  /**
+   * `exp` do token (segundos desde a época). Para conexão LONGA (SSE), que não
+   * passa de novo pelo verificador: ela se encerra quando o token vence.
+   */
+  readonly expiraEm?: number | undefined
 }
 
 export interface VerificadorCognito {
@@ -76,6 +81,7 @@ export function criarVerificadorCognito(): VerificadorCognito | null {
         sub: String(payload.sub),
         email: typeof payload['email'] === 'string' ? payload['email'] : undefined,
         grupos: Array.isArray(grupos) ? grupos.filter((g): g is string => typeof g === 'string') : [],
+        expiraEm: typeof payload.exp === 'number' ? payload.exp : undefined,
       }
     },
   }
