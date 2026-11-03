@@ -1,8 +1,12 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, computed, inject, signal, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
-import { ConfirmacaoServico, ToastServico, ehStatus, mensagemDeErro, mesclarPagina, queryDeLista } from '../../compartilhado/ui/index.js'
+import {
+  BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente,
+  GradeFormComponente, IconeComponente, ModalComponente, PaginacaoComponente, TabelaComponente, ToastServico, ehStatus,
+  mensagemDeErro, mesclarPagina, queryDeLista, type ColunaTabela, type LinhaTabela,
+} from '../../compartilhado/ui/index.js'
 
 interface Webhook {
   readonly id: string
@@ -23,24 +27,17 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 @Component({
   selector: 'app-webhooks',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe],
+  imports: [
+    BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, DatePipe, EstadoComponente,
+    GradeFormComponente, IconeComponente, ModalComponente, PaginacaoComponente, TabelaComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <h1>Webhooks de saída</h1>
-      <p class="sub">Receba nossos eventos no seu sistema. Cada entrega vem assinada e é reenviada se falhar.</p>
-    </header>
-
-    <form class="add" (submit)="adicionar($event)">
-      <label class="campo rotulado">
-        <span>URL do webhook</span>
-        <input [value]="url()" (input)="url.set($any($event.target).value)"
-               placeholder="https://seu-sistema.com/webhook" inputmode="url" />
-      </label>
-      <button class="btn btn--primario" type="submit" [disabled]="salvando() || !url().trim()">
-        {{ salvando() ? 'Criando…' : 'Adicionar' }}
+    <ui-cabecalho-tela titulo="Webhooks de saída"
+      subtitulo="Receba nossos eventos no seu sistema. Cada entrega vem assinada e é reenviada se falhar.">
+      <button type="button" class="btn btn--primario" (click)="novoAberto.set(true)">
+        <ui-icone nome="plus" />Novo webhook
       </button>
-    </form>
-    @if (erroAdd(); as e) { <p class="erro" role="alert">{{ e }}</p> }
+    </ui-cabecalho-tela>
 
     @if (segredoNovo(); as s) {
       <div class="segredo" role="status">
@@ -50,79 +47,91 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
       </div>
     }
 
-    @switch (estado()) {
-      @case ('carregando') { <div class="bloco"><div class="esqueleto"></div></div> }
-      @case ('sem_permissao') { <div class="bloco aviso"><h2>Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco aviso"><h2>Não foi possível carregar</h2>
-        <button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
-      @case ('pronto') {
-        @if (itens().length === 0) {
-          <div class="bloco vazio"><h2>Nenhum webhook</h2>
-            <p>Adicione uma URL https para começar a receber os eventos.</p></div>
-        } @else {
-          <ul class="lista">
-            @for (w of itens(); track w.id) {
-              <li class="item">
-                <div class="col">
-                  <span class="url">{{ w.url }}</span>
-                  <span class="meta">
-                    {{ w.eventos.length ? w.eventos.join(', ') : 'todos os eventos' }}
-                    @if (w.entregueEm) { · última entrega {{ w.entregueEm | date: 'dd/MM HH:mm' }} }
-                    @if (w.ultimoErro) { · <span class="ruim">⚠️ {{ w.ultimoErro }}</span> }
-                  </span>
-                </div>
-                <button class="btn btn--perigo btn--pequeno remover" (click)="remover(w)" [disabled]="removendo().has(w.id)">
-                  {{ removendo().has(w.id) ? '…' : 'Remover' }}
-                </button>
-              </li>
-            }
-          </ul>
-          @if (proximoCursor()) {
-            <button class="btn btn--secundario mais" (click)="carregarMais()" [disabled]="carregandoMais()">
-              {{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
-            </button>
-          }
+    <div class="corpo">
+      @switch (estado()) {
+        @case ('carregando') {
+          <ui-tabela [colunas]="colunas" [linhas]="[]" [carregando]="true" />
+        }
+        @case ('sem_permissao') {
+          <ui-estado tipo="sem-permissao" titulo="Sem acesso aos webhooks" descricao="Peça acesso a um administrador." />
+        }
+        @case ('erro') {
+          <ui-estado tipo="erro" titulo="Não foi possível carregar os webhooks" descricao="Verifique a conexão e tente de novo.">
+            <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+          </ui-estado>
+        }
+        @case ('pronto') {
+          <ui-tabela [colunas]="colunas" [linhas]="linhas()">
+            <ng-template uiCelula="url" let-w>{{ w.url }}</ng-template>
+            <ng-template uiCelula="eventos" let-w>{{ w.eventos.length ? w.eventos.join(', ') : 'todos os eventos' }}</ng-template>
+            <ng-template uiCelula="entrega" let-w>
+              @if (w.entregueEm) { {{ w.entregueEm | date: 'dd/MM HH:mm' }} } @else { — }
+            </ng-template>
+            <ng-template uiCelula="situacao" let-w>
+              @if (w.ultimoErro) {
+                <ui-badge tom="erro"><ui-icone nome="alert-triangle" [tamanho]="14" />{{ w.ultimoErro }}</ui-badge>
+              }
+            </ng-template>
+            <ng-template uiCelula="acoes" let-w>
+              <button type="button" class="btn btn--perigo btn--pequeno" (click)="remover(w)" [disabled]="removendo().has(w.id)">
+                {{ removendo().has(w.id) ? 'Removendo…' : 'Remover' }}
+              </button>
+            </ng-template>
+            <div uiVazio>
+              <ui-estado titulo="Nenhum webhook"
+                descricao="Adicione uma URL https para começar a receber os eventos.">
+                <button type="button" class="btn btn--primario" (click)="novoAberto.set(true)">Novo webhook</button>
+              </ui-estado>
+            </div>
+          </ui-tabela>
+          <ui-paginacao [mostrados]="itens().length" [temMais]="proximoCursor() !== null"
+            [carregando]="carregandoMais()" (mais)="carregarMais()" />
         }
       }
-    }
+    </div>
+
+    <ui-modal [aberto]="novoAberto()" titulo="Novo webhook" largura="p" (fechar)="fecharNovo()">
+      <form id="form-webhook" (submit)="adicionar($event)">
+        <ui-grade-form>
+          <ui-campo class="largo" rotulo="URL do webhook" placeholder="https://seu-sistema.com/webhook" autocomplete="off"
+            dica="Precisa ser https." [obrigatorio]="true" [(valor)]="url" [erro]="erroAdd()" />
+        </ui-grade-form>
+      </form>
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharNovo()">Cancelar</button>
+        <button type="submit" form="form-webhook" class="btn btn--primario" [disabled]="salvando()">
+          {{ salvando() ? 'Criando…' : 'Criar webhook' }}
+        </button>
+      </div>
+    </ui-modal>
   `,
   styles: `
-    :host { display: block; width: 100%; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
-    .cabecalho { margin-bottom: var(--espacamento-5); }
-    h1 { margin: 0; font-size: 20px; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    /* ⚠️ align-items:end alinha o BOTÃO com o campo, não com o rótulo — sem
-       isso o botão sobe para a altura do texto do label. */
-    .add { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-2); align-items: end; }
-    .add .campo { flex: 1; display: flex; flex-direction: column; gap: 4px; }
-    .add .campo > span { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
-    .add input { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .erro { color: var(--erro); font-size: 13px; margin: 0 0 var(--espacamento-3); }
-    .segredo { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3) var(--espacamento-4); border: 1px solid var(--ativo); border-radius: var(--raio-painel); background: var(--superficie-elevada); font-size: 13px; color: var(--texto-secundario); }
-    .segredo .valor { display: block; margin-top: var(--espacamento-2); padding: var(--espacamento-2); background: var(--fundo); border-radius: var(--raio-controle); font-family: var(--tipografia-familia-dados, monospace); font-size: 12px; color: var(--texto); word-break: break-all; }
-    code { font-family: var(--tipografia-familia-dados, monospace); }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; margin-top: var(--espacamento-4); }
-    .bloco h2 { margin: 0 0 var(--espacamento-2); font-size: 16px; color: var(--texto); }
-    .esqueleto { height: 44px; border-radius: var(--raio-controle); background: var(--superficie); }
-    .lista { list-style: none; margin: var(--espacamento-4) 0 0; padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); overflow: hidden; }
-    .item { display: flex; justify-content: space-between; align-items: center; gap: var(--espacamento-3); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); }
-    .item:last-child { border-bottom: none; }
-    .col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .url { font-size: 13px; color: var(--texto); font-family: var(--tipografia-familia-dados, monospace); word-break: break-all; }
-    .meta { font-size: 12px; color: var(--texto-suave); }
-    .meta .ruim { color: var(--erro); }
-    .remover { flex: none; }
-    .mais { margin-top: var(--espacamento-4); }
+    :host { display: block; width: 100%; padding: var(--espacamento-6); }
+    .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-2); min-width: 0; }
+    .segredo { margin: var(--espacamento-4) 0 0; padding: var(--espacamento-3) var(--espacamento-4); border: 1px solid var(--ativo); border-radius: var(--raio-painel); background: var(--superficie-elevada); font-size: 13px; color: var(--texto-secundario); }
+    .segredo .valor { display: block; margin-top: var(--espacamento-2); padding: var(--espacamento-2); background: var(--fundo); border-radius: var(--raio-controle); font-family: var(--tipografia-familia-dados); font-size: 12px; color: var(--texto); word-break: break-all; }
+    code { font-family: var(--tipografia-familia-dados); }
   `,
 })
 export class WebhooksPagina implements OnInit {
   private readonly http = inject(HttpClient)
   private readonly toast = inject(ToastServico)
   private readonly confirmacao = inject(ConfirmacaoServico)
+
+  protected readonly colunas: ColunaTabela[] = [
+    { chave: 'url', rotulo: 'URL', mono: true },
+    { chave: 'eventos', rotulo: 'Eventos' },
+    { chave: 'entrega', rotulo: 'Última entrega', mono: true, largura: '140px' },
+    { chave: 'situacao', rotulo: 'Situação' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '130px' },
+  ]
+
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Webhook[]>([])
+  protected readonly linhas = computed(() => this.itens() as unknown as readonly LinhaTabela[])
   readonly proximoCursor = signal<string | null>(null)
   readonly carregandoMais = signal(false)
+  readonly novoAberto = signal(false)
   readonly url = signal('')
   readonly salvando = signal(false)
   readonly erroAdd = signal<string | null>(null)
@@ -160,16 +169,20 @@ export class WebhooksPagina implements OnInit {
     } finally { this.carregandoMais.set(false) }
   }
 
+  fecharNovo(): void { if (!this.salvando()) this.novoAberto.set(false) }
+
   async adicionar(ev: Event): Promise<void> {
     ev.preventDefault()
     const url = this.url().trim()
-    if (!url || this.salvando()) return
+    if (this.salvando()) return
+    if (!url) { this.erroAdd.set('Informe a URL do webhook.'); return }
     this.salvando.set(true)
     this.erroAdd.set(null)
     try {
       const r = await firstValueFrom(this.http.post<{ segredo: string }>('/v1/webhooks', { url }))
       this.segredoNovo.set(r.segredo)
       this.url.set('')
+      this.novoAberto.set(false)
       this.toast.sucesso('Webhook adicionado')
       await this.carregar()
     } catch (e) {
