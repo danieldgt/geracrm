@@ -7,7 +7,7 @@ import type { Sql } from '../../db/index.js'
 import { instanteLocal, partesLocais } from '../atendimento/expediente.js'
 import { fragmentoForaDaSimulacao, fragmentoNaFila, respostaHumanaDoAtendimento } from '../atendimento/sla-handoff.js'
 import { fusoSeguro } from './fuso.js'
-import { condicaoContato, condicaoConversa, condicaoOportunidade, type Escopo } from './escopo.js'
+import { condicaoContato, condicaoConversa, condicaoEvento, condicaoOportunidade, type Escopo } from './escopo.js'
 
 /**
  * COCKPIT DO GESTOR (raia D1) — o lado com banco. Uma consulta de BASE por card; os números e a lista
@@ -38,22 +38,6 @@ export async function janelaDoDia(tx: Sql, agora: Date): Promise<{ inicioDia: Da
   const [y, m, d] = hoje.split('-').map(Number) as [number, number, number]
   const amanha = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10)
   return { inicioDia: instanteLocal(hoje, '00:00', fuso), fimDia: instanteLocal(amanha, '00:00', fuso) }
-}
-
-/** Escopo do evento da agenda: o contato é visível, ou o evento é do usuário (filial: de alguém da filial). */
-function condicaoEvento(tx: Sql, escopo: Escopo) {
-  if (escopo.tipo === 'tudo') return tx`true`
-  if (escopo.usuarioId === null) return tx`false`
-  const u = escopo.usuarioId
-  const daFilial = escopo.tipo === 'filial'
-    ? tx`EXISTS (SELECT 1 FROM usuario_filial esc_uf
-                  WHERE esc_uf.tenant_id = e.tenant_id AND esc_uf.usuario_id = e.responsavel_id
-                    AND esc_uf.filial_id = ANY(${[...escopo.filialIds]}::uuid[]))`
-    : tx`false`
-  return tx`(e.responsavel_id = ${u}::uuid OR e.criado_por = ${u}::uuid OR ${daFilial}
-             OR (e.contato_id IS NOT NULL AND EXISTS (
-                   SELECT 1 FROM contato esc_ct WHERE esc_ct.tenant_id = e.tenant_id AND esc_ct.id = e.contato_id
-                      AND ${condicaoContato(tx, escopo, 'esc_ct')})))`
 }
 
 /** A filial de uma pessoa (a primeira, por id) — só quando o item não traz filial própria. */
