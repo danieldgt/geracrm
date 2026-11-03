@@ -159,6 +159,11 @@ import {
         Cole ou envie um CSV com colunas <b>nome</b>, <b>telefone</b> e <b>cnpj/cpf</b>
         (só nome é obrigatório). Separador vírgula ou ponto-e-vírgula.
       </p>
+      <p class="import-ajuda">
+        Tem endereço, origem, etiquetas, vendedor, vendas ou tarefas? Use o
+        <a routerLink="/importar" (click)="importAberto.set(false)">assistente de importação</a>:
+        ele simula antes de gravar, deixa você associar as colunas e confere o resultado.
+      </p>
       <input class="import-arquivo" type="file" accept=".csv,text/csv" (change)="arquivoCsv($event)" [disabled]="servico.importando()" />
       <textarea class="import-texto" placeholder="nome,telefone,cnpj&#10;Zé,81998617049,11222333000181"
                 [ngModel]="csvTexto()" (ngModelChange)="csvTexto.set($event)" rows="6"

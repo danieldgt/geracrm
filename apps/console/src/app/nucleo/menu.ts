@@ -146,6 +146,8 @@ export const MENU: readonly GrupoMenu[] = [
         descricao: 'Cargas, conciliação e conflitos de identidade.' },
       { rota: 'webhooks', rotulo: 'Webhooks de saída', icone: 'link', status: 'pronto', onda: 'O1',
         descricao: 'Receba nossos eventos no seu sistema — assinados, com retry.' },
+      { rota: 'importar', rotulo: 'Importar dados', icone: 'upload', status: 'pronto', onda: 'H1', soGestao: true,
+        descricao: 'Traga contatos, vendas e tarefas de uma planilha — com simulação antes.' },
     ],
   },
   {

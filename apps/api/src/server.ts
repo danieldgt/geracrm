@@ -26,6 +26,7 @@ import { batimento } from './contexts/plataforma/batimento.js'
 import { processarQualidade, INTERVALO_QUALIDADE_MS } from './workers/qualidade.js'
 import { processarSla, INTERVALO_SLA_MS } from './workers/sla.js'
 import { processarPosIngestao, INTERVALO_POS_INGESTAO_MS } from './workers/pos-ingestao.js'
+import { processarImportacoes, INTERVALO_IMPORTACAO_MS } from './workers/importacao.js'
 import {
   processarParticoes, ALERTA_PARTICOES, ATRASO_PRIMEIRA_PASSADA_PARTICOES_MS, INTERVALO_PARTICOES_MS,
 } from './workers/particoes.js'
@@ -266,6 +267,7 @@ if (process.env.DATABASE_ADMIN_URL) {
     ['posIngestao', INTERVALO_POS_INGESTAO_MS, () => processarPosIngestao(donoAquisicao as never, {}, new Date())],
     ['qualidade', INTERVALO_QUALIDADE_MS, () => processarQualidade(donoAquisicao as never, {}, new Date())],
     ['sla', INTERVALO_SLA_MS, () => processarSla(donoAquisicao as never, {}, new Date())],
+    ['importacao', INTERVALO_IMPORTACAO_MS, () => processarImportacoes(donoAquisicao as never, {}, new Date())],
     ['agendaLembrete', INTERVALO_LEMBRETE_AGENDA_MS, async () => {
       const r = await enviarLembretesAgenda(donoAquisicao as never, new Date())
       return { processadas: r.avisados, ...r }
