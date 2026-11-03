@@ -6,6 +6,7 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
 import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
+import { EtiquetasContatoComponente } from './etiquetas-contato.componente.js'
 
 /**
  * Ficha do Contato — o cliente 360°.
@@ -19,7 +20,7 @@ import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
 @Component({
   selector: 'app-ficha-contato',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, DatePipe, AvisosPrivacidadeComponente],
+  imports: [RouterLink, DatePipe, AvisosPrivacidadeComponente, EtiquetasContatoComponente],
   template: `
     <!-- Volta para ONDE a pessoa veio (lista, chat, funil, pedidos) — e para a
          lista de contatos quando a ficha foi aberta por link direto. -->
@@ -190,6 +191,11 @@ import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
                     }
                   </ul>
                 } @else { <p class="vazio-mini">Sem compras registradas.</p> }
+              </div>
+
+              <div class="cartao">
+                <h3>Etiquetas</h3>
+                <app-etiquetas-contato [contatoId]="f.id" />
               </div>
 
               <div class="cartao">
