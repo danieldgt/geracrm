@@ -24,6 +24,8 @@ export interface ItemMenu {
   readonly acao?: 'rail'
   /** Item de módulo opcional por tenant: some do menu quando o módulo está desligado (ModulosServico). */
   readonly modulo?: 'agenda'
+  /** Só aparece para a gestão (gestor/supervisor/admin) — higiene de interface; a API responde 403. */
+  readonly soGestao?: boolean
 }
 
 export interface GrupoMenu {
@@ -149,6 +151,8 @@ export const MENU: readonly GrupoMenu[] = [
   {
     titulo: 'Gestão',
     itens: [
+      { rota: 'cockpit', rotulo: 'Cockpit', icone: 'bar-chart-3', status: 'pronto', onda: 'D1', soGestao: true,
+        descricao: 'SLA, esquecidos, reuniões e quem está sem próximo passo — agora' },
       { rota: 'bi', rotulo: 'Painéis (BI)', icone: 'line-chart', status: 'pronto', onda: 'O2',
         descricao: 'Vendas, ranking, top produtos, exportações.' },
       { rota: 'relatorios', rotulo: 'Relatórios', icone: 'bar-chart-3', status: 'pronto', onda: 'E1',
@@ -188,8 +192,9 @@ export function itensDoMenu(): ItemMenu[] {
  */
 export function menuVisivel(
   menu: readonly GrupoMenu[], modulosAtivos: Readonly<Partial<Record<NonNullable<ItemMenu['modulo']>, boolean>>>,
+  gestao = false,
 ): readonly GrupoMenu[] {
   return menu
-    .map((g) => ({ ...g, itens: g.itens.filter((i) => !i.modulo || modulosAtivos[i.modulo] === true) }))
+    .map((g) => ({ ...g, itens: g.itens.filter((i) => (!i.modulo || modulosAtivos[i.modulo] === true) && (!i.soGestao || gestao)) }))
     .filter((g) => g.itens.length > 0)
 }

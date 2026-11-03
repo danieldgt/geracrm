@@ -80,6 +80,7 @@ import { rotasPlaybook } from './contexts/atendimento/agente/rotas-playbook.js'
 import { rotasGoLive } from './contexts/atendimento/agente/rotas-go-live.js'
 import { rotasSaudeDetalhada } from './contexts/plataforma/rotas-saude-detalhada.js'
 import { rotasSla } from './contexts/atendimento/rotas-sla.js'
+import { rotasCockpit } from './contexts/plataforma/rotas-cockpit.js'
 
 /**
  * Builds the app without listening — so tests can use `app.inject()`
@@ -207,6 +208,7 @@ export async function criarApp(
   await app.register(rotasGoLive)
   await app.register(rotasSaudeDetalhada)
   await app.register(rotasSla)
+  await app.register(rotasCockpit)
 
   /** Liveness — no database. Answers even with the bank down, on purpose. */
   /**

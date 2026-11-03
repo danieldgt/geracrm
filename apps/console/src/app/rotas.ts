@@ -47,6 +47,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/crm/crm-avancado.pagina.js').then((m) => m.CrmAvancadoPagina),
   templates: () =>
     import('./funcionalidades/atendimento/templates.pagina.js').then((m) => m.TemplatesPagina),
+  cockpit: () =>
+    import('./funcionalidades/gestao/cockpit.pagina.js').then((m) => m.CockpitPagina),
   'atendimento-kanban': () =>
     import('./funcionalidades/atendimento/atendimento-kanban.pagina.js').then((m) => m.AtendimentoKanbanPagina),
   campanhas: () =>

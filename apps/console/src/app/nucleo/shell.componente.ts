@@ -1,4 +1,5 @@
 import { ModulosServico } from './modulos.servico.js'
+import { PresencaServico } from './presenca.servico.js'
 import {
   Component, ChangeDetectionStrategy, signal, computed, inject, OnInit, effect, untracked, viewChild, ElementRef, HostListener,
 } from '@angular/core'
@@ -408,6 +409,7 @@ export class ShellComponente implements OnInit {
   readonly inbox = inject(InboxServico)
   readonly auth = inject(AuthServico)
   private readonly modulos = inject(ModulosServico)
+  private readonly presenca = inject(PresencaServico)
   private readonly router = inject(Router)
   private readonly http = inject(HttpClient)
 
@@ -436,7 +438,7 @@ export class ShellComponente implements OnInit {
   readonly menuFiltrado = computed(() => {
     const doStaff = MENU.filter((g) => !g.soStaff || this.auth.ehStaff())
     // Itens de módulo desligado (Agenda) saem do menu — o estado vem de `ModulosServico`.
-    const visiveis = menuVisivel(doStaff, this.modulos.estado())
+    const visiveis = menuVisivel(doStaff, this.modulos.estado(), this.presenca.gestao())
     const q = this.filtro().trim().toLowerCase()
     if (!q) return visiveis
     return visiveis
@@ -478,6 +480,8 @@ export class ShellComponente implements OnInit {
     this.eventos.conectar()
     void this.alertas.carregar()
     void this.modulos.carregar()
+    // Quem é gestão: decide se o Cockpit aparece no menu (a API barra o resto com 403).
+    void this.presenca.carregar()
     // Alerta novo chega pelo SSE → rebusca os abertos (sem polling).
     this.eventos.escutar('alerta.novo', () => void this.alertas.carregar())
     void this.carregarVersaoApi()
