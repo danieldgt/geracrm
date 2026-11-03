@@ -40,7 +40,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | F1 campanhas v2 | 3 | ⬜ | |
 | F3 formulários públicos | 3 | 🔄 | Sonnet; migration 0127 |
 | G2 objeções | 3 | 🔄 | Opus; migration 0126 |
-| G3 pós-venda, NPS, indicações, prova social | 3 | ⬜ | |
+| G3 pós-venda, NPS, indicações, prova social | 3 | 🔄 | Opus; migration 0130 |
 | G4 roteamento e rodízio | 3 | ⬜ | |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
 | H1 importador | 3 | ⬜ | |
