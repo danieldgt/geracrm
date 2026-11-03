@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { condicaoContato, contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
+import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { qualificarContato } from './qualificacao.js'
 
 const PAGINA = 50 // cards por página de coluna (kanban paginado por coluna, ADR)
 
@@ -112,20 +114,14 @@ export async function rotasLeads(app: FastifyInstance): Promise<void> {
       if (estado !== 'novo' && estado !== 'qualificado' && estado !== 'descartado') {
         return reply.code(422).send({ erro: 'estado.invalido' })
       }
-      // ⚠️ CHECK contato_qualificacao_coerente: qualificado e qualificado_em
-      //    andam juntos — 'novo' zera os dois.
-      const q = estado === 'qualificado' ? true : estado === 'descartado' ? false : null
-      const [row] = await req.comTenant(async (tx) => {
+      // Mesmo caminho de domínio do descarte automático (G5): `qualificarContato`.
+      const r = await req.comTenant(async (tx) => {
         // ⚠️ Fora do escopo (D3) = 404, como inexistente.
-        if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), req.params.contatoId))) return []
-        return tx<{ id: string }[]>`
-        UPDATE contato
-           SET qualificado = ${q},
-               qualificado_em = ${q === null ? tx`NULL` : tx`now()`}
-         WHERE tenant_id = tenant_atual() AND id = ${req.params.contatoId} AND ativo
-         RETURNING id`
+        if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), req.params.contatoId))) return { tipo: 'nao_encontrado' as const }
+        const atorId = await garantirUsuarioId(tx, req)
+        return qualificarContato(tx, { contatoId: req.params.contatoId, estado, atorId, atorStaff: req.atorStaff === true })
       })
-      if (!row) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if (r.tipo === 'nao_encontrado') return reply.code(404).send({ erro: 'contato.nao_encontrado' })
       return reply.send({ ok: true, estado })
     },
   )

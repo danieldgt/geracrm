@@ -1,10 +1,19 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit, input, effect } from '@angular/core'
-import { DatePipe } from '@angular/common'
+import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit, input, effect } from '@angular/core'
+import { NgTemplateOutlet } from '@angular/common'
 import { ActivatedRoute, Router, RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
-import { ToastServico, mensagemDeErro, mesclarPagina } from '../../compartilhado/ui/index.js'
+import {
+  ToastServico, mensagemDeErro, mesclarPagina, formatarReais,
+  CabecalhoTelaComponente, StatCardComponente, FiltrosComponente, SelectComponente, TabelaComponente,
+  CelulaDiretiva, PaginacaoComponente, ModalComponente, ListaDefinicaoComponente, BadgeComponente,
+  EstadoComponente, EsqueletoComponente, PainelComponente,
+  type ColunaTabela, type LinhaTabela, type OpcaoSelect, type TomStat,
+} from '../../compartilhado/ui/index.js'
+import {
+  rotuloDoEstado, tomDoEstado, variacaoDaGrade, formatarDataHora, indicadoresDaLista, filtrarPorTermo,
+} from './pedidos.regras.js'
 
 interface PedidoItem {
   readonly id: string; readonly estado: string; readonly contatoId: string | null; readonly contato: string | null
@@ -25,6 +34,7 @@ interface PedidoDetalhe {
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
+/** Estados que a API filtra (`?estado=`). O primeiro, vazio, é "todos". */
 const FILTROS = [
   { chave: '', rotulo: 'Todos' },
   { chave: 'rascunho', rotulo: 'Rascunhos' },
@@ -35,224 +45,232 @@ const FILTROS = [
 ]
 
 /**
- * Lista de pedidos com vínculo ao cliente + detalhes por linha, e um MODAL com
- * todos os detalhes do pedido ao clicar. Filtro por estado + cursor. Segue
- * geracrm-layout-ui (5 estados, tokens, responsivo, sem sobreposição).
+ * Lista de pedidos no padrão de lista (cabeçalho, cards, filtros, tabela, cursor) com
+ * um detalhe em modal ao clicar em Ver. Filtro por estado e por cliente vão ao servidor
+ * (cursor); a busca por texto só vale para o que já está carregado. Segue geracrm-layout-ui
+ * (5 estados como ramos explícitos, tokens, responsivo, sem sobreposição).
  */
 @Component({
   selector: 'app-pedidos',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, RouterLink],
+  imports: [
+    NgTemplateOutlet, RouterLink,
+    CabecalhoTelaComponente, StatCardComponente, FiltrosComponente, SelectComponente, TabelaComponente,
+    CelulaDiretiva, PaginacaoComponente, ModalComponente, ListaDefinicaoComponente, BadgeComponente,
+    EstadoComponente, EsqueletoComponente, PainelComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <h1 class="txt-titulo">Pedidos</h1>
-      <p class="sub">Todos os pedidos por estado, vinculados ao cliente. Clique para ver os detalhes.</p>
-      @if (contatoFiltro(); as c) {
-        <p class="chip-filtro">Só os pedidos de um cliente ·
-          <a [routerLink]="['/contato', c]">ver ficha</a> ·
-          <a routerLink="/pedidos">ver todos</a></p>
-      }
-    </header>
+    <ui-cabecalho-tela titulo="Pedidos" subtitulo="Todos os pedidos por estado, vinculados ao cliente. Clique em Ver para abrir os detalhes." />
 
-    <div class="filtros">
-      @for (f of filtros; track f.chave) {
-        <button [class.on]="filtro() === f.chave" (click)="trocar(f.chave)">{{ f.rotulo }}</button>
+    @if (contatoFiltro(); as c) {
+      <p class="chip-filtro">Só os pedidos de um cliente ·
+        <a [routerLink]="['/contato', c]">ver ficha</a> ·
+        <a routerLink="/pedidos">ver todos</a></p>
+    }
+
+    <div class="cartoes">
+      @for (c of cartoes(); track c.rotulo) {
+        <ui-stat-card [valor]="c.valor" [rotulo]="c.rotulo" [tom]="c.tom" />
       }
     </div>
 
-    @switch (estado()) {
-      @case ('carregando') { <div class="lista"><div class="esq"></div><div class="esq"></div><div class="esq"></div></div> }
-      @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso aos pedidos</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
-      @case ('pronto') {
-        @if (itens().length === 0) {
-          <div class="bloco"><h2 class="txt-secao">Nenhum pedido aqui</h2>
-            <p>Monte um pedido pela conversa ou pelo <a routerLink="/pedido">Pedido Assistido</a>.</p></div>
-        } @else {
-          <ul class="lista">
-            @for (p of itens(); track p.id) {
-              <li class="ped" (click)="abrir(p.id)">
-                <span class="badge" [class]="'badge--' + p.estado">{{ rotuloEstado(p.estado) }}</span>
-                <div class="col encolhe">
-                  @if (p.contato && p.contatoId) {
-                    <a class="cliente" [routerLink]="['/contato', p.contatoId]" (click)="$event.stopPropagation()">{{ p.contato }}</a>
-                  } @else { <span class="cliente sem">Sem cliente</span> }
-                  <span class="sub-linha">
-                    @if (p.rotulo) { {{ p.rotulo }} · } {{ p.itens }} {{ p.itens === 1 ? 'item' : 'itens' }} · {{ p.totalPecas }} pç
-                    @if (p.numeroExterno) { · NF {{ p.numeroExterno }} }
-                  </span>
-                </div>
-                <span class="total txt-dados">{{ reais(p.totalCentavos) }}</span>
-                <span class="data txt-dados">{{ p.criadoEm | date: 'dd/MM/yy' }}</span>
-                <span class="chevron" aria-hidden="true">›</span>
-              </li>
-            }
-          </ul>
-          @if (proximoCursor()) {
-            <button class="btn btn--secundario mais" (click)="carregarMais()" [disabled]="carregandoMais()">{{ carregandoMais() ? 'Carregando…' : 'Carregar mais' }}</button>
+    <ui-filtros placeholder="Buscar nos carregados: cliente, nome ou nº ERP" (buscar)="termo.set($event)" (limpar)="limparFiltros()">
+      <ui-select rotulo="Estado" placeholder="Todos os estados" [opcoes]="opcoesEstado" [valor]="filtro()" (valorChange)="trocar($event)" />
+    </ui-filtros>
+
+    <div class="corpo">
+      @switch (estado()) {
+        @case ('sem_permissao') {
+          <ui-painel><ui-estado tipo="sem-permissao" titulo="Sem acesso aos pedidos" descricao="Peça a um administrador para liberar o perfil de vendas." /></ui-painel>
+        }
+        @case ('erro') {
+          <ui-painel>
+            <ui-estado tipo="erro" titulo="Não foi possível carregar os pedidos" descricao="O servidor não respondeu. Dá para tentar de novo.">
+              <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+            </ui-estado>
+          </ui-painel>
+        }
+        @case ('carregando') {
+          <ng-container [ngTemplateOutlet]="tabela" [ngTemplateOutletContext]="{ carregando: true }" />
+        }
+        @case ('pronto') {
+          <ng-container [ngTemplateOutlet]="tabela" [ngTemplateOutletContext]="{ carregando: false }" />
+          <ui-paginacao [mostrados]="itens().length" [temMais]="!!proximoCursor()" [carregando]="carregandoMais()" (mais)="carregarMais()" />
+          @if (avisoMais(); as aviso) {
+            <p class="aviso" role="status">{{ aviso }}</p>
           }
         }
       }
-    }
+    </div>
 
-    <!-- Modal de detalhes do pedido -->
+    <ng-template #tabela let-carregando="carregando">
+      <ui-tabela [colunas]="colunas" [linhas]="linhas()" [carregando]="carregando">
+        <ng-template uiCelula="numeroExterno" let-p>
+          {{ p.numeroExterno ?? '—' }}
+        </ng-template>
+        <ng-template uiCelula="cliente" let-p>
+          @if (p.contato && p.contatoId) {
+            <a class="cliente" [routerLink]="['/contato', p.contatoId]">{{ p.contato }}</a>
+          } @else { <span class="sem">Sem cliente</span> }
+          @if (p.rotulo) { <span class="sub">{{ p.rotulo }}</span> }
+        </ng-template>
+        <ng-template uiCelula="estado" let-p>
+          <ui-badge [tom]="tomDoEstado(p.estado)">{{ rotuloDoEstado(p.estado) }}</ui-badge>
+        </ng-template>
+        <ng-template uiCelula="itens" let-p>
+          {{ p.itens }} {{ p.itens === 1 ? 'item' : 'itens' }} · {{ p.totalPecas }} pç
+        </ng-template>
+        <ng-template uiCelula="total" let-p>
+          {{ reais(p.totalCentavos) }}
+        </ng-template>
+        <ng-template uiCelula="criadoEm" let-p>
+          {{ dataHora(p.criadoEm) }}
+        </ng-template>
+        <ng-template uiCelula="acao" let-p>
+          <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrir(p.id)">Ver</button>
+        </ng-template>
+        <div uiVazio>
+          @if (itens().length === 0) {
+            <ui-estado titulo="Nenhum pedido ainda" icone="🧾" descricao="Monte um pedido pela conversa ou pelo Pedido Assistido.">
+              <a class="btn btn--primario btn--pequeno" routerLink="/pedido">Abrir o Pedido Assistido</a>
+            </ui-estado>
+          } @else {
+            <ui-estado titulo="Nenhum pedido bate com a busca" icone="🔍" descricao="A busca vale só para os pedidos já carregados. Carregue mais para procurar nos demais." />
+          }
+        </div>
+      </ui-tabela>
+    </ng-template>
+
     @if (detalhe(); as d) {
-      <div class="overlay" (click)="fechar()">
-        <div class="modal" role="dialog" aria-modal="true" tabindex="-1" (click)="$event.stopPropagation()">
-          <header class="m-topo">
-            <div>
-              <span class="badge" [class]="'badge--' + d.estado">{{ rotuloEstado(d.estado) }}</span>
-              <h2 class="txt-secao">{{ d.nome || 'Pedido' }}</h2>
-            </div>
-            <button class="fechar" (click)="fechar()" aria-label="Fechar">×</button>
-          </header>
-
+      <ui-modal [aberto]="true" [titulo]="d.nome || 'Pedido'" largura="g" (fechar)="fechar()">
+        <div class="m-topo">
+          <ui-badge [tom]="tomDoEstado(d.estado)">{{ rotuloDoEstado(d.estado) }}</ui-badge>
           <div class="m-meta">
-            @if (d.contato && d.contatoId) { <a class="m-cliente" [routerLink]="['/contato', d.contatoId]">👤 {{ d.contato }}</a> }
             @if (d.conversaId) {
               <button type="button" class="m-conversa" (click)="abrirConversa(d.conversaId)" title="Abrir a conversa onde este pedido nasceu">💬 Conversa de origem</button>
             }
             @if (d.estado === 'rascunho' && d.contatoId) {
-              <a class="m-cliente" routerLink="/pedido" [queryParams]="{ contato: d.contatoId }">✎ Continuar montando</a>
+              <a class="m-link" routerLink="/pedido" [queryParams]="{ contato: d.contatoId }">✎ Continuar montando</a>
             }
-            <span>Criado {{ d.criadoEm | date: 'dd/MM/yy HH:mm' }}</span>
-            @if (d.confirmadoEm) { <span class="ok">✓ Confirmado pelo cliente {{ d.confirmadoEm | date: 'dd/MM HH:mm' }}</span> }
-            @if (d.numeroExterno) { <span>NF {{ d.numeroExterno }}</span> }
+            @if (d.confirmadoEm) { <span class="ok">✓ Confirmado pelo cliente {{ dataHora(d.confirmadoEm) }}</span> }
+          </div>
+        </div>
+
+        <ui-lista-definicao [colunas]="2" [itens]="[
+          { rotulo: 'Cliente', valor: d.contato ?? 'Sem cliente' },
+          { rotulo: 'Estado', valor: rotuloDoEstado(d.estado) },
+          { rotulo: 'Forma de pagamento', valor: d.formaPagamento },
+          { rotulo: 'Observação', valor: d.observacao },
+          { rotulo: 'Nº ERP', valor: d.numeroExterno, mono: true },
+          { rotulo: 'Criado em', valor: dataHora(d.criadoEm), mono: true }
+        ]" />
+
+        @if (carregandoDet()) {
+          <div class="esqueletos" aria-hidden="true"><ui-esqueleto altura="14px" /><ui-esqueleto altura="14px" /><ui-esqueleto altura="14px" /></div>
+        } @else {
+          <div class="rolagem-x itens-caixa">
+            <table class="itens-tab">
+              <thead><tr><th>Qtd</th><th>Item</th><th>Variação</th><th class="dir">Unit.</th><th class="dir">Subtotal</th></tr></thead>
+              <tbody>
+                @for (i of d.itens; track $index) {
+                  <tr>
+                    <td class="txt-dados">{{ i.quantidade }}×</td>
+                    <td class="encolhe">{{ i.descricaoSnapshot }}</td>
+                    <td>{{ variacao(i.grade) || '—' }}</td>
+                    <td class="dir txt-dados">{{ reais(i.valorUnitarioCentavos) }}</td>
+                    <td class="dir txt-dados">{{ reais(i.quantidade * i.valorUnitarioCentavos) }}</td>
+                  </tr>
+                }
+                @if (d.itens.length === 0) { <tr><td colspan="5" class="vazio">Sem itens.</td></tr> }
+              </tbody>
+            </table>
           </div>
 
-          @if (carregandoDet()) { <p class="dica">Carregando itens…</p> }
-          @else {
-            <div class="rolagem-x">
-              <table class="itens-tab">
-                <thead><tr><th>Qtd</th><th>Item</th><th>Variação</th><th class="dir">Unit.</th><th class="dir">Subtotal</th></tr></thead>
-                <tbody>
-                  @for (i of d.itens; track $index) {
-                    <tr>
-                      <td class="txt-dados">{{ i.quantidade }}×</td>
-                      <td class="encolhe">{{ i.descricaoSnapshot }}</td>
-                      <td>{{ variacao(i.grade) || '—' }}</td>
-                      <td class="dir txt-dados">{{ reais(i.valorUnitarioCentavos) }}</td>
-                      <td class="dir txt-dados">{{ reais(i.quantidade * i.valorUnitarioCentavos) }}</td>
-                    </tr>
-                  }
-                  @if (d.itens.length === 0) { <tr><td colspan="5" class="vazio">Sem itens.</td></tr> }
-                </tbody>
-              </table>
-            </div>
-
+          @if (d.formaPagamento || d.observacao) {
             <div class="m-ctx">
               @if (d.formaPagamento) { <div><span class="lab">Pagamento</span> {{ d.formaPagamento }}</div> }
               @if (d.observacao) { <div><span class="lab">Obs.</span> {{ d.observacao }}</div> }
             </div>
-
-            <!-- ⚠️ Cancelado NÃO é um sumiço: mostra por quê e deixa reaproveitar.
-                 Um pedido superado por um resumo novo continua valendo como
-                 trabalho de montagem — o vendedor abre, ajusta e reenvia. -->
-            <!-- ⚠️ O ERP recebe ORÇAMENTO, não venda: o status é fixo nessa via.
-                 Sem dizer isso aqui, o operador lê "no ERP" e entende que a
-                 venda fechou — e descobre o contrário no fim do mês. -->
-            @if (d.estado === 'efetivado') {
-              <p class="m-orcamento">
-                <strong>Orçamento criado no ERP.</strong>
-                Para faturar, converta em venda no GeraCloud.
-              </p>
-            }
-
-            @if (d.estado === 'cancelado') {
-              <div class="m-cancel">
-                <div><strong>Cancelado</strong> — {{ d.canceladoMotivo ?? 'sem motivo registrado' }}</div>
-                <button class="btn btn--secundario btn--pequeno" (click)="reabrir(d.id)" [disabled]="reabrindo()">
-                  {{ reabrindo() ? 'Reabrindo…' : 'Reabrir como rascunho' }}</button>
-                @if (erroReabrir()) { <span class="err">{{ erroReabrir() }}</span> }
-              </div>
-            }
-
-            <div class="m-total">
-              <span>{{ d.totalPecas }} peças · {{ d.itens.length }} {{ d.itens.length === 1 ? 'item' : 'itens' }}</span>
-              <strong class="txt-dados">{{ reais(d.totalCentavos) }}</strong>
-            </div>
-
-            <!-- Próximas etapas: só no pedido confirmado. Cada uma DEGRADA honesto
-                 enquanto o GeraCloud não está ligado (ADR-008) — nunca finge sucesso. -->
-            @if (d.estado === 'confirmado' && d.proximasEtapas?.length) {
-              <div class="m-etapas">
-                <h3 class="txt-secao">Próximas etapas</h3>
-                <p class="dica">O cliente confirmou. Estes passos entram quando o GeraCloud for conectado.</p>
-                @for (e of d.proximasEtapas!; track e.etapa) {
-                  <div class="etapa">
-                    <div class="e-txt">
-                      <span class="e-rot">{{ e.rotulo }}</span>
-                      <span class="e-desc">{{ e.descricao }}</span>
-                    </div>
-                    <button class="e-btn" [disabled]="!e.disponivel || acionando() === e.etapa"
-                            (click)="acionarEtapa(d.id, e.etapa)"
-                            [title]="e.disponivel ? '' : (e.motivoIndisponivel || '')">
-                      @if (!e.disponivel) { 🔒 Em breve } @else { {{ acionando() === e.etapa ? '…' : 'Gerar' }} }
-                    </button>
-                  </div>
-                }
-                @if (etapaMsg(); as m) {
-                  <div class="e-msg" [class.e-msg--ok]="m.ok">{{ m.ok ? '✅ ' : '⚠️ ' }}{{ m.texto }}</div>
-                }
-              </div>
-            }
           }
-        </div>
-      </div>
+
+          <!-- ⚠️ Cancelado NÃO é um sumiço: mostra por quê e deixa reaproveitar.
+               Um pedido superado por um resumo novo continua valendo como
+               trabalho de montagem — o vendedor abre, ajusta e reenvia. -->
+          <!-- ⚠️ O ERP recebe ORÇAMENTO, não venda: o status é fixo nessa via.
+               Sem dizer isso aqui, o operador lê "no ERP" e entende que a
+               venda fechou — e descobre o contrário no fim do mês. -->
+          @if (d.estado === 'efetivado') {
+            <p class="m-orcamento">
+              <strong>Orçamento criado no ERP.</strong>
+              Para faturar, converta em venda no GeraCloud.
+            </p>
+          }
+
+          @if (d.estado === 'cancelado') {
+            <div class="m-cancel">
+              <div><strong>Cancelado</strong> — {{ d.canceladoMotivo ?? 'sem motivo registrado' }}</div>
+              <button type="button" class="btn btn--secundario btn--pequeno" (click)="reabrir(d.id)" [disabled]="reabrindo()">
+                {{ reabrindo() ? 'Reabrindo…' : 'Reabrir como rascunho' }}</button>
+              @if (erroReabrir()) { <span class="err">{{ erroReabrir() }}</span> }
+            </div>
+          }
+
+          <div class="m-total">
+            <span>{{ d.totalPecas }} peças · {{ d.itens.length }} {{ d.itens.length === 1 ? 'item' : 'itens' }}</span>
+            <strong class="txt-dados">{{ reais(d.totalCentavos) }}</strong>
+          </div>
+
+          <!-- Próximas etapas: só no pedido confirmado. Cada uma DEGRADA honesto
+               enquanto o GeraCloud não está ligado (ADR-008) — nunca finge sucesso. -->
+          @if (d.estado === 'confirmado' && d.proximasEtapas?.length) {
+            <div class="m-etapas">
+              <h3 class="txt-secao">Próximas etapas</h3>
+              <p class="dica">O cliente confirmou. Estes passos entram quando o GeraCloud for conectado.</p>
+              @for (e of d.proximasEtapas!; track e.etapa) {
+                <div class="etapa">
+                  <div class="e-txt">
+                    <span class="e-rot">{{ e.rotulo }}</span>
+                    <span class="e-desc">{{ e.descricao }}</span>
+                  </div>
+                  <button type="button" class="e-btn" [disabled]="!e.disponivel || acionando() === e.etapa"
+                          (click)="acionarEtapa(d.id, e.etapa)"
+                          [title]="e.disponivel ? '' : (e.motivoIndisponivel || '')">
+                    @if (!e.disponivel) { 🔒 Em breve } @else { {{ acionando() === e.etapa ? '…' : 'Gerar' }} }
+                  </button>
+                </div>
+              }
+              @if (etapaMsg(); as m) {
+                <div class="e-msg" [class.e-msg--ok]="m.ok">{{ m.ok ? '✅ ' : '⚠️ ' }}{{ m.texto }}</div>
+              }
+            </div>
+          }
+        }
+      </ui-modal>
     }
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { margin-bottom: var(--espacamento-4); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .filtros { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); margin-bottom: var(--espacamento-4); }
-    .filtros button { padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
-    .filtros button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
-    .bloco a { color: var(--acao); }
-    .esq { height: 52px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
-    .lista { list-style: none; margin: 0; padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
-    .ped { display: flex; align-items: center; gap: var(--espacamento-3); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); font-size: 13px; cursor: pointer; }
-    .ped:last-child { border-bottom: none; }
-    .ped:hover { background: var(--superficie-hover); }
-    .col { display: flex; flex-direction: column; gap: 2px; flex: 1; }
-    .cliente { color: var(--acao); text-decoration: none; font-size: 14px; }
-    .cliente.sem { color: var(--texto-suave); }
-    .sub-linha { color: var(--texto-suave); font-size: 12px; }
-    .total { color: var(--texto); font-weight: 600; flex: none; }
-    .data { color: var(--texto-suave); flex: none; }
-    .chevron { color: var(--texto-suave); flex: none; font-size: 18px; }
-    .badge { font-size: 11px; padding: 2px 8px; border-radius: var(--raio-completo); white-space: nowrap; flex: none; }
-    .badge--rascunho { background: var(--superficie); color: var(--texto-secundario); }
-    .badge--aguardando_confirmacao { background: var(--atencao-suave); color: var(--atencao); }
-    .badge--confirmado { background: var(--acao-suave); color: var(--marca); }
-    .badge--efetivado { background: var(--sucesso-suave); color: var(--sucesso); }
-    .badge--falhou { background: var(--erro-suave); color: var(--erro); }
-    .badge--cancelado { background: var(--superficie); color: var(--texto-suave); }
-    .m-cancel { margin-top: var(--espacamento-3); padding: var(--espacamento-3);
-      border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--texto);
-      font-size: 13px; display: grid; gap: var(--espacamento-2); justify-items: start; }
-    .m-cancel .err { color: var(--erro); font-size: 12px; }
-    .m-orcamento { margin-top: var(--espacamento-3); padding: var(--espacamento-3);
-      border-radius: var(--raio-controle); background: var(--acao-suave); color: var(--texto);
-      font-size: 13px; line-height: 1.5; }
-    .badge--aguardando_conferencia { background: var(--atencao-suave); color: var(--atencao); }
-    .mais { margin-top: var(--espacamento-4); }
-    @media (max-width: 560px) { .data { display: none; } }
-    /* Modal */
-    .overlay { position: fixed; inset: 0; background: rgb(0 0 0 / .4); display: grid; place-items: center; padding: var(--espacamento-4); z-index: 50; }
-    .modal { width: 100%; max-width: 620px; max-height: 88vh; overflow-y: auto; background: var(--superficie-elevada); border: 1px solid var(--borda); border-radius: var(--raio-painel); box-shadow: var(--elevacao-modal); padding: var(--espacamento-6); }
-    .m-topo { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-3); margin-bottom: var(--espacamento-3); }
-    .m-topo h2 { margin: var(--espacamento-2) 0 0; }
-    .fechar { border: 0; background: transparent; color: var(--texto-suave); font-size: 22px; cursor: pointer; line-height: 1; }
-    .m-meta { display: flex; flex-wrap: wrap; gap: var(--espacamento-3); font-size: 12px; color: var(--texto-secundario); margin-bottom: var(--espacamento-4); }
-    .m-cliente { color: var(--acao); text-decoration: none; }
-    .m-conversa { border: 0; background: transparent; color: var(--acao); font: inherit; font-size: 12px; cursor: pointer; padding: 0; }
-    .m-conversa:hover, .m-cliente:hover { text-decoration: underline; }
-    .chip-filtro { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-secundario); }
+    .chip-filtro { margin: 0 0 var(--espacamento-4); font-size: 12px; color: var(--texto-secundario); }
     .chip-filtro a { color: var(--acao); }
+    .cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--espacamento-3);
+      margin-bottom: var(--espacamento-4); }
+    .corpo { margin-top: var(--espacamento-4); }
+    .cliente { color: var(--acao); text-decoration: none; }
+    .cliente:hover { text-decoration: underline; }
+    .sem { color: var(--texto-suave); }
+    .sub { display: block; color: var(--texto-suave); font-size: 12px; }
+    .aviso { margin: var(--espacamento-2) 0 0; padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle);
+      background: var(--atencao-suave); color: var(--atencao); font-size: 13px; }
+    /* Detalhe (dentro do ui-modal) */
+    .m-topo { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--espacamento-3);
+      margin-bottom: var(--espacamento-4); }
+    .m-meta { display: flex; flex-wrap: wrap; gap: var(--espacamento-3); font-size: 12px; color: var(--texto-secundario); }
+    .m-link { color: var(--acao); text-decoration: none; }
+    .m-conversa { border: 0; background: transparent; color: var(--acao); font: inherit; font-size: 12px; cursor: pointer; padding: 0; }
+    .m-conversa:hover, .m-link:hover { text-decoration: underline; }
     .m-meta .ok { color: var(--sucesso); }
+    .esqueletos { display: grid; gap: var(--espacamento-2); margin-top: var(--espacamento-5); }
+    .itens-caixa { margin-top: var(--espacamento-5); }
     .itens-tab { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 460px; }
     .itens-tab th, .itens-tab td { padding: var(--espacamento-2) var(--espacamento-3); border-bottom: 1px solid var(--borda); text-align: left; }
     .itens-tab th { color: var(--texto-suave); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
@@ -260,6 +278,13 @@ const FILTROS = [
     .itens-tab .vazio { text-align: center; color: var(--texto-suave); }
     .m-ctx { display: grid; gap: var(--espacamento-1); margin: var(--espacamento-4) 0; font-size: 13px; color: var(--texto); }
     .m-ctx .lab { color: var(--texto-suave); margin-right: var(--espacamento-1); }
+    .m-cancel { margin-top: var(--espacamento-3); padding: var(--espacamento-3);
+      border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--texto);
+      font-size: 13px; display: grid; gap: var(--espacamento-2); justify-items: start; }
+    .m-cancel .err { color: var(--erro); font-size: 12px; }
+    .m-orcamento { margin-top: var(--espacamento-3); padding: var(--espacamento-3);
+      border-radius: var(--raio-controle); background: var(--acao-suave); color: var(--texto);
+      font-size: 13px; line-height: 1.5; }
     .m-total { display: flex; justify-content: space-between; align-items: baseline; padding-top: var(--espacamento-3); border-top: 2px solid var(--borda); font-size: 14px; }
     .m-total strong { font-size: 18px; color: var(--texto); }
     .dica { color: var(--texto-suave); font-size: 13px; }
@@ -289,7 +314,49 @@ export class PedidosPagina implements OnInit {
   readonly id = input<string>()
   /** `?contatoId=` — a ficha do cliente manda para cá. */
   readonly contatoFiltro = signal<string | null>(null)
-  readonly filtros = FILTROS
+
+  /** Colunas da tabela: nº ERP (mono), cliente, estado, itens, total (dir, mono), criado em, ação. */
+  readonly colunas: readonly ColunaTabela[] = [
+    { chave: 'numeroExterno', rotulo: 'Nº ERP', mono: true, largura: '120px' },
+    { chave: 'cliente', rotulo: 'Cliente' },
+    { chave: 'estado', rotulo: 'Estado', largura: '160px' },
+    { chave: 'itens', rotulo: 'Itens', largura: '180px' },
+    { chave: 'total', rotulo: 'Total', alinhamento: 'dir', mono: true, largura: '140px' },
+    { chave: 'criadoEm', rotulo: 'Criado em', mono: true, largura: '150px' },
+    { chave: 'acao', rotulo: '', alinhamento: 'dir', largura: '90px' },
+  ]
+  readonly opcoesEstado: OpcaoSelect[] = FILTROS.filter((f) => f.chave !== '').map((f) => ({ valor: f.chave, rotulo: f.rotulo }))
+
+  readonly estado = signal<Estado>('carregando')
+  readonly itens = signal<readonly PedidoItem[]>([])
+  readonly filtro = signal('')
+  readonly termo = signal('')
+  readonly proximoCursor = signal<string | null>(null)
+  readonly carregandoMais = signal(false)
+  /** Estado PARCIAL: a lista já carregada segue na tela; só a próxima página falhou. */
+  readonly avisoMais = signal<string | null>(null)
+  readonly detalhe = signal<PedidoDetalhe | null>(null)
+  readonly reabrindo = signal(false)
+  readonly erroReabrir = signal<string | null>(null)
+  readonly carregandoDet = signal(false)
+  readonly acionando = signal<string | null>(null)
+  readonly etapaMsg = signal<{ ok: boolean; texto: string } | null>(null)
+
+  /** Linhas da tabela: a busca local filtra o carregado. */
+  readonly linhas = computed<LinhaTabela[]>(() =>
+    filtrarPorTermo(this.itens(), this.termo()).map((p) => ({ ...p })))
+
+  /** Cards: contadores do que está carregado. Fora do estado "pronto" mostram traço, nunca zero. */
+  readonly cartoes = computed<{ rotulo: string; valor: string | number; tom: TomStat }[]>(() => {
+    const pronto = this.estado() === 'pronto'
+    const i = indicadoresDaLista(this.itens())
+    return [
+      { rotulo: 'Orçamentos no ERP (carregados)', valor: pronto ? i.efetivados : '—', tom: 'sucesso' },
+      { rotulo: 'Valor no ERP (carregados)', valor: pronto ? formatarReais(i.valorEfetivadoCentavos) : '—', tom: 'acao' },
+      { rotulo: 'Rascunhos nos carregados', valor: pronto ? i.rascunhos : '—', tom: 'neutro' },
+      { rotulo: 'Falharam nos carregados', valor: pronto ? i.falharam : '—', tom: pronto && i.falharam > 0 ? 'erro' : 'neutro' },
+    ]
+  })
 
   constructor() {
     effect(() => {
@@ -298,40 +365,30 @@ export class PedidosPagina implements OnInit {
     })
   }
 
+  ngOnInit(): void {
+    this.contatoFiltro.set(this.route.snapshot.queryParamMap.get('contatoId'))
+    void this.carregar()
+  }
+
   /** Abre o chat onde o pedido nasceu (o rail expande sozinho). */
   abrirConversa(conversaId: string): void {
     this.fechar()
     void this.inbox.abrir(conversaId)
   }
-  readonly estado = signal<Estado>('carregando')
-  readonly itens = signal<readonly PedidoItem[]>([])
-  readonly filtro = signal('')
-  readonly proximoCursor = signal<string | null>(null)
-  readonly carregandoMais = signal(false)
-  readonly detalhe = signal<PedidoDetalhe | null>(null)
-  readonly reabrindo = signal(false)
-  readonly erroReabrir = signal<string | null>(null)
-  readonly carregandoDet = signal(false)
-  readonly acionando = signal<string | null>(null)
-  readonly etapaMsg = signal<{ ok: boolean; texto: string } | null>(null)
 
-  ngOnInit(): void {
-    this.contatoFiltro.set(this.route.snapshot.queryParamMap.get('contatoId'))
-    void this.carregar()
-  }
-  reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
-  variacao(g: Record<string, string> | null | undefined): string {
-    if (!g) return ''
-    const ordem = ['cor', 'tamanho', 'subTamanho']
-    const vistos = new Set<string>(); const p: string[] = []
-    for (const k of ordem) if (g[k]) { p.push(g[k]!); vistos.add(k) }
-    for (const [k, v] of Object.entries(g)) if (!vistos.has(k) && v) p.push(v)
-    return p.join(' · ')
-  }
-  rotuloEstado(e: string): string {
-    return { rascunho: 'Rascunho', aguardando_confirmacao: 'Aguardando SIM', confirmado: 'Confirmado', efetivado: 'No ERP', falhou: 'Falhou', cancelado: 'Cancelado', aguardando_conferencia: 'Conferência', enviando: 'Enviando', validando: 'Validando' }[e] ?? e
-  }
+  protected readonly rotuloDoEstado = rotuloDoEstado
+  protected readonly tomDoEstado = tomDoEstado
+  protected readonly dataHora = formatarDataHora
+
+  reais(c: number): string { return formatarReais(c) }
+  variacao(g: Record<string, string> | null | undefined): string { return variacaoDaGrade(g) }
+
   trocar(f: string): void { this.filtro.set(f); void this.carregar() }
+
+  limparFiltros(): void {
+    this.termo.set('')
+    if (this.filtro()) this.trocar('')
+  }
 
   private url(cursor: string | null): string {
     const p = new URLSearchParams()
@@ -344,6 +401,7 @@ export class PedidosPagina implements OnInit {
 
   async carregar(): Promise<void> {
     this.estado.set('carregando')
+    this.avisoMais.set(null)
     try {
       const r = await firstValueFrom(this.http.get<{ itens: PedidoItem[]; proximoCursor: string | null }>(this.url(null)))
       this.itens.set(r.itens); this.proximoCursor.set(r.proximoCursor); this.estado.set('pronto')
@@ -354,10 +412,13 @@ export class PedidosPagina implements OnInit {
     const cursor = this.proximoCursor()
     if (!cursor || this.carregandoMais()) return
     this.carregandoMais.set(true)
+    this.avisoMais.set(null)
     try {
       const r = await firstValueFrom(this.http.get<{ itens: PedidoItem[]; proximoCursor: string | null }>(this.url(cursor)))
       this.itens.update((a) => mesclarPagina(a, r.itens, (p) => p.id)); this.proximoCursor.set(r.proximoCursor)
-    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais pedidos.')) }
+    } catch (e) {
+      this.avisoMais.set(mensagemDeErro(e, 'Não foi possível carregar mais pedidos.') + ' Os que já aparecem continuam aqui.')
+    }
     finally { this.carregandoMais.set(false) }
   }
 

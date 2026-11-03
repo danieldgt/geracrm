@@ -260,7 +260,7 @@ describe('Fuso da empresa', () => {
   it('PATCH /v1/config/empresa recusa fuso que não é IANA (422) e aceita um válido', async () => {
     const r = await chamar(T, 'PATCH', '/v1/config/empresa', { fuso: 'Brasil/Fortaleza' })
     expect(r.statusCode).toBe(422)
-    expect(r.json()).toMatchObject({ erro: 'empresa.fuso_invalido', campos: ['fuso'] })
+    expect(r.json()).toMatchObject({ erro: 'validacao', campos: { fuso: expect.any(String) } })
     expect((await chamar(T, 'PATCH', '/v1/config/empresa', { fuso: 'America/Fortaleza' })).statusCode).toBe(200)
     await dono`UPDATE tenant SET fuso = 'America/Sao_Paulo' WHERE id = ${T}`
   })

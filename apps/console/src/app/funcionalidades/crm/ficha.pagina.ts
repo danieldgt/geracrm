@@ -6,6 +6,8 @@ import { FichaServico, type FichaContato } from './ficha.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
 import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
+import { EtiquetasContatoComponente } from './etiquetas-contato.componente.js'
+import { TarefaModalComponente } from './tarefa-modal.componente.js'
 
 /**
  * Ficha do Contato — o cliente 360°.
@@ -19,7 +21,7 @@ import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
 @Component({
   selector: 'app-ficha-contato',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, DatePipe, AvisosPrivacidadeComponente],
+  imports: [RouterLink, DatePipe, AvisosPrivacidadeComponente, EtiquetasContatoComponente, TarefaModalComponente],
   template: `
     <!-- Volta para ONDE a pessoa veio (lista, chat, funil, pedidos) — e para a
          lista de contatos quando a ficha foi aberta por link direto. -->
@@ -55,22 +57,41 @@ import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
                           [disabled]="abrindoConversa()" title="Abrir o chat com este cliente">
                     {{ abrindoConversa() ? 'Abrindo…' : '💬 Abrir conversa' }}
                   </button>
+                  <a class="btn btn--secundario btn--pequeno" [routerLink]="['/contato', f.id, 'editar']"
+                     title="Editar o cadastro completo deste contato">✎ Editar</a>
                   <a class="btn btn--secundario btn--pequeno" routerLink="/pedido" [queryParams]="{ contato: f.id }"
                      title="Montar um pedido para este cliente">🛒 Novo pedido</a>
                   <a class="btn btn--secundario btn--pequeno" routerLink="/pedidos" [queryParams]="{ contatoId: f.id }"
                      title="Todos os pedidos deste cliente">🧾 Pedidos</a>
                   <a class="btn btn--secundario btn--pequeno" routerLink="/tarefas" [queryParams]="{ contatoId: f.id }"
                      title="Tarefas e follow-ups deste cliente">✅ Tarefas</a>
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="novaTarefa.set(true)"
+                          title="Criar uma tarefa para este cliente">➕ Nova tarefa</button>
                 </div>
                 @if (erroConversa(); as e) { <p class="erro-edit" role="alert">{{ e }}</p> }
                 <div class="tags">
                   @if (f.modalidade) { <span class="tag">{{ f.modalidade }}</span> }
+                  @if (f.prioridade) { <span class="tag">Prioridade {{ f.prioridade }}</span> }
+                  @if (f.temperatura) { <span class="tag">{{ f.temperatura }}</span> }
                   @if (f.qualificado) { <span class="tag ok">Qualificado</span> }
                   @if (f.metricas; as m) {
                     <span class="tag rfv" [style.--c]="cor(m.segmento.codigo)">{{ m.segmento.rotulo }}</span>
                   }
                 </div>
               </div>
+
+              @if (f.razaoSocial || f.nomeFantasia || f.email || f.valorEstimadoCentavos !== null || f.observacoes) {
+                <div class="cartao">
+                  <h3>Dados cadastrais</h3>
+                  <dl class="cadastro">
+                    @if (f.razaoSocial) { <dt>Razão social</dt><dd>{{ f.razaoSocial }}</dd> }
+                    @if (f.nomeFantasia) { <dt>Nome fantasia</dt><dd>{{ f.nomeFantasia }}</dd> }
+                    @if (f.email) { <dt>E-mail</dt><dd>{{ f.email }}</dd> }
+                    @if (f.valorEstimadoCentavos !== null) { <dt>Valor estimado</dt><dd>{{ reais(f.valorEstimadoCentavos) }}</dd> }
+                    @if (f.observacoes) { <dt>Observações</dt><dd class="obs">{{ f.observacoes }}</dd> }
+                  </dl>
+                </div>
+              }
 
               <div class="cartao">
                 <h3>Contato</h3>
@@ -193,6 +214,11 @@ import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
               </div>
 
               <div class="cartao">
+                <h3>Etiquetas</h3>
+                <app-etiquetas-contato [contatoId]="f.id" />
+              </div>
+
+              <div class="cartao">
                 <h3>Comentários</h3>
                 @if (f.comentarios.length) {
                   <ul class="coment">
@@ -212,6 +238,8 @@ import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
               <app-avisos-privacidade [contatoId]="f.id" />
             </section>
           </div>
+          <app-tarefa-modal [aberto]="novaTarefa()" [contatoId]="f.id" [contatoNome]="f.nome"
+            (fechar)="novaTarefa.set(false)" (criada)="novaTarefa.set(false)" />
         }
       }
     }
@@ -258,6 +286,10 @@ import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
     .mini.can { color: var(--erro); border-color: var(--erro); }
     .vazio-mini { font-size: 13px; color: var(--texto-suave); margin: 0; }
     .alerta-mini { font-size: 12px; color: var(--atencao); margin: var(--espacamento-2) 0 0; }
+    .cadastro { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--espacamento-1) var(--espacamento-3); margin: 0; font-size: 13px; }
+    .cadastro dt { color: var(--texto-secundario); }
+    .cadastro dd { margin: 0; color: var(--texto); overflow-wrap: anywhere; }
+    .cadastro .obs { white-space: pre-wrap; }
     .endereco { font-size: 13px; color: var(--texto-secundario); margin: 0; }
     .metricas { display: grid; grid-template-columns: 1fr 1fr; gap: var(--espacamento-3); margin: 0; }
     .metricas dt { font-size: 11px; color: var(--texto-suave); }
@@ -285,6 +317,7 @@ export class FichaContatoPagina {
   private readonly toast = inject(ToastServico)
   readonly id = input.required<string>()
   readonly abrindoConversa = signal(false)
+  readonly novaTarefa = signal(false)
   readonly erroConversa = signal<string | null>(null)
 
   /** Volta pelo histórico; sem histórico (link direto), vai à lista. */
@@ -379,7 +412,7 @@ export class FichaContatoPagina {
   enderecoTexto(e: NonNullable<FichaContato['endereco']>): string {
     return [
       [e.logradouro, e.numero].filter(Boolean).join(', '),
-      e.bairro, [e.cidade, e.uf].filter(Boolean).join('/'), e.cep,
+      e.complemento, e.bairro, [e.cidade, e.uf].filter(Boolean).join('/'), e.cep,
     ].filter(Boolean).join(' · ')
   }
 }

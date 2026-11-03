@@ -29,9 +29,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
         <button class="btn btn--secundario" type="button" (click)="mostrarImport.set(!mostrarImport())">
           {{ mostrarImport() ? 'Fechar' : '↑ Importar CSV' }}
         </button>
-        <button class="btn btn--primario" type="button" (click)="mostrarForm.set(!mostrarForm())">
-          {{ mostrarForm() ? 'Fechar' : '+ Novo contato' }}
-        </button>
+        <a class="btn btn--primario" routerLink="/contato/novo">+ Novo contato</a>
       </div>
     </header>
 
@@ -66,21 +64,6 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
           </div>
         }
       </div>
-    }
-
-    @if (mostrarForm()) {
-      <form class="novo-contato" (ngSubmit)="adicionar(false)">
-        <input name="nome" placeholder="Nome" [ngModel]="novoNome()" (ngModelChange)="novoNome.set($event)"
-               [disabled]="servico.salvandoContato()" />
-        <input name="tel" placeholder="Telefone (DDD + número)" [ngModel]="novoTelefone()"
-               (ngModelChange)="novoTelefone.set($event)" [disabled]="servico.salvandoContato()" />
-        <button class="btn btn--primario" type="submit" [disabled]="servico.salvandoContato() || !valido()">
-          {{ servico.salvandoContato() ? 'Salvando…' : 'Adicionar' }}
-        </button>
-        <button class="btn btn--secundario" type="button" (click)="adicionar(true)"
-                [disabled]="servico.salvandoContato() || !valido()">Adicionar e conversar</button>
-        @if (servico.erroForm()) { <p class="erro-form">{{ servico.erroForm() }}</p> }
-      </form>
     }
 
     <!-- Busca de contato (acha até contato manual sem venda) -->
@@ -190,8 +173,6 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     :host { display: block; width: 100%; min-width: 0; padding: var(--espacamento-6); container-type: inline-size; }
     .cabecalho { margin-bottom: var(--espacamento-5); display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
     .acoes-topo { flex-wrap: wrap; }
-    .novo-contato { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: center; margin-bottom: var(--espacamento-5); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .novo-contato input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
     .erro-form { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
     .acoes-topo { display: flex; gap: var(--espacamento-2); }
     .import { display: flex; flex-direction: column; gap: var(--espacamento-2); margin-bottom: var(--espacamento-5); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
@@ -269,21 +250,6 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
 export class ClientesPagina implements OnInit {
   readonly servico = inject(ClientesServico)
   private readonly inbox = inject(InboxServico)
-
-  // Novo contato
-  readonly mostrarForm = signal(false)
-  readonly novoNome = signal('')
-  readonly novoTelefone = signal('')
-  valido(): boolean { return this.novoNome().trim().length > 0 && this.novoTelefone().trim().length >= 8 }
-
-  /** Cadastra o contato; se `irConversar`, já abre a conversa no chat. */
-  async adicionar(irConversar: boolean): Promise<void> {
-    if (!this.valido() || this.servico.salvandoContato()) return
-    const id = await this.servico.criarContato(this.novoNome().trim(), this.novoTelefone().trim())
-    if (!id) return
-    this.novoNome.set(''); this.novoTelefone.set(''); this.mostrarForm.set(false)
-    if (irConversar) await this.conversar(id)
-  }
 
   /** "Puxa o contato para o chat": inicia/abre a conversa e a abre no rail lateral. */
   async conversar(contatoId: string): Promise<void> {

@@ -13,6 +13,8 @@ import { rotasFila } from '../atendimento/rotas-fila.js'
 import { rotasPedido } from '../pedido/rotas-pedido.js'
 import { rotasAtendimentoKanban } from '../atendimento/rotas-atendimento-kanban.js'
 import { rotasMensagens } from '../atendimento/rotas-mensagens.js'
+import { rotasDevolucao } from '../atendimento/rotas-devolucao.js'
+import { rotasEtiquetas } from '../crm/rotas-etiquetas.js'
 
 /**
  * ESCOPO NAS ROTAS (D3) — banco real, papel da aplicação (RLS), DOIS tenants.
@@ -153,7 +155,7 @@ beforeAll(async () => {
     if (typeof s === 'string') { req.usuarioSub = s; req.usuarioEmail = `${s}@d3.test` }
     if (req.headers['x-teste-staff'] === '1') req.atorStaff = true
   })
-  for (const r of [rotasContatos, rotasCarteira, rotasTarefa, rotasFunil, rotasLeads, rotasConversas, rotasFila, rotasPedido, rotasAtendimentoKanban, rotasMensagens]) {
+  for (const r of [rotasContatos, rotasCarteira, rotasTarefa, rotasFunil, rotasLeads, rotasConversas, rotasFila, rotasPedido, rotasAtendimentoKanban, rotasMensagens, rotasDevolucao, rotasEtiquetas]) {
     await app.register(r)
   }
   await app.ready()
@@ -171,6 +173,7 @@ async function limpar(): Promise<void> {
     await dono`DELETE FROM auditoria WHERE tenant_id = ${t}`
     await dono`DELETE FROM outbox WHERE tenant_id = ${t}`
     await dono`DELETE FROM atendimento_etapa_historico WHERE tenant_id = ${t}`
+    await dono`DELETE FROM mensagem WHERE tenant_id = ${t}`
     await dono`DELETE FROM oportunidade_etapa_historico WHERE tenant_id = ${t}`
     await dono`DELETE FROM oportunidade WHERE tenant_id = ${t}`
     await dono`DELETE FROM funil_etapa WHERE tenant_id = ${t}`
@@ -261,6 +264,9 @@ describe('contatos — lista, busca e ficha', () => {
     expect((await pedir('va', 'GET', `${alvo}/carteira/historico`)).status).toBe(404)
     expect((await pedir('va', 'POST', `${alvo}/carteira`, { usuarioId: U.va })).status).toBe(404)
     expect((await pedir('va', 'GET', `${alvo}/pedidos`)).status).toBe(404)
+    expect((await pedir('va', 'GET', `${alvo}/etiquetas`)).status).toBe(404)
+    expect((await pedir('va', 'PUT', `${alvo}/etiquetas`, { etiquetaIds: [] })).status).toBe(404)
+    expect((await pedir('va', 'PUT', alvo, { nome: 'Invadido', telefone: '11987654321' })).status).toBe(404)
     const [c] = await dono<{ nome: string }[]>`SELECT nome FROM contato WHERE tenant_id = ${A} AND id = ${C.b}`
     expect(c!.nome).toBe('D3 Cliente Beta')
     const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM contato_telefone WHERE tenant_id = ${A} AND contato_id = ${C.b}`
@@ -324,6 +330,28 @@ describe('tarefas', () => {
     expect(t!.estado).toBe('aberta')
     const venceEm = new Date(Date.now() + 86400000).toISOString()
     expect((await pedir('va', 'POST', '/v1/tarefas', { titulo: 'x', venceEm, contatoId: C.b })).status).toBe(404)
+  })
+})
+
+describe('tarefas — contadores, sem próximo passo e lote', () => {
+  it('contadores contam só o escopo', async () => {
+    expect((await pedir('va', 'GET', '/v1/tarefas/contadores')).corpo['pendentes']).toBe(2)
+    expect((await pedir('adm', 'GET', '/v1/tarefas/contadores')).corpo['pendentes']).toBe(4)
+  })
+
+  it('sem-próximo-passo omite o contato fora do escopo', async () => {
+    const r = await pedir('va', 'GET', `/v1/tarefas/sem-proximo-passo?contatoIds=${C.a},${C.b}`)
+    expect(ids(r.corpo, 'contatoId')).toEqual([C.a])
+  })
+
+  it('lote: contato fora do escopo é ignorado e contado', async () => {
+    const venceEm = new Date(Date.now() + 86400000).toISOString()
+    const r = await pedir('va', 'POST', '/v1/tarefas/lote', { contatoIds: [C.a, C.b], titulo: 'Lote D3', venceEm })
+    expect(r.status).toBe(201)
+    expect(r.corpo).toMatchObject({ criadas: 1, ignorados: 1 })
+    const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tarefa WHERE tenant_id = ${A} AND titulo = 'Lote D3' AND contato_id = ${C.b}`
+    expect(n!.n).toBe(0)
+    await dono`DELETE FROM tarefa WHERE tenant_id = ${A} AND titulo = 'Lote D3'`
   })
 })
 
@@ -426,6 +454,21 @@ describe('conversas — e a fila continua funcionando', () => {
     expect((await pedir('vb', 'GET', `/v1/conversas/${CV.fila}`)).status).toBe(404)
     expect(ids((await pedir('vb', 'GET', '/v1/conversas?filtro=fila')).corpo)).toEqual([CV.fila2])
     expect((await pedir('vb', 'GET', `/v1/pedidos/${ped.corpo.id as string}`)).status).toBe(404)
+  })
+
+  it('devolver ao agente e reatribuir: só sobre conversa visível; o destino precisa poder atender', async () => {
+    expect((await pedir('va', 'POST', `/v1/conversas/${CV.b}/devolver-agente`, { motivo: 'outro' })).status).toBe(404)
+    // Gestor de X não enxerga a conversa do cliente de Y → 404.
+    expect((await pedir('gx', 'POST', `/v1/conversas/${CV.b}/reatribuir`, { usuarioId: U.va, motivo: 'teste' })).status).toBe(404)
+    // CV.fila2 é do CANAL2 (só VB atende) e o cliente é órfão de Y.
+    expect((await pedir('vb', 'POST', `/v1/conversas/${CV.fila2}/assumir`)).status).toBe(201)
+    const semAcesso = await pedir('adm', 'POST', `/v1/conversas/${CV.fila2}/reatribuir`, { usuarioId: U.va, motivo: 'teste' })
+    expect(semAcesso.status).toBe(422)
+    expect(semAcesso.corpo.erro).toBe('reatribuicao.destino_sem_acesso')
+    const [at] = await dono<{ atendente_id: string }[]>`SELECT atendente_id FROM atendimento WHERE tenant_id = ${A} AND conversa_id = ${CV.fila2} AND estado <> 'encerrado'`
+    expect(at!.atendente_id).toBe(U.vb)
+    // Supervisor de todas as filiais pode atender → reatribuição passa.
+    expect((await pedir('adm', 'POST', `/v1/conversas/${CV.fila2}/reatribuir`, { usuarioId: U.sup, motivo: 'teste' })).status).toBe(200)
   })
 
   it('protocolo de conversa fora do escopo → não encontrado', async () => {

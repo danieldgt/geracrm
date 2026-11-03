@@ -6,7 +6,7 @@ import {
 import { ehSemPermissao } from './agente.servico.js'
 import { AtivasServico } from './ativas.servico.js'
 import {
-  adicionarFeriado, badgeStatusTemplate, confirmacaoLiberar, erroDaApi, feriadoDeData, removerFeriado, rotuloFeriado, rotuloSuspensao,
+  adicionarFeriado, badgeStatusTemplate, confirmacaoLiberar, erroDaApi, feriadoDeData, lerDias, removerFeriado, rotuloFeriado, rotuloSuspensao,
   formatarNoFuso, validarAtivas, type ErrosAtivas, type FormAtivas,
 } from './ativas.regras.js'
 
@@ -117,6 +117,49 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
               </div>
             </section>
 
+            <section class="bloco">
+              <h4 class="txt-rotulo">Fim da sequência sem resposta</h4>
+              <p class="obs">Depois do último retorno sem resposta, o contato vai para Descartado com o motivo “sem resposta” — sem enviar mensagem.
+                Se o cliente escrever em qualquer momento antes ou depois, o descarte é cancelado e ele volta a ser novo.</p>
+              <label class="campo"><span>Descartar após (horas) sem resposta</span>
+                <input type="number" min="0" [max]="maxDescarte" step="1" [value]="form().descarteAposHoras"
+                       (input)="mudar('descarteAposHoras', +$any($event.target).value)" [attr.aria-invalid]="erros().descarteAposHoras ? 'true' : null" />
+                @if (erros().descarteAposHoras; as e) { <span class="msg-erro">{{ e }}</span> }
+                <small>Padrão: {{ d.padroes.descarteAposHoras }}. Use 0 para nunca descartar sozinho.</small></label>
+
+              <h4 class="txt-rotulo sub-bloco">Reativação</h4>
+              <p class="obs">Contato descartado por falta de resposta recebe uma mensagem de reativação nos prazos abaixo, contados do descarte.
+                Respeita opt-out, expediente, limites e a qualidade do número.
+                @if (d.exigeTemplateForaDaJanela) { No WhatsApp oficial sai SEMPRE por template aprovado. }
+                @else { Neste número (não-oficial) sai o texto abaixo, respeitando o aquecimento; sem texto, nada é enviado. }</p>
+              <label class="chk"><input type="checkbox" [checked]="form().reativacao.ativa"
+                     (change)="mudarReativacao({ ativa: $any($event.target).checked })" />Reativar contatos descartados</label>
+              <div class="grade-2">
+                <label class="campo"><span>Prazos em dias (até 3, crescentes)</span>
+                  <input type="text" inputmode="numeric" [value]="form().reativacao.dias.join(', ')"
+                         (change)="mudarReativacao({ dias: lerDias($any($event.target).value) })"
+                         [attr.aria-invalid]="erros().reativacao ? 'true' : null" />
+                  <small>Padrão: 30, 90.</small></label>
+                @if (d.exigeTemplateForaDaJanela) {
+                  <label class="campo"><span>Template de reativação</span>
+                    <select [value]="form().reativacao.templateId ?? ''" (change)="mudarReativacao({ templateId: $any($event.target).value || null })">
+                      <option value="">Nenhum</option>
+                      @if (form().reativacao.templateId; as id) { @if (!temNaLista(id)) { <option [value]="id">Template escolhido</option> } }
+                      @for (t of templates(); track t.id) {
+                        <option [value]="t.id" [disabled]="!t.compativel">{{ t.nome }} ({{ t.idioma }}){{ t.compativel ? '' : ' — usa variável além do primeiro nome' }}</option>
+                      }
+                    </select>
+                  </label>
+                }
+              </div>
+              @if (!d.exigeTemplateForaDaJanela) {
+                <label class="campo"><span>Texto da reativação</span>
+                  <textarea rows="3" [maxLength]="maxTextoReativacao" [value]="form().reativacao.texto ?? ''"
+                            (input)="mudarReativacao({ texto: $any($event.target).value || null })"></textarea></label>
+              }
+              @if (erros().reativacao; as e) { <span class="msg-erro">{{ e }}</span> }
+            </section>
+
             @if (d.exigeTemplateForaDaJanela) {
               <section class="bloco">
                 <h4 class="txt-rotulo">Fora da janela de 24 h (WhatsApp oficial)</h4>
@@ -189,6 +232,9 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
     .add .campo { flex: 0 1 200px; }
     .campo { display: grid; gap: var(--espacamento-1); grid-template-columns: minmax(0, 1fr); min-width: 0; color: var(--texto); font-size: 13px; }
     .campo small { color: var(--texto-suave); font-size: 12px; }
+    .sub-bloco { margin-top: var(--espacamento-4); }
+    .campo textarea { font: inherit; width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
+      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); resize: vertical; }
     .campo input, .campo select { font: inherit; width: 100%; min-height: var(--densidade-alvo-clique-console);
       padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
       border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); }
@@ -218,7 +264,10 @@ export class AgenteAtivasComponente {
 
   readonly estado = signal<Estado>('carregando')
   readonly dados = signal<EstadoAtivas | null>(null)
-  readonly form = signal<FormAtivas>({ limiteDia: 2, limiteSemana: 4, templateRetorno: null, feriados: [] })
+  readonly form = signal<FormAtivas>({
+    limiteDia: 2, limiteSemana: 4, templateRetorno: null, descarteAposHoras: 72,
+    reativacao: { ativa: false, dias: [30, 90], templateId: null, texto: null }, feriados: [],
+  })
   private readonly original = signal<FormAtivas | null>(null)
   readonly erros = signal<ErrosAtivas>({})
   readonly salvando = signal(false)
@@ -231,6 +280,9 @@ export class AgenteAtivasComponente {
 
   readonly maxDia = 10
   readonly maxSemana = 30
+  readonly maxDescarte = 720
+  readonly maxTextoReativacao = 500
+  readonly lerDias = lerDias
 
   readonly alterado = computed(() => JSON.stringify(this.form()) !== JSON.stringify(this.original()))
   readonly escolhido = computed(() => {
@@ -255,7 +307,7 @@ export class AgenteAtivasComponente {
     this.estado.set('carregando'); this.erros.set({})
     try {
       const d = await this.api.carregar(canalId)
-      const f: FormAtivas = { ...d.config, feriados: [...d.feriados] }
+      const f: FormAtivas = { ...d.config, reativacao: { ...d.config.reativacao, dias: [...d.config.reativacao.dias] }, feriados: [...d.feriados] }
       this.dados.set(d); this.form.set(f); this.original.set(f)
       this.estado.set('pronto')
       if (d.exigeTemplateForaDaJanela) void this.carregarTemplates(null)
@@ -282,6 +334,10 @@ export class AgenteAtivasComponente {
       const { [campo]: _campo, geral: _geral, ...resto } = e
       return resto
     })
+  }
+
+  mudarReativacao(parte: Partial<FormAtivas['reativacao']>): void {
+    this.mudar('reativacao', { ...this.form().reativacao, ...parte })
   }
 
   incluirFeriado(): void {

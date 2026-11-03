@@ -23,6 +23,8 @@ export class PresencaServico {
   /** ⚠️ Nasce DISPONÍVEL: o padrão do produto é atender. */
   readonly ausente = signal(false)
   readonly mexendo = signal(false)
+  /** Admin/gestor/supervisor — só decide o que MOSTRAR (Reatribuir); o servidor barra em cada rota. */
+  readonly gestao = signal(false)
   #batimento: ReturnType<typeof setInterval> | null = null
 
   /**
@@ -59,8 +61,9 @@ export class PresencaServico {
    */
   async carregar(): Promise<void> {
     try {
-      const r = await firstValueFrom(this.http.get<{ ausente: boolean }>('/v1/config/eu'))
+      const r = await firstValueFrom(this.http.get<{ ausente: boolean; gestao?: boolean }>('/v1/config/eu'))
       this.ausente.set(r.ausente === true)
+      this.gestao.set(r.gestao === true)
     } catch { /* sem resposta: fica no padrão disponível */ }
   }
 

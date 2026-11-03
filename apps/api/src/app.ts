@@ -6,7 +6,9 @@ import { rotasIntegracao } from './contexts/integracao/rotas.js'
 import { rotasSync } from './contexts/integracao/rotas-sync.js'
 import { rotasWebhooksSaida } from './contexts/integracao/rotas-webhooks-saida.js'
 import { rotasContatos } from './contexts/crm/rotas-contatos.js'
+import { rotasConsultas } from './contexts/crm/rotas-consultas.js'
 import { rotasBloqueios } from './contexts/crm/rotas-bloqueios.js'
+import { rotasEtiquetas } from './contexts/crm/rotas-etiquetas.js'
 import { rotasFunil } from './contexts/crm/rotas-funil.js'
 import { rotasLeads } from './contexts/crm/rotas-leads.js'
 import { rotasCrmAvancado } from './contexts/crm/rotas-crm-avancado.js'
@@ -32,6 +34,7 @@ import { rotasWebhook } from './contexts/atendimento/rotas-webhook.js'
 import { rotasWebhookMeta } from './contexts/atendimento/rotas-webhook-meta.js'
 import { rotasMensagens } from './contexts/atendimento/rotas-mensagens.js'
 import { rotasFila } from './contexts/atendimento/rotas-fila.js'
+import { rotasDevolucao } from './contexts/atendimento/rotas-devolucao.js'
 import { rotasTemplate } from './contexts/atendimento/rotas-template.js'
 import { rotasAtendimentoKanban } from './contexts/atendimento/rotas-atendimento-kanban.js'
 import { rotasPresenca } from './contexts/atendimento/rotas-presenca.js'
@@ -119,7 +122,9 @@ export async function criarApp(
   await app.register(rotasSync)
   await app.register(rotasWebhooksSaida)
   await app.register(rotasContatos)
+  await app.register(rotasConsultas)
   await app.register(rotasBloqueios)
+  await app.register(rotasEtiquetas)
   await app.register(rotasFunil)
   await app.register(rotasLeads)
   await app.register(rotasCrmAvancado)
@@ -145,6 +150,7 @@ export async function criarApp(
   await app.register(rotasWebhookMeta)
   await app.register(rotasMensagens)
   await app.register(rotasFila)
+  await app.register(rotasDevolucao)
   await app.register(rotasTemplate)
   await app.register(rotasAtendimentoKanban)
   await app.register(rotasPresenca)

@@ -35,6 +35,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/plataforma/auditoria.pagina.js').then((m) => m.AuditoriaPagina),
   bloqueios: () =>
     import('./funcionalidades/crm/bloqueios.pagina.js').then((m) => m.BloqueiosPagina),
+  'etiquetas-origens': () =>
+    import('./funcionalidades/crm/etiquetas-origens.pagina.js').then((m) => m.EtiquetasOrigensPagina),
   webhooks: () =>
     import('./funcionalidades/integracao/webhooks.pagina.js').then((m) => m.WebhooksPagina),
   funil: () =>
@@ -133,6 +135,18 @@ export const ROTAS: Routes = [
       { path: 'conversas', pathMatch: 'full', redirectTo: 'contatos' },
       // Ficha do contato: rota de detalhe (não vai no menu). `id` liga ao input
       // do componente via withComponentInputBinding.
+      // Cadastro/edição do contato (formulário-página). ⚠️ `contato/novo` ANTES de
+      // `contato/:id`, senão "novo" casa como id.
+      {
+        path: 'contato/novo',
+        loadComponent: () =>
+          import('./funcionalidades/crm/contato-form.pagina.js').then((m) => m.ContatoFormPagina),
+      },
+      {
+        path: 'contato/:id/editar',
+        loadComponent: () =>
+          import('./funcionalidades/crm/contato-form.pagina.js').then((m) => m.ContatoFormPagina),
+      },
       {
         path: 'contato/:id',
         loadComponent: () =>

@@ -2,6 +2,7 @@ import { Component, ChangeDetectionStrategy, inject } from '@angular/core'
 import { ActivatedRoute } from '@angular/router'
 import { toSignal } from '@angular/core/rxjs-interop'
 import { map } from 'rxjs'
+import { IconeComponente } from './ui/icone.componente.js'
 
 /**
  * Placeholder honesto para telas ainda não construídas.
@@ -17,9 +18,12 @@ import { map } from 'rxjs'
 @Component({
   selector: 'app-em-construcao',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [IconeComponente],
   template: `
     <div class="caixa">
-      <span class="icone">{{ dados()?.icone }}</span>
+      @if (dados()?.icone; as nome) {
+        <span class="icone"><ui-icone [nome]="nome" [tamanho]="18" /></span>
+      }
       <h1>{{ dados()?.rotulo }}</h1>
       <p class="job">{{ dados()?.descricao }}</p>
       <span class="selo">Em construção · {{ dados()?.onda }}</span>
@@ -34,7 +38,7 @@ import { map } from 'rxjs'
     .caixa { max-width: 460px; text-align: center; padding: var(--espacamento-8);
       border: 1px dashed var(--borda-forte); border-radius: var(--raio-painel);
       background: var(--superficie-elevada); }
-    .icone { font-size: 40px; display: block; margin-bottom: var(--espacamento-3); }
+    .icone { display: inline-flex; margin-bottom: var(--espacamento-3); }
     h1 { margin: 0; font-size: 20px; color: var(--texto); }
     .job { margin: var(--espacamento-2) 0 var(--espacamento-4); color: var(--texto-secundario); }
     .selo { display: inline-block; font-size: 12px; font-weight: 500; color: var(--atencao);

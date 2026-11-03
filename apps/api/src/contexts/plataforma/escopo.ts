@@ -116,6 +116,19 @@ export async function escopoDoUsuario(
   tx: Sql, quem: { sub: string; atorStaff?: boolean | undefined },
 ): Promise<Escopo> {
   if (quem.atorStaff) return decidirEscopo({ staff: true, usuarioId: null, usuarioAtivo: false, tenantTemAdminAtivo: false, vinculos: [] })
+  return lerEDecidir(tx, tx`u.cognito_sub = ${quem.sub}`)
+}
+
+/**
+ * O escopo de OUTRA pessoa do tenant, pelo `usuario.id` — para decisões sobre um
+ * destino (ex.: reatribuir a conversa a alguém que precisa poder atendê-la).
+ * Mesma regra; nunca staff.
+ */
+export async function escopoDoUsuarioId(tx: Sql, usuarioId: string): Promise<Escopo> {
+  return lerEDecidir(tx, tx`u.id = ${usuarioId}::uuid`)
+}
+
+async function lerEDecidir(tx: Sql, filtroUsuario: ReturnType<Sql>): Promise<Escopo> {
   const [l] = await tx<{
     id: string; ativo: boolean; tenant_tem_admin: boolean
     vinculos: { papel: string; filialId: string | null }[]
@@ -128,7 +141,7 @@ export async function escopoDoUsuario(
                        FROM usuario_filial uf
                       WHERE uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id), '[]'::json) AS vinculos
       FROM usuario u
-     WHERE u.tenant_id = tenant_atual() AND u.cognito_sub = ${quem.sub}`
+     WHERE u.tenant_id = tenant_atual() AND ${filtroUsuario}`
   return decidirEscopo({
     staff: false,
     usuarioId: l?.id ?? null,
@@ -324,6 +337,45 @@ export async function conversaNoEscopo(tx: Sql, escopo: Escopo, conversaId: stri
   const [l] = await tx`SELECT 1 FROM conversa cv
                         WHERE cv.tenant_id = tenant_atual() AND cv.id = ${conversaId}
                           AND ${condicaoConversa(tx, escopo)}`
+  return Boolean(l)
+}
+
+/**
+ * O usuário `usuarioId` PODE ATENDER esta conversa? Para o destino de uma
+ * reatribuição: ele precisa ter acesso ao cliente OU ao número pela regra de
+ * escopo — senão a gestão colocaria um cliente nas mãos de quem não o veria
+ * (antes da reatribuição) nem atende aquele número.
+ *
+ *   tudo     → sim;
+ *   inativo  → não;
+ *   senão    → o contato está no escopo dele, OU ele atende o número
+ *              (`usuario_canal` com ele, ou número sem ninguém vinculado), OU
+ *              (gestor de filial) o número é de uma das filiais dele.
+ *
+ * ⚠️ Não conta "atendimento aberto com ele": é justamente o que a reatribuição
+ *    vai criar.
+ */
+export async function podeAtenderConversa(tx: Sql, usuarioId: string, conversaId: string): Promise<boolean> {
+  const escopo = await escopoDoUsuarioId(tx, usuarioId)
+  if (escopo.tipo === 'tudo') return true
+  if (escopo.usuarioId === null || !UUID.test(conversaId)) return false
+  const u = escopo.usuarioId
+  const doNumeroDaFilial = escopo.tipo === 'filial'
+    ? tx`EXISTS (SELECT 1 FROM canal_conectado esc_cc
+                  WHERE esc_cc.tenant_id = cv.tenant_id AND esc_cc.id = cv.canal_id
+                    AND esc_cc.filial_id = ANY(${[...escopo.filialIds]}::uuid[]))`
+    : tx`false`
+  const [l] = await tx`
+    SELECT 1 FROM conversa cv
+     WHERE cv.tenant_id = tenant_atual() AND cv.id = ${conversaId}
+       AND (EXISTS (SELECT 1 FROM contato esc_ct
+                     WHERE esc_ct.tenant_id = cv.tenant_id AND esc_ct.id = cv.contato_id
+                       AND ${condicaoContato(tx, escopo, 'esc_ct')})
+            OR EXISTS (SELECT 1 FROM usuario_canal esc_uc
+                        WHERE esc_uc.tenant_id = cv.tenant_id AND esc_uc.canal_id = cv.canal_id AND esc_uc.usuario_id = ${u}::uuid)
+            OR NOT EXISTS (SELECT 1 FROM usuario_canal esc_uc
+                            WHERE esc_uc.tenant_id = cv.tenant_id AND esc_uc.canal_id = cv.canal_id)
+            OR ${doNumeroDaFilial})`
   return Boolean(l)
 }
 

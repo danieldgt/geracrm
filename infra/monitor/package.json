@@ -1,0 +1,15 @@
+{
+  "name": "@geracrm/monitor",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node monitor.mjs",
+    "test": "vitest run",
+    "lint": "oxlint .",
+    "typecheck": "node --check monitor.mjs"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  }
+}

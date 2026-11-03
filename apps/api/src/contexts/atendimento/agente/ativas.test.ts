@@ -79,9 +79,9 @@ const agendar = async (conversaId: string, canalId: string, executarEm = new Dat
 const retornos = (conversaId: string) => dono<{ estado: string; detalhe: string | null; executar_em: Date; tentativa: number }[]>`
   SELECT estado, detalhe, executar_em, tentativa FROM agente_retorno WHERE tenant_id = ${T} AND conversa_id = ${conversaId}
    ORDER BY criado_em, tentativa`
-// ⚠️ `criado_em` no relógio do teste (AGORA), não o default now(): `retornos` ordena por
-//    criado_em, e com o relógio real o "enviado há 2h" ficava DEPOIS do retorno agendado —
-//    o teste passou enquanto o relógio real coincidia com AGORA e quebrou depois.
+// ⚠️ `criado_em` também sai do relógio do teste (AGORA - ms): o default `now()` do banco é o relógio REAL,
+// que cai DEPOIS de AGORA assim que o calendário passa de 20/10/2026 e embaralha `retornos()`, que ordena por
+// `criado_em` (o `.at(-1)` passava a ser a ativa semeada, não o retorno processado).
 const enviadoHa = (conversaId: string, canalId: string, ms: number) => dono`
   INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, executar_em, estado, tentativa, concluido_em, criado_em)
   VALUES (${T}, ${randomUUID()}, ${conversaId}, ${canalId}, 'carrinho_abandonado', ${new Date(AGORA.getTime() - ms)}, 'enviado', 1,

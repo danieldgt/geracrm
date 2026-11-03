@@ -12,6 +12,8 @@ import { SugestaoServico } from './sugestao.servico.js'
 import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo, seloDaSugestao, tituloDaSugestao } from './sugestao.regras.js'
 import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.js'
 import { SlaCronometroComponente } from './sla-cronometro.componente.js'
+import { AcoesConversaComponente } from './acoes-conversa.componente.js'
+import { CONDUCOES } from '../../nucleo/devolucao.regras.js'
 import { CelularServico } from '../../nucleo/celular.servico.js'
 import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
 
@@ -24,7 +26,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
  */
 @Component({
   selector: 'app-inbox',
-  imports: [FormsModule, RouterLink, CanalSimboloComponente, SlaCronometroComponente],
+  imports: [FormsModule, RouterLink, CanalSimboloComponente, SlaCronometroComponente, AcoesConversaComponente],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="wa" [class.tem-conversa]="servico.selecionadaId()">
@@ -75,6 +77,13 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
           <button [class.ativa]="servico.filtro() === 'meus'" (click)="servico.trocarFiltro('meus')">
             Meus @if (servico.contadores().meus) { <span class="cont">{{ servico.contadores().meus }}</span> }
           </button>
+        </div>
+
+        <div class="abas conducao" role="group" aria-label="Quem conduz a conversa">
+          @for (c of conducoes; track c.id) {
+            <button type="button" [class.ativa]="servico.conduzidoPor() === c.id" [attr.aria-pressed]="servico.conduzidoPor() === c.id"
+                    (click)="servico.trocarConducao(c.id)">{{ c.rotulo }}</button>
+          }
         </div>
 
         <div class="itens">
@@ -176,6 +185,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                 <div class="topo-acoes">
                   <a class="pedido-btn" routerLink="/pedido" [queryParams]="{ conversa: t.id }"
                      title="Montar um pedido para este cliente">🛒 Montar pedido</a>
+                  <app-acoes-conversa [conversaId]="t.id" [atendimento]="t.atendimento" /><!-- G1: devolver ao agente / reatribuir -->
                   <app-sla-cronometro [conversaId]="t.id" /><!-- P18: SLA do handoff (some sem SLA armado) -->
                   @if (t.atendimento && t.atendimento.estado !== 'na_fila') {
                     <span class="atend-badge" [title]="'Atendimento ' + protocoloFmt(t.atendimento.protocolo)">
@@ -506,6 +516,8 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .abas { display: flex; gap: 4px; padding: 0 12px 8px; }
     .abas button { flex: 1; padding: 7px 8px; border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13px; background: var(--wa-panel); color: var(--wa-sec); display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
     .abas button.ativa { background: var(--wa-hover); color: var(--wa-text); font-weight: 600; }
+    .abas.conducao { padding-top: 0; }
+    .abas.conducao button { font-size: 12px; padding: 4px 8px; }
     .abas .cont { background: var(--wa-green); color: #04231d; font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 999px; min-width: 18px; text-align: center; }
     .itens { flex: 1; overflow-y: auto; min-height: 0; }
     .item { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: none; border: 0; border-bottom: 1px solid var(--wa-line); cursor: pointer; text-align: left; color: inherit; }
@@ -718,6 +730,7 @@ export class InboxPagina implements OnDestroy {
    * dois falando com o mesmo cliente, cada um sem saber do outro.
    */
   readonly presenca = inject(PresencaServico)
+  readonly conducoes = CONDUCOES
   /** P13: a sugestão do agente da conversa aberta (assistido/copiloto). */
   readonly sugestao = inject(SugestaoServico)
   readonly rotuloModo = rotuloModo
