@@ -38,6 +38,7 @@ import {
           <ui-stat-card [valor]="d.cartoes.recebidas" rotulo="Mensagens recebidas" />
           <ui-stat-card [valor]="d.cartoes.enviadas" rotulo="Mensagens enviadas" tom="acao" />
           <ui-stat-card [valor]="d.cartoes.enviadasHumanas + ' / ' + d.cartoes.enviadasAutomaticas" rotulo="Enviadas: humanas / automáticas" />
+          <ui-stat-card [valor]="d.cartoes.falhas" rotulo="Envios que falharam" tom="erro" />
           <ui-stat-card [valor]="d.cartoes.conversasIniciadas" rotulo="Conversas iniciadas" />
           <ui-stat-card [valor]="pct(d.cartoes.pctNoLimite)" [rotulo]="'Respondidas por gente em até ' + d.limiteMin + ' min'" tom="sucesso" />
         </div>
@@ -56,7 +57,7 @@ import {
         <div class="barra-tabela">
           <span class="txt-denso nota">
             Período {{ c.inicio() }} a {{ c.fim() }}. Tempo da chegada da 1ª mensagem do cliente até a 1ª resposta;
-            p50 = metade respondeu até esse tempo, p95 = 95% respondeu até esse tempo.
+            p50 = metade respondeu até esse tempo, p95 = 95% respondeu até esse tempo. Avisos do sistema (transferência, devolução) e envios que falharam não entram em "enviadas".
           </span>
           <ui-botao-csv [colunas]="csv().colunas" [linhas]="csv().linhas" [arquivo]="arquivoCsv()" />
         </div>

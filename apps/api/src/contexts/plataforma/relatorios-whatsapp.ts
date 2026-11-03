@@ -17,6 +17,11 @@ import { diasDoPeriodo } from './relatorios-vendas.js'
  * Coorte: atendimentos CRIADOS no período com `primeira_entrante_em`.
  * `pctNoLimite` = respondidos por gente em até `limiteMin` minutos / atendimentos da coorte (0..1; null sem coorte).
  *
+ * Mensagens: `tipo = 'sistema'` (handoff, devolução, notas internas) NÃO é mensagem de ninguém e fica fora de tudo.
+ * `enviadas` exclui as que FALHARAM (`status = 'falhou'`: não chegaram ao cliente) — elas vão no cartão `falhas`.
+ * 1ª resposta anterior à chegada (relógio/dado inconsistente) é descartada: nunca há tempo negativo.
+ * O escopo é aplicado UMA vez por conversa (CTE `vis`, materializada fora do escopo "tudo"), não por mensagem.
+ *
  * Mensagens por dia: `mensagem` é particionada por `criado_em`; a consulta sempre leva o intervalo do período
  * (máx. 366 dias) — poda de partição + índice (tenant_id, criado_em). Sem view materializada nesta leva: o
  * escopo por conversa não cabe numa MV (sem RLS) e o período é sempre limitado. Reavaliar se o volume pedir.
@@ -44,52 +49,64 @@ export interface CartoesWhatsapp {
   readonly enviadas: number
   readonly enviadasHumanas: number
   readonly enviadasAutomaticas: number
+  /** Saídas que falharam (status 'falhou'): fora de `enviadas`. */
+  readonly falhas: number
   readonly conversasIniciadas: number
   readonly atendimentos: number
   readonly respondidasNoLimite: number
   readonly pctNoLimite: number | null
 }
 
+
 const arred = (v: number | null): number | null => (v === null ? null : Math.round(v))
+
+/** Conversas WhatsApp visíveis no escopo (alias `vis`). Fora do escopo "tudo" materializa; no "tudo" o planner inlina. */
+function conversasVisiveis(tx: Sql, escopo: Escopo) {
+  const materializar = escopo.tipo === 'tudo' ? tx`NOT MATERIALIZED` : tx`MATERIALIZED`
+  return tx`vis AS ${materializar} (
+    SELECT cv.id, cv.criado_em
+      FROM conversa cv
+      JOIN canal_conectado cc ON cc.tenant_id = cv.tenant_id AND cc.id = cv.canal_id
+     WHERE cv.tenant_id = tenant_atual() AND cc.tipo LIKE 'whatsapp%'
+       AND ${condicaoConversa(tx, escopo)})`
+}
 
 export async function relatorioWhatsapp(
   tx: Sql, p: PeriodoResolvido, escopo: Escopo, limiteMin: number,
 ): Promise<{ cartoes: CartoesWhatsapp; porDia: DiaMensagens[]; primeiraResposta: PrimeiraResposta[] }> {
-  const dias = await tx<{ dia: string; recebidas: number; enviadas: number; humanas: number }[]>`
+  const dias = await tx<{ dia: string; recebidas: number; enviadas: number; humanas: number; falhas: number }[]>`
+    WITH ${conversasVisiveis(tx, escopo)}
     SELECT to_char(m.criado_em AT TIME ZONE ${p.fuso}::text, 'YYYY-MM-DD') AS dia,
            count(*) FILTER (WHERE m.direcao = 'entrante')::int AS recebidas,
-           count(*) FILTER (WHERE m.direcao = 'saliente')::int AS enviadas,
-           count(*) FILTER (WHERE m.direcao = 'saliente' AND m.enviada_por_id IS NOT NULL)::int AS humanas
+           count(*) FILTER (WHERE m.direcao = 'saliente' AND m.status IS DISTINCT FROM 'falhou')::int AS enviadas,
+           count(*) FILTER (WHERE m.direcao = 'saliente' AND m.status IS DISTINCT FROM 'falhou'
+                              AND m.enviada_por_id IS NOT NULL)::int AS humanas,
+           count(*) FILTER (WHERE m.direcao = 'saliente' AND m.status = 'falhou')::int AS falhas
       FROM mensagem m
-      JOIN conversa cv ON cv.tenant_id = m.tenant_id AND cv.id = m.conversa_id
-      JOIN canal_conectado cc ON cc.tenant_id = cv.tenant_id AND cc.id = cv.canal_id
+      JOIN vis ON vis.id = m.conversa_id
      WHERE m.tenant_id = tenant_atual() AND m.criado_em >= ${p.desde} AND m.criado_em < ${p.ate}
-       AND cc.tipo LIKE 'whatsapp%'
-       AND ${condicaoConversa(tx, escopo)}
+       AND m.tipo <> 'sistema'
      GROUP BY 1`
   const porDia = new Map(dias.map((d) => [d.dia, d]))
 
   const [iniciadas] = await tx<{ n: number }[]>`
-    SELECT count(*)::int AS n
-      FROM conversa cv
-      JOIN canal_conectado cc ON cc.tenant_id = cv.tenant_id AND cc.id = cv.canal_id
-     WHERE cv.tenant_id = tenant_atual() AND cv.criado_em >= ${p.desde} AND cv.criado_em < ${p.ate}
-       AND cc.tipo LIKE 'whatsapp%'
-       AND ${condicaoConversa(tx, escopo)}`
+    WITH ${conversasVisiveis(tx, escopo)}
+    SELECT count(*)::int AS n FROM vis WHERE vis.criado_em >= ${p.desde} AND vis.criado_em < ${p.ate}`
 
   const [r] = await tx<{
     base: number; no_limite: number
     n_h: number; h50: number | null; h95: number | null
     n_a: number; a50: number | null; a95: number | null
   }[]>`
-    WITH coorte AS (
-      SELECT a.primeira_entrante_em AS entrou, a.primeira_resposta_em AS qualquer, a.primeira_resposta_humana_em AS humana
+    WITH ${conversasVisiveis(tx, escopo)},
+    coorte AS (
+      SELECT a.primeira_entrante_em AS entrou,
+             CASE WHEN a.primeira_resposta_em >= a.primeira_entrante_em THEN a.primeira_resposta_em END AS qualquer,
+             CASE WHEN a.primeira_resposta_humana_em >= a.primeira_entrante_em THEN a.primeira_resposta_humana_em END AS humana
         FROM atendimento a
-        JOIN conversa cv ON cv.tenant_id = a.tenant_id AND cv.id = a.conversa_id
-        JOIN canal_conectado cc ON cc.tenant_id = cv.tenant_id AND cc.id = cv.canal_id
+        JOIN vis ON vis.id = a.conversa_id
        WHERE a.tenant_id = tenant_atual() AND a.criado_em >= ${p.desde} AND a.criado_em < ${p.ate}
-         AND a.primeira_entrante_em IS NOT NULL AND cc.tipo LIKE 'whatsapp%'
-         AND ${condicaoConversa(tx, escopo)}
+         AND a.primeira_entrante_em IS NOT NULL
     )
     SELECT count(*)::int AS base,
            count(*) FILTER (WHERE humana IS NOT NULL
@@ -110,11 +127,12 @@ export async function relatorioWhatsapp(
   const recebidas = serie.reduce((s, d) => s + d.recebidas, 0)
   const enviadas = serie.reduce((s, d) => s + d.enviadas, 0)
   const humanas = dias.reduce((s, d) => s + d.humanas, 0)
+  const falhas = dias.reduce((s, d) => s + d.falhas, 0)
   const base = r?.base ?? 0
   const noLimite = r?.no_limite ?? 0
   return {
     cartoes: {
-      recebidas, enviadas, enviadasHumanas: humanas, enviadasAutomaticas: enviadas - humanas,
+      recebidas, enviadas, enviadasHumanas: humanas, enviadasAutomaticas: enviadas - humanas, falhas,
       conversasIniciadas: iniciadas?.n ?? 0, atendimentos: base, respondidasNoLimite: noLimite,
       pctNoLimite: base > 0 ? Math.round((noLimite / base) * 10_000) / 10_000 : null,
     },

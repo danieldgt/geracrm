@@ -59,6 +59,7 @@ export interface RespostaWhatsapp {
   readonly periodo: PeriodoApi; readonly limiteMin: number
   readonly cartoes: {
     readonly recebidas: number; readonly enviadas: number; readonly enviadasHumanas: number; readonly enviadasAutomaticas: number
+    readonly falhas: number
     readonly conversasIniciadas: number; readonly atendimentos: number; readonly respondidasNoLimite: number
     readonly pctNoLimite: number | null
   }
