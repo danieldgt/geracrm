@@ -1,7 +1,8 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { FormsModule } from '@angular/forms'
 import { TemplatesServico, type CorpoTemplate, type ItemTemplate } from './templates.servico.js'
-import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
+import { ConfirmacaoServico, SelectComponente, ToastServico } from '../../compartilhado/ui/index.js'
+import { OPCOES_CAMPO_MAPEAMENTO, mapeamentoParaSalvar, variaveisDoTemplate, variaveisSemCampo } from './templates.regras.js'
 
 interface Rascunho { id: string | null; nome: string; categoria: string; header: string; body: string; footer: string; botoes: string }
 const VAZIO: Rascunho = { id: null, nome: '', categoria: 'MARKETING', header: '', body: '', footer: '', botoes: '' }
@@ -24,7 +25,7 @@ const ERRO_CRIAR: Record<string, string> = {
 @Component({
   selector: 'app-templates',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule],
+  imports: [FormsModule, SelectComponente],
   template: `
     <header class="cabecalho">
       <div>
@@ -64,6 +65,19 @@ const ERRO_CRIAR: Record<string, string> = {
                 @if (t.corpo?.footer?.texto) { <p class="tpl-footer">{{ t.corpo.footer!.texto }}</p> }
                 @if (t.corpo?.botoes?.length) {
                   <div class="tpl-botoes">@for (b of t.corpo.botoes!; track $index) { <span class="btn-chip">{{ b.texto }}</span> }</div>
+                }
+                @if (variaveis(t); as vars) {
+                  @if (vars.length > 0) {
+                    <div class="mapa">
+                      <p class="mapa-tit">Variáveis do corpo
+                        @if (semCampo(t) > 0) { <span class="mapa-aviso">· {{ semCampo(t) }} sem campo</span> }
+                      </p>
+                      @for (v of vars; track v) {
+                        <ui-select [rotulo]="'{{' + v + '}}'" placeholder="Sem campo" [largo]="true"
+                          [opcoes]="opcoesCampo" [valor]="campoDe(t, v)" (valorChange)="mapear(t, v, $event)" />
+                      }
+                    </div>
+                  }
                 }
                 @if (t.statusMeta === 'REJECTED' && t.motivoRejeicao) {
                   <p class="rejeicao">✕ {{ t.motivoRejeicao }}</p>
@@ -161,6 +175,9 @@ const ERRO_CRIAR: Record<string, string> = {
     .tpl-botoes { display: flex; flex-wrap: wrap; gap: 4px; }
     .btn-chip { font-size: 11px; color: var(--acao); border: 1px solid var(--acao-suave); background: var(--acao-suave); border-radius: var(--raio-controle); padding: 1px 8px; }
     .rejeicao { margin: 0; font-size: 12px; color: var(--erro); }
+    .mapa { display: flex; flex-direction: column; gap: var(--espacamento-2); padding-top: var(--espacamento-2); border-top: 1px solid var(--borda); }
+    .mapa-tit { margin: 0; font-size: 12px; font-weight: 600; color: var(--texto-secundario); }
+    .mapa-aviso { font-weight: 400; color: var(--atencao); }
     .tpl-acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-1); }
     .tpl-acoes button { flex: 1; padding: 5px 8px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto-secundario); font: inherit; font-size: 12px; cursor: pointer; }
     .tpl-acoes .del:hover { background: var(--erro-suave); color: var(--erro); border-color: var(--erro); }
@@ -186,6 +203,21 @@ export class TemplatesPagina implements OnInit {
   ngOnInit(): void { void this.servico.carregar() }
 
   rotulo(s: string): string { return ROTULO_STATUS[s] ?? s }
+
+  readonly opcoesCampo = OPCOES_CAMPO_MAPEAMENTO
+  /** Variáveis {{n}} do cabeçalho e do corpo (a lista que o editor de mapeamento mostra). */
+  variaveis(t: ItemTemplate): number[] { return variaveisDoTemplate(t.corpo) }
+  semCampo(t: ItemTemplate): number { return variaveisSemCampo(this.variaveis(t), t.mapeamentoVariaveis ?? {}) }
+  campoDe(t: ItemTemplate, v: number): string { return t.mapeamentoVariaveis?.[String(v)] ?? '' }
+
+  /** Escolher o campo salva na hora; vazio remove a variável do mapeamento. */
+  async mapear(t: ItemTemplate, v: number, campo: string): Promise<void> {
+    if (campo === this.campoDe(t, v)) return
+    const escolhas = { ...t.mapeamentoVariaveis, [String(v)]: campo }
+    const erro = await this.servico.salvarMapeamento(t.id, mapeamentoParaSalvar(this.variaveis(t), escolhas))
+    if (erro) this.servico.erro.set(erro)
+    else { this.servico.erro.set(null); this.toast.sucesso('Mapeamento salvo') }
+  }
 
   abrirNovo(): void { this.erroForm.set(null); this.rascunho.set({ ...VAZIO }) }
   abrirEdicao(t: ItemTemplate): void {

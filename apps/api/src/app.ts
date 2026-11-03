@@ -68,6 +68,7 @@ import type { ProvedorIdentidade } from './contexts/identidade/provedor-identida
 // Raias do plano-port-playbook-am: registradas pela P0, preenchidas cada uma no seu arquivo.
 import { rotasCompliance } from './contexts/atendimento/agente/rotas-compliance.js'
 import { rotasCusto } from './contexts/atendimento/agente/rotas-custo.js'
+import { rotasConsumo } from './contexts/atendimento/rotas-consumo.js'
 import { rotasPrivacidade } from './contexts/atendimento/agente/rotas-privacidade.js'
 import { rotasAtivas } from './contexts/atendimento/agente/rotas-ativas.js'
 import { rotasQualidade } from './contexts/atendimento/agente/rotas-qualidade.js'
@@ -192,6 +193,7 @@ export async function criarApp(
   //    precisa editar este bloco.
   await app.register(rotasCompliance)
   await app.register(rotasCusto)
+  await app.register(rotasConsumo)
   await app.register(rotasPrivacidade)
   await app.register(rotasAtivas)
   await app.register(rotasQualidade)
