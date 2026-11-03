@@ -1,7 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core'
 import { textoSelecionados } from './lista.regras.js'
 
-/** Faixa de seleção do padrão Lista: "N selecionado(s)" + botões projetados + Limpar seleção. Some em 0. */
+/**
+ * Faixa de seleção do padrão Lista: "N selecionado(s)" + botões projetados + Limpar seleção. Some em 0.
+ * `quantidade` deve vir do `selecionados` da `ui-tabela`, que já é podado às linhas visíveis quando
+ * `linhas` muda — a faixa nunca anuncia seleção que o usuário não enxerga.
+ */
 @Component({
   selector: 'ui-acoes-lote',
   changeDetection: ChangeDetectionStrategy.OnPush,

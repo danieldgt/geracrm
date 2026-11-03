@@ -21,7 +21,7 @@ import {
   template: `
     <div class="campo">
       @if (rotulo()) {
-        <label class="rotulo" [for]="id">{{ rotulo() }}@if (obrigatorio()) { <span class="obrigatorio" aria-hidden="true">*</span> }</label>
+        <label class="rotulo txt-denso" [for]="id">{{ rotulo() }}@if (obrigatorio()) { <span class="obrigatorio" aria-hidden="true">*</span> }</label>
       }
       <div class="ancora">
         <input class="controle" [id]="id" type="text" role="combobox" autocomplete="off"
@@ -32,25 +32,31 @@ import {
                [placeholder]="placeholder()" [disabled]="desabilitadoEfetivo()"
                [value]="aberto() ? termo() : rotuloAtual()"
                (focus)="abrir()" (click)="abrir()" (input)="digitou($any($event.target).value)"
-               (keydown)="teclou($event)" (blur)="aoTocar()" />
+               (keydown)="teclou($event)" (blur)="aoSairFoco($event)" />
         @if (aberto()) {
-          <ul class="lista" role="listbox" [id]="idLista" (scroll)="rolou($any($event.target))">
+          <ul class="lista" role="listbox" [id]="idLista" (scroll)="rolou($any($event.target))"
+              (mousedown)="$event.preventDefault()">
             @for (o of estado.itens(); track o.valor; let i = $index) {
               <li role="option" class="opcao" [id]="idOpcao(i)" [class.ativa]="i === ativo()"
-                  [attr.aria-selected]="o.valor === valor()" (mousedown)="$event.preventDefault()"
+                  [attr.aria-selected]="o.valor === valor()"
                   (click)="escolher(o)">
                 <span>{{ o.rotulo }}</span>
-                @if (o.dica) { <span class="opcao-dica">{{ o.dica }}</span> }
+                @if (o.dica) { <span class="opcao-dica txt-denso">{{ o.dica }}</span> }
               </li>
             }
-            @if (estado.carregando()) { <li class="aviso" role="presentation">Carregando…</li> }
-            @else if (estado.falhou()) { <li class="aviso aviso-erro" role="presentation">Não foi possível carregar.</li> }
-            @else if (estado.itens().length === 0) { <li class="aviso" role="presentation">Nada encontrado.</li> }
+            @if (estado.carregando()) { <li class="aviso txt-denso" role="presentation">Carregando…</li> }
+            @else if (estado.falhou()) {
+              <li class="aviso aviso-erro txt-denso" role="presentation">
+                Não foi possível carregar.
+                <button type="button" class="tentar" (click)="estado.tentarNovamente()">Tentar novamente</button>
+              </li>
+            }
+            @else if (estado.itens().length === 0) { <li class="aviso txt-denso" role="presentation">Nada encontrado.</li> }
           </ul>
         }
       </div>
-      @if (dica()) { <span class="dica" [id]="idDica">{{ dica() }}</span> }
-      @if (erro()) { <span class="msg-erro" [id]="idErro" role="alert">{{ erro() }}</span> }
+      @if (dica()) { <span class="dica txt-denso" [id]="idDica">{{ dica() }}</span> }
+      @if (erro()) { <span class="msg-erro txt-denso" [id]="idErro" role="alert">{{ erro() }}</span> }
     </div>
   `,
   styles: [ESTILOS_CONTROLE, `
@@ -63,9 +69,12 @@ import {
     .opcao { display: flex; flex-direction: column; padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle); cursor: pointer; }
     .opcao.ativa, .opcao:hover { background: var(--superficie-hover); }
     .opcao[aria-selected='true'] { font-weight: 600; }
-    .opcao-dica { font-size: 12px; color: var(--texto-secundario); }
-    .aviso { padding: var(--espacamento-2) var(--espacamento-3); font-size: 12px; color: var(--texto-secundario); }
+    .opcao-dica { color: var(--texto-secundario); }
+    .aviso { padding: var(--espacamento-2) var(--espacamento-3); color: var(--texto-secundario); }
     .aviso-erro { color: var(--erro); }
+    .tentar { margin-left: var(--espacamento-2); border: 0; background: transparent; color: var(--acao-texto);
+      font: inherit; text-decoration: underline; cursor: pointer; }
+    .tentar:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
   `],
 })
 export class SelectPaginadoComponente implements ControlValueAccessor {
@@ -74,7 +83,7 @@ export class SelectPaginadoComponente implements ControlValueAccessor {
   readonly idErro = idErro(this.id)
   readonly idLista = `${this.id}-lista`
 
-  /** Busca uma página (1-based) para o termo digitado. */
+  /** Busca uma página por CURSOR (nulo = primeira) para o termo digitado. */
   readonly carregar = input.required<CarregarOpcoes>()
   /** Opção do valor já salvo, para mostrar o rótulo na edição. */
   readonly opcaoInjetada = input<OpcaoPaginada | null>(null)
@@ -124,7 +133,16 @@ export class SelectPaginadoComponente implements ControlValueAccessor {
     if (this.aberto() && !(e.target as HTMLElement).closest(`#${this.id}, #${this.idLista}`)) this.fechar()
   }
 
+  /** Foco saiu da âncora (Tab ou clique fora): fecha a lista. Foco ainda dentro dela não fecha. */
+  protected aoSairFoco(e: FocusEvent): void {
+    const ancora = (e.currentTarget as HTMLElement | null)?.closest('.ancora')
+    const para = e.relatedTarget as Node | null
+    if (!(ancora && para && ancora.contains(para))) this.fechar()
+    this.aoTocar()
+  }
+
   protected digitou(texto: string): void {
+    if (!this.aberto()) { this.aberto.set(true) }
     this.termo.set(texto)
     this.ativo.set(-1)
     this.estado.digitar(texto)
@@ -149,7 +167,7 @@ export class SelectPaginadoComponente implements ControlValueAccessor {
         break
       }
       case 'Escape':
-        if (this.aberto()) { e.preventDefault(); this.fechar() }
+        if (this.aberto()) { e.preventDefault(); e.stopPropagation(); this.fechar() }
         break
     }
   }

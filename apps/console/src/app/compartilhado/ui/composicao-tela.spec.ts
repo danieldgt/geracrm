@@ -22,7 +22,7 @@ describe('ui-modal', () => {
   it('Esc fecha e véu fecha (contrato do template)', () => {
     const src = fonte('modal.componente.ts')
     expect(src).toContain("e.key === 'Escape'")
-    expect(src).toMatch(/class="overlay" \(click\)="fechar\.emit\(\)"/)
+    expect(src).toMatch(/class="overlay" \(mousedown\)="marcarVeu\(\$event\)" \(mouseup\)="soltarNoVeu\(\$event\)"/)
     expect(src).toContain('role="dialog"')
     expect(src).toContain('aria-modal="true"')
   })

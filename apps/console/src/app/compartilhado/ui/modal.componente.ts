@@ -9,7 +9,9 @@ let serie = 0
 
 /**
  * Modal de verdade: véu fixo, foco no primeiro campo e preso, Esc/véu fecham,
- * foco devolvido ao fechar. Corpo rola; o slot [rodape] fica fixo.
+ * foco devolvido ao fechar. O véu só fecha se o mousedown E o mouseup foram nele — arrastar
+ * a seleção de texto de dentro da caixa para fora NÃO descarta o formulário.
+ * (O conteúdo de fundo não recebe `inert`: o shell já usa inert na gaveta e o foco já fica preso.) Corpo rola; o slot [rodape] fica fixo.
  * Abaixo de 720 px ocupa a tela inteira.
  *
  *   <ui-modal [aberto]="aberto()" titulo="Novo contato" largura="m" (fechar)="aberto.set(false)">
@@ -22,10 +24,10 @@ let serie = 0
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (aberto()) {
-      <div class="overlay" (click)="fechar.emit()">
+      <div class="overlay" (mousedown)="marcarVeu($event)" (mouseup)="soltarNoVeu($event)">
         <div #caixa class="modal" [class.modal--p]="largura() === 'p'" [class.modal--g]="largura() === 'g'"
              role="dialog" aria-modal="true" tabindex="-1"
-             [attr.aria-labelledby]="idTitulo" (click)="$event.stopPropagation()"
+             [attr.aria-labelledby]="idTitulo"
              (keydown)="aoTeclar($event)">
           <header class="cab">
             <h2 [id]="idTitulo" class="txt-secao">{{ titulo() }}</h2>
@@ -72,6 +74,7 @@ export class ModalComponente {
   protected readonly idTitulo = `ui-modal-titulo-${++serie}`
   private readonly caixa = viewChild<ElementRef<HTMLElement>>('caixa')
   private anterior: Element | null = null
+  private comecouNoVeu = false
 
   constructor() {
     afterRenderEffect(() => {
@@ -91,9 +94,17 @@ export class ModalComponente {
     })
   }
 
+  protected marcarVeu(e: MouseEvent): void { this.comecouNoVeu = e.target === e.currentTarget }
+
+  protected soltarNoVeu(e: MouseEvent): void {
+    const fechaPeloVeu = this.comecouNoVeu && e.target === e.currentTarget
+    this.comecouNoVeu = false
+    if (fechaPeloVeu) this.fechar.emit()
+  }
+
   protected aoTeclar(e: KeyboardEvent): void {
     if (e.key === 'Escape') { e.stopPropagation(); this.fechar.emit(); return }
     const el = this.caixa()?.nativeElement
-    if (el && prenderTab(el, e, document.activeElement)) e.preventDefault()
+    if (el && prenderTab(el, e, document.activeElement)) { e.preventDefault(); e.stopPropagation() }
   }
 }

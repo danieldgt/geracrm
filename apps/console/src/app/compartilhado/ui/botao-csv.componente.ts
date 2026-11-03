@@ -16,7 +16,7 @@ export class BotaoCsvComponente {
   readonly colunas = input.required<readonly ColunaCsv[]>()
   readonly linhas = input<readonly Record<string, unknown>[]>([])
   readonly arquivo = input('exportacao')
-  readonly virgulaDecimal = input(false)
+  readonly virgulaDecimal = input(true)
 
   protected exportar(): void {
     baixarCsv(this.arquivo(), paraCsv(this.colunas(), this.linhas(), { virgulaDecimal: this.virgulaDecimal() }))

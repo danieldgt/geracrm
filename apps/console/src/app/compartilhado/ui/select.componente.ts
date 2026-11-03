@@ -13,7 +13,7 @@ export interface OpcaoSelect { valor: string; rotulo: string }
   template: `
     <div class="campo">
       @if (rotulo()) {
-        <label class="rotulo" [for]="id">{{ rotulo() }}@if (obrigatorio()) { <span class="obrigatorio" aria-hidden="true">*</span> }</label>
+        <label class="rotulo txt-denso" [for]="id">{{ rotulo() }}@if (obrigatorio()) { <span class="obrigatorio" aria-hidden="true">*</span> }</label>
       }
       <select class="controle" [id]="id" [disabled]="desabilitadoEfetivo()"
               [attr.aria-invalid]="aria().ariaInvalid" [attr.aria-required]="aria().ariaRequired"
@@ -24,8 +24,8 @@ export interface OpcaoSelect { valor: string; rotulo: string }
           <option [value]="o.valor" [selected]="o.valor === valor()">{{ o.rotulo }}</option>
         }
       </select>
-      @if (dica()) { <span class="dica" [id]="idDica">{{ dica() }}</span> }
-      @if (erro()) { <span class="msg-erro" [id]="idErro" role="alert">{{ erro() }}</span> }
+      @if (dica()) { <span class="dica txt-denso" [id]="idDica">{{ dica() }}</span> }
+      @if (erro()) { <span class="msg-erro txt-denso" [id]="idErro" role="alert">{{ erro() }}</span> }
     </div>
   `,
   styles: ESTILOS_CONTROLE,
