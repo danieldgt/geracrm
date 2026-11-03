@@ -41,7 +41,7 @@ beforeEach(async () => {
 afterAll(async () => {
   await dono`DELETE FROM tarefa WHERE tenant_id IN (${T}, ${OUTRO})`
   await dono`DELETE FROM contato WHERE tenant_id IN (${T}, ${OUTRO})`
-  await dono`DELETE FROM auditoria WHERE tenant_id IN (${T}, ${OUTRO}) AND acao = 'tarefa.lote'`
+  await dono`DELETE FROM auditoria WHERE tenant_id IN (${T}, ${OUTRO}) AND acao LIKE 'tarefa.%'`
   await dono`DELETE FROM usuario WHERE tenant_id IN (${T}, ${OUTRO})`
   for (const t of [T, OUTRO]) {
     await dono`UPDATE tenant SET perfil_vertical_id = NULL WHERE id = ${t}`
@@ -247,5 +247,184 @@ describe('Tarefas v2 — sem próximo passo', () => {
     await chamar(OUTRO, 'POST', '/v1/tarefas', { titulo: 'x', venceEm: em(H), contatoId: CO })
     const r = json<{ itens: { semProximoPasso: boolean }[] }>(await chamar(T, 'GET', `/v1/tarefas/sem-proximo-passo?contatoIds=${CO}`))
     expect(r.itens[0]!.semProximoPasso).toBe(true)
+  })
+})
+
+describe('Tarefas v2 — revisão adversarial (validação, cursor, responsável nulo, autorização)', () => {
+  const ADMIN_FIXO = 'fa5e0000-6666-4000-8000-000000000001'
+  const COLEGA = 'fa5e0000-6666-4000-8000-000000000002'
+  const papelDe = (u: string, p: string) =>
+    dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${T}, ${u}, NULL, ${p})
+         ON CONFLICT (tenant_id, usuario_id) WHERE filial_id IS NULL DO UPDATE SET papel = EXCLUDED.papel`
+
+  let eu = ''
+  beforeEach(async () => {
+    await dono`DELETE FROM usuario_filial WHERE tenant_id = ${T}`
+    await dono`DELETE FROM auditoria WHERE tenant_id = ${T} AND acao LIKE 'tarefa.%'`
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${T}, ${ADMIN_FIXO}, 'sub-admin-c1b', 'Ada', 'ada@c1b.test') ON CONFLICT DO NOTHING`
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${T}, ${COLEGA}, 'sub-colega-c1b', 'Cola', 'cola@c1b.test') ON CONFLICT DO NOTHING`
+    await papelDe(ADMIN_FIXO, 'admin') // leaves the founder mode: the dev user has no role until a test grants one
+    await criar(T, em(H), 'semente') // creates the dev user row
+    const [u] = await dono<{ id: string }[]>`SELECT id FROM usuario WHERE tenant_id=${T} AND cognito_sub=${'dev-' + T}`
+    eu = u!.id
+    await dono`DELETE FROM tarefa WHERE tenant_id = ${T}`
+  })
+  const inserir = async (titulo: string, venceEm: string, extra: { resp?: string | null; criador?: string | null } = {}) => {
+    const [r] = await dono<{ id: string }[]>`
+      INSERT INTO tarefa (tenant_id, id, titulo, vence_em, responsavel_id, criado_por)
+      VALUES (${T}, gen_random_uuid(), ${titulo}, ${venceEm}::text::timestamptz, ${extra.resp ?? null}, ${extra.criador ?? null}) RETURNING id`
+    return r!.id
+  }
+  const lista = async (qs: string) => json<Lista>(await chamar(T, 'GET', `/v1/tarefas?${qs}`)).itens.map((i) => i.titulo)
+
+  it('situacao=hoje é só o dia local: tarefa de ontem aberta fica em atrasadas', async () => {
+    const [l] = await dono<{ ini: Date }[]>`
+      SELECT date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo' AS ini`
+    const ini = l!.ini.getTime()
+    await criar(T, new Date(ini - 3600_000).toISOString(), 'ontem')
+    await criar(T, new Date(ini + 60_000).toISOString(), 'hoje cedo')
+    expect(await lista('situacao=hoje')).toEqual(['hoje cedo'])
+    expect(await lista('situacao=atrasadas')).toContain('ontem')
+  })
+
+  it('POST valida contato e responsável (422 por campo, nunca 500)', async () => {
+    const base = { titulo: 'x', venceEm: em(H) }
+    for (const [corpo, campo] of [
+      [{ ...base, contatoId: 'nao-uuid' }, 'contatoId'],
+      [{ ...base, contatoId: 'fa5e0000-7777-4000-8000-000000000001' }, 'contatoId'], // well-formed, not found
+      [{ ...base, contatoId: CO }, 'contatoId'], // another tenant's contact
+      [{ ...base, responsavelId: 'nao-uuid' }, 'responsavelId'],
+      [{ ...base, responsavelId: 'fa5e0000-7777-4000-8000-000000000002' }, 'responsavelId'],
+    ] as const) {
+      const r = await chamar(T, 'POST', '/v1/tarefas', corpo)
+      expect(r.statusCode).toBe(422)
+      expect(json<{ campos: string[] }>(r).campos).toContain(campo)
+    }
+    expect((await dono`SELECT 1 FROM tarefa WHERE tenant_id=${T}`).length).toBe(0)
+  })
+
+  it('entradas inválidas → 422 (corpo e consulta)', async () => {
+    const post = (c: Record<string, unknown>) => chamar(T, 'POST', '/v1/tarefas', { titulo: 'x', venceEm: em(H), ...c })
+    expect((await post({ venceEm: '2026-02-31T10:00:00Z' })).statusCode).toBe(422)
+    expect((await post({ venceEm: '2026-02-10' })).statusCode).toBe(422) // no time/zone
+    expect((await post({ venceEm: 'amanhã' })).statusCode).toBe(422)
+    expect((await post({ venceEm: 123 })).statusCode).toBe(422)
+    expect((await post({ titulo: 42 })).statusCode).toBe(422)
+    expect((await post({ descricao: 'd'.repeat(5001) })).statusCode).toBe(422)
+    expect((await post({ venceEm: '2030-06-01T10:00:00-03:00' })).statusCode).toBe(201)
+    for (const qs of ['de=2026-02-31', 'ate=2026-13-01', 'de=ontem', 'situacao=xyz', 'tipo=fax',
+      'contatoId=abc', 'responsavelId=abc', `q=${'a'.repeat(201)}`, 'tipo=ligacao&tipo=email']) {
+      expect((await chamar(T, 'GET', `/v1/tarefas?${qs}`)).statusCode, qs).toBe(422)
+    }
+    expect((await chamar(T, 'GET', '/v1/tarefas/contadores?responsavelId=abc')).statusCode).toBe(422)
+  })
+
+  it('cursor malformado → 422', async () => {
+    const b64 = (t: string) => Buffer.from(t).toString('base64url')
+    for (const c of ['abc', b64('sem-separador'), b64('2026-01-01§x'), b64(`ontem§${C1}`),
+      b64(`2026-02-31T10:00:00.000000Z§${C1}`), b64(`2026-01-01T25:00:00.000000Z§${C1}`),
+      b64(`2026-01-01T10:00:00.000000Z§${C1}§extra`)]) {
+      const r = await chamar(T, 'GET', `/v1/tarefas?cursor=${c}`)
+      expect(r.statusCode, c).toBe(422)
+      expect(json<{ erro: string }>(r).erro).toBe('cursor.invalido')
+    }
+  })
+
+  it(':id que não é UUID → 404; resultado inválido → 422; lote com entrada inválida → 422', async () => {
+    expect((await chamar(T, 'POST', '/v1/tarefas/nao-uuid/concluir')).statusCode).toBe(404)
+    expect((await chamar(T, 'POST', '/v1/tarefas/nao-uuid/cancelar')).statusCode).toBe(404)
+    expect((await chamar(T, 'POST', '/v1/tarefas/fa5e0000-7777-4000-8000-000000000003/concluir')).statusCode).toBe(404)
+    const id = await inserir('A', em(H), { resp: eu })
+    expect((await chamar(T, 'POST', `/v1/tarefas/${id}/concluir`, { resultado: 42 })).statusCode).toBe(422)
+    expect((await chamar(T, 'POST', `/v1/tarefas/${id}/concluir`, { resultado: 'x'.repeat(2001) })).statusCode).toBe(422)
+    await papelDe(eu, 'gestor')
+    const lote = (c: Record<string, unknown>) => chamar(T, 'POST', '/v1/tarefas/lote', { titulo: 'x', venceEm: em(H), ...c })
+    expect((await lote({ contatoIds: 'abc' })).statusCode).toBe(422)
+    expect((await lote({ contatoIds: [1, 2] })).statusCode).toBe(422)
+    expect((await lote({ contatoIds: [C1], venceEm: '2026-02-31T10:00:00Z' })).statusCode).toBe(422)
+    expect((await lote({ contatoIds: [C1], tipo: 'fax' })).statusCode).toBe(422)
+    expect((await dono`SELECT 1 FROM tarefa WHERE tenant_id=${T} AND id <> ${id}`).length).toBe(0)
+  })
+
+  it('cursor preserva microssegundos: tarefas que diferem só em µs na fronteira da página', async () => {
+    for (let i = 0; i < 29; i++) await inserir(`T${i}`, `2030-01-01T09:00:${String(i).padStart(2, '0')}Z`, { resp: eu })
+    await inserir('T29', '2030-01-01T10:00:00.000100Z', { resp: eu }) // last of page 1
+    await inserir('T30', '2030-01-01T10:00:00.000200Z', { resp: eu }) // first of page 2 (same millisecond)
+    await inserir('T31', '2030-01-01T10:00:00.000200Z', { resp: eu }) // same instant, tie broken by id
+    const p1 = json<Lista>(await chamar(T, 'GET', '/v1/tarefas?situacao=abertas'))
+    expect(p1.itens.length).toBe(30)
+    expect(p1.itens[29]!.titulo).toBe('T29')
+    const p2 = json<Lista>(await chamar(T, 'GET', `/v1/tarefas?situacao=abertas&cursor=${p1.proximoCursor}`))
+    expect(p2.itens.map((i) => i.titulo).sort()).toEqual(['T30', 'T31']) // T29 not repeated, none skipped
+    expect(p2.proximoCursor).toBeNull()
+  })
+
+  it('cursor atravessa um empate exato de vence_em sem perder nem repetir', async () => {
+    for (let i = 0; i < 31; i++) await inserir(`E${i}`, '2030-02-02T10:00:00.123456Z', { resp: eu })
+    const p1 = json<Lista>(await chamar(T, 'GET', '/v1/tarefas?situacao=abertas'))
+    const p2 = json<Lista>(await chamar(T, 'GET', `/v1/tarefas?situacao=abertas&cursor=${p1.proximoCursor}`))
+    const todos = [...p1.itens, ...p2.itens].map((i) => i.titulo)
+    expect(todos.length).toBe(31)
+    expect(new Set(todos).size).toBe(31)
+  })
+
+  it('responsável NULL ("de ninguém") aparece no filtro e nos contadores por responsável', async () => {
+    await inserir('minha', em(H), { resp: eu })
+    await inserir('de ninguém', em(H))
+    await inserir('da colega', em(H), { resp: COLEGA })
+    expect((await lista(`responsavelId=${eu}`)).sort()).toEqual(['de ninguém', 'minha'])
+    const c = json<{ pendentes: number }>(await chamar(T, 'GET', `/v1/tarefas/contadores?responsavelId=${eu}`))
+    expect(c.pendentes).toBe(2)
+    expect(json<{ pendentes: number }>(await chamar(T, 'GET', '/v1/tarefas/contadores')).pendentes).toBe(3)
+  })
+
+  it('lote exige gestor/supervisor/admin', async () => {
+    const corpo = { contatoIds: [C1], titulo: 'x', venceEm: em(H) }
+    for (const papel of ['vendedor', 'atendente']) {
+      await papelDe(eu, papel)
+      expect((await chamar(T, 'POST', '/v1/tarefas/lote', corpo)).statusCode, papel).toBe(403)
+    }
+    await dono`DELETE FROM usuario_filial WHERE tenant_id=${T} AND usuario_id=${eu}`
+    expect((await chamar(T, 'POST', '/v1/tarefas/lote', corpo)).statusCode).toBe(403) // no role at all
+    for (const papel of ['gestor', 'supervisor', 'admin']) {
+      await papelDe(eu, papel)
+      expect((await chamar(T, 'POST', '/v1/tarefas/lote', corpo)).statusCode, papel).toBe(201)
+    }
+  })
+
+  it('concluir/cancelar: responsável, criador ou gestão; os demais levam 403', async () => {
+    const dosOutros = () => inserir('alheia', em(H), { resp: COLEGA, criador: COLEGA })
+    for (const acao of ['concluir', 'cancelar']) {
+      const alheia = await dosOutros()
+      expect((await chamar(T, 'POST', `/v1/tarefas/${alheia}/${acao}`)).statusCode, `${acao} sem papel`).toBe(403)
+      await papelDe(eu, 'vendedor')
+      expect((await chamar(T, 'POST', `/v1/tarefas/${alheia}/${acao}`)).statusCode, `${acao} vendedor`).toBe(403)
+      expect((await dono`SELECT 1 FROM tarefa WHERE id=${alheia} AND estado='aberta'`).length).toBe(1)
+      const minha = await inserir('minha', em(H), { resp: eu, criador: COLEGA })
+      expect((await chamar(T, 'POST', `/v1/tarefas/${minha}/${acao}`)).statusCode, `${acao} responsável`).toBe(200)
+      const criada = await inserir('criei', em(H), { resp: COLEGA, criador: eu })
+      expect((await chamar(T, 'POST', `/v1/tarefas/${criada}/${acao}`)).statusCode, `${acao} criador`).toBe(200)
+      const nula = await inserir('de ninguém', em(H), { criador: COLEGA })
+      expect((await chamar(T, 'POST', `/v1/tarefas/${nula}/${acao}`)).statusCode, `${acao} tarefa sem dono`).toBe(403)
+      await papelDe(eu, 'gestor')
+      expect((await chamar(T, 'POST', `/v1/tarefas/${alheia}/${acao}`)).statusCode, `${acao} gestor`).toBe(200)
+      expect((await chamar(T, 'POST', `/v1/tarefas/${nula}/${acao}`)).statusCode, `${acao} gestor sem dono`).toBe(200)
+      await papelDe(eu, 'supervisor')
+      const outra = await dosOutros()
+      expect((await chamar(T, 'POST', `/v1/tarefas/${outra}/${acao}`)).statusCode, `${acao} supervisor`).toBe(200)
+      await dono`DELETE FROM usuario_filial WHERE tenant_id=${T} AND usuario_id=${eu}`
+    }
+  })
+
+  it('concluir e cancelar são auditados, com autor e id da tarefa', async () => {
+    const a = await inserir('a', em(H), { resp: eu })
+    const b = await inserir('b', em(H), { resp: eu })
+    await chamar(T, 'POST', `/v1/tarefas/${a}/concluir`)
+    await chamar(T, 'POST', `/v1/tarefas/${b}/cancelar`)
+    const aud = await dono<{ acao: string; entidade_id: string; ator_id: string }[]>`
+      SELECT acao, entidade_id, ator_id FROM auditoria WHERE tenant_id=${T} AND acao LIKE 'tarefa.%' AND acao <> 'tarefa.lote'`
+    expect(aud.map((x) => x.acao).sort()).toEqual(['tarefa.cancelada', 'tarefa.concluida'])
+    expect(aud.find((x) => x.acao === 'tarefa.cancelada')).toMatchObject({ entidade_id: b, ator_id: eu })
+    expect(aud.find((x) => x.acao === 'tarefa.concluida')).toMatchObject({ entidade_id: a, ator_id: eu })
   })
 })
