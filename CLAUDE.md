@@ -10,7 +10,7 @@ para venda B2B recorrente. Monorepo pnpm+Turborepo: `apps/api` (Fastify), `apps/
   (`.claude/skills/`) — obrigatórias em qualquer código. Há skills por área: `geracrm-whatsapp-meta`,
   `geracrm-tempo-real`, `geracrm-dados-postgres`, `geracrm-conectores-erp`,
   `geracrm-identidade-acesso`, `geracrm-monorepo-deploy`, `geracrm-ia`, `geracrm-observabilidade`,
-  `geracrm-agente-vendas` (o vendedor autônomo), `geracrm-catalogo` (catálogo e busca).
+  `geracrm-agente-vendas` (o vendedor autônomo), `geracrm-catalogo` (catálogo e busca), `geracrm-formularios`.
 - **Arquitetura em diagramas**: `docs/arquitetura-visual.md` — 11 diagramas Mermaid.
 - **`tenant_id` vem do token autenticado, NUNCA de parâmetro.** RLS em toda tabela de domínio.
   Chave única sempre composta (`UNIQUE(tenant_id, cnpj)`). É o ADR-001 e não tem exceção.
