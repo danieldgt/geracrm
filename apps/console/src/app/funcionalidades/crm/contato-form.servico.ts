@@ -1,10 +1,15 @@
 import { Injectable, inject } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
-import { mensagemDeErro } from '../../compartilhado/ui/index.js'
+import { corpoDoErro, mensagemDeErro } from '../../compartilhado/ui/index.js'
+import { EtiquetasServico } from './etiquetas.servico.js'
 import {
   mapearErros, type CorpoContato, type EmpresaConsulta, type EnderecoConsulta, type ErrosForm, type FichaParaForm,
+  type OrigemLista,
 } from './contato-form.regras.js'
+
+/** Teto de páginas ao carregar origens: o select é de poucas linhas; acima disso a lista é outra tela. */
+const MAX_PAGINAS_ORIGENS = 5
 
 /** Resultado tipificado — validação por campo e falha geral são retornos, não exceções. */
 export type ResultadoSalvar =
@@ -15,6 +20,10 @@ export type ResultadoConsulta<T> =
   | { ok: true; dado: T }
   | { ok: false; codigo: string | null }
 
+export type ResultadoOrigens =
+  | { ok: true; itens: OrigemLista[] }
+  | { ok: false }
+
 export type ResultadoCarga =
   | { ok: true; ficha: FichaParaForm }
   | { ok: false; naoEncontrado: boolean; mensagem: string }
@@ -23,6 +32,24 @@ export type ResultadoCarga =
 @Injectable({ providedIn: 'root' })
 export class ContatoFormServico {
   private readonly http = inject(HttpClient)
+  private readonly etiquetas = inject(EtiquetasServico)
+
+  /** Origens por cursor, até `MAX_PAGINAS_ORIGENS` páginas. `soAtivas` = `?ativas=true`. */
+  async origens(soAtivas: boolean): Promise<ResultadoOrigens> {
+    const itens: OrigemLista[] = []
+    let cursor: string | null = null
+    try {
+      for (let pagina = 0; pagina < MAX_PAGINAS_ORIGENS; pagina++) {
+        const r = await this.etiquetas.origens(cursor, soAtivas)
+        itens.push(...r.itens)
+        if (!r.proximoCursor) break
+        cursor = r.proximoCursor
+      }
+      return { ok: true, itens }
+    } catch {
+      return { ok: false }
+    }
+  }
 
   async carregar(id: string): Promise<ResultadoCarga> {
     try {
@@ -69,8 +96,7 @@ export class ContatoFormServico {
   }
 
   private falha(e: unknown): ResultadoSalvar {
-    const corpo = e instanceof HttpErrorResponse ? e.error : null
-    const { campos, geral } = mapearErros(corpo)
+    const { campos, geral } = mapearErros(corpoDoErro(e))
     if (Object.keys(campos).length > 0 || geral) return { ok: false, campos, geral }
     return { ok: false, campos: {}, geral: mensagemDeErro(e, 'Não foi possível salvar o contato. Tente de novo.') }
   }
