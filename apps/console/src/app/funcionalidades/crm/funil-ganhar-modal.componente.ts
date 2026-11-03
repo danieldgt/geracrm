@@ -9,7 +9,7 @@ import { FunilServico, type Card } from './funil.servico.js'
 import { ContatoFormServico } from './contato-form.servico.js'
 import { UFS, mensagemConsulta, podeConsultarCep, podeConsultarCnpj } from './contato-form.regras.js'
 import {
-  ganhoDaFicha, ganhoPelaEmpresa, ganhoPeloEndereco, ganhoVazio, mapearErrosGanho, payloadGanho, rotuloDoPedido,
+  ganhoDaFicha, ganhoPelaEmpresa, ganhoPeloEndereco, ganhoVazio, mapearErrosGanho, mesclarFicha, payloadGanho, pedidosVinculaveis, rotuloDoPedido, tratarFalhaDeAcao,
   validarGanhoLocal, type ErrosGanho, type FichaParaGanho, type PedidoDoContato, type ValoresGanho,
 } from './funil-acoes.regras.js'
 
@@ -29,6 +29,7 @@ import {
         @if (carregando()) {
           <p class="dica-geral">Carregando os dados do contato…</p>
         }
+        <fieldset class="bloco" [disabled]="carregando()">
         <ui-grade-form>
           <ui-campo rotulo="CNPJ" mascara="cnpj" [obrigatorio]="true" placeholder="00.000.000/0000-00"
             [valor]="v().cnpj" (valorChange)="definir('cnpj', $event)" [erro]="erros().cnpj ?? null"
@@ -55,16 +56,17 @@ import {
           <ui-select rotulo="UF" [obrigatorio]="true" [opcoes]="opcoesUf" [valor]="v().uf"
             (valorChange)="definir('uf', $event)" [erro]="erros().uf ?? null" />
         </ui-grade-form>
+        </fieldset>
 
         <h3 class="secao txt-rotulo">Pedido</h3>
         <ui-grade-form>
           <ui-select rotulo="Vincular pedido existente" placeholder="Sem vínculo" [largo]="true"
             [opcoes]="opcoesPedido()" [valor]="pedidoId()" (valorChange)="pedidoId.set($event)"
-            [desabilitado]="abrirPedido() || opcoesPedido().length === 0" [erro]="erroPedido()"
+            [desabilitado]="carregando() || abrirPedido() || opcoesPedido().length === 0" [erro]="erroPedido()"
             [dica]="opcoesPedido().length === 0 ? 'Este contato ainda não tem pedidos.' : 'Os pedidos mais recentes do contato.'" />
         </ui-grade-form>
         <label class="marca">
-          <input type="checkbox" [checked]="abrirPedido()" (change)="alternarAbrirPedido($any($event.target).checked)" />
+          <input type="checkbox" [checked]="abrirPedido()" [disabled]="carregando()" (change)="alternarAbrirPedido($any($event.target).checked)" />
           <span>Abrir pedido assistido depois de ganhar</span>
         </label>
 
@@ -72,7 +74,7 @@ import {
       </form>
       <div rodape>
         <button type="button" class="btn btn--secundario" (click)="cancelado.emit()">Cancelar</button>
-        <button type="submit" form="form-ganhar" class="btn btn--primario" [disabled]="salvando() || carregando()">
+        <button type="submit" form="form-ganhar" class="btn btn--primario" [disabled]="salvando() || carregando() || erroFicha()">
           {{ salvando() ? 'Salvando…' : 'Ganhar negócio' }}
         </button>
       </div>
@@ -81,6 +83,7 @@ import {
   styles: `
     .contato-fixo { margin: 0 0 var(--espacamento-4); color: var(--texto-secundario); font-size: 14px; }
     .contato-fixo strong { color: var(--texto); }
+    .bloco { border: 0; margin: 0; padding: 0; min-width: 0; }
     .dica-geral { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
     .secao { margin: var(--espacamento-6) 0 var(--espacamento-3); }
     .marca { display: flex; align-items: center; gap: var(--espacamento-2); margin-top: var(--espacamento-3);
@@ -108,6 +111,7 @@ export class FunilGanharModalComponente {
   protected readonly erroGeral = signal<string | null>(null)
   protected readonly carregando = signal(false)
   protected readonly salvando = signal(false)
+  protected readonly erroFicha = signal(false)
   protected readonly consultandoCnpj = signal(false)
   protected readonly mensagemCnpj = signal<string | null>(null)
   protected readonly mensagemCep = signal<string | null>(null)
@@ -117,6 +121,8 @@ export class FunilGanharModalComponente {
   protected readonly opcoesPedido = computed<OpcaoSelect[]>(() => this.pedidos().map((p) => ({ valor: p.id, rotulo: rotuloDoPedido(p) })))
   protected readonly podeCnpj = computed(() => podeConsultarCnpj(this.v().cnpj))
   private ultimoCep = ''
+  /** Campos que o usuário já mexeu: a ficha, ao chegar, não os sobrescreve. */
+  private tocados = new Set<keyof ValoresGanho>()
 
   constructor() {
     // Ao abrir (card novo): zera, pré-preenche pela ficha e carrega os pedidos do contato.
@@ -125,8 +131,8 @@ export class FunilGanharModalComponente {
       if (!c) return
       untracked(() => {
         this.v.set(ganhoVazio()); this.erros.set({}); this.erroPedido.set(null); this.erroGeral.set(null)
-        this.mensagemCnpj.set(null); this.mensagemCep.set(null); this.pedidoId.set(''); this.abrirPedido.set(false)
-        this.pedidos.set([]); this.ultimoCep = ''
+        this.mensagemCnpj.set(null); this.mensagemCep.set(null); this.erroFicha.set(false); this.pedidoId.set(''); this.abrirPedido.set(false)
+        this.pedidos.set([]); this.ultimoCep = ''; this.tocados = new Set()
         void this.carregarContato(c)
       })
     })
@@ -136,16 +142,24 @@ export class FunilGanharModalComponente {
     this.carregando.set(true)
     try {
       const [ficha, pedidos] = await Promise.all([
-        firstValueFrom(this.http.get<FichaParaGanho>(`/v1/contatos/${c.contatoId}`)).catch(() => null),
+        firstValueFrom(this.http.get<FichaParaGanho>(`/v1/contatos/${c.contatoId}`)).then((f) => ({ f }), () => null),
         this.funil.pedidosDoContato(c.contatoId),
       ])
       if (this.card()?.id !== c.id) return // trocou de card enquanto carregava
-      if (ficha) { this.v.set(ganhoDaFicha(ficha)); this.ultimoCep = this.v().cep.replace(/\D/g, '') }
-      this.pedidos.set(pedidos)
-    } finally { this.carregando.set(false) }
+      if (!ficha) {
+        // Falha da ficha é erro, não ficha vazia: ganhar com campos em branco sobrescreveria o cadastro.
+        this.erroGeral.set('Não foi possível carregar os dados do contato. Feche e abra de novo.')
+        this.erroFicha.set(true)
+        return
+      }
+      this.v.set(mesclarFicha(this.v(), ganhoDaFicha(ficha.f), this.tocados))
+      this.ultimoCep = this.v().cep.replace(/\D/g, '')
+      this.pedidos.set(pedidosVinculaveis(pedidos))
+    } finally { if (this.card()?.id === c.id) this.carregando.set(false) }
   }
 
   protected definir(campo: keyof ValoresGanho, valor: string): void {
+    this.tocados.add(campo)
     this.v.update((x) => ({ ...x, [campo]: valor }))
     if (campo !== 'complemento' && this.erros()[campo]) this.erros.update((e) => ({ ...e, [campo]: undefined }))
   }
@@ -180,7 +194,8 @@ export class FunilGanharModalComponente {
   protected async salvar(ev: Event): Promise<void> {
     ev.preventDefault()
     const c = this.card()
-    if (!c || this.salvando()) return
+    if (!c || this.salvando() || this.carregando()) return
+    if (this.erroFicha()) return
     const locais = validarGanhoLocal(this.v())
     this.erroGeral.set(null); this.erroPedido.set(null)
     this.erros.set(locais)
@@ -189,12 +204,14 @@ export class FunilGanharModalComponente {
     const r = await this.funil.ganhar(c.id, payloadGanho(this.v(), c.versao, this.pedidoId()))
     this.salvando.set(false)
     if (!r.ok) {
+      const t = tratarFalhaDeAcao(r.status, r.corpo, r.mensagem)
       const m = r.status === 422 ? mapearErrosGanho(r.corpo) : { campos: {}, pedido: null, geral: null }
       this.erros.set(m.campos); this.erroPedido.set(m.pedido)
       const temCampo = Object.keys(m.campos).length > 0 || m.pedido !== null
-      this.erroGeral.set(m.geral ?? (temCampo ? null : r.mensagem))
-      // 409 (alguém moveu) já recarregou o quadro: o card mudou de versão, então o modal fecha.
-      if (r.status === 409) this.cancelado.emit()
+      this.erroGeral.set(m.geral ?? (temCampo ? null : t.mensagemModal))
+      if (t.toast) this.toast.erro(t.toast)
+      // 409 (alguém moveu) já recarregou o quadro: fecha, e a mensagem vai no toast. Rede (0) mantém aberto.
+      if (t.fechar) this.cancelado.emit()
       return
     }
     this.toast.sucesso('Negócio ganho')

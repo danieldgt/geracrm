@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, output, signal, untracked } from '@angular/core'
 import { CampoComponente, GradeFormComponente, ModalComponente, SelectComponente, ToastServico, type OpcaoSelect } from '../../compartilhado/ui/index.js'
 import { FunilServico, type Card } from './funil.servico.js'
-import { payloadPerda, validarPerda } from './funil-acoes.regras.js'
+import { payloadPerda, tratarFalhaDeAcao, validarPerda } from './funil-acoes.regras.js'
 
 /** Modal "Perder" (padrão A): motivo do catálogo (obrigatório) + descrição livre. Cancelar não persiste nada. */
 @Component({
@@ -67,9 +67,11 @@ export class FunilPerderModalComponente {
     const r = await this.funil.perder(c.id, payloadPerda(form, c.versao))
     this.salvando.set(false)
     if (!r.ok) {
-      this.erroGeral.set(r.mensagem)
-      if (r.status !== 422) this.cancelado.emit() // o quadro já recarregou; o card pode ter mudado
-      return
+      const t = tratarFalhaDeAcao(r.status, r.corpo, r.mensagem)
+      this.erro.set(t.erroMotivo); this.erroGeral.set(t.mensagemModal)
+      if (t.toast) this.toast.erro(t.toast)
+      if (t.fechar) this.cancelado.emit() // 409: o quadro já recarregou; o card mudou
+      return // rede (0), 422 e demais: modal aberto
     }
     this.toast.sucesso('Perda registrada')
     this.concluido.emit()

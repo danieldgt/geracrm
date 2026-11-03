@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   decidirAcaoAoSoltar, ganhoDaFicha, ganhoPelaEmpresa, ganhoPeloEndereco, ganhoVazio, itensDoMenu, mapearErrosGanho,
   payloadGanho, payloadNovaOportunidade, payloadPerda, payloadTransferencia, rotuloDoPedido, validarGanhoLocal,
-  validarNovaOportunidade, validarPerda, validarTransferencia, type ValoresGanho,
+  mesclarFicha, pedidosVinculaveis, proximoItemDoMenu, tratarFalhaDeAcao, validarNovaOportunidade, validarPerda, validarTransferencia, type ValoresGanho,
 } from './funil-acoes.regras.js'
 
 const completo: ValoresGanho = {
@@ -116,5 +116,53 @@ describe('menu do card e rótulo de pedido', () => {
     expect(r).toContain('Pedido 1234')
     expect(r).toContain('Efetivado')
     expect(r).toMatch(/1\.500,00/)
+  })
+})
+
+describe('proximoItemDoMenu (teclado do menu ⋯)', () => {
+  it('↓ e ↑ circulam; sem foco, ↓ vai ao primeiro e ↑ ao último', () => {
+    expect(proximoItemDoMenu(0, 4, 'ArrowDown')).toBe(1)
+    expect(proximoItemDoMenu(3, 4, 'ArrowDown')).toBe(0)
+    expect(proximoItemDoMenu(0, 4, 'ArrowUp')).toBe(3)
+    expect(proximoItemDoMenu(2, 4, 'ArrowUp')).toBe(1)
+    expect(proximoItemDoMenu(-1, 4, 'ArrowDown')).toBe(0)
+    expect(proximoItemDoMenu(-1, 4, 'ArrowUp')).toBe(3)
+  })
+  it('Home/End vão às pontas; outra tecla e menu vazio devolvem null', () => {
+    expect(proximoItemDoMenu(2, 4, 'Home')).toBe(0)
+    expect(proximoItemDoMenu(1, 4, 'End')).toBe(3)
+    expect(proximoItemDoMenu(1, 4, 'a')).toBeNull()
+    expect(proximoItemDoMenu(0, 0, 'ArrowDown')).toBeNull()
+  })
+})
+
+describe('tratarFalhaDeAcao', () => {
+  it('409 fecha o modal e leva a mensagem para o toast', () => {
+    expect(tratarFalhaDeAcao(409, null, 'Alguém moveu este card antes de você. Recarregue.')).toEqual({
+      fechar: true, toast: 'Alguém moveu este card antes de você. Recarregue.', mensagemModal: null, erroMotivo: null,
+    })
+  })
+  it('status 0 (rede) mantém o modal aberto com a mensagem', () => {
+    const t = tratarFalhaDeAcao(0, null, 'Sem conexão.')
+    expect(t).toMatchObject({ fechar: false, toast: null, mensagemModal: 'Sem conexão.' })
+  })
+  it('422 perda.motivo_invalido vai para o select de motivo', () => {
+    const t = tratarFalhaDeAcao(422, { erro: 'perda.motivo_invalido' }, 'Motivo de perda inexistente.')
+    expect(t).toMatchObject({ fechar: false, erroMotivo: 'Motivo de perda inexistente.', mensagemModal: null })
+  })
+})
+
+describe('pedidos vinculáveis e mescla da ficha', () => {
+  const ped = (estado: string) => ({ id: estado, estado, totalCentavos: 1, numeroExterno: null, criadoEm: '2026-11-03T00:00:00Z' })
+  it('só efetivado e aguardando conferência', () => {
+    const r = pedidosVinculaveis(['rascunho', 'validando', 'enviando', 'efetivado', 'falhou', 'aguardando_conferencia', 'cancelado'].map(ped))
+    expect(r.map((p) => p.estado)).toEqual(['efetivado', 'aguardando_conferencia'])
+  })
+  it('a ficha não sobrescreve o que o usuário já digitou', () => {
+    const atual = { ...ganhoVazio(), razaoSocial: 'Digitada' }
+    const ficha = { ...ganhoVazio(), razaoSocial: 'Da ficha', nomeFantasia: 'Fantasia' }
+    const r = mesclarFicha(atual, ficha, new Set(['razaoSocial']))
+    expect(r.razaoSocial).toBe('Digitada')
+    expect(r.nomeFantasia).toBe('Fantasia')
   })
 })

@@ -6,8 +6,9 @@ import type { Sql } from 'postgres'
 import { dadosMinimosDoGanho, type CampoGanho, type DadosDoGanho } from '@geracrm/shared'
 import { exigirPapel } from '../plataforma/papel.js'
 import { auditar } from '../plataforma/auditoria.js'
+import { fusoSeguro } from '../plataforma/fuso.js'
 import { garantirEtapasFunil } from './funil-modelos.js'
-import { gravarDocumento, gravarEndereco } from './contato-gravacao.js'
+import { gravarEndereco, acrescentarCnpj } from './contato-gravacao.js'
 import { condicaoOportunidade, contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 import type { FastifyRequest } from 'fastify'
 
@@ -136,6 +137,7 @@ async function aplicarMovimento(tx: Sql, ator: string, m: Movimento): Promise<{ 
          SET etapa_id = ${m.etapaId}, posicao = ${m.posicao}, entrou_etapa_em = now(),
              estado = ${estado}, motivo_perda_codigo = ${etapa.tipo === 'perdido' ? m.motivo : null},
              perda_descricao = ${etapa.tipo === 'perdido' ? m.descricao : null},
+             pedido_id = ${estado === 'ganha' ? tx`pedido_id` : null},
              fechada_em = ${fecha ? tx`now()` : null}, versao = versao + 1
        WHERE tenant_id = tenant_atual() AND id = ${m.id}
          AND (${m.versao}::bigint IS NULL OR versao = ${m.versao}::bigint)
@@ -164,6 +166,9 @@ async function etapaDoTipo(tx: Sql, tipo: TipoEtapa): Promise<string | null> {
 }
 
 const texto = (v: unknown): string | undefined => (typeof v === 'string' ? v.trim() : undefined)
+
+/** Pedido só vincula ao ganho quando já existe de fato (número no ERP) ou está sob conferência. */
+const ESTADOS_PEDIDO_VINCULAVEIS: readonly string[] = ['efetivado', 'aguardando_conferencia']
 
 interface CorpoGanho {
   versao?: number
@@ -363,6 +368,10 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
           if (!(await oportunidadeNoEscopo(tx, req, req.params.id))) return { erro: 'nao_encontrada' } satisfies Falha
           const atual = await dadosDoContato(tx, req.params.id)
           if (!atual) return { erro: 'nao_encontrada' } satisfies Falha
+          // Idempotente: já ganha → 200 sem escrever (nem histórico duplicado, nem `fechada_em` reiniciado).
+          const [jaEstado] = await tx<{ estado: string }[]>`
+            SELECT estado FROM oportunidade WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+          if (jaEstado?.estado === 'ganha') return { ok: true as const }
           const etapaId = await etapaDoTipo(tx, 'ganho')
           if (!etapaId) return { erro: 'sem_etapa_ganho' as const }
 
@@ -378,8 +387,11 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
 
           if (b.pedidoId) {
             const [ped] = await tx`
-              SELECT 1 FROM pedido WHERE tenant_id = tenant_atual() AND id = ${b.pedidoId} AND contato_id = ${atual.contatoId}`
-            if (!ped) return { erro: 'pedido_invalido' as const }
+              SELECT estado FROM pedido WHERE tenant_id = tenant_atual() AND id = ${b.pedidoId} AND contato_id = ${atual.contatoId}`
+            if (!ped) return { erro: 'pedido_invalido' as const, motivo: 'O pedido não existe ou é de outro cliente.' }
+            if (!ESTADOS_PEDIDO_VINCULAVEIS.includes(ped.estado as string)) {
+              return { erro: 'pedido_invalido' as const, motivo: `Só pedido efetivado ou aguardando conferência pode ser vinculado (este está ${ped.estado}).` }
+            }
           }
 
           const ator = await garantirUsuarioId(tx, req)
@@ -393,7 +405,8 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
           if (d) {
             await tx`UPDATE contato SET razao_social = ${efetivos.razaoSocial?.trim() ?? null}, nome_fantasia = ${efetivos.nomeFantasia?.trim() ?? null}
                       WHERE tenant_id = tenant_atual() AND id = ${atual.contatoId}`
-            await gravarDocumento(tx, atual.contatoId, { documento: efetivos.cnpj })
+            // ⚠️ Ganho nunca apaga o CPF manual do contato: o CNPJ entra como linha nova (ver acrescentarCnpj).
+            if (efetivos.cnpj) await acrescentarCnpj(tx, atual.contatoId, efetivos.cnpj)
             if (e) {
               await gravarEndereco(tx, atual.contatoId, { endereco: {
                 cep: efetivos.cep, logradouro: efetivos.logradouro, numero: efetivos.numero, complemento: texto(e.complemento) || null,
@@ -401,9 +414,7 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
               } })
             }
           }
-          if (b.pedidoId) {
-            await tx`UPDATE oportunidade SET pedido_id = ${b.pedidoId} WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
-          }
+          await tx`UPDATE oportunidade SET pedido_id = ${b.pedidoId ?? null} WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
           await auditar(tx, {
             atorId: ator, acao: 'funil.ganhar', entidade: 'oportunidade', entidadeId: req.params.id,
             dados: { contatoId: atual.contatoId, pedidoId: b.pedidoId ?? null, dadosAtualizados: !!d },
@@ -415,7 +426,7 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
             return reply.code(422).send({ erro: 'ganho.sem_etapa', mensagem: 'O funil não tem etapa de ganho ativa.' })
           }
           if (r.erro === 'pedido_invalido') {
-            return reply.code(422).send({ erro: 'ganho.pedido_invalido', mensagem: 'O pedido não existe ou é de outro cliente.' })
+            return reply.code(422).send({ erro: 'ganho.pedido_invalido', mensagem: (r as { motivo: string }).motivo })
           }
           return responderFalha(reply, r as Falha)
         }
@@ -437,6 +448,10 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
       const r = await req.comTenant(async (tx) => {
         // ⚠️ Escopo (D3): fora do escopo responde como inexistente.
         if (!(await oportunidadeNoEscopo(tx, req, req.params.id))) return { erro: 'nao_encontrada' } satisfies Falha
+        // Idempotente: já perdida → 200 sem escrever (histórico e `fechada_em` intactos).
+        const [jaEstado] = await tx<{ estado: string }[]>`
+          SELECT estado FROM oportunidade WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        if (jaEstado?.estado === 'perdida') return { ok: true as const }
         const [m] = await tx`SELECT 1 FROM motivo_perda WHERE tenant_id = tenant_atual() AND codigo = ${motivo} AND ativo`
         if (!m) return { erro: 'motivo_invalido' as const }
         const etapaId = await etapaDoTipo(tx, 'perdido')
@@ -494,9 +509,21 @@ export async function rotasFunil(app: FastifyInstance): Promise<void> {
         })
         // Aviso ao destino (não a quem transferiu para si mesmo): vira tarefa dele, com o contato.
         if (mudou && destino !== eu) {
-          await tx`INSERT INTO tarefa (tenant_id, id, contato_id, responsavel_id, titulo, descricao, vence_em, criado_por)
-                   VALUES (tenant_atual(), ${randomUUID()}, ${o.contato_id}, ${destino},
-                           ${`Cliente transferido para você: ${o.nome}`.slice(0, 200)}, ${motivo}, now(), ${eu})`
+          const titulo = `Cliente transferido para você: ${o.nome}`.slice(0, 200)
+          const [dup] = await tx`
+            SELECT 1 FROM tarefa WHERE tenant_id = tenant_atual() AND contato_id = ${o.contato_id}
+               AND responsavel_id = ${destino} AND estado = 'aberta' AND titulo = ${titulo} LIMIT 1`
+          if (!dup) {
+            // Vence no FIM do próximo dia útil (seg–sex) no fuso do tenant — fuso validado em TS antes do AT TIME ZONE.
+            const [t] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
+            const fuso = fusoSeguro(t?.fuso)
+            await tx`
+              INSERT INTO tarefa (tenant_id, id, contato_id, responsavel_id, titulo, descricao, tipo, vence_em, criado_por)
+              VALUES (tenant_atual(), ${randomUUID()}, ${o.contato_id}, ${destino}, ${titulo}, ${motivo}, 'ligacao',
+                      (SELECT (((d + CASE extract(isodow FROM d)::int WHEN 5 THEN 3 WHEN 6 THEN 2 ELSE 1 END + 1)::timestamp
+                                AT TIME ZONE ${fuso}::text) - interval '1 second')
+                         FROM (SELECT (now() AT TIME ZONE ${fuso}::text)::date AS d) x), ${eu})`
+          }
         }
         return { ok: true as const, semMudanca: !mudou }
       })

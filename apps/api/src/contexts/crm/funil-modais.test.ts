@@ -215,7 +215,7 @@ describe('POST .../ganhar', () => {
     const c = await novoContato(T, 'Com pedido')
     const outro = await novoContato(T, 'Outro contato')
     const pOk = randomUUID(); const pRuim = randomUUID()
-    await dono`INSERT INTO pedido (tenant_id, id, contato_id) VALUES (${T}, ${pOk}, ${c}), (${T}, ${pRuim}, ${outro})`
+    await dono`INSERT INTO pedido (tenant_id, id, contato_id, estado) VALUES (${T}, ${pOk}, ${c}, 'efetivado'), (${T}, ${pRuim}, ${outro}, 'efetivado')`
     const id = await novaOp(T, c)
     const ruim = await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/ganhar`, { dados: dadosOk, pedidoId: pRuim })
     expect(ruim.statusCode).toBe(422)
@@ -227,11 +227,79 @@ describe('POST .../ganhar', () => {
     expect((await op(id)).pedido_id).toBe(pOk)
   })
 
+  it('pedido rascunho ou cancelado → 422 com o motivo; aguardando_conferencia vincula', async () => {
+    const c = await novoContato(T, 'Estados do pedido')
+    const pRasc = randomUUID(); const pCanc = randomUUID(); const pConf = randomUUID()
+    await dono`INSERT INTO pedido (tenant_id, id, contato_id, estado) VALUES
+      (${T}, ${pRasc}, ${c}, 'rascunho'), (${T}, ${pConf}, ${c}, 'aguardando_conferencia')`
+    await dono`INSERT INTO pedido (tenant_id, id, contato_id, estado, cancelado_em, cancelado_motivo)
+               VALUES (${T}, ${pCanc}, ${c}, 'cancelado', now(), 'teste')`
+    const id = await novaOp(T, c)
+    for (const p of [pRasc, pCanc]) {
+      const r = await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/ganhar`, { dados: dadosOk, pedidoId: p })
+      expect(r.statusCode).toBe(422)
+      const j = r.json<{ erro: string; mensagem: string }>()
+      expect(j.erro).toBe('ganho.pedido_invalido')
+      expect(j.mensagem).toMatch(/efetivado ou aguardando conferência/)
+      expect((await op(id)).estado).toBe('aberta')
+    }
+    const ok = await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/ganhar`, { dados: dadosOk, pedidoId: pConf })
+    expect(ok.statusCode).toBe(200)
+    expect((await op(id)).pedido_id).toBe(pConf)
+  })
+
+  it('reabrir ou perder depois de ganhar limpa o pedido vinculado', async () => {
+    const c = await novoContato(T, 'Reabre')
+    const p = randomUUID()
+    await dono`INSERT INTO pedido (tenant_id, id, contato_id, estado) VALUES (${T}, ${p}, ${c}, 'efetivado')`
+    const id = await novaOp(T, c)
+    await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/ganhar`, { dados: dadosOk, pedidoId: p })
+    expect((await op(id)).pedido_id).toBe(p)
+    const re = await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/mover`, { etapaId: await etapaId(T, 'lead'), versao: Number((await op(id)).versao) })
+    expect(re.statusCode).toBe(200)
+    expect((await op(id)).pedido_id).toBeNull()
+
+    await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/ganhar`, { dados: dadosOk, pedidoId: p })
+    expect((await op(id)).pedido_id).toBe(p)
+    await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/perder`, { motivoCodigo: 'preco' })
+    expect((await op(id)).pedido_id).toBeNull()
+  })
+
+  it('ganho mantém o CPF manual e acrescenta o CNPJ como nova linha fiscal', async () => {
+    const c = await novoContato(T, 'Com CPF')
+    await dono`INSERT INTO contato_documento (tenant_id, contato_id, seq, tipo, numero, fiscal, fonte)
+               VALUES (${T}, ${c}, 1, 'cpf', '52998224725', true, 'manual')`
+    const id = await novaOp(T, c)
+    const r = await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/ganhar`, { dados: dadosOk })
+    expect(r.statusCode).toBe(200)
+    const docs = await dono<{ seq: number; tipo: string; numero: string; fiscal: boolean; fonte: string }[]>`
+      SELECT seq, tipo, numero, fiscal, fonte FROM contato_documento WHERE contato_id = ${c} ORDER BY seq`
+    expect(docs).toEqual([
+      { seq: 1, tipo: 'cpf', numero: '52998224725', fiscal: false, fonte: 'manual' },
+      { seq: 2, tipo: 'cnpj', numero: CNPJ, fiscal: true, fonte: 'manual' },
+    ])
+  })
+
+  it('ganhar duas vezes é idempotente: 200, sem histórico duplicado e fechada_em intacto', async () => {
+    const c = await novoContato(T, 'Duas vezes')
+    const id = await novaOp(T, c)
+    expect((await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/ganhar`, { dados: dadosOk })).statusCode).toBe(200)
+    const antes = await op(id)
+    const [f1] = await dono<{ f: string }[]>`SELECT fechada_em::text AS f FROM oportunidade WHERE id = ${id}`
+    const [h1] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM oportunidade_etapa_historico WHERE oportunidade_id = ${id}`
+    expect((await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/ganhar`, { dados: dadosOk })).statusCode).toBe(200)
+    const [f2] = await dono<{ f: string }[]>`SELECT fechada_em::text AS f FROM oportunidade WHERE id = ${id}`
+    const [h2] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM oportunidade_etapa_historico WHERE oportunidade_id = ${id}`
+    expect(f2!.f).toBe(f1!.f)
+    expect(h2!.n).toBe(h1!.n)
+    expect((await op(id)).versao).toBe(antes.versao)
+  })
+
   it('pedido de outro tenant → 422', async () => {
     const c = await novoContato(T, 'Cliente A')
     const cB = await novoContato(OUTRO, 'Cliente B')
     const pB = randomUUID()
-    await dono`INSERT INTO pedido (tenant_id, id, contato_id) VALUES (${OUTRO}, ${pB}, ${cB})`
+    await dono`INSERT INTO pedido (tenant_id, id, contato_id, estado) VALUES (${OUTRO}, ${pB}, ${cB}, 'efetivado')`
     const id = await novaOp(T, c)
     const r = await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/ganhar`, { dados: dadosOk, pedidoId: pB })
     expect(r.statusCode).toBe(422)
@@ -272,6 +340,20 @@ describe('POST .../perder', () => {
     expect(o.perda_descricao).toBe('Achou caro')
   })
 
+  it('perder duas vezes é idempotente: 200 sem reescrever', async () => {
+    const c = await novoContato(T, 'Perde duas')
+    const id = await novaOp(T, c)
+    await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/perder`, { motivoCodigo: 'preco' })
+    const antes = await op(id)
+    const [h1] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM oportunidade_etapa_historico WHERE oportunidade_id = ${id}`
+    const r = await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/perder`, { motivoCodigo: 'preco', descricao: 'outra' })
+    expect(r.statusCode).toBe(200)
+    const [h2] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM oportunidade_etapa_historico WHERE oportunidade_id = ${id}`
+    expect(h2!.n).toBe(h1!.n)
+    expect((await op(id)).versao).toBe(antes.versao)
+    expect((await op(id)).perda_descricao).toBeNull()
+  })
+
   it('motivo de OUTRO tenant não vale', async () => {
     await dono`INSERT INTO motivo_perda (tenant_id, codigo, nome) VALUES (${OUTRO}, 'so_do_outro', 'Só do outro') ON CONFLICT DO NOTHING`
     const c = await novoContato(T, 'Cruzado')
@@ -295,6 +377,20 @@ describe('POST .../transferir', () => {
     expect(aud!.n).toBe(1)
     const [tar] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tarefa WHERE tenant_id = ${T} AND responsavel_id = ${U_DESTINO} AND contato_id = ${c}`
     expect(tar!.n).toBe(1)
+  })
+
+  it('aviso ao destino: ligação com vencimento futuro e sem duplicata para o mesmo destino e contato', async () => {
+    const c = await novoContato(T, 'Aviso único')
+    const id = await novaOp(T, c)
+    await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/transferir`, { usuarioId: U_DESTINO, motivo: 'a' })
+    await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/transferir`, { usuarioId: U_ADMIN, motivo: 'b' })
+    await chamar(T, 'POST', `/v1/funil/oportunidades/${id}/transferir`, { usuarioId: U_DESTINO, motivo: 'c' })
+    const tarefas = await dono<{ responsavel_id: string; tipo: string; futuro: boolean; fim: boolean }[]>`
+      SELECT responsavel_id, tipo, vence_em > now() AS futuro,
+             to_char(vence_em AT TIME ZONE 'America/Sao_Paulo', 'HH24:MI:SS') = '23:59:59' AS fim
+        FROM tarefa WHERE tenant_id = ${T} AND contato_id = ${c} ORDER BY responsavel_id`
+    expect(tarefas).toHaveLength(2)
+    for (const t of tarefas) expect(t).toMatchObject({ tipo: 'ligacao', futuro: true, fim: true })
   })
 
   it('vendedor não transfere (403); sem motivo → 422; destino de outro tenant → 422; oportunidade de outro tenant → 404', async () => {
