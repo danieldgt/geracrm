@@ -127,14 +127,17 @@ export async function listarMemoria(
   const cur = opcoes.cursor ?? null
   const linhas = await tx<{
     id: string; tipo: TipoMemoria; fato: string; confianca: string; valido_ate: Date | null
-    origem_mensagem_id: string | null; criado_em: Date
+    origem_mensagem_id: string | null; criado_em: Date; criado_em_txt: string
   }[]>`
-    SELECT id, tipo, fato, confianca::text, valido_ate, origem_mensagem_id, criado_em
+    SELECT id, tipo, fato, confianca::text, valido_ate, origem_mensagem_id, criado_em,
+           -- Microssegundos como texto: o cursor carrega este valor, não o Date (que corta em ms).
+           criado_em::text AS criado_em_txt
       FROM cliente_memoria
      WHERE tenant_id = tenant_atual() AND contato_id = ${contatoId}
        AND revogado_em IS NULL
        AND (valido_ate IS NULL OR valido_ate > ${agora}::timestamptz)
-       AND ${cur === null ? tx`true` : tx`(criado_em, id) < (${cur.criadoEm}::timestamptz, ${cur.id}::uuid)`}
+       -- ⚠️ ::text::timestamptz — um ::timestamptz direto faz o driver virar Date e cortar µs.
+       AND ${cur === null ? tx`true` : tx`(criado_em, id) < (${cur.criadoEm}::text::timestamptz, ${cur.id}::uuid)`}
      ORDER BY criado_em DESC, id DESC
      LIMIT ${limite + 1}`
   const temMais = linhas.length > limite
@@ -145,7 +148,7 @@ export async function listarMemoria(
       id: l.id, tipo: l.tipo, fato: l.fato, confianca: Number(l.confianca), validoAte: l.valido_ate,
       origemMensagemId: l.origem_mensagem_id, criadoEm: l.criado_em,
     })),
-    proximoCursor: temMais && ultimo ? { criadoEm: ultimo.criado_em.toISOString(), id: ultimo.id } : null,
+    proximoCursor: temMais && ultimo ? { criadoEm: ultimo.criado_em_txt, id: ultimo.id } : null,
   }
 }
 
