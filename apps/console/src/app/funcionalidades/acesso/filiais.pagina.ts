@@ -1,8 +1,9 @@
+import { HttpErrorResponse } from '@angular/common/http'
 import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } from '@angular/core'
 import {
   BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente,
   GradeFormComponente, ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente, ToastServico,
-  codigoDoErro, ehStatus, mensagemDeErro, mesclarPagina, type ColunaTabela, type LinhaTabela, type OpcaoSelect,
+  codigoDoErro, mensagemDeErro, mesclarPagina, type ColunaTabela, type LinhaTabela, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
 import { UFS } from '../crm/contato-form.regras.js'
 import { CORES_FILIAL, chaveDoHex, hexDaCor } from './filiais.cores.js'
@@ -11,8 +12,9 @@ import {
   type CampoFilial, type FilialLista,
 } from './filiais.regras.js'
 import { FiliaisServico } from './filiais.servico.js'
+import { TEXTO_SEM_ADMIN, estadoDaFalhaDeLista } from './usuarios.regras.js'
 
-type EstadoLista = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
+type EstadoLista = 'carregando' | 'pronto' | 'erro' | 'sem_permissao' | 'sem_admin'
 const OPCOES_UF: OpcaoSelect[] = UFS.map((u) => ({ valor: u, rotulo: u }))
 const OPCOES_TIPO: OpcaoSelect[] = TIPOS_FILIAL.map((t) => ({ valor: t, rotulo: ROTULO_TIPO[t] }))
 const OPCOES_COR: OpcaoSelect[] = CORES_FILIAL.map((c) => ({ valor: c.chave, rotulo: c.rotulo }))
@@ -35,6 +37,9 @@ const OPCOES_SITUACAO: OpcaoSelect[] = [{ valor: 'true', rotulo: 'Ativa' }, { va
       @switch (estado()) {
         @case ('sem_permissao') {
           <ui-estado tipo="sem-permissao" titulo="Sem acesso às filiais" descricao="Peça acesso a um administrador." />
+        }
+        @case ('sem_admin') {
+          <ui-estado tipo="sem-permissao" [titulo]="textoSemAdmin.titulo" [descricao]="textoSemAdmin.descricao" />
         }
         @case ('erro') {
           <ui-estado tipo="erro" titulo="Não foi possível carregar as filiais" [descricao]="erroLista()">
@@ -132,6 +137,7 @@ export class FiliaisPagina implements OnInit {
   protected readonly opcoesTipo = OPCOES_TIPO
   protected readonly opcoesCor = OPCOES_COR
   protected readonly opcoesSituacao = OPCOES_SITUACAO
+  protected readonly textoSemAdmin = TEXTO_SEM_ADMIN
 
   protected readonly estado = signal<EstadoLista>('carregando')
   protected readonly erroLista = signal('')
@@ -165,8 +171,9 @@ export class FiliaisPagina implements OnInit {
       this.cursor.set(r.proximoCursor)
       this.estado.set('pronto')
     } catch (e) {
-      if (ehStatus(e, 403)) this.estado.set('sem_permissao')
-      else { this.erroLista.set(mensagemDeErro(e, 'Verifique a conexão e tente de novo.')); this.estado.set('erro') }
+      const falha = estadoDaFalhaDeLista(e instanceof HttpErrorResponse ? e.status : 0, codigoDoErro(e))
+      if (falha === 'erro') this.erroLista.set(mensagemDeErro(e, 'Verifique a conexão e tente de novo.'))
+      this.estado.set(falha)
     }
   }
 
