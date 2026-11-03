@@ -3,6 +3,7 @@ import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { AuthServico } from '../../nucleo/auth.servico.js'
+import { CampoComponente, ModalComponente, ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
 import { ModelosClienteComponente } from './modelos-cliente.componente.js'
 
 interface Cliente {
@@ -42,7 +43,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 @Component({
   selector: 'app-clientes-plataforma',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, ModelosClienteComponente],
+  imports: [DatePipe, ModelosClienteComponente, CampoComponente, ModalComponente],
   template: `
     <header class="cabecalho">
       <h1 class="txt-titulo">Clientes</h1>
@@ -169,6 +170,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                           [attr.aria-expanded]="modelosAberto() === c.id">
                     {{ modelosAberto() === c.id ? 'Fechar modelos' : 'Modelos de IA' }}
                   </button>
+                  <button class="btn btn--secundario btn--pequeno" type="button" (click)="abrirNomear(c)">Nomear admin</button>
                   <button class="btn btn--secundario btn--pequeno" (click)="pedirMotivo(c)"
                           [disabled]="entrando() === c.id">
                     {{ entrando() === c.id ? 'Entrando…' : 'Entrar' }}
@@ -194,9 +196,27 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         }
       }
     }
+
+    <ui-modal [aberto]="nomeando() !== null" titulo="Nomear administrador" largura="p" (fechar)="fecharNomear()">
+      <form id="form-nomear-admin" (submit)="nomearAdmin($event)">
+        <p class="nomear-texto">
+          O usuário vira admin de <strong>{{ nomeando()?.nome }}</strong> em todas as filiais. Use quando a empresa
+          ainda não tem administrador: depois disso, ele cadastra os próprios usuários e filiais.
+        </p>
+        <ui-campo rotulo="ID do usuário" [obrigatorio]="true" [(valor)]="usuarioAdmin" [erro]="erroNomear()"
+          dica="UUID de um usuário ativo da empresa. A equipe não vê a lista de usuários do cliente; o ID vem do banco." />
+      </form>
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharNomear()">Cancelar</button>
+        <button type="submit" form="form-nomear-admin" class="btn btn--primario" [disabled]="nomeandoSalvando()">
+          {{ nomeandoSalvando() ? 'Nomeando…' : 'Nomear' }}
+        </button>
+      </div>
+    </ui-modal>
   `,
   styles: `
     :host { display: block; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
+    .nomear-texto { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
     .cabecalho { margin-bottom: var(--espacamento-5); }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
@@ -266,6 +286,13 @@ export class ClientesPlataformaPagina implements OnInit {
   /** Um painel de modelos aberto por vez — o id do cliente expandido. */
   readonly modelosAberto = signal<string | null>(null)
   private readonly auth = inject(AuthServico)
+  private readonly toast = inject(ToastServico)
+
+  /** Cliente cujo modal "Nomear admin" está aberto. */
+  readonly nomeando = signal<Cliente | null>(null)
+  readonly usuarioAdmin = signal('')
+  readonly erroNomear = signal<string | null>(null)
+  readonly nomeandoSalvando = signal(false)
 
   readonly nome = signal('')
   readonly plano = signal('')
@@ -314,6 +341,39 @@ export class ClientesPlataformaPagina implements OnInit {
   cancelarMotivo(): void {
     this.pedindoMotivo.set(null)
     this.motivo.set('')
+  }
+
+  abrirNomear(c: Cliente): void {
+    this.usuarioAdmin.set('')
+    this.erroNomear.set(null)
+    this.nomeando.set(c)
+  }
+
+  fecharNomear(): void {
+    if (!this.nomeandoSalvando()) this.nomeando.set(null)
+  }
+
+  /** Nomeia admin atribuído do cliente (staff). A API valida o usuário; aqui só o campo vazio. */
+  async nomearAdmin(ev: Event): Promise<void> {
+    ev.preventDefault()
+    const c = this.nomeando()
+    if (!c || this.nomeandoSalvando()) return
+    const usuarioId = this.usuarioAdmin().trim()
+    if (!usuarioId) {
+      this.erroNomear.set('Informe o ID do usuário.')
+      return
+    }
+    this.nomeandoSalvando.set(true)
+    this.erroNomear.set(null)
+    try {
+      await firstValueFrom(this.http.post('/v1/plataforma/clientes/' + c.id + '/admin', { usuarioId }))
+      this.nomeando.set(null)
+      this.toast.sucesso(c.nome + ': administrador nomeado.')
+    } catch (e) {
+      this.erroNomear.set(mensagemDeErro(e, 'Não foi possível nomear o administrador.'))
+    } finally {
+      this.nomeandoSalvando.set(false)
+    }
   }
 
   /**

@@ -1,15 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
-  avisaModoFundador, erroDaSenha, indicesDuplicados, linhasDosPapeis, mapearErroUsuario, modoFundador, montarPapeis,
-  rotuloDaAtribuicao, rotuloDoPapel, temDuplicata, ultimoLoginTexto, type UsuarioLista,
+  TEXTO_SEM_ADMIN, erroDaSenha, estadoDaFalhaDeLista, indicesDuplicados, linhasDosPapeis, mapearErroUsuario, montarPapeis,
+  rotuloDaAtribuicao, rotuloDoPapel, temDuplicata, ultimoLoginTexto,
 } from './usuarios.regras.js'
 import { mapearErroFilial, montarPayloadFilial, localDaFilial } from './filiais.regras.js'
 import { CORES_FILIAL, chaveDoHex, hexDaCor } from './filiais.cores.js'
-
-const usuario = (ativo: boolean, papel: string | null): UsuarioLista => ({
-  id: 'u', nome: 'N', email: 'n@x.com', telefone: null, cargo: null, ativo, ultimoLoginEm: null,
-  papeis: papel ? [{ papel: papel as 'admin', filialId: null, filial: null }] : [],
-})
 
 describe('papéis', () => {
   it('rótulos', () => {
@@ -38,24 +33,30 @@ describe('papéis', () => {
   })
 })
 
-describe('modo fundador', () => {
-  it('sem admin ativo (lista completa) é fundador', () => {
-    expect(modoFundador([usuario(true, null), usuario(true, 'gestor')], true)).toBe(true)
-    expect(modoFundador([], true)).toBe(true)
+describe('empresa sem admin atribuído (403 acesso.admin_atribuido)', () => {
+  it('só o código de admin atribuído vira estado próprio; outro 403 é falta de papel', () => {
+    expect(estadoDaFalhaDeLista(403, 'acesso.admin_atribuido')).toBe('sem_admin')
+    expect(estadoDaFalhaDeLista(403, 'acesso.papel_insuficiente')).toBe('sem_permissao')
+    expect(estadoDaFalhaDeLista(403, null)).toBe('sem_permissao')
   })
-  it('admin inativo não conta', () => { expect(modoFundador([usuario(false, 'admin')], true)).toBe(true) })
-  it('com admin ativo não é', () => { expect(modoFundador([usuario(true, 'admin')], true)).toBe(false) })
-  it('lista incompleta nunca afirma', () => { expect(modoFundador([usuario(true, null)], false)).toBe(false) })
-  it('o aviso só aparece se esta edição atribui admin', () => {
-    expect(avisaModoFundador(true, [{ papel: 'admin', filialId: '' }])).toBe(true)
-    expect(avisaModoFundador(true, [{ papel: 'gestor', filialId: '' }])).toBe(false)
-    expect(avisaModoFundador(false, [{ papel: 'admin', filialId: '' }])).toBe(false)
+  it('fora do 403 é erro de carga, mesmo com o código de admin', () => {
+    expect(estadoDaFalhaDeLista(500, 'acesso.admin_atribuido')).toBe('erro')
+    expect(estadoDaFalhaDeLista(0, null)).toBe('erro')
+    expect(estadoDaFalhaDeLista(401, null)).toBe('erro')
+  })
+  it('o texto diz quem resolve e o que fica liberado, sem botão de tentar de novo', () => {
+    expect(TEXTO_SEM_ADMIN.titulo).toBe('Sua empresa ainda não tem um administrador')
+    expect(TEXTO_SEM_ADMIN.descricao).toMatch(/equipe Drezz/)
   })
 })
 
 describe('erros da API', () => {
   it('usuário: campo e mensagem', () => {
     expect(mapearErroUsuario('usuario.email_duplicado')?.campo).toBe('email')
+    // Mensagem genérica de propósito: não revela se o e-mail existe em outra empresa.
+    expect(mapearErroUsuario('usuario.email_indisponivel')).toMatchObject({ campo: 'email' })
+    expect(mapearErroUsuario('usuario.email_indisponivel')?.mensagem).not.toMatch(/outra conta/)
+    expect(mapearErroUsuario('identidade.login_de_outra_conta')).toMatchObject({ campo: null })
     expect(mapearErroUsuario('usuario.papeis_duplicados')?.campo).toBe('papeis')
     expect(mapearErroUsuario('usuario.senha_invalida')?.campo).toBe('senha')
     expect(mapearErroUsuario('usuario.ultimo_admin')).toMatchObject({ campo: null })

@@ -72,18 +72,23 @@ export function montarPapeis(linhas: readonly LinhaPapel[]): PapelAtribuido[] {
   return saida
 }
 
-/**
- * Modo fundador: enquanto nenhum usuário ATIVO tem papel admin, todo usuário ativo vale admin.
- * Só dá para afirmar com a lista completa; com mais páginas por carregar, devolve falso (sem alarme falso).
- */
-export function modoFundador(usuarios: readonly UsuarioLista[], listaCompleta: boolean): boolean {
-  if (!listaCompleta) return false
-  return !usuarios.some((u) => u.ativo && u.papeis.some((p) => p.papel === 'admin'))
-}
+/** Estado de uma lista de cadastro (usuários e filiais) quando a API recusa a leitura. */
+export type EstadoFalhaLista = 'sem_admin' | 'sem_permissao' | 'erro'
 
-/** O modal avisa quando o tenant está em modo fundador e esta edição atribui admin a alguém. */
-export function avisaModoFundador(fundador: boolean, linhas: readonly LinhaPapel[]): boolean {
-  return fundador && linhas.some((l) => l.papel === 'admin')
+/** Texto da tela de empresa sem admin atribuído (igual em usuários e filiais). */
+export const TEXTO_SEM_ADMIN = {
+  titulo: 'Sua empresa ainda não tem um administrador',
+  descricao: 'Peça à equipe Drezz para nomear o primeiro administrador da sua empresa. Depois disso, ele poderá cadastrar usuários e filiais.',
+} as const
+
+/**
+ * Decide o estado da lista a partir da falha de leitura. `acesso.admin_atribuido` (403) é a
+ * empresa sem admin atribuído; outro 403 é falta de papel; o resto é erro de carga.
+ * Puro: `status` é o HTTP (0 quando não há resposta) e `codigo` o `erro` do corpo.
+ */
+export function estadoDaFalhaDeLista(status: number, codigo: string | null): EstadoFalhaLista {
+  if (status !== 403) return 'erro'
+  return codigo === 'acesso.admin_atribuido' ? 'sem_admin' : 'sem_permissao'
 }
 
 export type CampoUsuario = 'nome' | 'email' | 'telefone' | 'cargo' | 'papeis' | 'senha' | 'ativo'

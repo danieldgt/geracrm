@@ -1,28 +1,29 @@
+import { HttpErrorResponse } from '@angular/common/http'
 import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } from '@angular/core'
 import {
   BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente,
   FiltrosComponente, GradeFormComponente, ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente,
-  ToastServico, codigoDoErro, ehStatus, mensagemDeErro, mesclarPagina,
+  ToastServico, codigoDoErro, mensagemDeErro, mesclarPagina,
   type ColunaTabela, type LinhaTabela, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
 import { digitosDaMascara } from '../../compartilhado/ui/mascaras.js'
 import { FiliaisServico } from './filiais.servico.js'
 import { UsuariosServico } from './usuarios.servico.js'
 import {
-  PAPEIS, ROTULO_PAPEL, adicionarLinha, avisaModoFundador, erroDaSenha, erroDoEmail, erroDoNome, indicesDuplicados,
-  linhasDosPapeis, mapearErroUsuario, modoFundador, montarPapeis, rotuloDaAtribuicao, temDuplicata, ultimoLoginTexto,
+  PAPEIS, ROTULO_PAPEL, TEXTO_SEM_ADMIN, adicionarLinha, erroDaSenha, erroDoEmail, erroDoNome, estadoDaFalhaDeLista,
+  indicesDuplicados, linhasDosPapeis, mapearErroUsuario, montarPapeis, rotuloDaAtribuicao, temDuplicata, ultimoLoginTexto,
   type CampoUsuario, type LinhaPapel, type UsuarioLista,
 } from './usuarios.regras.js'
 
-type EstadoLista = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
+type EstadoLista = 'carregando' | 'pronto' | 'erro' | 'sem_permissao' | 'sem_admin'
 const OPCOES_PAPEL: OpcaoSelect[] = PAPEIS.map((p) => ({ valor: p, rotulo: ROTULO_PAPEL[p] }))
 const OPCOES_STATUS: OpcaoSelect[] = [{ valor: 'true', rotulo: 'Ativos' }, { valor: 'false', rotulo: 'Inativos' }]
 const MAX_PAGINAS_FILIAIS = 10
 
 /**
- * Usuários (D3.4) — padrão Lista + CRUD em modal. Só admin (403 vira estado "sem permissão").
- * ⚠️ Papel é POR FILIAL. Modo fundador: sem admin ativo, todo ativo vale admin; atribuir o primeiro
- * admin a OUTRA pessoa encerra o modo — o modal avisa para a própria pessoa se tornar admin primeiro.
+ * Usuários (D3.4) — padrão Lista + CRUD em modal. Exige admin ATRIBUÍDO na API: empresa sem admin
+ * vira estado próprio ("nomeie o primeiro admin pela Drezz"); outro 403 vira "sem permissão".
+ * ⚠️ Papel é POR FILIAL. O modo fundador não vale aqui: quem nomeia o primeiro admin é o staff.
  */
 @Component({
   selector: 'app-usuarios',
@@ -46,6 +47,9 @@ const MAX_PAGINAS_FILIAIS = 10
         @case ('sem_permissao') {
           <ui-estado tipo="sem-permissao" titulo="Sem acesso a usuários"
             descricao="Só administradores gerenciam usuários. Peça acesso a um administrador." />
+        }
+        @case ('sem_admin') {
+          <ui-estado tipo="sem-permissao" [titulo]="textoSemAdmin.titulo" [descricao]="textoSemAdmin.descricao" />
         }
         @case ('erro') {
           <ui-estado tipo="erro" titulo="Não foi possível carregar os usuários" [descricao]="erroLista()">
@@ -100,13 +104,6 @@ const MAX_PAGINAS_FILIAIS = 10
 
     <ui-modal [aberto]="edicao() !== null" [titulo]="editandoId() ? 'Editar usuário' : 'Novo usuário'" largura="m" (fechar)="fechar()">
       <form id="form-usuario" (submit)="salvar($event)">
-        @if (avisoFundador()) {
-          <p class="aviso" role="status">
-            Esta empresa ainda não tem administrador: hoje todo usuário ativo vale admin. Atribuir admin a OUTRA
-            pessoa encerra esse modo e o seu acesso passa a valer só pelo seu próprio papel. Se for você quem
-            administra, torne-se admin primeiro.
-          </p>
-        }
         <ui-grade-form [colunas]="2">
           <ui-campo class="largo" rotulo="Nome" [obrigatorio]="true" [(valor)]="nome" [erro]="erros().nome ?? null" />
           @if (!editandoId()) {
@@ -179,7 +176,6 @@ const MAX_PAGINAS_FILIAIS = 10
     p.suave { font-size: 13px; margin: 0 0 var(--espacamento-3); }
     .papeis { display: inline-flex; flex-wrap: wrap; gap: var(--espacamento-1); }
     .acoes { display: inline-flex; flex-wrap: wrap; gap: var(--espacamento-2); justify-content: flex-end; }
-    .aviso { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3); border: 1px solid var(--atencao); border-radius: var(--raio-controle); color: var(--texto); font-size: 13px; }
     .papeis-form { margin: var(--espacamento-4) 0 0; padding: var(--espacamento-3); border: 1px solid var(--borda); border-radius: var(--raio-controle); display: grid; gap: var(--espacamento-3); min-width: 0; }
     .papeis-form legend { padding: 0 var(--espacamento-2); color: var(--texto-secundario); }
     .linha-papel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: var(--espacamento-3); align-items: end; }
@@ -216,8 +212,7 @@ export class UsuariosPagina implements OnInit {
   protected readonly busca = signal('')
   protected readonly ativo = signal('')
   protected readonly temFiltro = computed(() => this.busca().trim() !== '' || this.ativo() !== '')
-  /** Só é afirmado com a lista completa e sem filtro (ver `modoFundador`). */
-  private readonly fundador = signal(false)
+  protected readonly textoSemAdmin = TEXTO_SEM_ADMIN
 
   protected readonly filiais = signal<readonly { id: string; nome: string; ativa: boolean }[]>([])
   protected readonly opcoesFilial = computed<OpcaoSelect[]>(() =>
@@ -236,7 +231,6 @@ export class UsuariosPagina implements OnInit {
   protected readonly erros = signal<Partial<Record<CampoUsuario, string>>>({})
   protected readonly erroEnvio = signal<string | null>(null)
   protected readonly salvando = signal(false)
-  protected readonly avisoFundador = computed(() => avisaModoFundador(this.fundador(), this.linhasPapel()))
 
   // Modal redefinir senha
   protected readonly senhaDe = signal<string | null>(null)
@@ -268,11 +262,11 @@ export class UsuariosPagina implements OnInit {
       const r = await this.api.listar(this.consulta(null))
       this.itens.set(r.itens)
       this.cursor.set(r.proximoCursor)
-      if (!this.temFiltro()) this.fundador.set(modoFundador(r.itens, r.proximoCursor === null))
       this.estado.set('pronto')
     } catch (e) {
-      if (ehStatus(e, 403)) this.estado.set('sem_permissao')
-      else { this.erroLista.set(mensagemDeErro(e, 'Verifique a conexão e tente de novo.')); this.estado.set('erro') }
+      const falha = estadoDaFalhaDeLista(e instanceof HttpErrorResponse ? e.status : 0, codigoDoErro(e))
+      if (falha === 'erro') { this.erroLista.set(mensagemDeErro(e, 'Verifique a conexão e tente de novo.')) }
+      this.estado.set(falha)
     }
   }
 
@@ -284,7 +278,6 @@ export class UsuariosPagina implements OnInit {
       const r = await this.api.listar(this.consulta(c))
       this.itens.update((atual) => mesclarPagina(atual, r.itens, (u) => u.id))
       this.cursor.set(r.proximoCursor)
-      if (!this.temFiltro()) this.fundador.set(modoFundador(this.itens(), r.proximoCursor === null))
     } catch (e) {
       this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais usuários.'))
     } finally { this.carregandoMais.set(false) }
