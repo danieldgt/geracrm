@@ -12,6 +12,24 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- ⚠️ Anti-clickjacking, 2ª linha (a 1ª é o cabeçalho `frame-ancestors 'none'` + `X-Frame-Options: DENY`
+         do nginx). `frame-ancestors` em <meta> é IGNORADO pelo navegador, por especificação — por isso aqui
+         é script: dentro de iframe de terceiro, a página fica oculta e tenta sair do quadro. Exceção única: o
+         formulário público `/f/<chave>`, feito para ser incorporado (mesmo formato que o nginx libera). -->
+    <style id="anti-quadro">html { display: none !important; }</style>
+    <script>
+      (function () {
+        var incorporavel = /^\/f\/[A-Za-z0-9_-]{16,40}$/.test(location.pathname);
+        var emQuadro;
+        try { emQuadro = window.self !== window.top; } catch (e) { emQuadro = true; }
+        if (!emQuadro || incorporavel) {
+          var s = document.getElementById('anti-quadro');
+          if (s) s.parentNode.removeChild(s);
+        } else {
+          try { window.top.location = window.self.location; } catch (e) { /* bloqueado: segue oculto */ }
+        }
+      })();
+    </script>
     <!-- Tipografia da identidade (ADR-012): Geist (interface) + Geist Mono
          (dados). Fallback gracioso para IBM Plex / system-ui se não carregar. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />

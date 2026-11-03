@@ -162,11 +162,12 @@ export async function rotasContatoArquivo(app: FastifyInstance): Promise<void> {
       if (!UUID.test(req.params.id) || !UUID.test(req.params.arquivoId)) return reply.code(404).send({ erro: 'arquivo.nao_encontrado' })
       const bucket = arquivosBucket()
       if (!bucket.disponivel()) return reply.code(503).send(bucketIndisponivel)
-      const [a] = await req.comTenant((tx) => tx<{ chave_bucket: string; nome: string }[]>`
-        SELECT chave_bucket, nome FROM contato_arquivo
+      const [a] = await req.comTenant((tx) => tx<{ chave_bucket: string; nome: string; tipo_mime: string }[]>`
+        SELECT chave_bucket, nome, tipo_mime FROM contato_arquivo
          WHERE tenant_id = tenant_atual() AND id = ${req.params.arquivoId} AND contato_id = ${req.params.id}`)
       if (!a) return reply.code(404).send({ erro: 'arquivo.nao_encontrado' })
-      const url = await bucket.urlAssinada(a.chave_bucket, TTL_URL_SEGUNDOS)
+      // Baixa como anexo, nunca abre na origem do bucket (arquivo pode ter vindo de formulário público).
+      const url = await bucket.urlAssinada(a.chave_bucket, TTL_URL_SEGUNDOS, { nome: a.nome, tipo: a.tipo_mime })
       return reply.send({ url, nome: a.nome, expiraEmSegundos: TTL_URL_SEGUNDOS })
     },
   )

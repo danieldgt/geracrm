@@ -396,6 +396,13 @@ domínio muda. Tamanho: **P** = uma tela ou rota, sem migration · **M** = tela 
 - Hoje: LPs da Aquisição (nome, título, WhatsApp de destino) + `/publico/lp/:chave/lead`.
 - Fazer: evoluir a LP em **Formulário**: builder (nome, slug `/f/:slug`, título, descrição, tipo, filial, etapa destino, responsável padrão, cor, texto do botão, ativo, token; campos com obrigatório/placeholder/opções, seleção condicional, campo de referência, arrastar), página pública (LGPD, honeypot, anexos ao bucket, rate-limit por IP + slug, `?embed=1`), respostas (tabela + CSV + link para o contato), contato criado ou **mesclado por telefone** com origem = formulário.
 - Migration: `formulario`, `formulario_campo`, `formulario_resposta` (RLS; leitura pública por slug via função).
+- Revisão de segurança (2026-11-03, 0127 editada no lugar antes de produção): telefone já cadastrado **não mescla** —
+  a resposta fica `pendente` e um gestor "Aplica ao contato" (auditado); upload fora da transação com
+  compensação; IP real por `TRUST_PROXY_HOPS`; multipart com teto de 20 MB, parte repetida recusada e semáforo;
+  assinatura do arquivo; hash do texto de consentimento (409 `formulario.texto_mudou`); marketing só com a flag;
+  formulário nasce inativo; só `/f/<chave>` pode ir para iframe (`frame-ancestors *`), o resto do console é
+  `'none'`. **Evolução**: `dominios_incorporacao` por formulário para trocar o `*` por uma lista; streaming dos
+  anexos direto ao bucket (hoje ficam em memória até a validação, limitados pelo semáforo).
 
 **F4 — Site Social** · **removida** (decisão do dono em 2026-11-03: não entra).
 

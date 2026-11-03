@@ -9,14 +9,15 @@ export interface ArquivosBucket {
   disponivel(): boolean
   subir(chave: string, bytes: Buffer, mime: string): Promise<void>
   remover(chave: string): Promise<void>
-  urlAssinada(chave: string, ttlSegundos: number): Promise<string>
+  /** `nome`/`tipo`: a URL força download (`attachment`) com esse nome e esse Content-Type. */
+  urlAssinada(chave: string, ttlSegundos: number, baixar?: { nome: string; tipo: string }): Promise<string>
 }
 
 const real: ArquivosBucket = {
   disponivel: midiaHabilitada,
   subir: subirObjeto,
   remover: removerObjeto,
-  urlAssinada: (chave, ttl) => urlAssinada(chave, ttl),
+  urlAssinada: (chave, ttl, baixar) => urlAssinada(chave, ttl, baixar ? { baixarComo: baixar.nome, tipo: baixar.tipo } : {}),
 }
 
 let atual: ArquivosBucket = real

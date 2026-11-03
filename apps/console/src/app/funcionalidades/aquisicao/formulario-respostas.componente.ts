@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, OnInit, computed, inject, input, signal } from '@angular/core'
 import { RouterLink } from '@angular/router'
 import {
-  BadgeComponente, CelulaDiretiva, EstadoComponente, PaginacaoComponente, TabelaComponente, ToastServico,
+  BadgeComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente, PaginacaoComponente, TabelaComponente, ToastServico,
   mensagemDeErro, mesclarPagina, type ColunaTabela, type LinhaTabela,
 } from '../../compartilhado/ui/index.js'
 import { MAX_COLUNAS_RESPOSTA, camposDaTabela, textoDaResposta, type CampoFormulario } from './formulario.regras.js'
@@ -35,7 +35,19 @@ type EstadoLista = 'carregando' | 'pronto' | 'erro'
             @if (l.contatoId) { <a class="nome" [routerLink]="['/contato', l.contatoId]">{{ l.contato }}</a> } @else { <span>{{ l.contato }}</span> }
           </ng-template>
           <ng-template uiCelula="novo" let-l>
-            <ui-badge [tom]="l.novo ? 'sucesso' : 'info'">{{ l.novo ? 'Novo contato' : 'Já cadastrado' }}</ui-badge>
+            @switch (l.verificacao) {
+              @case ('pendente') {
+                <div class="pendente">
+                  <ui-badge tom="atencao">Não verificada</ui-badge>
+                  <span class="aviso">Resposta não verificada — confirme antes de usar.</span>
+                  <button type="button" class="btn btn--secundario btn--pequeno" [disabled]="aplicando() === l.id" (click)="aplicar(l.id)">
+                    {{ aplicando() === l.id ? 'Aplicando…' : 'Aplicar ao contato' }}
+                  </button>
+                </div>
+              }
+              @case ('aplicada') { <ui-badge tom="info">Aplicada ao contato</ui-badge> }
+              @default { <ui-badge [tom]="l.novo ? 'sucesso' : 'info'">{{ l.novo ? 'Novo contato' : 'Já cadastrado' }}</ui-badge> }
+            }
           </ng-template>
           <div uiVazio>
             <ui-estado titulo="Nenhuma resposta ainda" descricao="Quando alguém preencher o formulário público, a resposta aparece aqui." />
@@ -55,6 +67,8 @@ type EstadoLista = 'carregando' | 'pronto' | 'erro'
     ui-tabela { display: block; }
     .nome { color: var(--texto); text-decoration: none; }
     .nome:hover { color: var(--acao); text-decoration: underline; }
+    .pendente { display: grid; gap: var(--espacamento-1); justify-items: start; min-width: 0; }
+    .aviso { color: var(--texto-secundario); font-size: 12px; line-height: 1.3; white-space: normal; }
   `,
 })
 export class FormularioRespostasComponente implements OnInit {
@@ -64,6 +78,7 @@ export class FormularioRespostasComponente implements OnInit {
 
   private readonly api = inject(FormulariosServico)
   private readonly toast = inject(ToastServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
 
   protected readonly limite = MAX_COLUNAS_RESPOSTA
   protected readonly estado = signal<EstadoLista>('carregando')
@@ -72,17 +87,19 @@ export class FormularioRespostasComponente implements OnInit {
   protected readonly cursor = signal<string | null>(null)
   protected readonly carregandoMais = signal(false)
   protected readonly baixando = signal(false)
+  protected readonly aplicando = signal<string | null>(null)
 
   private readonly colunasDeCampo = computed(() => camposDaTabela(this.campos()))
   protected readonly colunas = computed<ColunaTabela[]>(() => [
     { chave: 'quando', rotulo: 'Data', mono: true, largura: '150px' },
     { chave: 'contato', rotulo: 'Contato' },
-    { chave: 'novo', rotulo: 'Situação', largura: '140px' },
+    { chave: 'novo', rotulo: 'Situação', largura: '200px' },
     ...this.colunasDeCampo().map((c, i) => ({ chave: `c${i}`, rotulo: c.rotulo })),
   ])
   protected readonly linhas = computed<readonly LinhaTabela[]>(() => this.itens().map((r) => {
     const linha: Record<string, unknown> = {
       id: r.id, contatoId: r.contatoId, contato: r.contatoNome ?? 'Contato removido', novo: r.contatoNovo,
+      verificacao: r.verificacao,
       quando: new Date(r.criadoEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }),
     }
     this.colunasDeCampo().forEach((c, i) => { linha[`c${i}`] = textoDaResposta(c, r.respostas[c.id]) })
@@ -115,6 +132,29 @@ export class FormularioRespostasComponente implements OnInit {
     } catch (e) {
       this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais respostas.'))
     } finally { this.carregandoMais.set(false) }
+  }
+
+  /**
+   * ⚠️ Quem preencheu é anônimo: o telefone bater com um cliente não prova que é ele. O gestor confere
+   * (ligando, pela conversa) e só então os dados entram na ficha — só o que faltava, auditado.
+   */
+  protected async aplicar(respostaId: string): Promise<void> {
+    if (this.aplicando()) return
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Aplicar a resposta ao contato?',
+      mensagem: 'Confirme que a resposta é mesmo do dono deste cadastro. O e-mail, o documento e os anexos entram na ficha '
+        + '(só o que estiver faltando; nada é sobrescrito). O consentimento do formulário não é copiado.',
+      acao: 'Aplicar ao contato',
+    })
+    if (!ok) return
+    this.aplicando.set(respostaId)
+    try {
+      await this.api.aplicarResposta(respostaId)
+      this.itens.update((l) => l.map((r) => (r.id === respostaId ? { ...r, verificacao: 'aplicada' as const } : r)))
+      this.toast.sucesso('Resposta aplicada ao contato.')
+    } catch (e) {
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível aplicar a resposta.'))
+    } finally { this.aplicando.set(null) }
   }
 
   protected async baixar(): Promise<void> {

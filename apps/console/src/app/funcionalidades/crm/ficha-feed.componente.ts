@@ -1,8 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core'
 import { DatePipe } from '@angular/common'
 import {
-  BadgeComponente, BotaoComponente, CampoComponente, EsqueletoComponente, EstadoComponente, IconeComponente,
-  PaginacaoComponente, ToastServico, mensagemDeErro,
+  BadgeComponente, BotaoComponente, CampoComponente, ConfirmacaoServico, EsqueletoComponente, EstadoComponente, IconeComponente,
+  PaginacaoComponente, ToastServico, codigoDoErro, mensagemDeErro,
 } from '../../compartilhado/ui/index.js'
 import { FichaBlocosServico } from './ficha-blocos.servico.js'
 import { itemParaExibicao, mesclarFeed, type ItemFeed } from './ficha.regras.js'
@@ -50,6 +50,11 @@ import { itemParaExibicao, mesclarFeed, type ItemFeed } from './ficha.regras.js'
                     <span class="txt-denso quem">{{ i.autor }} · {{ i.em | date: 'dd/MM/yyyy HH:mm' }}</span>
                   </div>
                   <p class="texto txt-corpo">{{ i.texto }}</p>
+                  @if (i.respostaPendenteId; as rid) {
+                    <div class="acao-pendente">
+                      <ui-botao variante="secundario" [carregando]="aplicando() === rid" (click)="aplicar(rid)">Aplicar ao contato</ui-botao>
+                    </div>
+                  }
                 </div>
               </li>
             }
@@ -77,11 +82,13 @@ import { itemParaExibicao, mesclarFeed, type ItemFeed } from './ficha.regras.js'
     .quem { color: var(--texto-secundario); }
     .texto { margin: var(--espacamento-1) 0 0; color: var(--texto); white-space: pre-wrap; overflow-wrap: anywhere; }
     .erro { color: var(--erro); margin: var(--espacamento-2) 0 0; }
+    .acao-pendente { margin-top: var(--espacamento-2); }
   `,
 })
 export class FichaFeedComponente {
   private readonly blocos = inject(FichaBlocosServico)
   private readonly toast = inject(ToastServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
 
   readonly contatoId = input.required<string>()
   /** Muda quando algo fora do feed (tarefa, qualificação, etiqueta) pode ter gerado item novo. */
@@ -96,6 +103,7 @@ export class FichaFeedComponente {
   readonly texto = signal('')
   readonly salvando = signal(false)
   readonly erroObs = signal<string | null>(null)
+  readonly aplicando = signal<string | null>(null)
   readonly vistas = computed(() => this.itens().map(itemParaExibicao))
 
   constructor() {
@@ -133,6 +141,33 @@ export class FichaFeedComponente {
       this.erroMais.set(mensagemDeErro(e, 'Não foi possível carregar mais itens.'))
     } finally {
       this.carregandoMais.set(false)
+    }
+  }
+
+  /**
+   * ⚠️ A resposta veio de um formulário público com o telefone deste contato — quem preencheu não foi
+   * verificado. Só depois da confirmação os dados entram na ficha (só o que faltava; auditado).
+   */
+  async aplicar(respostaId: string): Promise<void> {
+    if (this.aplicando()) return
+    const ok = await this.confirmacao.confirmar({
+      titulo: 'Aplicar a resposta ao contato?',
+      mensagem: 'Confirme que a resposta é mesmo do dono deste cadastro. O e-mail, o documento e os anexos entram na ficha '
+        + '(só o que estiver faltando; nada é sobrescrito). O consentimento do formulário não é copiado.',
+      acao: 'Aplicar ao contato',
+    })
+    if (!ok) return
+    this.aplicando.set(respostaId)
+    try {
+      await this.blocos.aplicarRespostaFormulario(respostaId)
+      this.toast.sucesso('Resposta aplicada ao contato.')
+      await this.carregar(true)
+    } catch (e) {
+      this.toast.erro(codigoDoErro(e) === 'autorizacao.sem_permissao'
+        ? 'Só gestor ou administrador pode aplicar a resposta.'
+        : mensagemDeErro(e, 'Não foi possível aplicar a resposta.'))
+    } finally {
+      this.aplicando.set(null)
     }
   }
 

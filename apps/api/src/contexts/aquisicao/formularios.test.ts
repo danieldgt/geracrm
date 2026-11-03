@@ -1,15 +1,20 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import postgres from 'postgres'
 import type { FastifyInstance } from 'fastify'
 import { criarApp } from '../../app.js'
 import { encerrarBanco } from '../../db/index.js'
 import { definirArquivosBucket, type ArquivosBucket } from '../crm/arquivos-bucket.js'
+import { definirMaxUploadsSimultaneos } from './rotas-formulario-publico.js'
 
 /**
  * F3 — formulários públicos. A pergunta de segurança é a mesma da LP: uma rota SEM token escreve no
  * tenant certo e só nele? Fixa também: CRUD + papel, validação dos campos, merge por telefone,
  * honeypot, rate-limit, consentimento, anexo, etapa destino e CSV.
+ *
+ * Revisão de segurança (F3b): upload FORA da transação com compensação, IP real (`trustProxy`) no
+ * limite, contato existente INTOCADO (resposta pendente + "Aplicar ao contato"), multipart com tetos e
+ * semáforo, assinatura do arquivo, hash do texto de consentimento e formulário que nasce inativo.
  */
 const T = 'f3f00000-0000-4000-8000-000000000001'
 const T2 = 'f3f00000-0000-4000-8000-000000000002'
@@ -28,9 +33,21 @@ let app: FastifyInstance
 
 const objetos = new Map<string, Buffer>()
 let bucketOn = true
+/**
+ * Sonda do A1: no instante do upload, existe transação da API parada no meio da gravação do formulário?
+ * (antes da correção o `subir` rodava DENTRO da transação, segurando a conexão do pool durante a rede.)
+ */
+const transacoesDuranteUpload: number[] = []
 const bucketFalso: ArquivosBucket = {
   disponivel: () => bucketOn,
-  subir: async (k, b) => { objetos.set(k, b) },
+  subir: async (k, b) => {
+    const [r] = await dono`SELECT count(*)::int AS n FROM pg_stat_activity
+                            WHERE state LIKE 'idle in transaction%'
+                              AND (query ILIKE '%consentimento_contato%' OR query ILIKE '%INSERT INTO contato%'
+                                   OR query ILIKE '%formulario_resposta%')`
+    transacoesDuranteUpload.push(Number(r!['n']))
+    objetos.set(k, b)
+  },
   remover: async (k) => { objetos.delete(k) },
   urlAssinada: async (k) => `https://fake/${k}`,
 }
@@ -38,8 +55,8 @@ const bucketFalso: ArquivosBucket = {
 const adm = (t: string, m: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, corpo?: Record<string, unknown>) =>
   app.inject({ method: m, url, headers: { 'x-tenant-id': t }, ...(corpo ? { payload: corpo } : {}) })
 /** SEM cabeçalho de tenant: é assim que o navegador de quem preenche chama. */
-const pub = (m: 'GET' | 'POST', url: string, corpo?: Record<string, unknown>, ip?: string) =>
-  app.inject({ method: m, url, headers: ip ? { 'x-forwarded-for': ip } : {}, ...(corpo ? { payload: corpo } : {}) })
+const pub = (m: 'GET' | 'POST', url: string, corpo?: Record<string, unknown>, ip?: string, extra: Record<string, string> = {}) =>
+  app.inject({ method: m, url, headers: { ...(ip ? { 'x-forwarded-for': ip } : {}), ...extra }, ...(corpo ? { payload: corpo } : {}) })
 const papelDe = (t: string, u: string, p: string) =>
   dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${t}, ${u}, NULL, ${p})
        ON CONFLICT (tenant_id, usuario_id) WHERE filial_id IS NULL DO UPDATE SET papel = EXCLUDED.papel`
@@ -56,21 +73,25 @@ const CAMPOS = [
 ]
 const CNPJ = '11222333000181'
 
-async function criarForm(t: string, extra: Record<string, unknown> = {}, campos: unknown[] = CAMPOS) {
+/** Cria, põe os campos e PUBLICA (o formulário nasce inativo). `ativar: false` deixa como nasceu. */
+async function criarForm(t: string, extra: Record<string, unknown> = {}, campos: unknown[] = CAMPOS, ativar = true) {
   const r = await adm(t, 'POST', '/v1/formularios', { nome: 'Cadastro de clientes', ...extra })
   expect(r.statusCode).toBe(201)
   const f = r.json() as { id: string; chavePublica: string; slug: string }
   const c = await adm(t, 'PUT', `/v1/formularios/${f.id}/campos`, { campos })
   expect(c.statusCode).toBe(200)
+  if (ativar) expect((await adm(t, 'PATCH', `/v1/formularios/${f.id}`, { ativo: true })).statusCode).toBe(200)
   return f
 }
 
-function multipart(dados: unknown, arquivo?: { campo: string; nome: string; mime: string; bytes: Buffer }) {
+interface Arquivo { campo: string; nome: string; mime: string; bytes: Buffer }
+function multipart(dados: unknown, arquivo?: Arquivo | Arquivo[], dadosRepetido = false) {
   const f = 'frontEIRAf3x'
-  const partes: Buffer[] = [Buffer.from(`--${f}\r\nContent-Disposition: form-data; name="dados"\r\n\r\n${JSON.stringify(dados)}\r\n`)]
-  if (arquivo) {
-    partes.push(Buffer.from(`--${f}\r\nContent-Disposition: form-data; name="${arquivo.campo}"; filename="${arquivo.nome}"\r\nContent-Type: ${arquivo.mime}\r\n\r\n`))
-    partes.push(arquivo.bytes, Buffer.from('\r\n'))
+  const parteDados = Buffer.from(`--${f}\r\nContent-Disposition: form-data; name="dados"\r\n\r\n${JSON.stringify(dados)}\r\n`)
+  const partes: Buffer[] = dadosRepetido ? [parteDados, parteDados] : [parteDados]
+  for (const a of arquivo === undefined ? [] : Array.isArray(arquivo) ? arquivo : [arquivo]) {
+    partes.push(Buffer.from(`--${f}\r\nContent-Disposition: form-data; name="${a.campo}"; filename="${a.nome}"\r\nContent-Type: ${a.mime}\r\n\r\n`))
+    partes.push(a.bytes, Buffer.from('\r\n'))
   }
   partes.push(Buffer.from(`--${f}--\r\n`))
   return { payload: Buffer.concat(partes), headers: { 'content-type': `multipart/form-data; boundary=${f}` } }
@@ -78,12 +99,19 @@ function multipart(dados: unknown, arquivo?: { campo: string; nome: string; mime
 
 let ipN = 0
 const novoIp = () => `10.3.${Math.floor(ipN / 250)}.${(ipN++ % 250) + 1}`
-const envio = (chave: string, respostas: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
-  pub('POST', `/publico/f/${chave}/respostas`, { respostas, consentimento: true, ...extra }, novoIp())
+/** O hash do texto de consentimento que a página recebeu no GET (M4): o POST tem de devolvê-lo. */
+const hashDe = async (chave: string): Promise<string | undefined> =>
+  (await pub('GET', `/publico/f/${chave}`)).json().textoConsentimentoHash
+const envio = async (chave: string, respostas: Record<string, unknown>, extra: Record<string, unknown> = {}, ip = novoIp()) =>
+  pub('POST', `/publico/f/${chave}/respostas`, { respostas, consentimento: true, textoConsentimentoHash: await hashDe(chave), ...extra }, ip)
+const enviarMultipart = async (chave: string, m: { payload: Buffer; headers: Record<string, string> }, ip = novoIp()) =>
+  app.inject({ method: 'POST', url: `/publico/f/${chave}/respostas`, headers: { ...m.headers, 'x-forwarded-for': ip }, payload: m.payload })
+const PDF = Buffer.from('%PDF-1.4 teste')
 const PESSOA = (tel = '81 99999-1111', nome = 'Ana Souza') => ({ [uid(1)]: nome, [uid(2)]: tel, [uid(4)]: 'Pessoa' })
 
 async function limpar() {
-  for (const tb of ['formulario_resposta', 'formulario_campo', 'formulario', 'contato_arquivo', 'consentimento_contato',
+  await dono`DELETE FROM auditoria WHERE tenant_id IN (${T}, ${T2})`
+  for (const tb of ['formulario_resposta_anexo', 'formulario_resposta', 'formulario_campo', 'formulario', 'contato_arquivo', 'consentimento_contato',
     'oportunidade_etapa_historico', 'oportunidade', 'carteira_atribuicao', 'contato_documento', 'contato_telefone', 'contato', 'origem']) {
     await dono.unsafe(`DELETE FROM ${tb} WHERE tenant_id IN ('${T}', '${T2}')`)
   }
@@ -117,6 +145,8 @@ beforeEach(async () => {
   await papelDe(T, U_T, 'gestor')
   bucketOn = true
   objetos.clear()
+  transacoesDuranteUpload.length = 0
+  definirMaxUploadsSimultaneos()
 })
 
 afterAll(async () => {
@@ -238,6 +268,8 @@ describe('público: definição', () => {
     expect(corpo.titulo).toBe('Cadastro de clientes')
     expect(corpo.campos).toHaveLength(6)
     expect(corpo.textoConsentimento).toMatch(/autoriza/)
+    expect(corpo.textoConsentimentoHash).toBe(createHash('sha256').update(corpo.textoConsentimento).digest('hex'))
+    expect(r.headers['x-content-type-options']).toBe('nosniff')
     const bruto = r.body
     for (const proibido of [T, U_T, ETAPA, 'etapa', 'responsavel', 'tenant', 'token', 'filial', 'origem']) {
       expect(bruto.toLowerCase()).not.toContain(proibido.toLowerCase())
@@ -277,15 +309,20 @@ describe('público: envio', () => {
     expect(c).toMatchObject({ nome: 'Ana Souza', email: 'ana@exemplo.com', filial_id: filial, origem_carga: 'formulario', origem: 'Formulário: Cadastro de clientes' })
     const [tel] = await dono`SELECT e164, principal FROM contato_telefone WHERE tenant_id = ${T} AND contato_id = ${c!['id']}`
     expect(tel).toMatchObject({ e164: '+5581999991111', principal: true })
-    const [cons] = await dono`SELECT tipo, concedido FROM consentimento_contato WHERE tenant_id = ${T}`
-    expect(cons).toMatchObject({ tipo: 'whatsapp', concedido: true })
+    const consents = await dono`SELECT tipo, concedido, origem, formulario_resposta_id FROM consentimento_contato WHERE tenant_id = ${T}`
+    const [respId] = await dono`SELECT id FROM formulario_resposta WHERE tenant_id = ${T}`
+    // LGPD: origem `formulario`, apontando para a resposta; marketing NÃO foi pedido → nem registro, nem flag.
+    expect(consents).toEqual([{ tipo: 'whatsapp', concedido: true, origem: 'formulario', formulario_resposta_id: respId!['id'] }])
+    const [flags] = await dono`SELECT recebe_campanhas FROM contato WHERE tenant_id = ${T}`
+    expect(flags!['recebe_campanhas']).toBe(false)
     const [cart] = await dono`SELECT usuario_id FROM carteira_atribuicao WHERE tenant_id = ${T} AND contato_id = ${c!['id']} AND ate IS NULL`
     expect(cart!['usuario_id']).toBe(U_T)
     const [op] = await dono`SELECT etapa_id, responsavel_id, estado FROM oportunidade WHERE tenant_id = ${T}`
     expect(op).toMatchObject({ etapa_id: ETAPA, responsavel_id: U_T, estado: 'aberta' })
-    const [resp] = await dono`SELECT respostas, ip_hash, consentimento_texto, contato_novo FROM formulario_resposta WHERE tenant_id = ${T}`
+    const [resp] = await dono`SELECT respostas, ip_hash, consentimento_texto, contato_novo, verificacao FROM formulario_resposta WHERE tenant_id = ${T}`
     expect(resp!['contato_novo']).toBe(true)
     expect(resp!['ip_hash']).toMatch(/^[0-9a-f]{64}$/)
+    expect(resp!['verificacao']).toBe('nao_se_aplica')
     expect(resp!['consentimento_texto']).toMatch(/autoriza/)
     expect((resp!['respostas'] as Record<string, unknown>)[uid(4)]).toBe('Pessoa')
   })
@@ -300,26 +337,108 @@ describe('público: envio', () => {
     expect(await dono`SELECT 1 FROM origem WHERE tenant_id = ${T} AND nome LIKE 'Formulário:%'`).toHaveLength(0)
   })
 
-  it('telefone já cadastrado MESCLA: não duplica, só preenche o que faltava, e a resposta é igual', async () => {
-    const f = await criarForm(T, { etapaDestinoId: ETAPA })
+  /**
+   * ⚠️ A3 — antes, o anônimo que digitasse o telefone de um cliente GRAVAVA e-mail, origem, filial e
+   * documento na ficha dele, registrava consentimento em nome dele e o punha no funil. Agora o contato
+   * fica intocado: só nasce a resposta `pendente`, e a resposta HTTP é idêntica (não vira oráculo).
+   */
+  it('telefone já cadastrado NÃO altera o contato: resposta pendente, e a resposta HTTP é igual', async () => {
+    const filial = randomUUID()
+    await dono`INSERT INTO filial (tenant_id, id, nome) VALUES (${T}, ${filial}, 'Matriz')`
+    const f = await criarForm(T, { etapaDestinoId: ETAPA, filialId: filial, responsavelPadraoId: U_T })
+    const existente = randomUUID()
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo, recebe_campanhas) VALUES (${T}, ${existente}, 'Nome do ERP', 'erp', true, false)`
+    await dono`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
+               VALUES (${T}, ${existente}, 1, '+5581999991111', ${'558199991111'}, true, true, 'erp')`
+    await dono`INSERT INTO consentimento_contato (tenant_id, contato_id, tipo, concedido, origem) VALUES (${T}, ${existente}, 'whatsapp', false, 'opt_out_mensagem')`
+    const antes = await dono`SELECT * FROM contato WHERE tenant_id = ${T} AND id = ${existente}`
+
+    const m = multipart({ respostas: { [uid(1)]: 'Outro Nome', [uid(2)]: '(81) 99999-1111', [uid(3)]: 'invasor@b.com', [uid(4)]: 'Empresa', [uid(5)]: CNPJ },
+      consentimento: true, textoConsentimentoHash: await hashDe(f.chavePublica) }, { campo: uid(6), nome: 'doc.pdf', mime: 'application/pdf', bytes: PDF })
+    const r = await enviarMultipart(f.chavePublica, m)
+    expect(r.statusCode).toBe(201)
+
+    // contato: nem uma coluna mudou; nada de documento, consentimento novo, oportunidade, carteira ou arquivo na ficha
+    expect(await dono`SELECT * FROM contato WHERE tenant_id = ${T} AND id = ${existente}`).toEqual(antes)
+    expect(await dono`SELECT 1 FROM contato WHERE tenant_id = ${T}`).toHaveLength(1)
+    expect(await dono`SELECT 1 FROM contato_documento WHERE tenant_id = ${T}`).toHaveLength(0)
+    expect(await dono`SELECT tipo, concedido, origem FROM consentimento_contato WHERE tenant_id = ${T}`)
+      .toEqual([{ tipo: 'whatsapp', concedido: false, origem: 'opt_out_mensagem' }])
+    expect(await dono`SELECT 1 FROM oportunidade WHERE tenant_id = ${T}`).toHaveLength(0)
+    expect(await dono`SELECT 1 FROM carteira_atribuicao WHERE tenant_id = ${T}`).toHaveLength(0)
+    expect(await dono`SELECT 1 FROM contato_arquivo WHERE tenant_id = ${T}`).toHaveLength(0)
+    expect(await dono`SELECT 1 FROM origem WHERE tenant_id = ${T}`).toHaveLength(0)
+
+    // a resposta guarda tudo, PENDENTE, e o anexo fica preso a ela
+    const [resp] = await dono`SELECT id, contato_id, contato_novo, verificacao FROM formulario_resposta WHERE tenant_id = ${T}`
+    expect(resp).toMatchObject({ contato_id: existente, contato_novo: false, verificacao: 'pendente' })
+    const [anexo] = await dono`SELECT resposta_id, nome, chave_bucket FROM formulario_resposta_anexo WHERE tenant_id = ${T}`
+    expect(anexo).toMatchObject({ resposta_id: resp!['id'], nome: 'doc.pdf' })
+    expect(objetos.has(String(anexo!['chave_bucket']))).toBe(true)
+
+    // mesma resposta HTTP de um contato novo
+    const novo = await envio(f.chavePublica, PESSOA('81 98888-2222'))
+    expect(novo.json()).toEqual(r.json())
+    const de_novo = await envio(f.chavePublica, PESSOA('81999991111'))
+    expect(de_novo.statusCode).toBe(201)
+    expect(de_novo.json()).toEqual(r.json())
+    expect(await dono`SELECT 1 FROM contato WHERE tenant_id = ${T} AND id = ${existente}`).toHaveLength(1)
+  })
+
+  it('aplicar ao contato: gestor confirma, só o que faltava entra, anexo vai à ficha, auditado e uma vez só', async () => {
+    const f = await criarForm(T)
     const existente = randomUUID()
     await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${existente}, 'Nome do ERP', 'erp', true)`
     await dono`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
                VALUES (${T}, ${existente}, 1, '+5581999991111', ${'558199991111'}, true, true, 'erp')`
-    const novo = await envio(f.chavePublica, { ...PESSOA('(81) 99999-1111', 'Outro Nome'), [uid(3)]: 'a@b.com' })
-    expect(novo.statusCode).toBe(201)
-    const contatos = await dono`SELECT id, nome, email FROM contato WHERE tenant_id = ${T}`
-    expect(contatos).toHaveLength(1)
-    expect(contatos[0]).toMatchObject({ id: existente, nome: 'Nome do ERP', email: 'a@b.com' })
-    const [resp] = await dono`SELECT contato_id, contato_novo FROM formulario_resposta WHERE tenant_id = ${T}`
-    expect(resp).toMatchObject({ contato_id: existente, contato_novo: false })
-    expect(await dono`SELECT 1 FROM oportunidade WHERE tenant_id = ${T} AND contato_id = ${existente}`).toHaveLength(1)
-    // segundo envio: mesma resposta, sem segunda oportunidade aberta
-    const de_novo = await envio(f.chavePublica, PESSOA('81999991111'))
-    expect(de_novo.statusCode).toBe(201)
-    expect(de_novo.json()).toEqual(novo.json())
-    expect(await dono`SELECT 1 FROM oportunidade WHERE tenant_id = ${T} AND contato_id = ${existente}`).toHaveLength(1)
+    const m = multipart({ respostas: { [uid(1)]: 'Outro Nome', [uid(2)]: '81999991111', [uid(3)]: 'dono@b.com', [uid(4)]: 'Empresa', [uid(5)]: CNPJ },
+      consentimento: true, textoConsentimentoHash: await hashDe(f.chavePublica) }, { campo: uid(6), nome: 'doc.pdf', mime: 'application/pdf', bytes: PDF })
+    expect((await enviarMultipart(f.chavePublica, m)).statusCode).toBe(201)
+    const [resp] = await dono`SELECT id FROM formulario_resposta WHERE tenant_id = ${T}`
+    const rid = String(resp!['id'])
+
+    // lista de respostas e feed avisam
+    const lista = (await adm(T, 'GET', `/v1/formularios/${f.id}/respostas`)).json()
+    expect(lista.itens[0]).toMatchObject({ verificacao: 'pendente', contatoNovo: false })
+    const feed = (await adm(T, 'GET', `/v1/contatos/${existente}/feed`)).json()
+    const item = feed.itens.find((i: { tipo: string }) => i.tipo === 'formulario')
+    expect(item).toMatchObject({ texto: expect.stringMatching(/não verificada.*confirme antes de usar/), ref: { tipo: 'formulario_resposta_pendente', id: rid } })
+    const [anexoPendente] = await dono`SELECT id FROM formulario_resposta_anexo WHERE tenant_id = ${T}`
+    const url = await adm(T, 'GET', `/v1/formularios/respostas/${rid}/anexos/${anexoPendente!['id']}/url`)
+    expect(url.statusCode).toBe(200)
+
+    await papelDe(T, U_T, 'vendedor')
+    expect((await adm(T, 'POST', `/v1/formularios/respostas/${rid}/aplicar`)).statusCode).toBe(403)
+    await papelDe(T, U_T, 'gestor')
+    expect((await adm(T2, 'POST', `/v1/formularios/respostas/${rid}/aplicar`)).statusCode).toBe(404)
+    const ok = await adm(T, 'POST', `/v1/formularios/respostas/${rid}/aplicar`)
+    expect(ok.statusCode).toBe(200)
+
+    const [c] = await dono`SELECT nome, email FROM contato WHERE tenant_id = ${T} AND id = ${existente}`
+    expect(c).toMatchObject({ nome: 'Nome do ERP', email: 'dono@b.com' })
+    expect(await dono`SELECT numero FROM contato_documento WHERE tenant_id = ${T} AND contato_id = ${existente}`).toEqual([{ numero: CNPJ }])
+    const [arq] = await dono`SELECT id, contato_id FROM contato_arquivo WHERE tenant_id = ${T}`
+    expect(arq).toMatchObject({ id: anexoPendente!['id'], contato_id: existente })
+    expect(await dono`SELECT 1 FROM formulario_resposta_anexo WHERE tenant_id = ${T}`).toHaveLength(0)
+    expect(await dono`SELECT verificacao FROM formulario_resposta WHERE tenant_id = ${T}`).toEqual([{ verificacao: 'aplicada' }])
+    const [aud] = await dono`SELECT acao, entidade_id, ator_id FROM auditoria WHERE tenant_id = ${T} AND acao = 'formulario.resposta_aplicada'`
+    expect(aud).toMatchObject({ entidade_id: existente, ator_id: U_T })
+    // consentimento do anônimo não foi copiado
+    expect(await dono`SELECT 1 FROM consentimento_contato WHERE tenant_id = ${T}`).toHaveLength(0)
+    expect((await adm(T, 'POST', `/v1/formularios/respostas/${rid}/aplicar`)).statusCode).toBe(409)
+  })
+
+  it('envios SIMULTÂNEOS do mesmo telefone novo: um contato só, sem 500 (o 23505 vira "já cadastrado")', async () => {
+    const f = await criarForm(T)
+    const hash = await hashDe(f.chavePublica)
+    const rs = await Promise.all(Array.from({ length: 4 }, (_, i) =>
+      pub('POST', `/publico/f/${f.chavePublica}/respostas`, { respostas: PESSOA('81 97777-3333', `Nome ${i}`), consentimento: true, textoConsentimentoHash: hash }, novoIp())))
+    expect(rs.map((r) => r.statusCode)).toEqual([201, 201, 201, 201])
     expect(await dono`SELECT 1 FROM contato WHERE tenant_id = ${T}`).toHaveLength(1)
+    const resps = await dono`SELECT contato_novo, verificacao FROM formulario_resposta WHERE tenant_id = ${T} ORDER BY contato_novo DESC`
+    expect(resps).toHaveLength(4)
+    expect(resps.filter((r) => r['contato_novo'])).toHaveLength(1)
+    expect(resps.filter((r) => r['verificacao'] === 'pendente')).toHaveLength(3)
   })
 
   it('CNPJ do campo condicional vira o documento do contato', async () => {
@@ -347,10 +466,11 @@ describe('público: envio', () => {
 
   it('consentimento é obrigatório', async () => {
     const f = await criarForm(T)
-    const r = await pub('POST', `/publico/f/${f.chavePublica}/respostas`, { respostas: PESSOA(), consentimento: false }, novoIp())
+    const hash = await hashDe(f.chavePublica)
+    const r = await pub('POST', `/publico/f/${f.chavePublica}/respostas`, { respostas: PESSOA(), consentimento: false, textoConsentimentoHash: hash }, novoIp())
     expect(r.statusCode).toBe(422)
     expect(r.json().campos.consentimento).toBeTruthy()
-    const sem = await pub('POST', `/publico/f/${f.chavePublica}/respostas`, { respostas: PESSOA() }, novoIp())
+    const sem = await pub('POST', `/publico/f/${f.chavePublica}/respostas`, { respostas: PESSOA(), textoConsentimentoHash: hash }, novoIp())
     expect(sem.statusCode).toBe(422)
     expect(await dono`SELECT 1 FROM contato WHERE tenant_id = ${T}`).toHaveLength(0)
   })
@@ -368,8 +488,7 @@ describe('público: envio', () => {
     const ip = novoIp()
     const codigos: number[] = []
     for (let i = 0; i < 10; i++) {
-      const r = await pub('POST', `/publico/f/${f.chavePublica}/respostas`,
-        { respostas: PESSOA(`81 9${String(1000 + i).padStart(4, '0')}-0000`), consentimento: true }, ip)
+      const r = await envio(f.chavePublica, PESSOA(`81 9${String(1000 + i).padStart(4, '0')}-0000`), {}, ip)
       codigos.push(r.statusCode)
     }
     expect(codigos.filter((c) => c === 201)).toHaveLength(8)
@@ -394,23 +513,27 @@ describe('público: envio', () => {
   it('anexo: sobe ao bucket com o prefixo do tenant e vira contato_arquivo; tipo e tamanho são recusados', async () => {
     const f = await criarForm(T)
     const dados = { respostas: PESSOA(), consentimento: true }
-    const ok = multipart(dados, { campo: uid(6), nome: 'contrato.pdf', mime: 'application/pdf', bytes: Buffer.from('%PDF-1.4 teste') })
-    const r = await app.inject({ method: 'POST', url: `/publico/f/${f.chavePublica}/respostas`, headers: { ...ok.headers, 'x-forwarded-for': novoIp() }, payload: ok.payload })
+    const ok = multipart({ ...dados, textoConsentimentoHash: await hashDe(f.chavePublica) }, { campo: uid(6), nome: 'contrato.pdf', mime: 'application/pdf', bytes: PDF })
+    const r = await enviarMultipart(f.chavePublica, ok)
     expect(r.statusCode).toBe(201)
     const [arq] = await dono`SELECT nome, chave_bucket, tipo_mime FROM contato_arquivo WHERE tenant_id = ${T}`
     expect(arq).toMatchObject({ nome: 'contrato.pdf', tipo_mime: 'application/pdf' })
-    expect(String(arq!['chave_bucket'])).toMatch(new RegExp(`^tenant/${T}/`))
+    const [resp] = await dono`SELECT id, respostas FROM formulario_resposta WHERE tenant_id = ${T}`
+    // A1: a chave usa o id da RESPOSTA (gerado antes de abrir a transação), com o tenant no prefixo
+    expect(String(arq!['chave_bucket'])).toMatch(new RegExp(`^tenant/${T}/formulario/${resp!['id']}/[0-9a-f-]{36}\\.pdf$`))
     expect(objetos.has(String(arq!['chave_bucket']))).toBe(true)
-    const [resp] = await dono`SELECT respostas FROM formulario_resposta WHERE tenant_id = ${T}`
+    // A1: nenhuma transação da gravação estava aberta enquanto os bytes subiam
+    expect(transacoesDuranteUpload).toEqual([0])
     expect((resp!['respostas'] as Record<string, { nome: string }>)[uid(6)]!.nome).toBe('contrato.pdf')
 
-    const exe = multipart({ respostas: PESSOA('81 97777-0000'), consentimento: true }, { campo: uid(6), nome: 'virus.exe', mime: 'application/x-msdownload', bytes: Buffer.from('MZ') })
-    const rExe = await app.inject({ method: 'POST', url: `/publico/f/${f.chavePublica}/respostas`, headers: { ...exe.headers, 'x-forwarded-for': novoIp() }, payload: exe.payload })
+    const hash = await hashDe(f.chavePublica)
+    const exe = multipart({ respostas: PESSOA('81 97777-0000'), consentimento: true, textoConsentimentoHash: hash }, { campo: uid(6), nome: 'virus.exe', mime: 'application/x-msdownload', bytes: Buffer.from('MZ') })
+    const rExe = await enviarMultipart(f.chavePublica, exe)
     expect(rExe.statusCode).toBe(422)
     expect(rExe.json().campos[uid(6)]).toMatch(/Tipo não permitido/)
 
-    const grande = multipart({ respostas: PESSOA('81 96666-0000'), consentimento: true }, { campo: uid(6), nome: 'grande.pdf', mime: 'application/pdf', bytes: Buffer.alloc(10 * 1024 * 1024 + 10, 1) })
-    const rG = await app.inject({ method: 'POST', url: `/publico/f/${f.chavePublica}/respostas`, headers: { ...grande.headers, 'x-forwarded-for': novoIp() }, payload: grande.payload })
+    const grande = multipart({ respostas: PESSOA('81 96666-0000'), consentimento: true, textoConsentimentoHash: hash }, { campo: uid(6), nome: 'grande.pdf', mime: 'application/pdf', bytes: Buffer.alloc(10 * 1024 * 1024 + 10, 1) })
+    const rG = await enviarMultipart(f.chavePublica, grande)
     expect(rG.statusCode).toBe(422)
     expect(rG.json().campos[uid(6)]).toMatch(/10 MB/)
     expect(await dono`SELECT 1 FROM contato WHERE tenant_id = ${T}`).toHaveLength(1)
@@ -419,8 +542,8 @@ describe('público: envio', () => {
   it('anexo sem bucket configurado → 503 tipado, nada gravado', async () => {
     bucketOn = false
     const f = await criarForm(T)
-    const m = multipart({ respostas: PESSOA(), consentimento: true }, { campo: uid(6), nome: 'a.pdf', mime: 'application/pdf', bytes: Buffer.from('x') })
-    const r = await app.inject({ method: 'POST', url: `/publico/f/${f.chavePublica}/respostas`, headers: { ...m.headers, 'x-forwarded-for': novoIp() }, payload: m.payload })
+    const m = multipart({ respostas: PESSOA(), consentimento: true, textoConsentimentoHash: await hashDe(f.chavePublica) }, { campo: uid(6), nome: 'a.pdf', mime: 'application/pdf', bytes: PDF })
+    const r = await enviarMultipart(f.chavePublica, m)
     expect(r.statusCode).toBe(503)
     expect(await dono`SELECT 1 FROM contato WHERE tenant_id = ${T}`).toHaveLength(0)
   })
@@ -444,12 +567,184 @@ describe('admin: respostas e CSV', () => {
     expect(csv.statusCode).toBe(200)
     expect(csv.headers['content-type']).toMatch(/text\/csv/)
     const linhas = csv.body.replace(/^﻿/, '').trim().split('\r\n')
-    expect(linhas[0]).toBe('Data;Contato;Contato novo;Nome;WhatsApp;E-mail;Tipo;CNPJ;Contrato')
+    expect(linhas[0]).toBe('Data;Contato;Contato novo;Verificação;Nome;WhatsApp;E-mail;Tipo;CNPJ;Contrato')
     expect(linhas).toHaveLength(5)
     expect(csv.body).toContain('p1@x.com')
     // proteção contra fórmula
     expect(csv.body).toContain(`'=HYPERLINK`)
     // outro tenant não exporta
     expect((await adm(T2, 'GET', `/v1/formularios/${f.id}/respostas.csv`)).statusCode).toBe(404)
+  })
+})
+
+describe('revisão de segurança (F3b)', () => {
+  it('A1: transação que falha remove os objetos já enviados (compensação) e não grava nada', async () => {
+    const f = await criarForm(T)
+    await dono.unsafe(`
+      CREATE OR REPLACE FUNCTION f3b_falha() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'falha forçada'; END $$;
+      CREATE TRIGGER f3b_falha BEFORE INSERT ON formulario_resposta FOR EACH ROW
+        WHEN (NEW.tenant_id = '${T}') EXECUTE FUNCTION f3b_falha();`)
+    try {
+      const m = multipart({ respostas: PESSOA(), consentimento: true, textoConsentimentoHash: await hashDe(f.chavePublica) },
+        { campo: uid(6), nome: 'a.pdf', mime: 'application/pdf', bytes: PDF })
+      const r = await enviarMultipart(f.chavePublica, m)
+      expect(r.statusCode).toBe(500)
+      expect(r.json().erro).toBe('erro.interno')
+    } finally {
+      await dono.unsafe('DROP TRIGGER IF EXISTS f3b_falha ON formulario_resposta; DROP FUNCTION IF EXISTS f3b_falha();')
+    }
+    expect(transacoesDuranteUpload).toEqual([0])
+    expect(objetos.size).toBe(0)
+    expect(await dono`SELECT 1 FROM contato WHERE tenant_id = ${T}`).toHaveLength(0)
+  })
+
+  it('A2: X-Forwarded-For forjado não contorna o limite por IP (vale o IP que o proxy acrescentou)', async () => {
+    const f = await criarForm(T)
+    const real = novoIp()
+    const codigos: number[] = []
+    for (let i = 0; i < 10; i++) {
+      // o cliente escreve um "IP" novo a cada envio; o proxy acrescenta o real no fim
+      const r = await envio(f.chavePublica, PESSOA(`81 9${String(2000 + i).padStart(4, '0')}-0000`), {}, `203.0.113.${i + 1}, ${real}`)
+      codigos.push(r.statusCode)
+    }
+    expect(codigos.filter((c) => c === 201)).toHaveLength(8)
+    expect(codigos.filter((c) => c === 429)).toHaveLength(2)
+  })
+
+  it('A2/BAIXA: o limite vem ANTES do banco — chave inexistente também esgota e dá 429', async () => {
+    const ip = novoIp()
+    const chave = 'z'.repeat(24)
+    const codigos: number[] = []
+    for (let i = 0; i < 9; i++) codigos.push((await pub('POST', `/publico/f/${chave}/respostas`, { respostas: {} }, ip)).statusCode)
+    expect(codigos.slice(0, 8)).toEqual(Array(8).fill(404))
+    expect(codigos[8]).toBe(429)
+  })
+
+  it('M1: parte repetida é recusada antes de ler; nada sobe ao bucket', async () => {
+    const f = await criarForm(T)
+    const hash = await hashDe(f.chavePublica)
+    const arq = { campo: uid(6), nome: 'a.pdf', mime: 'application/pdf', bytes: PDF }
+    const dup = await enviarMultipart(f.chavePublica, multipart({ respostas: PESSOA(), consentimento: true, textoConsentimentoHash: hash }, [arq, arq]))
+    expect(dup.statusCode).toBe(422)
+    expect(dup.json().campos[uid(6)]).toMatch(/um arquivo por campo/)
+    const dadosDup = await enviarMultipart(f.chavePublica, multipart({ respostas: PESSOA(), consentimento: true, textoConsentimentoHash: hash }, undefined, true))
+    expect(dadosDup.statusCode).toBe(422)
+    expect(dadosDup.json().erro).toBe('formulario.envio_invalido')
+    expect(objetos.size).toBe(0)
+    expect(await dono`SELECT 1 FROM formulario_resposta WHERE tenant_id = ${T}`).toHaveLength(0)
+  })
+
+  it('M1: soma dos arquivos acima de 20 MB → 413 tipificado; sem vaga de upload → 503 formulario.ocupado com Retry-After', async () => {
+    const extras = [7, 8].map((n) => ({ id: uid(n), tipo: 'anexo', rotulo: `Anexo ${n}`, obrigatorio: false, referencia: false, opcoes: [], condicoes: {} }))
+    const f = await criarForm(T, {}, [...CAMPOS, ...extras])
+    const hash = await hashDe(f.chavePublica)
+    const pedaco = Buffer.concat([PDF, Buffer.alloc(7 * 1024 * 1024, 1)])
+    const grande = multipart({ respostas: PESSOA(), consentimento: true, textoConsentimentoHash: hash },
+      [uid(6), uid(7), uid(8)].map((c) => ({ campo: c, nome: `${c}.pdf`, mime: 'application/pdf', bytes: pedaco })))
+    const r = await enviarMultipart(f.chavePublica, grande)
+    expect(r.statusCode).toBe(413)
+    expect(r.json().erro).toBe('formulario.grande_demais')
+
+    definirMaxUploadsSimultaneos(0)
+    const m = multipart({ respostas: PESSOA(), consentimento: true, textoConsentimentoHash: hash }, { campo: uid(6), nome: 'a.pdf', mime: 'application/pdf', bytes: PDF })
+    const ocupado = await enviarMultipart(f.chavePublica, m)
+    expect(ocupado.statusCode).toBe(503)
+    expect(ocupado.json().erro).toBe('formulario.ocupado')
+    expect(ocupado.headers['retry-after']).toBe('5')
+    expect(objetos.size).toBe(0)
+  })
+
+  it('M1/BAIXA: JSON inválido (corpo ou `dados`) vira 422 tipificado, nunca 500', async () => {
+    const f = await criarForm(T)
+    const corpo = await app.inject({ method: 'POST', url: `/publico/f/${f.chavePublica}/respostas`,
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': novoIp() }, payload: '{"respostas":' })
+    expect(corpo.statusCode).toBe(422)
+    expect(corpo.json().erro).toBe('formulario.envio_invalido')
+    const fb = 'frontEIRAf3x'
+    const quebrado = await app.inject({ method: 'POST', url: `/publico/f/${f.chavePublica}/respostas`,
+      headers: { 'content-type': `multipart/form-data; boundary=${fb}`, 'x-forwarded-for': novoIp() },
+      payload: `--${fb}\r\nContent-Disposition: form-data; name="dados"\r\n\r\n{nao json\r\n--${fb}--\r\n` })
+    expect(quebrado.statusCode).toBe(422)
+    expect(quebrado.json().erro).toBe('formulario.envio_invalido')
+  })
+
+  it('M2: .exe renomeado para .pdf (mime e extensão "certos") é recusado pela assinatura', async () => {
+    const f = await criarForm(T)
+    const m = multipart({ respostas: PESSOA(), consentimento: true, textoConsentimentoHash: await hashDe(f.chavePublica) },
+      { campo: uid(6), nome: 'contrato.pdf', mime: 'application/pdf', bytes: Buffer.from('MZ\x90\x00\x03\x00\x00\x00') })
+    const r = await enviarMultipart(f.chavePublica, m)
+    expect(r.statusCode).toBe(422)
+    expect(r.json().campos[uid(6)]).toMatch(/não corresponde/)
+    expect(objetos.size).toBe(0)
+  })
+
+  it('M4: o POST exige o hash do texto exibido; texto mudou depois do GET → 409 formulario.texto_mudou', async () => {
+    const f = await criarForm(T)
+    const hash = await hashDe(f.chavePublica)
+    const sem = await pub('POST', `/publico/f/${f.chavePublica}/respostas`, { respostas: PESSOA(), consentimento: true }, novoIp())
+    expect(sem.statusCode).toBe(409)
+    expect(sem.json().erro).toBe('formulario.texto_mudou')
+    await dono`UPDATE tenant SET texto_consentimento = 'Texto novo da Loja A.' WHERE id = ${T}`
+    try {
+      const velho = await pub('POST', `/publico/f/${f.chavePublica}/respostas`, { respostas: PESSOA(), consentimento: true, textoConsentimentoHash: hash }, novoIp())
+      expect(velho.statusCode).toBe(409)
+      expect(await dono`SELECT 1 FROM contato WHERE tenant_id = ${T}`).toHaveLength(0)
+      expect((await envio(f.chavePublica, PESSOA())).statusCode).toBe(201)
+      const [r] = await dono`SELECT consentimento_texto FROM formulario_resposta WHERE tenant_id = ${T}`
+      expect(r!['consentimento_texto']).toBe('Texto novo da Loja A.')
+    } finally {
+      await dono`UPDATE tenant SET texto_consentimento = NULL WHERE id = ${T}`
+    }
+  })
+
+  it('M4: consentimento de marketing só com a flag do formulário — e aí o texto exibido diz isso', async () => {
+    const f = await criarForm(T, { consentimentoMarketing: true })
+    const def = (await pub('GET', `/publico/f/${f.chavePublica}`)).json()
+    expect(def.textoConsentimento).toMatch(/ofertas e novidades/)
+    expect((await envio(f.chavePublica, PESSOA())).statusCode).toBe(201)
+    const [c] = await dono`SELECT recebe_campanhas FROM contato WHERE tenant_id = ${T}`
+    expect(c!['recebe_campanhas']).toBe(true)
+    expect((await dono`SELECT tipo FROM consentimento_contato WHERE tenant_id = ${T} ORDER BY tipo`).map((x) => x['tipo']))
+      .toEqual(['campanhas', 'whatsapp'])
+  })
+
+  it('BAIXA: formulário nasce inativo e não publica sem campo telefone (422)', async () => {
+    const r = await adm(T, 'POST', '/v1/formularios', { nome: 'Sem campos' })
+    expect(r.statusCode).toBe(201)
+    expect(r.json().ativo).toBe(false)
+    expect((await pub('GET', `/publico/f/${r.json().chavePublica}`)).statusCode).toBe(404)
+    const ativar = await adm(T, 'PATCH', `/v1/formularios/${r.json().id}`, { ativo: true })
+    expect(ativar.statusCode).toBe(422)
+    expect(ativar.json().campos.ativo).toMatch(/telefone/)
+    const nascerAtivo = await adm(T, 'POST', '/v1/formularios', { nome: 'Já ativo', ativo: true })
+    expect(nascerAtivo.statusCode).toBe(422)
+  })
+
+  it('BAIXA: ip_hash é HMAC com segredo do servidor, não sha256 reversível do IP', async () => {
+    const f = await criarForm(T)
+    const ip = novoIp()
+    await envio(f.chavePublica, PESSOA(), {}, ip)
+    const [r] = await dono`SELECT ip_hash FROM formulario_resposta WHERE tenant_id = ${T}`
+    expect(r!['ip_hash']).toMatch(/^[0-9a-f]{64}$/)
+    expect(r!['ip_hash']).not.toBe(createHash('sha256').update(`${f.chavePublica}:${ip}`).digest('hex'))
+  })
+
+  it('BAIXA: POST público responde nosniff e no-store', async () => {
+    const f = await criarForm(T)
+    const r = await envio(f.chavePublica, PESSOA())
+    expect(r.headers['x-content-type-options']).toBe('nosniff')
+    expect(r.headers['cache-control']).toBe('no-store')
+  })
+
+  it('dois tenants: x-tenant-id no cabeçalho e tenantId no corpo são ignorados — vale a chave', async () => {
+    const a = await criarForm(T)
+    const r = await pub('POST', `/publico/f/${a.chavePublica}/respostas`,
+      { respostas: PESSOA('81 92222-0001', 'Forjado'), consentimento: true, textoConsentimentoHash: await hashDe(a.chavePublica), tenantId: T2 },
+      novoIp(), { 'x-tenant-id': T2 })
+    expect(r.statusCode).toBe(201)
+    expect((await dono`SELECT nome FROM contato WHERE tenant_id = ${T}`).map((x) => x['nome'])).toEqual(['Forjado'])
+    expect(await dono`SELECT 1 FROM contato WHERE tenant_id = ${T2}`).toHaveLength(0)
+    expect(await dono`SELECT 1 FROM formulario_resposta WHERE tenant_id = ${T2}`).toHaveLength(0)
   })
 })

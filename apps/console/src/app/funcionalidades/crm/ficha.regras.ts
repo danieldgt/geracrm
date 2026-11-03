@@ -38,7 +38,7 @@ export interface DadosFicha {
 
 export type TipoFeed =
   | 'comentario' | 'funil' | 'qualificacao' | 'tarefa_criada' | 'tarefa_concluida'
-  | 'pedido_criado' | 'pedido_efetivado' | 'handoff' | 'etiquetas' | 'arquivo'
+  | 'pedido_criado' | 'pedido_efetivado' | 'handoff' | 'etiquetas' | 'arquivo' | 'formulario'
 
 export interface ItemFeed {
   readonly id: string
@@ -122,26 +122,36 @@ export interface ItemFeedVista {
   readonly texto: string
   readonly autor: string
   readonly em: string
+  /**
+   * Resposta de formulário NÃO verificada (telefone já cadastrado, preenchido por anônimo): a ficha mostra o
+   * aviso e oferece "Aplicar ao contato" (gestor). É o id da resposta; ausente nos demais itens.
+   */
+  readonly respostaPendenteId: string | null
 }
 
 const ICONE_FEED: Record<TipoFeed, string> = {
   comentario: 'file-text', funil: 'kanban', qualificacao: 'check', tarefa_criada: 'check-square', tarefa_concluida: 'check-square',
   pedido_criado: 'shopping-cart', pedido_efetivado: 'receipt', handoff: 'users', etiquetas: 'tag', arquivo: 'upload',
+  formulario: 'file-text',
 }
 const ROTULO_FEED: Record<TipoFeed, string> = {
   comentario: 'Observação', funil: 'Funil', qualificacao: 'Qualificação', tarefa_criada: 'Tarefa', tarefa_concluida: 'Tarefa concluída',
   pedido_criado: 'Pedido', pedido_efetivado: 'Pedido efetivado', handoff: 'Atendimento', etiquetas: 'Etiquetas', arquivo: 'Arquivo',
+  formulario: 'Formulário',
 }
 const TOM_FEED: Record<TipoFeed, TomSelo> = {
   comentario: 'neutro', funil: 'info', qualificacao: 'info', tarefa_criada: 'neutro', tarefa_concluida: 'sucesso',
   pedido_criado: 'neutro', pedido_efetivado: 'sucesso', handoff: 'atencao', etiquetas: 'neutro', arquivo: 'neutro',
+  formulario: 'info',
 }
 
 /** Item do feed → o que a tela desenha. Autor ausente = Sistema. */
 export function itemParaExibicao(i: ItemFeed): ItemFeedVista {
+  const pendente = i.tipo === 'formulario' && i.ref?.tipo === 'formulario_resposta_pendente' ? i.ref.id : null
   return {
-    id: i.id, tipo: i.tipo, icone: ICONE_FEED[i.tipo], rotuloTipo: ROTULO_FEED[i.tipo], tom: TOM_FEED[i.tipo],
-    texto: i.texto, autor: i.autor?.nome ?? 'Sistema', em: i.em,
+    id: i.id, tipo: i.tipo, icone: ICONE_FEED[i.tipo] ?? 'file-text', rotuloTipo: ROTULO_FEED[i.tipo] ?? 'Evento',
+    tom: pendente ? 'atencao' : TOM_FEED[i.tipo] ?? 'neutro',
+    texto: i.texto, autor: i.autor?.nome ?? 'Sistema', em: i.em, respostaPendenteId: pendente,
   }
 }
 
