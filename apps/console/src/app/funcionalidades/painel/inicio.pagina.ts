@@ -3,6 +3,8 @@ import { RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { AuthServico } from '../../nucleo/auth.servico.js'
+import { PresencaServico } from '../../nucleo/presenca.servico.js'
+import type { RespostaCockpit } from '@geracrm/shared'
 import { CabecalhoTelaComponente } from '../../compartilhado/ui/cabecalho-tela.componente.js'
 import { CelulaDiretiva, TabelaComponente, type ColunaTabela, type LinhaTabela } from '../../compartilhado/ui/tabela.componente.js'
 import { EsqueletoComponente } from '../../compartilhado/ui/esqueleto.componente.js'
@@ -74,6 +76,14 @@ const MENSAGENS_PERIODO: Readonly<Record<string, string>> = {
       }
       @case ('pronto') {
         @if (d(); as p) {
+          @if (cockpit(); as k) {
+            <a class="atalho-cockpit" routerLink="/cockpit" aria-label="Abrir o Cockpit do gestor">
+              <strong class="txt-secao">Cockpit</strong>
+              <span>Aguardando humano: <b>{{ k.aguardandoHumano.total }}</b></span>
+              <span>SLA estourado hoje: <b>{{ k.slaEstouradoHoje }}</b></span>
+              <span>Sem próximo passo: <b>{{ k.semProximoPasso }}</b></span>
+            </a>
+          }
           <div class="cartoes">
             <a class="cartao" routerLink="/contatos" aria-label="Contatos novos no período: ver contatos">
               <ui-stat-card [valor]="p.contatosNovos" rotulo="Contatos novos" tom="acao" />
@@ -173,6 +183,9 @@ const MENSAGENS_PERIODO: Readonly<Record<string, string>> = {
     h2 { margin: 0 0 var(--espacamento-1); color: var(--texto); }
     .suave { color: var(--texto-suave); }
     p { margin: 0 0 var(--espacamento-3); }
+    .atalho-cockpit { display: flex; flex-wrap: wrap; align-items: center; gap: var(--espacamento-4); padding: var(--espacamento-3) var(--espacamento-4); background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-painel); color: var(--texto); text-decoration: none; }
+    .atalho-cockpit:hover { background: var(--superficie-hover); }
+    .atalho-cockpit b { font-family: var(--tipografia-familia-dados); }
     .cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--espacamento-3); }
     .cartao { display: block; min-width: 0; border: 2px solid transparent; border-radius: var(--raio-painel); text-decoration: none; color: inherit; }
     .cartao:hover, .cartao:focus-visible { border-color: var(--acao); }
@@ -194,6 +207,9 @@ const MENSAGENS_PERIODO: Readonly<Record<string, string>> = {
 export class InicioPagina implements OnInit {
   private readonly http = inject(HttpClient)
   private readonly auth = inject(AuthServico)
+  private readonly presenca = inject(PresencaServico)
+  /** Atalho do Cockpit — só para a gestão; falha em silêncio (o Início não depende dele). */
+  protected readonly cockpit = signal<RespostaCockpit['cards'] | null>(null)
 
   readonly estado = signal<Estado>('carregando')
   readonly d = signal<Painel | null>(null)
@@ -235,7 +251,17 @@ export class InicioPagina implements OnInit {
     (this.d()?.ranking ?? []).map((r, i) => ({ ...r, posicao: i + 1 })))
   protected readonly chaveLinha = (l: LinhaTabela): string => String(l['usuarioId'] ?? 'sem-vendedor')
 
-  ngOnInit(): void { void this.carregar() }
+  ngOnInit(): void {
+    void this.carregar()
+    void this.carregarAtalhoCockpit()
+  }
+
+  private async carregarAtalhoCockpit(): Promise<void> {
+    await this.presenca.carregar()
+    if (!this.presenca.gestao()) return
+    try { this.cockpit.set((await firstValueFrom(this.http.get<RespostaCockpit>('/v1/gestao/cockpit'))).cards) }
+    catch { /* sem atalho */ }
+  }
 
   protected reais(c: unknown): string { return formatarReais(Number(c)) }
   protected quando(iso: string): string { return dataHoraCurta(iso, this.d()?.periodo.fuso ?? null) }
