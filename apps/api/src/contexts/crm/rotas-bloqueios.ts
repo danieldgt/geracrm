@@ -75,8 +75,21 @@ export async function rotasBloqueios(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const chave = req.params.chave
       if (!/^\d{10,13}$/.test(chave)) return reply.code(422).send({ erro: 'chave.invalida' })
-      await req.comTenant((tx) => tx`
-        DELETE FROM lista_bloqueio WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${chave}`)
+      // ⚠️ Bloqueio LGPD (contato anonimizado) não sai pela tela: desfazê-lo reabriria o envio e a
+      //    reimportação de um número cujo titular pediu para ser esquecido (H2).
+      const lgpd = await req.comTenant(async (tx) => {
+        const [l] = await tx<{ motivo: string }[]>`
+          SELECT motivo FROM lista_bloqueio WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${chave}`
+        if (l?.motivo === 'lgpd') return true
+        await tx`DELETE FROM lista_bloqueio WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${chave}`
+        return false
+      })
+      if (lgpd) {
+        return reply.code(422).send({
+          erro: 'bloqueio.lgpd_irremovivel',
+          mensagem: 'Este número foi anonimizado por pedido de LGPD e não pode ser desbloqueado.',
+        })
+      }
       return reply.send({ ok: true })
     },
   )

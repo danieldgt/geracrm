@@ -5,6 +5,7 @@ import { rotuloSegmento } from '@geracrm/shared'
 import { FichaServico, type FichaContato } from './ficha.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
+import { AnonimizarContatoComponente } from './anonimizar-contato.componente.js'
 import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
 import { EtiquetasContatoComponente } from './etiquetas-contato.componente.js'
 import { TarefaModalComponente } from './tarefa-modal.componente.js'
@@ -21,7 +22,7 @@ import { TarefaModalComponente } from './tarefa-modal.componente.js'
 @Component({
   selector: 'app-ficha-contato',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, DatePipe, AvisosPrivacidadeComponente, EtiquetasContatoComponente, TarefaModalComponente],
+  imports: [RouterLink, DatePipe, AnonimizarContatoComponente, AvisosPrivacidadeComponente, EtiquetasContatoComponente, TarefaModalComponente],
   template: `
     <!-- Volta para ONDE a pessoa veio (lista, chat, funil, pedidos) — e para a
          lista de contatos quando a ficha foi aberta por link direto. -->
@@ -67,6 +68,7 @@ import { TarefaModalComponente } from './tarefa-modal.componente.js'
                      title="Tarefas e follow-ups deste cliente">✅ Tarefas</a>
                   <button type="button" class="btn btn--secundario btn--pequeno" (click)="novaTarefa.set(true)"
                           title="Criar uma tarefa para este cliente">➕ Nova tarefa</button>
+                  <app-anonimizar-contato [contatoId]="f.id" (anonimizou)="servico.carregar(f.id)" />
                 </div>
                 @if (erroConversa(); as e) { <p class="erro-edit" role="alert">{{ e }}</p> }
                 <div class="tags">
