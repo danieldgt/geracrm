@@ -29,7 +29,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D5 configurações com abas + módulos | 2 | ✅ | integrada (0116); `exigirModulo('agenda')` e `ModulosServico` prontos |
 | H2 LGPD retenção/anonimização | 2 | 🔍 | revisão Opus REPROVOU (falsos positivos confirmados, ressurreição pelo ERP, bloqueio irremovível na retenção, mídia sem remoção); correção Opus em curso — automática desligada por padrão com prévia |
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
-| B1 panorama do funil | 2 | ⬜ | |
+| B1 panorama do funil | 2 | 🔄 | Sonnet; migration 0131 se necessária |
 | C2 agenda (módulo) | 2 | ✅ | integrada (0117); pendente: trocar escopo por papéis pelo `escopo.ts` e montar `app-agenda-contato` na ficha |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | ⬜ | |
 | D4 notificações, perfil, esqueci a senha | 2 | ⬜ | |
