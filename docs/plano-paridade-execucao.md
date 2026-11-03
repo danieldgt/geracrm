@@ -45,9 +45,9 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
 | H1 importador | 3 | 🔄 | Sonnet; migration 0133 |
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
-| E2 relatórios 1ª leva | 3 | ⬜ | |
+| E2 relatórios 1ª leva | 3 | 🔄 | Sonnet; migration 0135 se necessária |
 | E3 relatórios 2ª leva | 3 | ⬜ | |
-| L1 retrofit das telas restantes | 4 | ⬜ | |
+| L1 retrofit das telas restantes | 4 | 🔄 | L1a (Haiku): bloqueios, listas, sequências, metas, webhooks, mensagens enviadas, retenção, segmentos |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
