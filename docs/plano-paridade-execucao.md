@@ -22,7 +22,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | A1 cadastro do contato | 1 | 🔄 | Sonnet, migration 0112 |
 | A4 etiquetas e origens | 1 | 🔄 | Sonnet, migration 0113 |
 | C1 tarefas v2 | 1 | 🔄 | Sonnet, migration 0114 |
-| A5 pedidos em lista | 1 | 🔄 | Haiku |
+| A5 pedidos em lista | 1 | ✅ | integrada; API não tem busca/período/contadores — cards e busca só no carregado |
 | A2 lista de contatos + massa | 1 | ⬜ | |
 | B2 modais do funil + ganho | 1 | ⬜ | |
 | A3 ficha 2+1 | 1 | ⬜ | |
