@@ -3,6 +3,8 @@
  * preencher pelas consultas). Sem Angular: testável em node, e a tela só liga.
  */
 
+import type { ErroApi } from '../../compartilhado/ui/erro-http.js'
+
 export const UFS = [
   'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI',
   'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO',
@@ -38,6 +40,8 @@ export interface ValoresContatoForm {
   modalidade: string
   prioridade: string
   temperatura: string
+  /** Id da origem (`origem.id`); '' = sem origem. */
+  origemId: string
   /** Centavos inteiros (o `ui-campo` tipo dinheiro entrega centavos). */
   valorEstimadoCentavos: number | null
   observacoes: string
@@ -47,7 +51,7 @@ export function formVazio(): ValoresContatoForm {
   return {
     nome: '', razaoSocial: '', nomeFantasia: '', email: '', telefone: '', whatsapp: true, documento: '',
     cep: '', logradouro: '', numero: '', complemento: '', bairro: '', cidade: '', uf: '',
-    modalidade: '', prioridade: '', temperatura: '', valorEstimadoCentavos: null, observacoes: '',
+    modalidade: '', prioridade: '', temperatura: '', origemId: '', valorEstimadoCentavos: null, observacoes: '',
   }
 }
 
@@ -75,6 +79,7 @@ export interface CorpoContato {
   modalidade: string | null
   prioridade: string | null
   temperatura: string | null
+  origemId: string | null
   valorEstimadoCentavos: number | null
   observacoes: string | null
 }
@@ -98,6 +103,7 @@ export function montarPayload(v: ValoresContatoForm): CorpoContato {
     modalidade: ouNulo(v.modalidade),
     prioridade: ouNulo(v.prioridade),
     temperatura: ouNulo(v.temperatura),
+    origemId: ouNulo(v.origemId),
     valorEstimadoCentavos: v.valorEstimadoCentavos,
     observacoes: ouNulo(v.observacoes),
   }
@@ -121,20 +127,57 @@ const CAMPOS_DO_FORM: ReadonlySet<string> = new Set(Object.keys(formVazio()))
  * que a tela sabe pintar. Campo desconhecido não some: vai para `geral`, para
  * a tela mostrar em algum lugar em vez de engolir o erro.
  */
-export function mapearErros(corpo: unknown): { campos: ErrosForm; geral: string | null } {
+export function mapearErros(corpo: ErroApi | null): { campos: ErrosForm; geral: string | null } {
   const campos: ErrosForm = {}
   const extras: string[] = []
-  if (corpo && typeof corpo === 'object' && (corpo as { erro?: unknown }).erro === 'validacao') {
-    const bruto = (corpo as { campos?: unknown }).campos
-    if (bruto && typeof bruto === 'object') {
-      for (const [k, msg] of Object.entries(bruto as Record<string, unknown>)) {
-        if (typeof msg !== 'string') continue
-        if (CAMPOS_DO_FORM.has(k)) (campos as Record<string, string>)[k] = msg
-        else extras.push(msg)
-      }
+  if (corpo?.erro === 'validacao' && corpo.campos) {
+    for (const [k, msg] of Object.entries(corpo.campos)) {
+      if (typeof msg !== 'string') continue
+      if (CAMPOS_DO_FORM.has(k)) (campos as Record<string, string>)[k] = msg
+      else extras.push(msg)
     }
   }
   return { campos, geral: extras.length ? extras.join(' · ') : null }
+}
+
+/** Origem como a lista de `GET /v1/origens` devolve. */
+export interface OrigemLista { readonly id: string; readonly nome: string; readonly ativa: boolean; readonly ordem: number }
+
+/** Ordena por `ordem` e, em empate, pelo nome (pt-BR). Não muta a entrada. */
+export function ordenarOrigens(itens: readonly OrigemLista[]): OrigemLista[] {
+  return [...itens].sort((a, b) => a.ordem - b.ordem || a.nome.localeCompare(b.nome, 'pt-BR'))
+}
+
+/**
+ * Opções do select de origem: as ativas e, na edição, a origem atual do contato
+ * mesmo inativa (acrescida com " (inativa)") para a tela não abrir vazia.
+ */
+export function opcoesOrigem(ativas: readonly OrigemLista[], atual: OrigemLista | null): { valor: string; rotulo: string }[] {
+  const jaTem = atual !== null && ativas.some((o) => o.id === atual.id)
+  const lista = atual && !jaTem ? ordenarOrigens([...ativas, atual]) : [...ativas]
+  return lista.map((o) => ({ valor: o.id, rotulo: o.ativa ? o.nome : `${o.nome} (inativa)` }))
+}
+
+export type StatusOrigens = 'carregando' | 'pronto' | 'erro'
+
+export interface EstadoOrigem {
+  placeholder: string
+  dica: string
+  desabilitado: boolean
+  /** Sem origem ativa cadastrada: oferece o caminho para cadastrar. */
+  linkCadastro: boolean
+}
+
+/** Estado do select de origem: carregando, falha, sem nenhuma origem ativa, ou pronto para escolher. */
+export function estadoOrigem(status: StatusOrigens, quantidadeAtivas: number): EstadoOrigem {
+  if (status === 'carregando') return { placeholder: 'Carregando origens…', dica: '', desabilitado: true, linkCadastro: false }
+  if (status === 'erro') {
+    return { placeholder: 'Origens indisponíveis', dica: 'Não foi possível carregar as origens.', desabilitado: true, linkCadastro: false }
+  }
+  if (quantidadeAtivas === 0) {
+    return { placeholder: 'Sem origens cadastradas', dica: 'Cadastre origens em Configurações.', desabilitado: true, linkCadastro: true }
+  }
+  return { placeholder: 'Selecione', dica: '', desabilitado: false, linkCadastro: false }
 }
 
 const preencher = (atual: string, novo: string | null): string => (novo === null || novo === '' ? atual : novo)
@@ -184,7 +227,7 @@ export const podeConsultarCnpj = (doc: string): boolean => doc.replace(/\D/g, ''
 export interface FichaParaForm {
   nome: string
   razaoSocial: string | null; nomeFantasia: string | null; email: string | null
-  modalidade: string | null; prioridade: string | null; temperatura: string | null
+  modalidade: string | null; prioridade: string | null; temperatura: string | null; origemId: string | null
   valorEstimadoCentavos: number | null; observacoes: string | null
   telefones: readonly { e164: string; principal: boolean; whatsapp: boolean }[]
   documentos: readonly { tipo: string; numero: string; fiscal: boolean }[]
@@ -206,6 +249,7 @@ export function formDaFicha(f: FichaParaForm): ValoresContatoForm {
     cep: e?.cep ?? '', logradouro: e?.logradouro ?? '', numero: e?.numero ?? '', complemento: e?.complemento ?? '',
     bairro: e?.bairro ?? '', cidade: e?.cidade ?? '', uf: e?.uf ?? '',
     modalidade: f.modalidade ?? '', prioridade: f.prioridade ?? '', temperatura: f.temperatura ?? '',
+    origemId: f.origemId ?? '',
     valorEstimadoCentavos: f.valorEstimadoCentavos, observacoes: f.observacoes ?? '',
   }
 }

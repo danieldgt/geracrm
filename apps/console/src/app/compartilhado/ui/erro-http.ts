@@ -4,7 +4,8 @@ import { HttpErrorResponse } from '@angular/common/http'
 export interface ErroApi {
   readonly erro?: string
   readonly mensagem?: string
-  readonly campos?: readonly string[]
+  /** Mapa campo → mensagem (`{ nome: 'Informe o nome' }`), como o 422 da API devolve. */
+  readonly campos?: Readonly<Record<string, string>>
   readonly disponivel?: number
   readonly skuSnapshot?: string
 }

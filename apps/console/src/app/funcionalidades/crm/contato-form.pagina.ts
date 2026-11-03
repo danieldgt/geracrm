@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal, type OnInit } from '@angular/core'
 import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms'
-import { Router } from '@angular/router'
+import { Router, RouterLink } from '@angular/router'
 import {
   BotaoComponente, BreadcrumbComponente, CabecalhoTelaComponente, CampoComponente, EsqueletoComponente,
   EstadoComponente, FormPaginaComponente, GradeFormComponente, SecaoFormComponente, SelectComponente,
@@ -10,9 +10,10 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { ClientesServico } from './clientes.servico.js'
 import { ContatoFormServico } from './contato-form.servico.js'
 import {
-  OPCOES_MODALIDADE, OPCOES_PRIORIDADE, OPCOES_TEMPERATURA, UFS, formDaFicha, formVazio, mensagemConsulta,
-  montarPayload, podeConsultarCep, podeConsultarCnpj, preencherEndereco, preencherPelaEmpresa, validarLocal,
-  type ErrosForm, type ValoresContatoForm,
+  OPCOES_MODALIDADE, OPCOES_PRIORIDADE, OPCOES_TEMPERATURA, UFS, estadoOrigem, formDaFicha, formVazio,
+  mensagemConsulta, montarPayload, opcoesOrigem, ordenarOrigens, podeConsultarCep, podeConsultarCnpj,
+  preencherEndereco, preencherPelaEmpresa, validarLocal,
+  type ErrosForm, type OrigemLista, type StatusOrigens, type ValoresContatoForm,
 } from './contato-form.regras.js'
 
 type Acao = 'salvar' | 'outro' | 'conversar'
@@ -33,7 +34,7 @@ const OPCOES_UF: OpcaoSelect[] = UFS.map((u) => ({ valor: u, rotulo: u }))
   imports: [
     ReactiveFormsModule, BotaoComponente, BreadcrumbComponente, CabecalhoTelaComponente, CampoComponente,
     EsqueletoComponente, EstadoComponente, FormPaginaComponente, GradeFormComponente, SecaoFormComponente,
-    SelectComponente,
+    SelectComponente, RouterLink,
   ],
   template: `
     <ui-cabecalho-tela [titulo]="editando() ? 'Editar contato' : 'Novo contato'"
@@ -91,8 +92,15 @@ const OPCOES_UF: OpcaoSelect[] = UFS.map((u) => ({ valor: u, rotulo: u }))
 
             <ui-secao-form titulo="Classificação">
               <ui-grade-form>
-                <ui-select rotulo="Origem" [opcoes]="[]" [desabilitado]="true" placeholder="Sem origens cadastradas"
-                           dica="Cadastre origens em Configurações." />
+                <div class="campo-origem">
+                  <ui-select rotulo="Origem" formControlName="origemId" [opcoes]="opcoesSelectOrigem()"
+                             [desabilitado]="estadoSelectOrigem().desabilitado"
+                             [placeholder]="estadoSelectOrigem().placeholder" [dica]="estadoSelectOrigem().dica"
+                             [erro]="erros().origemId ?? null" />
+                  @if (estadoSelectOrigem().linkCadastro) {
+                    <a class="link-origens" routerLink="/etiquetas-origens">Cadastrar origens</a>
+                  }
+                </div>
                 <ui-select rotulo="Prioridade" formControlName="prioridade" [opcoes]="opcoesPrioridade"
                            [erro]="erros().prioridade ?? null" />
                 <ui-select rotulo="Temperatura" formControlName="temperatura" [opcoes]="opcoesTemperatura"
@@ -134,6 +142,8 @@ const OPCOES_UF: OpcaoSelect[] = UFS.map((u) => ({ valor: u, rotulo: u }))
     .esqueleto { display: grid; gap: var(--espacamento-4); max-width: 960px; }
     .erro-geral { margin: 0; color: var(--erro); font-size: 13px; }
     .rodape { display: contents; }
+    .campo-origem { display: grid; gap: var(--espacamento-2); align-content: start; }
+    .link-origens { color: var(--acao); font-size: 13px; text-decoration: none; }
     @media (max-width: 480px) { :host { padding: var(--espacamento-3); } }
   `,
 })
@@ -162,6 +172,12 @@ export class ContatoFormPagina implements OnInit {
   ])
 
   readonly estado = signal<'carregando' | 'pronto' | 'erro'>('carregando')
+  /** Origens ativas (ordenadas) e, na edição, a origem atual se estiver inativa. */
+  readonly statusOrigens = signal<StatusOrigens>('carregando')
+  private readonly origensAtivas = signal<OrigemLista[]>([])
+  private readonly origemAtual = signal<OrigemLista | null>(null)
+  readonly opcoesSelectOrigem = computed(() => opcoesOrigem(this.origensAtivas(), this.origemAtual()))
+  readonly estadoSelectOrigem = computed(() => estadoOrigem(this.statusOrigens(), this.origensAtivas().length))
   readonly erroCarga = signal('')
   readonly erros = signal<ErrosForm>({})
   readonly erroGeral = signal<string | null>(null)
@@ -193,6 +209,7 @@ export class ContatoFormPagina implements OnInit {
     modalidade: new FormControl<string | null>(''),
     prioridade: new FormControl<string | null>(''),
     temperatura: new FormControl<string | null>(''),
+    origemId: new FormControl<string | null>(''),
     valorEstimadoCentavos: new FormControl<number | null>(null),
     observacoes: new FormControl<string | null>(''),
   })
@@ -210,12 +227,29 @@ export class ContatoFormPagina implements OnInit {
 
   async carregar(): Promise<void> {
     const id = this.id()
-    if (!id) { this.aplicar(formVazio()); this.estado.set('pronto'); return }
+    if (!id) { this.aplicar(formVazio()); this.estado.set('pronto'); void this.carregarOrigens(null); return }
     this.estado.set('carregando')
     const r = await this.servico.carregar(id)
     if (!r.ok) { this.erroCarga.set(r.mensagem); this.estado.set('erro'); return }
     this.aplicar(formDaFicha(r.ficha))
     this.estado.set('pronto')
+    void this.carregarOrigens(r.ficha.origemId)
+  }
+
+  /**
+   * Origens ativas (até 5 páginas). Se o contato aponta para uma origem inativa, busca
+   * a lista completa só para achar o nome dela — assim a edição não abre com o select vazio.
+   */
+  private async carregarOrigens(origemAtualId: string | null): Promise<void> {
+    this.statusOrigens.set('carregando')
+    const ativas = await this.servico.origens(true)
+    if (!ativas.ok) { this.statusOrigens.set('erro'); return }
+    this.origensAtivas.set(ordenarOrigens(ativas.itens))
+    this.statusOrigens.set('pronto')
+    if (!origemAtualId || ativas.itens.some((o) => o.id === origemAtualId)) { this.origemAtual.set(null); return }
+    const todas = await this.servico.origens(false)
+    const achada = todas.ok ? todas.itens.find((o) => o.id === origemAtualId) : undefined
+    this.origemAtual.set(achada ?? { id: origemAtualId, nome: 'Origem sem nome', ativa: false, ordem: 0 })
   }
 
   definirWhatsapp(v: string): void { this.whatsapp.set(v !== 'nao') }
@@ -289,6 +323,7 @@ export class ContatoFormPagina implements OnInit {
     this.mensagemCnpj.set(null)
     this.mensagemCep.set(null)
     this.ultimoCepConsultado = ''
+    this.origemAtual.set(null)
   }
 
   private limparErro(campo: keyof ValoresContatoForm): void {
@@ -305,6 +340,7 @@ export class ContatoFormPagina implements OnInit {
       cep: f.cep ?? '', logradouro: f.logradouro ?? '', numero: f.numero ?? '', complemento: f.complemento ?? '',
       bairro: f.bairro ?? '', cidade: f.cidade ?? '', uf: f.uf ?? '',
       modalidade: f.modalidade ?? '', prioridade: f.prioridade ?? '', temperatura: f.temperatura ?? '',
+      origemId: f.origemId ?? '',
       valorEstimadoCentavos: f.valorEstimadoCentavos, observacoes: f.observacoes ?? '',
     }
   }
