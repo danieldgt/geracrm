@@ -1243,7 +1243,7 @@ página é decidido pelo loader), e rolagem para a próxima página.
 
 **Estados:** fechado · aberto com itens · `Carregando…` · `Não foi possível carregar.` (falha) · `Nada encontrado.` (busca vazia) · desabilitado.
 
-**Comportamento:** abrir recarrega da página 1; digitar espera 300 ms; rolar até o fim (ou seta para baixo na última opção) traz a próxima página; clique fora fecha.
+**Comportamento:** contrato `carregar(cursor, termo) → { itens, proximoCursor }`; abrir recarrega do início (cursor `null`); digitar espera 300 ms; rolar até o fim (ou seta para baixo na última opção) traz a próxima página; clique fora fecha.
 
 **Acessibilidade:** `role="combobox"` no input, `role="listbox"`/`option`, `aria-expanded`, `aria-controls`,
 `aria-activedescendant`, `aria-selected`. Setas movem, Enter escolhe, Esc fecha uma camada.
@@ -1443,8 +1443,8 @@ placeholder, dentro de um `<label>` com o texto "Busca".
 
 > ⚠️ **Armadilha: todo filtro que muda zera o cursor.** O componente não conhece a lista. Quem escuta
 > `buscar`, `aplicar` e as mudanças dos controles projetados precisa voltar ao início do cursor. `limpar`
-> chega junto com `buscar('')`: trate uma vez. O `aria-label` da busca substitui o texto visível: é a exceção
-> de busca de `geracrm-layout-ui`, não um modelo para campo de cadastro.
+> chega junto com `buscar('')`: trate uma vez. O submit emite só `aplicar` (e `buscar` apenas se o texto
+> digitado ainda não saiu pelo debounce). A busca tem rótulo visível e **sem** `aria-label`.
 
 ### 5B.15 `ui-paginacao` — rodapé por cursor
 

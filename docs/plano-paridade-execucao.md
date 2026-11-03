@@ -15,7 +15,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | L0b composição (página, modal, abas) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
 | L0c lista (tabela, filtros, paginação) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
 | L0d ícones Lucide | 0 | ✅ | integrada; desenhos de memória — revisão aponta os suspeitos |
-| L0e docs e skill de formulários | 0 | 🔄 | Haiku |
+| L0e docs e skill de formulários | 0 | ✅ | integrada; skill `geracrm-formularios` criada; docs ajustados ao contrato por cursor |
 | D3 escopo por papel + usuários + filiais | 0 | 🔄 | Opus, worktree — só API (D3.1–D3.3); telas D3.4 depois de L0 |
 | G1 devolver ao agente / reatribuir / filtro | 0 | 🔍 | revisão REPROVOU (motivo sem leitor, sem guarda de concorrência); correção Opus em curso |
 | H3 monitor | 0 | ✅ | integrada; dono cria o cron service no Railway (README) |
@@ -49,7 +49,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | E3 relatórios 2ª leva | 3 | ⬜ | |
 | L1 retrofit das telas restantes | 4 | ⬜ | |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
-| R0b correções da biblioteca L0 | 0 | 🔄 | Sonnet |
+| R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | 🔄 | Opus (etapa de pipeline + concorrência) |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 

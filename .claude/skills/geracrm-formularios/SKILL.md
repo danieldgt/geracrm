@@ -60,10 +60,11 @@ do formulário: o dado, a máscara, a validação e a lista de escolha.
 - A consulta a serviço externo (BrasilAPI ou outro) **não** é feita pelo navegador. A tela chama uma rota
   da API, que é a porta de consulta do domínio, e a API chama o provedor. Motivos: CORS, cache, limite de
   uso e a regra de que o navegador não guarda chave nem depende de serviço de terceiro.
-- **Estado atual**: não há porta de consulta de CNPJ/CEP implementada no repositório. Até existir, o campo
-  **não tem** botão `[acao]`; não copie o exemplo de outro projeto que chama a BrasilAPI direto.
-- Quando a porta existir: o `[acao]` chama a API, preenche os campos com o retorno e mostra o estado
-  (carregando, não encontrado, falha) no próprio campo, com `dica` ou `erro`.
+- A porta existe (`apps/api/src/contexts/crm/consulta-externa.ts`, rotas em `rotas-consultas.ts`):
+  `GET /v1/consultas/cnpj/:cnpj` e `GET /v1/consultas/cep/:cep`. Fornecedor fora → 503
+  `consulta.indisponivel`; não achou → 404 `consulta.nao_encontrado`; documento inválido → 422 por campo.
+  Exemplo pronto: `funcionalidades/crm/contato-form.pagina.ts` (botão "Consultar" no `[acao]` do CNPJ e
+  CEP consultado ao sair do campo). Mostre carregando, não encontrado e falha no próprio campo.
 
 ## Select: estático ou paginado
 
@@ -73,7 +74,7 @@ do formulário: o dado, a máscara, a validação e a lista de escolha.
 | Vem do servidor ou pode crescer (vendedor, contato, produto, campanha) | `ui-select-paginado` com `carregar` |
 | Depende de outro campo (vendedor da unidade) | dois campos; o segundo recarrega com o filtro do primeiro |
 
-- `carregar(pagina, termo)` é **1-based** (`pagina` começa em 1). Devolve `{ itens, temMais }`.
+- `carregar(cursor, termo)` é por **cursor** (CLAUDE.md proíbe offset): `cursor` é `null` na primeira chamada e devolve `{ itens, proximoCursor }`; `proximoCursor: null` encerra.
 - Filtre sempre por ativo nas listas operacionais; inativo só em telas de administração.
 - Valor de `ui-select` vazio vira `null` no formulário: a obrigatoriedade é checada por `null`.
 
@@ -130,7 +131,7 @@ do formulário: o dado, a máscara, a validação e a lista de escolha.
 - **Crase em template.** `template:` e `styles:` são template literals. Uma crase dentro de comentário HTML
   ou CSS fecha o literal, e o erro (`NG1002`) não aponta a crase. Teste: `crase-em-template.spec.ts`.
 - **`aria-label` em campo com rótulo visível.** Substitui o texto que a pessoa lê. Não ponha `aria-label` em
-  `ui-campo` nem em `ui-select`: o `rotulo` já é o nome. A exceção é a busca de `ui-filtros`.
+  `ui-campo` nem em `ui-select`: o `rotulo` já é o nome. Nem na busca de `ui-filtros`, que tem rótulo visível.
 - **Atributo sem valor em input booleano.** `<ui-campo obrigatorio>` não liga; use `[obrigatorio]="true"`.
 - **Máscara sem a diretiva ou o input.** `ui-campo` sem `mascara` digita sem formatar, sem erro visível.
 - **Dinheiro como string ou float no payload.** Centavos inteiros.
