@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
-import { exigirPapel } from './papel.js'
+import { atendePapel, exigirPapel, papeisDoUsuario } from './papel.js'
 import { fusoValido } from './fuso.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 
@@ -96,11 +96,16 @@ export async function rotasConfig(app: FastifyInstance): Promise<void> {
    */
   app.get('/v1/config/eu', { preHandler: exigirTenant }, async (req, reply) => {
     const sub = subDoUsuario(req)
-    const [u] = await req.comTenant((tx) => tx<{ nome: string; email: string | null; ausente: boolean }[]>`
-      SELECT nome, email, ausente FROM usuario
-       WHERE tenant_id = tenant_atual() AND cognito_sub = ${sub}`)
+    const { u, gestao } = await req.comTenant(async (tx) => {
+      const [linha] = await tx<{ nome: string; email: string | null; ausente: boolean }[]>`
+        SELECT nome, email, ausente FROM usuario
+         WHERE tenant_id = tenant_atual() AND cognito_sub = ${sub}`
+      // Só para a tela decidir o que MOSTRAR (ex.: Reatribuir); quem barra é o servidor em cada rota.
+      const acesso = await papeisDoUsuario(tx, { sub, atorStaff: req.atorStaff })
+      return { u: linha, gestao: atendePapel(acesso, ['gestor', 'supervisor']) }
+    })
     return reply.send({
-      nome: u?.nome ?? null, email: u?.email ?? null, ausente: u?.ausente === true,
+      nome: u?.nome ?? null, email: u?.email ?? null, ausente: u?.ausente === true, gestao,
     })
   })
 

@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs'
 import type { TipoCanal } from '@geracrm/shared'
 import { PresencaServico } from './presenca.servico.js'
 import { mesclarPagina } from '../compartilhado/ui/cursor.js'
+import { alternarConducao, type Conducao, type MotivoDevolucao } from './devolucao.regras.js'
 
 /** Estado da janela de 24h — vem do domínio (calcularJanela), não daqui. */
 export interface Janela {
@@ -109,6 +110,8 @@ export class InboxServico {
     const f = this.filtro()
     const qs = new URLSearchParams({ limite: String(opcoes.limite ?? InboxServico.PAGINA) })
     if (f !== 'todas') qs.set('filtro', f)
+    const c = this.conduzidoPor()
+    if (c) qs.set('conduzidoPor', c)
     if (opcoes.cursor) qs.set('cursor', opcoes.cursor)
     return `/v1/conversas?${qs}`
   }
@@ -151,6 +154,43 @@ export class InboxServico {
     this.filtro.set(f)
     await this.carregar()
   }
+  /** Chips "Agente · Humano · Aguardando" (G1): quem conduz agora; combina com a aba. */
+  readonly conduzidoPor = signal<Conducao | null>(null)
+  async trocarConducao(c: Conducao): Promise<void> {
+    this.conduzidoPor.set(alternarConducao(this.conduzidoPor(), c))
+    await this.carregar()
+  }
+
+  /** Devolve a conversa ao agente (ou à fila, se o agente não fala sozinho). Devolve o texto de erro, ou o aviso do servidor. */
+  async devolverAoAgente(conversaId: string, corpo: { motivo: MotivoDevolucao; observacao?: string }):
+    Promise<{ ok: true; aviso: string | null } | { ok: false; erro: string }> {
+    try {
+      const r = await firstValueFrom(this.http.post<{ aviso?: string }>(`/v1/conversas/${conversaId}/devolver-agente`, corpo))
+      await Promise.all([this.atualizarThread(conversaId), this.carregar(), this.carregarContadores()])
+      return { ok: true, aviso: r.aviso ?? null }
+    } catch (e) {
+      await this.atualizarThread(conversaId)
+      return { ok: false, erro: this.textoDoErro(e, 'Não foi possível devolver ao agente.') }
+    }
+  }
+
+  async reatribuir(conversaId: string, corpo: { usuarioId: string; motivo: string }):
+    Promise<{ ok: true } | { ok: false; erro: string }> {
+    try {
+      await firstValueFrom(this.http.post(`/v1/conversas/${conversaId}/reatribuir`, corpo))
+      await Promise.all([this.atualizarThread(conversaId), this.carregar(), this.carregarContadores()])
+      return { ok: true }
+    } catch (e) {
+      await this.atualizarThread(conversaId)
+      return { ok: false, erro: this.textoDoErro(e, 'Não foi possível reatribuir.') }
+    }
+  }
+
+  private textoDoErro(e: unknown, padrao: string): string {
+    const corpo = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string } | null) : null
+    return corpo?.mensagem ?? padrao
+  }
+
   async carregarContadores(): Promise<void> {
     try {
       const c = await firstValueFrom(this.http.get<{ fila: number; meus: number }>('/v1/fila/contadores'))

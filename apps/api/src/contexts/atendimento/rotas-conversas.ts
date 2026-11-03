@@ -113,9 +113,15 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
   )
 
   app.get('/v1/conversas', { preHandler: exigirTenant }, async (req, reply) => {
-    const q = (req.query ?? {}) as { cursor?: string; limite?: string; canal?: string; filtro?: string }
+    const q = (req.query ?? {}) as { cursor?: string; limite?: string; canal?: string; filtro?: string; conduzidoPor?: string }
     const limite = Math.min(Number(q.limite) || LIMITE_PADRAO, LIMITE_MAX)
     const filtro = q.filtro === 'fila' || q.filtro === 'meus' ? q.filtro : 'todas'
+    // Quem CONDUZ agora (combina com `filtro`): agente = conduzida pela IA sem atendimento aberto;
+    // humano = atendimento aberto com atendente; aguardando = na fila (mesma régua da aba Fila).
+    const conduzidoPor = q.conduzidoPor === 'agente' || q.conduzidoPor === 'humano' || q.conduzidoPor === 'aguardando' ? q.conduzidoPor : null
+    if (q.conduzidoPor !== undefined && q.conduzidoPor !== '' && conduzidoPor === null) {
+      return reply.code(422).send({ erro: 'conversas.conduzido_por_invalido', validos: ['agente', 'humano', 'aguardando'] })
+    }
 
     // Cursor: "<ultima_mensagem_em iso>:<conversa_id>".
     let cursorEm: string | null = null
@@ -180,6 +186,20 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
                      WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id
                        AND a.estado <> 'encerrado' AND u.cognito_sub = ${sub})`
                : tx`true`
+         }
+         AND ${
+           conduzidoPor === 'agente'
+             ? tx`cv.conduzida_por = 'ia' AND NOT EXISTS (
+                     SELECT 1 FROM atendimento a
+                      WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado <> 'encerrado')`
+             : conduzidoPor === 'humano'
+               ? tx`EXISTS (
+                     SELECT 1 FROM atendimento a
+                      WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id
+                        AND a.estado <> 'encerrado' AND a.atendente_id IS NOT NULL)`
+               : conduzidoPor === 'aguardando'
+                 ? fragmentoNaFila(tx)
+                 : tx`true`
          }
          AND ${cursorEm === null ? tx`true` : tx`
                (cv.ultima_mensagem_em, cv.id) < (${cursorEm}::timestamptz, ${cursorId}::uuid)`}
