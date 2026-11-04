@@ -134,7 +134,7 @@ interface TemplateRef { readonly id: string; readonly nome: string; readonly sta
                   dentro do <strong>expediente</strong> e dos <strong>limites</strong> do dia/semana; respeita opt-out e
                   “não receber automações”. No oficial, fora da janela de 24h, só o <strong>template aprovado</strong>; no
                   não-oficial, só texto e dentro da cota de <strong>aquecimento</strong>. Com atendimento humano aberto, não envia.
-                  No roteiro NPS a resposta do cliente vira nota no painel de NPS; no de indicação, contatos com origem “Indicação”.
+                  No roteiro NPS a resposta do cliente vira nota no painel de NPS; no de indicação, contatos com origem “Indicação” — só com a ação “Registrar indicações” ligada no playbook do agente (nasce desligada).
                 </p>
               }
               @case ('enviar_mensagem') {

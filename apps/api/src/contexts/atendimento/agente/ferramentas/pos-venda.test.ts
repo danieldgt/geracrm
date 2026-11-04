@@ -47,6 +47,19 @@ const ctx = (modo: ContextoFerramenta['modo'] = 'autonomo', tenant = T, contato 
   perfil: 'varejo', sessaoId: null, modo, agora: new Date(),
 })
 
+/** Pedido de indicação ENVIADO há 1 h (A2): sessão ativa com `posVenda.indicacao` aberto. */
+async function ctxComIndicacao(modo: ContextoFerramenta['modo'] = 'autonomo', tenant = T, contato = CONTATO, canal = CANAL): Promise<ContextoFerramenta> {
+  const c = ctx(modo, tenant, contato, canal)
+  const estado = { posVenda: { indicacao: { pedidoId: 'p-teste', em: new Date(Date.now() - 3_600_000).toISOString(), registradas: 0 } } }
+  const [s] = await dono<{ id: string }[]>`
+    INSERT INTO agente_sessao (tenant_id, id, conversa_id, canal_id, iniciada_em, motivo_entrada, modo, estado_agente)
+    VALUES (${tenant}, gen_random_uuid(), ${c.conversaId}, ${canal}, now(), 'pos_venda', 'autonomo', ${JSON.stringify(estado)}::text::jsonb)
+    ON CONFLICT (tenant_id, conversa_id) WHERE estado = 'ativa'
+    DO UPDATE SET estado_agente = EXCLUDED.estado_agente
+    RETURNING id`
+  return { ...c, sessaoId: s!.id }
+}
+
 async function provaSocial(p: { texto: string; aprovado: boolean; apuradoEm?: string; tenant?: string; canal?: string | null; publicado?: boolean }): Promise<void> {
   await dono`INSERT INTO conhecimento_documento (tenant_id, id, canal_id, titulo, tipo, conteudo, versao, publicado,
                                                  fonte, link, apurado_em, prova_tipo, consentimento, aprovado)
@@ -137,9 +150,16 @@ afterAll(async () => {
 })
 
 describe('registrar_indicacoes', () => {
+  it('⚠️ A2: sem pedido de indicação aberto na sessão → indicacoes.nao_pedido, nada criado', async () => {
+    const r = await ferramentaRegistrarIndicacoes().executar(ctx(), { indicacoes: [{ nome: 'Zé', telefone: '85999970419', observacao: null }] } as never)
+    expect((r as { erro: string }).erro).toMatch(/^indicacoes\.nao_pedido/)
+    const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM contato WHERE tenant_id = ${T} AND origem_carga = 'indicacao'`
+    expect(n!.n).toBe(0)
+  })
+
   it('cria o indicado com origem "Indicação" (criada no tenant), indicado_por e sem dono', async () => {
-    const r = await ferramentaRegistrarIndicacoes().executar(ctx(), { indicacoes: [{ nome: 'Carla Nova', telefone: '(85) 99997-0410', observacao: 'tem loja no Centro' }] } as never)
-    expect(r).toMatchObject({ ok: true, saida: { itens: [{ nome: 'Carla Nova', situacao: 'criado' }], cadastrados: 1 } })
+    const r = await ferramentaRegistrarIndicacoes().executar(await ctxComIndicacao(), { indicacoes: [{ nome: 'Carla Nova', telefone: '(85) 99997-0410', observacao: 'tem loja no Centro' }] } as never)
+    expect(r).toEqual({ ok: true, saida: { itens: [{ nome: 'Carla Nova', situacao: 'registrado' }] } })
     const [c] = await dono<{ id: string; indicado_por: string; origem: string; dono: number; e164: string }[]>`
       SELECT c.id, c.indicado_por, o.nome AS origem, ct.e164,
              (SELECT count(*)::int FROM carteira_atribuicao ca WHERE ca.tenant_id = c.tenant_id AND ca.contato_id = c.id) AS dono
@@ -153,36 +173,49 @@ describe('registrar_indicacoes', () => {
 
   it('a origem existente é reaproveitada (sem duplicar), mesmo com outra caixa', async () => {
     await dono`INSERT INTO origem (tenant_id, id, nome) VALUES (${T}, gen_random_uuid(), 'INDICAÇÃO')`
-    await ferramentaRegistrarIndicacoes().executar(ctx(), { indicacoes: [{ nome: 'Dora', telefone: '85999970411', observacao: null }] } as never)
+    await ferramentaRegistrarIndicacoes().executar(await ctxComIndicacao(), { indicacoes: [{ nome: 'Dora', telefone: '85999970411', observacao: null }] } as never)
     const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM origem WHERE tenant_id = ${T}`
     expect(n!.n).toBe(1)
   })
 
-  it('⚠️ telefone já cadastrado (com ou sem o nono dígito): não duplica, registra no feed do existente e NÃO vaza nada dele', async () => {
-    const r = await ferramentaRegistrarIndicacoes().executar(ctx(), { indicacoes: [
+  it('⚠️ A1: telefone já cadastrado (com ou sem o nono dígito) sai IGUAL a um novo ("registrado"), não duplica e não vaza nada', async () => {
+    const r = await ferramentaRegistrarIndicacoes().executar(await ctxComIndicacao(), { indicacoes: [
       { nome: 'Fulano', telefone: '558599970402', observacao: null }, // sem o nono dígito = mesmo telefone
     ] } as never)
-    expect(r).toEqual({ ok: true, saida: { itens: [{ nome: 'Fulano', situacao: 'ja_cliente' }], cadastrados: 0 } })
-    expect(JSON.stringify(r)).not.toMatch(/Bruno|Segredo|c3b00000-6666-4000-8000-000000000002/)
+    expect(r).toEqual({ ok: true, saida: { itens: [{ nome: 'Fulano', situacao: 'registrado' }] } })
+    expect(JSON.stringify(r)).not.toMatch(/Bruno|Segredo|c3b00000-6666-4000-8000-000000000002|cliente|cadastrad/)
     const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM contato WHERE tenant_id = ${T} AND origem_carga = 'indicacao'`
     expect(n!.n).toBe(0)
     const [com] = await dono<{ texto: string }[]>`SELECT texto FROM comentario WHERE tenant_id = ${T} AND contato_id = ${EXISTENTE}`
     expect(com!.texto).toContain('Indicado por Ana Indicante')
   })
 
-  it('o próprio telefone do indicante, repetido na lista e inválido são nomeados, sem criar', async () => {
-    const r = await ferramentaRegistrarIndicacoes().executar(ctx(), { indicacoes: [
+  it('⚠️ B7: o dedupe olha TODOS os telefones do contato, não só o principal', async () => {
+    await dono`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
+               VALUES (${T}, ${EXISTENTE}, 2, '5585999970488', ${normalizarTelefone('5585999970488')!.chaveBloqueio}, false, true, 'teste')
+               ON CONFLICT DO NOTHING`
+    try {
+      await ferramentaRegistrarIndicacoes().executar(await ctxComIndicacao(), { indicacoes: [{ nome: 'Secundário', telefone: '85999970488', observacao: null }] } as never)
+      const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM contato WHERE tenant_id = ${T} AND origem_carga = 'indicacao'`
+      expect(n!.n).toBe(0)
+    } finally {
+      await dono`DELETE FROM contato_telefone WHERE tenant_id = ${T} AND contato_id = ${EXISTENTE} AND seq = 2`
+    }
+  })
+
+  it('o próprio telefone do indicante, repetido na lista e inválido são nomeados', async () => {
+    const r = await ferramentaRegistrarIndicacoes().executar(await ctxComIndicacao(), { indicacoes: [
       { nome: 'Eu mesma', telefone: TEL, observacao: null },
       { nome: 'Gil', telefone: '85999970412', observacao: null },
       { nome: 'Gil de novo', telefone: '5585999970412', observacao: null },
       { nome: 'Sem número', telefone: '12345678', observacao: null },
     ] } as never)
-    expect((r as { saida: { itens: { situacao: string }[] } }).saida.itens.map((i) => i.situacao)).toEqual(['proprio_cliente', 'criado', 'repetido', 'telefone_invalido'])
+    expect((r as { saida: { itens: { situacao: string }[] } }).saida.itens.map((i) => i.situacao)).toEqual(['proprio_cliente', 'registrado', 'repetido', 'telefone_invalido'])
   })
 
   it('⚠️ mais de 5: a entrada é recusada pelo esquema (e o módulo do CRM também recusa)', async () => {
     const seis = Array.from({ length: 6 }, (_, i) => ({ nome: `P${i}`, telefone: `8599997042${i}`, observacao: null }))
-    const reg = registroDeFerramentas(ctx(), [ferramentaRegistrarIndicacoes()])
+    const reg = registroDeFerramentas(await ctxComIndicacao(), [ferramentaRegistrarIndicacoes()])
     const r = await reg.executar('registrar_indicacoes', { indicacoes: seis })
     expect(r).toMatchObject({ ok: false })
     expect((r as { erro: string }).erro).toMatch(/entrada inválida/)
@@ -192,15 +225,15 @@ describe('registrar_indicacoes', () => {
   })
 
   it('modo simulação: modo seco, nada é criado', async () => {
-    const r = await ferramentaRegistrarIndicacoes().executar(ctx('simulacao'), { indicacoes: [{ nome: 'Hugo', telefone: '85999970413', observacao: null }] } as never)
+    const r = await ferramentaRegistrarIndicacoes().executar(await ctxComIndicacao('simulacao'), { indicacoes: [{ nome: 'Hugo', telefone: '85999970413', observacao: null }] } as never)
     expect(r).toMatchObject({ ok: true, saida: { modoSeco: true } })
     const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM contato WHERE tenant_id = ${T} AND origem_carga = 'indicacao'`
     expect(n!.n).toBe(0)
   })
 
-  it('dois tenants: o telefone cadastrado em A não é "já cliente" em B', async () => {
-    const r = await ferramentaRegistrarIndicacoes().executar(ctx('autonomo', T2, CONTATO2, CANAL2), { indicacoes: [{ nome: 'Ivo', telefone: TEL_EXISTENTE, observacao: null }] } as never)
-    expect(r).toMatchObject({ ok: true, saida: { itens: [{ situacao: 'criado' }] } })
+  it('dois tenants: o telefone cadastrado em A é contato NOVO em B', async () => {
+    const r = await ferramentaRegistrarIndicacoes().executar(await ctxComIndicacao('autonomo', T2, CONTATO2, CANAL2), { indicacoes: [{ nome: 'Ivo', telefone: TEL_EXISTENTE, observacao: null }] } as never)
+    expect(r).toMatchObject({ ok: true, saida: { itens: [{ situacao: 'registrado' }] } })
     const [c] = await dono<{ tenant_id: string; indicado_por: string }[]>`SELECT tenant_id, indicado_por FROM contato WHERE nome = 'Ivo'`
     expect(c).toEqual({ tenant_id: T2, indicado_por: CONTATO2 })
   })
@@ -255,6 +288,18 @@ describe('Número de prova social no turno (guardrail P7)', () => {
     expect(enviados).toEqual(['Segundo a Pesquisa NPS 2026, 98% dos clientes nos recomendam.'])
   })
 
+  it('⚠️ B1: prova social abona CONTAGEM e %, nunca prazo nem preço', async () => {
+    await provaSocial({ texto: 'Mais de 1.200 lojas atendidas, entrega em 48 horas, frete de R$ 19,90.', aprovado: true })
+    const r = await ferramentaConsultarProvaSocial().executar(ctx(), { tema: null } as never)
+    expect(r).toMatchObject({ ok: true })
+    const ok = r as unknown as { numeros: number[]; centavos?: number[] }
+    expect(ok.numeros).toContain(1200)
+    expect(ok.numeros).not.toContain(48)
+    expect(ok.centavos ?? []).toEqual([])
+    await turno('entregam rápido?', llm(['Entregamos em 48 horas.'], [{ nome: 'consultar_prova_social', entrada: { tema: null } }]))
+    expect(enviados).toEqual([AVISO_NUMERO_BLOQUEADO])
+  })
+
   it('⚠️ com a ferramenta, mas o item NÃO aprovado: o número continua sem fonte e não sai', async () => {
     await provaSocial({ texto: '98% dos clientes nos recomendam.', aprovado: false })
     await turno('vocês são confiáveis?', llm(['98% dos clientes nos recomendam.'], [{ nome: 'consultar_prova_social', entrada: { tema: null } }]))
@@ -266,8 +311,11 @@ describe('Ações do playbook', () => {
   const l: Ligacoes = { conhecimento: { async buscar() { return { trechos: [] } } } }
   const nomes = (acoes: typeof ACOES_TODAS_LIGADAS) => montarFerramentas({ ...l, acoes }).ferramentas.map((f) => f.nome)
 
-  it('ligadas (padrão): as três ferramentas estão no menu', () => {
-    expect(nomes(ACOES_TODAS_LIGADAS)).toEqual(expect.arrayContaining(['registrar_nps', 'registrar_indicacoes', 'consultar_prova_social']))
+  it('padrão: NPS e prova social no menu; ⚠️ indicações DESLIGADA até alguém ligar (escrita nova na base)', () => {
+    expect(ACOES_TODAS_LIGADAS.indicacoes).toBe(false)
+    expect(nomes(ACOES_TODAS_LIGADAS)).toEqual(expect.arrayContaining(['registrar_nps', 'consultar_prova_social']))
+    expect(nomes(ACOES_TODAS_LIGADAS)).not.toContain('registrar_indicacoes')
+    expect(nomes({ ...ACOES_TODAS_LIGADAS, indicacoes: true })).toContain('registrar_indicacoes')
   })
 
   it('⚠️ desligadas no playbook: saem do menu (o modelo não as recebe)', () => {
@@ -279,7 +327,7 @@ describe('Ações do playbook', () => {
   })
 
   it('cada uma desliga sozinha', () => {
-    expect(nomes({ ...ACOES_TODAS_LIGADAS, provaSocial: false })).toEqual(expect.arrayContaining(['registrar_nps', 'registrar_indicacoes']))
+    expect(nomes({ ...ACOES_TODAS_LIGADAS, indicacoes: true, provaSocial: false })).toEqual(expect.arrayContaining(['registrar_nps', 'registrar_indicacoes']))
     expect(nomes({ ...ACOES_TODAS_LIGADAS, provaSocial: false })).not.toContain('consultar_prova_social')
   })
 })

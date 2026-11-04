@@ -14,8 +14,9 @@ import { notificarPessoasDaConversa } from '../atendimento/notificacao.js'
  *
  * ⚠️ Detrator (0–6) não espera automação: o gatilho `nps_detrator` só age se o
  *    tenant tiver criado a regra. Aqui nasce, no MESMO commit, uma tarefa para o
- *    gestor (o primeiro gestor presente; sem nenhum, a tarefa fica sem dono e
- *    aparece para todos) e a notificação a TODOS os gestores presentes. Uma regra
+ *    gestor (o primeiro gestor presente; sem presente, o primeiro gestor; sem
+ *    nenhum gestor, a tarefa fica sem dono e aparece para todos) e a notificação
+ *    aos gestores presentes — ou a TODOS, se ninguém estiver presente. Uma regra
  *    `nps_detrator` configurada continua valendo por cima (age pelo contato).
  * Chamar sob tenant (RLS).
  */
@@ -40,7 +41,10 @@ export async function registrarNpsDoAgente(
     VALUES (tenant_atual(), ${npsId}, ${p.contatoId}, NULL, ${p.nota}, ${comentario}, 'agente', ${p.agora}, NULL)`
   if (!ehDetratorNps(p.nota)) return { npsId, detrator: false, tarefaId: null }
 
-  const gestores = (await gestoresDoTenant(tx)).filter((g) => !g.ausente)
+  // Presentes primeiro; ninguém presente → TODOS os gestores (B7): detrator não pode ficar sem ninguém avisado.
+  const todos = await gestoresDoTenant(tx)
+  const presentes = todos.filter((g) => !g.ausente)
+  const gestores = presentes.length > 0 ? presentes : todos
   const tarefaId = randomUUID()
   await tx`
     INSERT INTO tarefa (tenant_id, id, contato_id, responsavel_id, titulo, descricao, vence_em, criado_por, tipo)

@@ -62,6 +62,14 @@ export interface ContextoPortao {
   readonly sessaoEncerrada: SessaoEncerrada | null
   readonly maxTurnos: number
   /**
+   * A sessão ativa tem pergunta do PÓS-VENDA pendente (NPS sem nota, pedido de
+   * indicação aberto — G3, `pos-venda.ts`). Foi NÓS que perguntamos: a resposta
+   * precisa chegar a quem a registra, mesmo com a equipe disponível. Só vence o
+   * "tem quem atenda"; atendente presente e humano assumido continuam vencendo.
+   * Ausente = `false`.
+   */
+  readonly posVendaPendente?: boolean | undefined
+  /**
    * ⚠️ AS TRÊS REGRAS CONFIGURÁVEIS (0078). Eram decisões fixas aqui dentro;
    * agora vêm de `agente_config`, com os padrões iguais ao que estava escrito.
    *
@@ -146,7 +154,9 @@ export function portaoDoAgente(c: ContextoPortao): DecisaoPortao {
   // ⚠️ Havendo alguém disponível, quem atende é GENTE. O agente cobre o vácuo,
   //    não substitui o time. DESLIGÁVEL (0078): quem quer o robô atendendo junto
   //    com a equipe desliga isto na tela — e assume o que vem junto.
-  if (c.regras.soQuandoNinguemDisponivel && !c.ninguemDisponivel) return NAO('tem_quem_atenda')
+  //    Exceção (G3): a resposta a uma pergunta do PÓS-VENDA que nós fizemos (NPS,
+  //    indicação) é do agente — senão a nota cai no vácuo enquanto a equipe trabalha.
+  if (c.regras.soQuandoNinguemDisponivel && !c.ninguemDisponivel && !c.posVendaPendente) return NAO('tem_quem_atenda')
 
   // ⚠️ Alguém está na mesa AGORA (mesma régua da resposta de ausência): o robô
   //    não fala por cima de atendimento humano. Vale inclusive de madrugada —

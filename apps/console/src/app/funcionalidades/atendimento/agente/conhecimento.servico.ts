@@ -173,9 +173,10 @@ export class ConhecimentoServico {
    * Aprovar (ou revogar) uma prova social — só admin (403 para os outros). 422
    * `conhecimento.prova_social_incompleta` traz `campos` e a mensagem do que falta.
    */
-  async aprovar(id: string, aprovado: boolean): Promise<Resultado<{ documento: Documento }>> {
+  async aprovar(id: string, aprovado: boolean, versao: number): Promise<Resultado<{ documento: Documento }>> {
     try {
-      const d = await firstValueFrom(this.http.post<Documento>(`/v1/agente/conhecimento/${id}/aprovar`, { aprovado }))
+      // `versao` amarra a aprovação ao que a pessoa viu: mudou no meio → 409 `conhecimento.versao_divergente`.
+      const d = await firstValueFrom(this.http.post<Documento>(`/v1/agente/conhecimento/${id}/aprovar`, { aprovado, versao }))
       return { ok: true, documento: d }
     } catch (e) { return falha(e) }
   }

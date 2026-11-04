@@ -1,19 +1,22 @@
 import { z } from 'zod'
-import { MAX_INDICACOES, ehDetratorNps, verificarNumerosNaResposta } from '@geracrm/shared'
+import { MAX_INDICACOES, ehDetratorNps, fontesDaProvaSocial } from '@geracrm/shared'
 import { comTenantServico } from '../../../../db/index.js'
 import { registrarNpsDoAgente } from '../../../crm/nps-agente.js'
 import { ErroIndicacoes, registrarIndicacoes } from '../../../crm/indicacao.js'
 import { listarProvaSocialAprovada } from '../conhecimento/prova-social.js'
 import { lerEstado } from '../estado-agente.js'
-import { CHAVE_POS_VENDA, lerRoteiroPosVenda, marcarNpsRegistrado, npsAberto } from '../pos-venda.js'
+import { CHAVE_POS_VENDA, indicacaoAberta, lerPosVenda, marcarNpsRegistrado, npsAberto, reservarIndicacoes } from '../pos-venda.js'
 import type { ContextoFerramenta, Ferramenta } from './porta.js'
-import { numerosDe, percentuaisDe } from './porta.js'
 
 /**
  * FERRAMENTAS DO PÓS-VENDA (raia G3; AM `registrar_nps`, `registrar_indicacoes`,
  * `consultar_prova_social`). Cada uma é ação habilitável do playbook
- * (`nps`, `indicacoes`, `provaSocial`) — desligada, sai do menu.
+ * (`nps`, `indicacoes`, `provaSocial`) — desligada, sai do menu. `indicacoes` nasce
+ * desligada (escrita nova na base).
  *
+ * ⚠️ PORTÃO por roteiro: NPS só com a pesquisa enviada e aberta; indicações só com
+ *    o pedido de indicação enviado e aberto, e com TETO por roteiro (5 no total,
+ *    carimbado na sessão). Sem roteiro, erro tipificado.
  * ⚠️ Efeito REAL só no modo autônomo. Em sombra/assistido quem conduz é a pessoa
  *    (a decisão do agente é sugestão), e em simulação/copiloto nada é do cliente
  *    real: a ferramenta responde como se tivesse feito (`modoSeco: true`) e a
@@ -35,16 +38,16 @@ export function ferramentaRegistrarNps(): Ferramenta<never> {
     }),
     async executar(ctx, e) {
       return comTenantServico(ctx.tenantId, async (tx) => {
-        const r = lerRoteiroPosVenda((await lerEstado(tx, ctx.sessaoId))[CHAVE_POS_VENDA])
+        const pv = lerPosVenda((await lerEstado(tx, ctx.sessaoId))[CHAVE_POS_VENDA])
         // ⚠️ Sem pesquisa enviada (ou já respondida, ou vencida), não há nota a registrar.
-        if (!ctx.sessaoId || !npsAberto(r, ctx.agora)) {
+        if (!ctx.sessaoId || !npsAberto(pv, ctx.agora) || !pv.nps) {
           return { ok: false as const, erro: 'nps.nao_perguntado: a loja não enviou a pesquisa de nota nesta conversa (ou ela já foi respondida). Não registre; siga a conversa.' }
         }
         const detrator = ehDetratorNps(e.nota)
         if (!efeitoReal(ctx)) return { ok: true as const, saida: { registrado: true, detrator, modoSeco: true } }
         // A marca na sessão vem ANTES do insert: duas chamadas no mesmo turno — só uma passa.
-        if (!(await marcarNpsRegistrado(tx, ctx.sessaoId, r.em, ctx.agora))) {
-          return { ok: false as const, erro: 'nps.ja_registrado: a nota desta pesquisa já foi registrada.' }
+        if (!(await marcarNpsRegistrado(tx, ctx.sessaoId, pv.nps.em, ctx.agora))) {
+          return { ok: false as const, erro: 'nps.nao_perguntado: a nota desta pesquisa já foi registrada.' }
         }
         const reg = await registrarNpsDoAgente(tx, {
           contatoId: ctx.contatoId, conversaId: ctx.conversaId, nota: e.nota, comentario: e.comentario, agora: ctx.agora,
@@ -65,8 +68,8 @@ export function ferramentaRegistrarNps(): Ferramenta<never> {
 export function ferramentaRegistrarIndicacoes(): Ferramenta<never> {
   const f: Ferramenta<{ indicacoes: { nome: string; telefone: string; observacao: string | null }[] }> = {
     nome: 'registrar_indicacoes',
-    descricao: `Cadastra pessoas que o cliente indicou (nome e telefone, no máximo ${MAX_INDICACOES} por vez). `
-      + 'Não duplica quem já está cadastrado — nesse caso só diz que já é cliente. Não peça outros dados pessoais.',
+    descricao: `Registra pessoas que o cliente indicou (nome e telefone; no máximo ${MAX_INDICACOES} no total por pedido de indicação). `
+      + 'Só funciona quando a loja pediu indicações nesta conversa. Não peça outros dados pessoais e não comente se a pessoa já é conhecida da loja.',
     entrada: z.object({
       indicacoes: z.array(z.object({
         nome: z.string().min(1).max(120),
@@ -75,13 +78,25 @@ export function ferramentaRegistrarIndicacoes(): Ferramenta<never> {
       })).min(1).max(MAX_INDICACOES),
     }),
     async executar(ctx, e) {
-      if (!efeitoReal(ctx)) {
-        return { ok: true, saida: { modoSeco: true, itens: e.indicacoes.map((i) => ({ nome: i.nome, situacao: 'criado' })) } }
-      }
       try {
-        const r = await comTenantServico(ctx.tenantId, (tx) => registrarIndicacoes(tx, { indicanteId: ctx.contatoId, indicacoes: e.indicacoes }))
-        // ⚠️ Só nome (o que o próprio cliente disse) e situação: nada do contato existente.
-        return { ok: true, saida: { itens: r.itens, cadastrados: r.criados } }
+        return await comTenantServico(ctx.tenantId, async (tx) => {
+          const pv = lerPosVenda((await lerEstado(tx, ctx.sessaoId))[CHAVE_POS_VENDA])
+          // ⚠️ Portão (A2): só com o pedido de indicação enviado e aberto nesta conversa.
+          if (!ctx.sessaoId || !pv.indicacao || !indicacaoAberta(pv, ctx.agora)) {
+            return { ok: false as const, erro: 'indicacoes.nao_pedido: a loja não pediu indicações nesta conversa (ou o limite já foi atingido). Não registre; agradeça e siga a conversa.' }
+          }
+          if (!efeitoReal(ctx)) {
+            return { ok: true as const, saida: { modoSeco: true, itens: e.indicacoes.map((i) => ({ nome: i.nome, situacao: 'registrado' })) } }
+          }
+          // Teto TOTAL do roteiro, reservado atomicamente antes de gravar (rola de volta junto se falhar).
+          const restantes = MAX_INDICACOES - pv.indicacao.registradas
+          if ((await reservarIndicacoes(tx, ctx.sessaoId, pv.indicacao.em, e.indicacoes.length)) === null) {
+            return { ok: false as const, erro: `indicacoes.limite: no máximo ${MAX_INDICACOES} indicações por pedido; restam ${Math.max(0, restantes)}.` }
+          }
+          const r = await registrarIndicacoes(tx, { indicanteId: ctx.contatoId, indicacoes: e.indicacoes, comentarExistente: true })
+          // ⚠️ Só nome (o que o próprio cliente disse) e situação — `registrado` para novo e existente (A1).
+          return { ok: true as const, saida: { itens: r.itens } }
+        })
       } catch (err) {
         if (err instanceof ErroIndicacoes) {
           return { ok: false, erro: err.codigo === 'limite' ? `indicacoes.limite: no máximo ${MAX_INDICACOES} por vez.` : `indicacoes.${err.codigo}` }
@@ -97,7 +112,7 @@ export function ferramentaConsultarProvaSocial(): Ferramenta<never> {
   const f: Ferramenta<{ tema: string | null }> = {
     nome: 'consultar_prova_social',
     descricao: 'Depoimentos de clientes e números da loja APROVADOS para citar (com fonte e data). Única origem permitida de prova social: '
-      + 'use o texto como veio e cite a fonte. Lista vazia = não cite números nem depoimentos.',
+      + 'use o texto como veio e cite a fonte. Lista vazia = não cite números nem depoimentos. Não serve de fonte para preço nem prazo.',
     entrada: z.object({ tema: z.string().max(120).nullable() }),
     async executar(ctx, e) {
       const itens = await comTenantServico(ctx.tenantId, (tx) => listarProvaSocialAprovada(tx, {
@@ -106,11 +121,10 @@ export function ferramentaConsultarProvaSocial(): Ferramenta<never> {
       const saida = itens.length > 0
         ? { itens: itens.map((i) => ({ tipo: i.tipo, texto: i.texto, fonte: i.fonte, link: i.link, apuradoEm: i.apuradoEm, documentoId: i.documentoId, versao: i.versao })) }
         : { itens: [], aviso: 'Nenhuma prova social aprovada: não cite números, avaliações nem depoimentos.' }
-      // ⚠️ O TEXTO aprovado é fonte do guardrail numérico (P7) — só neste turno, só por aqui.
-      //    Valor em reais no texto ("economizou R$ 500") vira centavos permitidos pela mesma regra.
-      const textos = itens.map((i) => i.texto)
-      const centavos = textos.flatMap((t) => verificarNumerosNaResposta(t, new Set()))
-      return { ok: true, saida, centavos, numeros: numerosDe(textos), percentuais: percentuaisDe(textos) }
+      // ⚠️ B1: o texto aprovado abona só CONTAGENS e PERCENTUAIS deste turno — nunca
+      //    centavos nem prazo (que só vêm de pedido/catálogo/políticas).
+      const fontes = fontesDaProvaSocial(itens.map((i) => i.texto))
+      return { ok: true, saida, numeros: fontes.numeros, percentuais: fontes.percentuais }
     },
   }
   return f as Ferramenta<never>

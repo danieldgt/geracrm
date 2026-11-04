@@ -281,3 +281,25 @@ para acordar gente de madrugada, recalibrar com 2–4 semanas de histórico.
 - **Nunca:** a sessão de staff não grava mais linha em `usuario` do cliente (era a porta para o admin do cliente
   redefinir a senha da conta do staff). Ação que exige um usuário do cliente como dono (assumir conversa, ser
   responsável) responde 403 `acesso.staff_sem_usuario` na sessão de staff — peça a alguém da empresa.
+
+## 19. Pós-venda, NPS, indicações e prova social (G3) — rollback não é seguro
+
+- **Sintoma:** precisa voltar a versão do código depois de clientes criarem regras de pós-venda
+  (`pedido_efetivado` → `agente_envia`) ou provas sociais (`tipo = 'prova_social'`).
+- **Por que o rollback de código NÃO é seguro (0130/0141 ficam):**
+  - a versão anterior não conhece o motivo `pos_venda`: o worker de retornos dela pega a linha pendente
+    e a trata como retorno comum — envia o texto **sem** a política do pós-venda (template da regra no
+    oficial, teto diário e aquecimento do não-oficial, quietude depois de o cliente escrever) e agenda a
+    cadência de 3 passos (1 h → 24 h → 72 h) em cima de uma mensagem que era única;
+  - a busca de conhecimento dela **não exclui** `prova_social`: depoimentos e números **não aprovados**
+    passam a chegar ao modelo pela `conhecimento_buscar`, sem fonte e sem o portão de aprovação;
+  - a tela de Automações dela não sabe exibir nem editar a regra (gatilho/ação desconhecidos);
+  - o painel de NPS dela conta as notas do agente como "sem atendente".
+- **Se precisar voltar mesmo assim, antes do deploy da versão anterior (como dono):**
+  1. `UPDATE automacao SET ativa = false WHERE gatilho = 'pedido_efetivado';`
+  2. `UPDATE agente_retorno SET estado = 'cancelado', detalhe = 'rollback_g3', concluido_em = now()
+      WHERE motivo = 'pos_venda' AND estado = 'pendente';`
+  3. `UPDATE conhecimento_documento SET publicado = false WHERE tipo = 'prova_social';`
+  Depois de voltar à versão nova, religue as regras e republique as provas (a aprovação continua gravada).
+- **Nunca:** apagar as colunas/índices da 0130/0141 para "limpar" — são dois deploys (CLAUDE.md), e o
+  índice `agente_retorno_pos_venda_em_curso` é o que impede reenviar um pós-venda que já saiu.
