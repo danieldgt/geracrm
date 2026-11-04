@@ -67,7 +67,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
 
         <!-- Busca local sobre as conversas carregadas (+ abrir por protocolo). Enter aplica na hora;
              o debounce de 300 ms é do ui-filtros. As abas ficam projetadas no cartão. -->
-        <ui-filtros class="filtros-lista" rotuloBusca="Pesquisar" placeholder="Pesquisar conversa ou #protocolo"
+        <ui-filtros class="filtros-lista" [compacto]="true" rotuloBusca="Pesquisar" placeholder="Pesquisar conversa ou #protocolo"
                     (buscar)="busca.set($event)">
           <div class="abas-wrap">
             <div class="abas">
@@ -110,7 +110,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                 @if (servico.avisoBusca()) { <p class="aviso">{{ servico.avisoBusca() }}</p> }
               }
               @if (servico.vazio()) {
-                <ui-estado titulo="Nenhuma conversa ainda" icone="💬"
+                <ui-estado titulo="Nenhuma conversa ainda" icone="message-circle"
                            descricao="Elas aparecem aqui quando chegar uma mensagem." />
               } @else if (conversasFiltradas().length === 0) {
                 <p class="aviso">Nada encontrado para “{{ busca() }}”.</p>
@@ -164,7 +164,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
       <section class="conversa">
         @switch (servico.estadoThread()) {
           @case ('nenhuma') {
-            <ui-estado class="placeholder" titulo="Selecione uma conversa" icone="💬"
+            <ui-estado class="placeholder" titulo="Selecione uma conversa" icone="message-circle"
                        descricao="Escolha uma conversa da lista para começar a atender." />
           }
           @case ('carregando') { <div class="placeholder" aria-busy="true"><p>Abrindo…</p></div> }
@@ -419,7 +419,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                       }
                     </div>
                   }
-                  <button class="ic" type="button" title="Emoji" (click)="toggleEmojis($event)">😊</button>
+                  <button class="ic" type="button" title="Emoji" (click)="toggleEmojis($event)" aria-label="Emoji"><ui-icone nome="smile" [tamanho]="24" /></button>
                   <button class="ic" type="button" title="Enviar imagem" (click)="arquivoImg.click()"
                           aria-label="Enviar imagem" [disabled]="servico.enviando()"><ui-icone nome="plus" /></button>
                   <input #arquivoImg type="file" accept="image/*" hidden
@@ -444,7 +444,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                   } @else {
                     <button class="enviar" type="button" [class.gravando]="gravando()"
                             (click)="alternarGravacao(t.id)" [disabled]="servico.enviando()"
-                            [title]="gravando() ? 'Parar e enviar' : 'Gravar áudio'">{{ gravando() ? '⏹' : '🎤' }}</button>
+                            [title]="gravando() ? 'Parar e enviar' : 'Gravar áudio'"><ui-icone [nome]="gravando() ? 'square' : 'mic'" [tamanho]="18" /></button>
                   }
                 } @else {
                   <div class="fechada">

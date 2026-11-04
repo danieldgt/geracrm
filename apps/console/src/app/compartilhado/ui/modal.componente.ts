@@ -1,11 +1,26 @@
+import { NgTemplateOutlet } from '@angular/common'
 import {
-  ChangeDetectionStrategy, Component, ElementRef, afterRenderEffect, input, output, untracked, viewChild,
+  ChangeDetectionStrategy, Component, Directive, ElementRef, TemplateRef, afterRenderEffect, contentChild, inject,
+  input, output, untracked, viewChild,
 } from '@angular/core'
 import { devolverFoco, primeiroAlvoDeFoco, prenderTab } from './foco.js'
 
 export type LarguraModal = 'p' | 'm' | 'g'
 
 let serie = 0
+
+/**
+ * Rodapé do modal por TEMPLATE: `<ng-template uiModalRodape>botões</ng-template>`.
+ *
+ * ⚠️ Por que existe: `<ng-content select="[rodape]">` só enxerga o `[rodape]` quando ele é filho DIRETO
+ * do `<ui-modal>`. Um `@if` com mais de um nó na raiz é projetado inteiro no slot padrão (o corpo), e o
+ * rodapé vai junto, para o lugar errado. O template é achado por query de conteúdo, em qualquer
+ * profundidade, e renderizado no rodapé: funciona dentro de `@if`, `@for` ou `@switch`.
+ */
+@Directive({ selector: 'ng-template[uiModalRodape]' })
+export class ModalRodapeDiretiva {
+  readonly modelo = inject<TemplateRef<unknown>>(TemplateRef)
+}
 
 /**
  * Modal de verdade: véu fixo, foco no primeiro campo e preso, Esc/véu fecham,
@@ -18,10 +33,13 @@ let serie = 0
  *     ...corpo...
  *     <div rodape>botões</div>
  *   </ui-modal>
+ *
+ * Rodapé dentro de bloco de controle (`@if` com vários nós): use `<ng-template uiModalRodape>` em vez de `[rodape]`.
  */
 @Component({
   selector: 'ui-modal',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [NgTemplateOutlet],
   template: `
     @if (aberto()) {
       <div class="overlay" (mousedown)="marcarVeu($event)" (mouseup)="soltarNoVeu($event)">
@@ -34,7 +52,10 @@ let serie = 0
             <button type="button" class="x" aria-label="Fechar" (click)="fechar.emit()">×</button>
           </header>
           <div class="corpo"><ng-content /></div>
-          <footer class="rodape"><ng-content select="[rodape]" /></footer>
+          <footer class="rodape">
+            <ng-content select="[rodape]" />
+            @if (rodapeModelo(); as m) { <ng-container [ngTemplateOutlet]="m.modelo" /> }
+          </footer>
         </div>
       </div>
     }
@@ -70,6 +91,7 @@ export class ModalComponente {
   readonly titulo = input('')
   readonly largura = input<LarguraModal>('m')
   readonly fechar = output<void>()
+  protected readonly rodapeModelo = contentChild(ModalRodapeDiretiva)
 
   protected readonly idTitulo = `ui-modal-titulo-${++serie}`
   private readonly caixa = viewChild<ElementRef<HTMLElement>>('caixa')
