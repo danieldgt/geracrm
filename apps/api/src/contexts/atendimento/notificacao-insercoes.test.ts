@@ -11,10 +11,8 @@ import { join, relative } from 'node:path'
  */
 const RAIZ = join(import.meta.dirname, '..', '..')
 
-const EXCECOES: Readonly<Record<string, string>> = {
-  // Produtor de `campanha.pausada`: a raia F1a passa por `canaisDosUsuarios`; sai desta lista nesse commit.
-  'contexts/crm/campanha-destinatario.ts': 'F1a: migrar para canaisDosUsuarios',
-}
+// Hoje vazia: todo produtor consulta a preferência. Só entra arquivo com motivo escrito.
+const EXCECOES: Readonly<Record<string, string>> = {}
 
 function arquivosTs(dir: string): string[] {
   return readdirSync(dir).flatMap((nome) => {
