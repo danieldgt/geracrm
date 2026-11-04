@@ -37,11 +37,25 @@ const CV = {
 }
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
-const enviarFalso = (async () => ({ ok: true as const, mensagemId: crypto.randomUUID() })) as never
+const enviados: string[] = []
+const enviarFalso = (async (_t: string, _c: string, texto: string) => {
+  enviados.push(texto)
+  return { ok: true as const, mensagemId: crypto.randomUUID() }
+}) as never
 
 type Chamada = { nome: string; entrada: unknown }
 /** Modelo falso: guarda o menu, tenta as chamadas pedidas e devolve o que cada uma respondeu. */
-function llm(chamadas: Chamada[]) {
+/** Sem `resposta`, o modelo falso faz o que o prompt manda: envia o `texto` da oferta como veio, ou confirma o agendado. */
+function respostaPadrao(r: ChamadaRegistrada[]): string[] {
+  for (const c of r) {
+    const s = c.saida as { situacao?: string; texto?: string; quando?: string; com?: string } | null
+    if (s?.situacao === 'agendado') return [`Reunião marcada: ${s.quando} com ${s.com}.`]
+    if (s?.situacao === 'ok' && s.texto) return [`Tenho estes horários:\n${s.texto}`, 'Qual prefere?']
+  }
+  return ['Combinado, já te retorno.']
+}
+
+function llm(chamadas: Chamada[], resposta?: string[]) {
   const menus: string[][] = []
   const resultados: ChamadaRegistrada[] = []
   const porta: PortaLlmFerramentas = {
@@ -54,7 +68,7 @@ function llm(chamadas: Chamada[]) {
         const r = { nome: c.nome, entrada: c.entrada, saida: s.ok ? s.saida : null, ms: 1, ...(s.ok ? {} : { erro: s.erro }) }
         feitas.push(r); resultados.push(r)
       }
-      return { ok: true, saida: { mensagens: ['Combinado, já te retorno.'], confianca: 0.9 }, rastro: { chamadas: feitas, rodadas: 1, uso: { entrada: 1, saida: 1, cacheLeitura: 0, cacheEscrita: 0 }, modelo: 'falso', latenciaMs: 1, parouPor: 'fim' } }
+      return { ok: true, saida: { mensagens: resposta ?? respostaPadrao(feitas), confianca: 0.9 }, rastro: { chamadas: feitas, rodadas: 1, uso: { entrada: 1, saida: 1, cacheLeitura: 0, cacheEscrita: 0 }, modelo: 'falso', latenciaMs: 1, parouPor: 'fim' } }
     },
   }
   return { porta, menus, resultados }
@@ -65,13 +79,13 @@ const confirmar = (opcao: number): Chamada => ({ nome: 'agendar_reuniao', entrad
 
 /** Relógio do turno: cada turno 1 minuto depois do anterior; a mensagem do cliente chega 1 s antes. */
 let relogio = Date.now()
-async function turno(t: string, conversa: string, canal: string, texto: string, chamadas: Chamada[]) {
+async function turno(t: string, conversa: string, canal: string, texto: string, chamadas: Chamada[], resposta?: string[]) {
   relogio += 60_000
   const agora = new Date(relogio)
   const id = crypto.randomUUID()
   await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
              VALUES (${t}, ${id}, ${conversa}, 'entrante', 'texto', ${JSON.stringify({ texto })}::text::jsonb, ${new Date(relogio - 1000)})`
-  const m = llm(chamadas)
+  const m = llm(chamadas, resposta)
   await conduzirTurnoVendedor(
     { tenant_id: t, id: crypto.randomUUID(), conversa_id: conversa, canal_id: canal, mensagens_ids: [id], tentativas: 1, executar_em: agora },
     { llm: m.porta, ligacoes: ligacoesPadrao, enviar: enviarFalso, agora },
@@ -126,7 +140,7 @@ beforeEach(async () => {
     for (const tab of ['reuniao_oferta', 'evento_agenda', 'agente_decisao', 'agente_sessao', 'atendimento', 'carteira_atribuicao', 'auditoria', 'notificacao']) {
       await dono.unsafe(`DELETE FROM ${tab} WHERE tenant_id = '${t}'`)
     }
-    await dono`UPDATE conversa SET conduzida_por = 'agente' WHERE tenant_id = ${t}`.catch(() => undefined)
+    await dono`UPDATE conversa SET conduzida_por = 'ia' WHERE tenant_id = ${t}`.catch(() => undefined)
   }
   await dono`INSERT INTO carteira_atribuicao (tenant_id, id, contato_id, usuario_id) VALUES (${A}, gen_random_uuid(), ${CONTATO[A]!}, ${VA}), (${K}, gen_random_uuid(), ${CONTATO[K]!}, ${VA})`
 })
@@ -188,31 +202,46 @@ describe('agendar_reuniao — modo seco', () => {
   })
 })
 
+const linhas = (r: ChamadaRegistrada) => ((r.saida as { texto?: string }).texto ?? '').split('\n').filter(Boolean)
+const guardrails = async (conversa: string) => (await dono<{ guardrails: { etapa: string; codigo: string }[] }[]>`
+  SELECT guardrails FROM agente_decisao WHERE tenant_id = ${A} AND conversa_id = ${conversa} ORDER BY criado_em DESC LIMIT 1`)[0]?.guardrails ?? []
+
 describe('agendar_reuniao — propor e confirmar (autônomo)', () => {
   it('⚠️ nunca cria sem a escolha explícita do cliente; cria uma vez só quando ele escolhe', async () => {
     // Turno 1: oferta + tentativa de confirmar no MESMO turno.
     const t1 = await turno(A, CV.ok, CANAL, 'quero marcar uma reunião', [ofertar, confirmar(1)])
     expect(situacoes(t1.resultados)).toEqual(['ok', 'mesmo_turno'])
-    const opcoes = (t1.resultados[0]!.saida as { opcoes: { n: number; com: string }[] }).opcoes
-    expect(opcoes.length).toBeGreaterThan(1)
-    expect(opcoes.every((o) => o.com === 'Vera')).toBe(true) // o responsável do contato primeiro
-    const [oferta] = await dono<{ opcoes: { usuarioId: string }[] }[]>`SELECT opcoes FROM reuniao_oferta WHERE tenant_id = ${A}`
+    const ls = linhas(t1.resultados[0]!)
+    expect(ls.length).toBeGreaterThan(1)
+    expect(ls.every((l) => /^\d\) \w{3}, \d{2}\/\d{2} às \d{2}:\d{2} com Vera$/.test(l))).toBe(true) // o responsável primeiro
+    // A3: as linhas chegaram ao gateway → a oferta passou a valer.
+    const [oferta] = await dono<{ opcoes: { usuarioId: string }[]; enviada_em: Date | null }[]>`SELECT opcoes, enviada_em FROM reuniao_oferta WHERE tenant_id = ${A}`
     expect(oferta!.opcoes.every((o) => o.usuarioId === VA)).toBe(true)
+    expect(oferta!.enviada_em).not.toBeNull()
 
     // Turno 2: "sim" com várias opções é ambíguo.
     const t2 = await turno(A, CV.ok, CANAL, 'sim', [confirmar(1)])
     expect(situacoes(t2.resultados)).toEqual(['sem_confirmacao'])
-    // Turno 3: o cliente escolheu a 2; o modelo tenta a 1 (divergente) e depois a 2.
+    // Turno 3: o cliente escolheu a 2; o modelo tenta a 1 (divergente, sem revelar a escolha) e depois a 2.
     const t3 = await turno(A, CV.ok, CANAL, 'a 2', [confirmar(1), confirmar(2)])
     expect(situacoes(t3.resultados)).toEqual(['confirmacao_divergente', 'agendado'])
+    expect(JSON.stringify(t3.resultados[0]!.saida)).not.toMatch(/escolhida/)
     expect(await eventos(A)).toEqual([expect.objectContaining({ responsavel_id: VA, origem: 'agente', conversa_id: CV.ok, status: 'agendado' })])
-    const [a] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM auditoria WHERE tenant_id = ${A} AND acao = 'agenda.reuniao_agendada'`
-    expect(a!.n).toBe(1)
+    expect(enviados[enviados.length - 1]).toMatch(/^Reunião marcada: \w{3}, \d{2}\/\d{2} às \d{2}:\d{2} com Vera\.$/)
 
     // Turno 4: confirmar de novo não duplica.
     const t4 = await turno(A, CV.ok, CANAL, 'a 2', [confirmar(2)])
     expect(situacoes(t4.resultados)).toEqual(['ja_confirmada'])
     expect(await eventos(A)).toHaveLength(1)
+  })
+
+  it('⚠️ A2: só a mensagem MAIS RECENTE do cliente conta ("2" seguido de "prefiro amanhã" não confirma)', async () => {
+    await turno(A, CV.ok, CANAL, 'quero uma reunião', [ofertar])
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+               VALUES (${A}, gen_random_uuid(), ${CV.ok}, 'entrante', 'texto', ${JSON.stringify({ texto: '2' })}::text::jsonb, ${new Date(relogio + 30_000)})`
+    const t2 = await turno(A, CV.ok, CANAL, 'prefiro amanhã', [confirmar(2)])
+    expect(situacoes(t2.resultados)).toEqual(['sem_confirmacao'])
+    expect(await eventos(A)).toHaveLength(0)
   })
 
   it('cliente recusa as opções → nada é criado', async () => {
@@ -222,16 +251,61 @@ describe('agendar_reuniao — propor e confirmar (autônomo)', () => {
     expect(await eventos(A)).toHaveLength(0)
   })
 
-  it('responsável sem horário → oferta com outro vendedor da filial, que vira o responsável ao confirmar', async () => {
+  it('⚠️ A3: segunda oferta no mesmo turno é recusada', async () => {
+    const t = await turno(A, CV.ok, CANAL, 'quero uma reunião', [ofertar, ofertar])
+    expect(situacoes(t.resultados)[1]).toMatch(/^erro: reuniao\.ja_ofertado/)
+    expect(await dono`SELECT 1 FROM reuniao_oferta WHERE tenant_id = ${A}`).toHaveLength(1)
+  })
+
+  it('⚠️ A1/A3: resposta com horário inventado é barrada e a oferta não vale', async () => {
+    await turno(A, CV.ok, CANAL, 'quero uma reunião', [ofertar], ['Posso te encaixar quinta às 16h17, combinado?'])
+    expect((await guardrails(CV.ok)).filter((g) => g.etapa === 'reuniao').map((g) => g.codigo)).toContain('horario_sem_fonte')
+    expect(enviados[enviados.length - 1]).toBe('Vou confirmar os horários com a equipe e já te retorno.')
+    const [o] = await dono<{ enviada_em: Date | null }[]>`SELECT enviada_em FROM reuniao_oferta WHERE tenant_id = ${A}`
+    expect(o!.enviada_em).toBeNull()
+    // A equipe devolve a conversa ao agente (o handoff do bloqueio calou o turno seguinte).
+    for (const tab of ['atendimento', 'agente_sessao']) await dono.unsafe(`DELETE FROM ${tab} WHERE tenant_id = '${A}'`)
+    await dono`UPDATE conversa SET conduzida_por = 'ia' WHERE tenant_id = ${A}`
+    const t2 = await turno(A, CV.ok, CANAL, '1', [confirmar(1)])
+    expect(situacoes(t2.resultados)).toEqual(['oferta_nao_enviada'])
+    expect(await eventos(A)).toHaveLength(0)
+  })
+
+  it('⚠️ A1: "reunião marcada" sem evento no turno é barrado', async () => {
+    await turno(A, CV.ok, CANAL, 'e a reunião?', [], ['Sua reunião já está marcada, fique tranquilo!'])
+    expect((await guardrails(CV.ok)).map((g) => g.codigo)).toContain('marcacao_sem_evento')
+  })
+
+  it('⚠️ B5: evento criado e confirmação barrada → marcado na decisão e o vendedor é avisado', async () => {
+    await turno(A, CV.ok, CANAL, 'quero uma reunião', [ofertar])
+    await turno(A, CV.ok, CANAL, '1', [confirmar(1)], ['Fechado, até sexta às 23:59!'])
+    expect(await eventos(A)).toHaveLength(1)
+    expect((await guardrails(CV.ok)).map((g) => g.codigo)).toEqual(expect.arrayContaining(['horario_sem_fonte', 'reuniao_sem_confirmacao_ao_cliente']))
+    const [n] = await dono<{ titulo: string }[]>`SELECT titulo FROM notificacao WHERE tenant_id = ${A} AND usuario_id = ${VA} AND tipo = 'agenda.reuniao'`
+    expect(n?.titulo).toMatch(/confirmação não chegou ao cliente/)
+  })
+
+  it('⚠️ M7: já existe reunião futura desta conversa → recusa e passa para uma pessoa', async () => {
+    await dono`INSERT INTO evento_agenda (tenant_id, id, titulo, responsavel_id, contato_id, inicio, fim, conversa_id, canal_id, origem)
+               VALUES (${A}, gen_random_uuid(), 'Reunião com Ana', ${VA}, ${CONTATO[A]!}, now() + interval '2 days', now() + interval '2 days 30 minutes', ${CV.ok}, ${CANAL}, 'agente')`
+    const t = await turno(A, CV.ok, CANAL, 'quero outra reunião', [ofertar], ['Uma pessoa da equipe vai cuidar disso.'])
+    expect(situacoes(t.resultados)).toEqual(['ja_tem_reuniao'])
+    expect(await dono`SELECT 1 FROM atendimento WHERE tenant_id = ${A} AND conversa_id = ${CV.ok} AND estado <> 'encerrado'`).toHaveLength(1)
+  })
+
+  it('⚠️ responsável sem horário → oferta com outro vendedor da filial; a carteira NÃO muda (o agente nunca transfere)', async () => {
     await dono`INSERT INTO evento_agenda (tenant_id, id, titulo, responsavel_id, inicio, fim)
                VALUES (${A}, gen_random_uuid(), 'Férias', ${VA}, now() - interval '1 day', now() + interval '20 days')`
     const t1 = await turno(A, CV.ok, CANAL, 'quero uma reunião', [ofertar])
-    const opcoes = (t1.resultados[0]!.saida as { opcoes: { n: number; com: string }[] }).opcoes
-    expect(opcoes.every((o) => o.com === 'Bruno')).toBe(true)
+    expect(linhas(t1.resultados[0]!).every((l) => l.endsWith('com Bruno'))).toBe(true)
     const t2 = await turno(A, CV.ok, CANAL, 'opção 1', [confirmar(1)])
     expect(situacoes(t2.resultados)).toEqual(['agendado'])
-    const [c] = await dono<{ usuario_id: string; origem: string }[]>`
-      SELECT usuario_id, origem FROM carteira_atribuicao WHERE tenant_id = ${A} AND contato_id = ${CONTATO[A]!} AND ate IS NULL`
-    expect(c).toEqual({ usuario_id: VB, origem: 'automatica' })
+    expect(await eventos(A)).toEqual([expect.objectContaining({ responsavel_id: VB })])
+    const [c] = await dono<{ usuario_id: string }[]>`
+      SELECT usuario_id FROM carteira_atribuicao WHERE tenant_id = ${A} AND contato_id = ${CONTATO[A]!} AND ate IS NULL`
+    expect(c).toEqual({ usuario_id: VA })
+    const [a] = await dono<{ dados: { mantido: string | null; assumiu: boolean } }[]>`
+      SELECT dados FROM auditoria WHERE tenant_id = ${A} AND acao = 'agenda.reuniao_agendada'`
+    expect(a!.dados).toMatchObject({ assumiu: false, mantido: 'Vera Vendas' })
   })
 })

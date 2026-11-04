@@ -85,13 +85,23 @@ export interface OpcaoParaLlm {
   /** Primeiro nome de quem atende. */
   readonly com: string
 }
+/** Hora e data LOCAIS de um horário devolvido (fonte da guarda da resposta). */
+export interface QuandoLocal { readonly data: string; readonly hora: string; readonly diaIso: number }
+
 export type ResultadoOferta =
-  | { readonly situacao: 'ok'; readonly opcoes: readonly OpcaoParaLlm[] }
-  | { readonly situacao: 'sem_horarios' | 'sem_vendedor' | 'dia_invalido' }
+  | { readonly situacao: 'ok'; readonly opcoes: readonly (OpcaoParaLlm & QuandoLocal)[]; readonly ofertaId: string | null }
+  | { readonly situacao: 'sem_horarios' | 'sem_vendedor' | 'dia_invalido' | 'limite_ofertas' }
+  | { readonly situacao: 'ja_tem_reuniao'; readonly quando: string }
 export type ResultadoConfirmacaoReuniao =
-  | { readonly situacao: 'agendado'; readonly quando: string; readonly com: string; readonly responsavelAlterado: boolean }
-  | { readonly situacao: 'sem_oferta' | 'mesmo_turno' | 'oferta_vencida' | 'ja_confirmada' | 'sem_confirmacao' | 'cliente_recusou' | 'opcao_inexistente' | 'ocupado' }
-  | { readonly situacao: 'confirmacao_divergente'; readonly escolhida: number }
+  | {
+    readonly situacao: 'agendado'; readonly eventoId: string; readonly usuarioId: string; readonly quando: string; readonly com: string
+    readonly contato: string; readonly local: QuandoLocal
+  }
+  | {
+    readonly situacao: 'sem_oferta' | 'mesmo_turno' | 'oferta_nao_enviada' | 'oferta_vencida' | 'ja_confirmada' | 'sem_confirmacao'
+      | 'cliente_recusou' | 'opcao_inexistente' | 'ocupado' | 'responsavel_indisponivel' | 'sem_conversa' | 'confirmacao_divergente'
+  }
+  | { readonly situacao: 'ja_tem_reuniao'; readonly quando: string }
 
 export interface AgendaPorta {
   ofertar(ctx: ContextoFerramenta, p: { dia: string | null; real: boolean }): Promise<ResultadoOferta>

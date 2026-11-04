@@ -68,6 +68,9 @@ describe('Falhas e sucesso', () => {
     expect(mensagemDaFalha(404, 'modulo.desligado')).toBe('A Agenda foi desligada para a sua empresa.')
     expect(mensagemDaFalha(404, 'conversa.nao_encontrada')).toMatch(/não está mais disponível/)
     expect(mensagemDaFalha(0, null)).toMatch(/Sem conexão/)
+    expect(mensagemDaFalha(403, 'agenda.transferencia_proibida')).toMatch(/só a gestão transfere carteira/)
+    expect(mensagemDaFalha(422, 'agenda.fora_do_expediente')).toMatch(/fora do expediente/)
+    expect(recarregaHorarios(422, 'agenda.fora_do_expediente')).toBe(true)
     expect(mensagemDaFalha(500, null)).toBe('Não foi possível marcar a reunião. Tente de novo.')
   })
 

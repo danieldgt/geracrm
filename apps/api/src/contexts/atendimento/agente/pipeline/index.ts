@@ -11,6 +11,7 @@ import { etapaFiltroSaida } from './filtro-saida.js'
 import { etapaPerguntaRepetida } from './pergunta-repetida.js'
 import { etapaRegrasQualidade } from './regras-qualidade.js'
 import { etapaObjecoesSeguidas } from './objecoes-seguidas.js'
+import { etapaReuniao, etapaReuniaoPosEnvio } from './reuniao.js'
 import { politicaFalhaLlm } from './falha-llm.js'
 import type {
   ContextoPipeline, DecisaoPreLlm, EfeitoPosEnvio, EntradaPosResposta, EtapaPosResposta, EtapaPreLlm, PatchEstado, PipelineDoTurno,
@@ -22,8 +23,8 @@ export * from './tipos.js'
 /**
  * O PIPELINE DO TURNO, MONTADO — a ordem é esta e só muda aqui (raia P0).
  *
- *   modoEfetivo → [portão] → gatilhos → slots → teto(pré) → devolução → pós-venda → LLM →
- *   [guardrail R$] → números → filtro → pergunta → qualidade → objeções → envio → teto(pós)
+ *   modoEfetivo → [portão] → gatilhos → slots → teto(pré) → devolução → pós-venda → reunião(efeito) → LLM →
+ *   [guardrail R$] → números → reunião → filtro → pergunta → qualidade → objeções → envio → teto(pós)
  *
  * Cada etapa mora no seu arquivo e tem uma raia dona; editar a etapa NÃO exige
  * tocar aqui nem em `vendedor.ts`. Testes trocam etapas por falsas com
@@ -36,7 +37,9 @@ export const PIPELINE_PADRAO: PipelineDoTurno = {
   teto: etapaTetoConversa,
   devolucao: etapaDevolucaoDaEquipe,
   posVenda: etapaPosVenda,
+  reuniaoPosEnvio: etapaReuniaoPosEnvio,
   numeros: etapaNumerosAmpliados,
+  reuniao: etapaReuniao,
   filtro: etapaFiltroSaida,
   pergunta: etapaPerguntaRepetida,
   qualidade: etapaRegrasQualidade,
@@ -55,7 +58,7 @@ export function montarPipeline(sobrepor: Partial<PipelineDoTurno> = {}): Pipelin
  * vem depois dela pelo mesmo motivo: só acrescenta instrução.
  */
 function etapasPreLlm(p: PipelineDoTurno): readonly EtapaPreLlm[] {
-  return [p.gatilhos, p.slots, { nome: p.teto.nome, executar: (ctx) => p.teto.antes(ctx) }, p.devolucao, p.posVenda]
+  return [p.gatilhos, p.slots, { nome: p.teto.nome, executar: (ctx) => p.teto.antes(ctx) }, p.devolucao, p.posVenda, p.reuniaoPosEnvio]
 }
 
 /**
@@ -64,7 +67,7 @@ function etapasPreLlm(p: PipelineDoTurno): readonly EtapaPreLlm[] {
  * objeção troca uma resposta que já passou por todas as outras.
  */
 function etapasPosResposta(p: PipelineDoTurno): readonly EtapaPosResposta[] {
-  return [p.numeros, p.filtro, p.pergunta, p.qualidade, p.objecoes]
+  return [p.numeros, p.reuniao, p.filtro, p.pergunta, p.qualidade, p.objecoes]
 }
 
 export interface ResultadoPreLlm {
