@@ -37,7 +37,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
 | D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
-| F1 campanhas v2 | 3 | 🔄 | F1a ✅ com as correções da revisão (0142: tier 250/24h por contato distinto, 1 envio por passada no não-oficial com intervalo 3–10 s, varredura decide pela mensagem, exclusões reavaliadas no envio, erros da Meta separados e pausa imediata por número em risco, `pedido.campanha_id` herdado, LGPD); F1b ✅ telas; falta F1c (Haiku, depois da R2): telas mostram `bloqueio`, `ajustada`, `numero_em_risco` e os códigos novos (`janela_vazia`, `janela_fora_do_permitido`, `alterada_durante_inicio`, `teste_limite`, `teste_sem_cota`) |
+| F1 campanhas v2 | 3 | 🔄 | F1a ✅ com as correções da revisão (0142: tier 250/24h por contato distinto, 1 envio por passada no não-oficial com intervalo 3–10 s, varredura decide pela mensagem, exclusões reavaliadas no envio, erros da Meta separados e pausa imediata por número em risco, `pedido.campanha_id` herdado, LGPD); F1b ✅ telas; F1c Haiku em curso: telas mostram `bloqueio`, `ajustada`, `numero_em_risco` e os códigos novos (`janela_vazia`, `janela_fora_do_permitido`, `alterada_durante_inicio`, `teste_limite`, `teste_sem_cota`) |
 | F3 formulários públicos | 3 | ✅ | integrada com as correções de segurança; re-revisão conferiu todas; pendência média: IP confiável (`TRUST_PROXY_HOPS` global deixa forjar IP em chamada direta) → F3c Sonnet em curso (segredo nginx→API + limitador global por IP); **dono: não publicar link de formulário antes da F3c** |
 | G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
 | G3 pós-venda, NPS, indicações, prova social | 3 | ✅ | integrada com as correções da revisão (0141: índice parcial e reagendamento; indicações padrão desligado, com portão e teto; NPS passa o portão com equipe disponível; prova social amarrada à versão; espalhamento e teto no não-oficial); runbook §19 |
@@ -47,7 +47,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
 | E2 relatórios 1ª leva | 3 | ✅ | integrada com as correções da revisão (sistema e falhas fora de "enviadas", ranking no escopo, vazio, base do percentual, escopo materializado, 1ª resposta negativa, cliente antigo do ERP fora do tempo de conversão) |
 | E3 relatórios 2ª leva | 3 | ✅ | integrada com as correções da revisão (cursor estrito, filial no escopo do gestor, coorte materializada por requisição, telefone sem apóstrofo no CSV); faixa etária fora (sem data de nascimento) |
-| L1 retrofit das telas restantes | 4 | ✅ | L1a (8 telas), L1b (8), L1c (10), L1d (5 densas), L1e (inbox) integradas; R1 ✅ biblioteca; R2 Sonnet em curso (ui-select-multi, rodapé do modal em @if, ui-estado com ícone, ui-botao-icone, inputmode, ui-filtros compacto, ícones do composer, busca no servidor no wizard de campanhas) |
+| L1 retrofit das telas restantes | 4 | ✅ | L1a (8 telas), L1b (8), L1c (10), L1d (5 densas), L1e (inbox) integradas; R1 ✅ biblioteca; R2 ✅ (ui-select-multi, rodapé do modal por `uiModalRodape`, ui-estado com ícone, ui-botao-icone, inputmode, ui-filtros compacto, ícones do composer, busca no servidor no wizard) |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
@@ -63,7 +63,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | F3c IP confiável por segredo nginx→API + limitador global por IP | 3 | 🔄 | Sonnet |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
-> Última suíte completa em `feat` (após G4, D4, E3): api 2973, console 856, shared 1075 — verde. `formularios.test.ts` (anexo) oscilou uma vez sob carga 50+; passou isolado.
+> Última suíte completa em `feat` (após F1a corrigida e R2): api 3089, console 926, shared 1100 — verde. `formularios.test.ts` (anexo) oscilou uma vez sob carga 50+; passou isolado.
 
 > Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.
 
