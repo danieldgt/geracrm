@@ -1,12 +1,14 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
+import { ActivatedRoute } from '@angular/router'
 import { firstValueFrom } from 'rxjs'
 import { ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
 
 interface Canal { readonly id: string; readonly nomeAmigavel: string; readonly tipo: string; readonly estado: string; readonly riscoBanimento: boolean }
-import { HorarioAtendimentoComponente, somenteDiasAbertos, type Faixa } from '../../compartilhado/ui/index.js'
+import { AbasComponente, HorarioAtendimentoComponente, somenteDiasAbertos, type Aba, type Faixa } from '../../compartilhado/ui/index.js'
 import { SlaConfigComponente } from './sla-config.componente.js'
+import { RoteamentoComponente } from './roteamento.componente.js'
 interface Config {
   readonly canal: string
   readonly horarioAtendimento: Record<string, Faixa | null>
@@ -22,17 +24,27 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
  * Config do Canal — horário de atendimento, mensagem de ausência, assinatura e a
  * pausa de disparo, por canal. Master-detail (canais | config).
  * Segue geracrm-layout-ui (5 estados, tokens, responsivo, sem cor literal).
+ *
+ * Aba ROTEAMENTO (G4): as regras DDD/origem → filial valem para VÁRIOS números
+ * (ou todos), então não cabem no detalhe de um número — moram numa aba própria
+ * desta tela, ao lado da chave "rodízio na entrada" de cada número e do simulador.
+ * `?aba=roteamento` abre direto nela.
  */
 @Component({
   selector: 'app-canal-config',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, HorarioAtendimentoComponente, SlaConfigComponente],
+  imports: [DatePipe, AbasComponente, HorarioAtendimentoComponente, SlaConfigComponente, RoteamentoComponente],
   template: `
     <header class="cabecalho">
       <h1 class="txt-titulo">Configuração do Canal</h1>
-      <p class="sub">Horário, ausência, assinatura e a pausa de disparo — por número.</p>
+      <p class="sub">Horário, ausência, assinatura e a pausa de disparo — por número. Roteamento por filial e rodízio.</p>
     </header>
+    <ui-abas [abas]="abas" [(ativa)]="aba" idPainel="painel-canal-config" />
 
+    <div class="painel-aba" role="tabpanel" id="painel-canal-config" [attr.aria-labelledby]="'painel-canal-config-aba-' + aba()">
+    @if (aba() === 'roteamento') {
+      <app-roteamento />
+    } @else {
     @switch (estado()) {
       @case ('carregando') { <div class="grade"><div class="col"><div class="esq"></div><div class="esq"></div></div></div> }
       @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
@@ -97,10 +109,13 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         }
       }
     }
+    }
+    </div>
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
     .cabecalho { margin-bottom: var(--espacamento-4); }
+    .painel-aba { margin-top: var(--espacamento-4); min-width: 0; }
     h1 { margin: 0; color: var(--texto); }
     .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .grade { display: grid; grid-template-columns: 260px 1fr; gap: var(--espacamento-4); align-items: start; }
@@ -134,6 +149,8 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 export class CanalConfigPagina implements OnInit {
   private readonly http = inject(HttpClient)
   private readonly toast = inject(ToastServico)
+  readonly abas: readonly Aba[] = [{ id: 'numero', rotulo: 'Por número' }, { id: 'roteamento', rotulo: 'Roteamento' }]
+  readonly aba = signal(inject(ActivatedRoute).snapshot.queryParamMap.get('aba') === 'roteamento' ? 'roteamento' : 'numero')
   readonly estado = signal<Estado>('carregando')
   readonly canais = signal<readonly Canal[]>([])
   readonly sel = signal<Canal | null>(null)

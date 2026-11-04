@@ -65,6 +65,17 @@ export interface PessoaRoteavel {
 export interface EntradaRoteamento {
   /** Dono da carteira do contato (carteira_atribuicao aberta), se houver. */
   readonly donoCarteira: PessoaRoteavel | null
+  /**
+   * A FILIAL roteada do contato (G4, `resolverFilial`), se houver: os vendedores
+   * dela que atendem o número, o ponteiro do rodízio da filial e os gestores
+   * dela. Ausente/null = sem filial (o roteamento de antes, P18).
+   */
+  readonly filial?: {
+    readonly id: string
+    readonly vendedores: readonly PessoaRoteavel[]
+    readonly ultimoDoRodizio: string | null
+    readonly gestores: readonly PessoaRoteavel[]
+  } | null
   /** Quem tem permissão no número (`usuario_canal`). Ordem não importa. */
   readonly pool: readonly PessoaRoteavel[]
   /** O último do pool que recebeu um handoff NESTE número (rodízio). */
@@ -73,31 +84,44 @@ export interface EntradaRoteamento {
   readonly gestores: readonly PessoaRoteavel[]
 }
 
-export type DestinoHandoff = 'dono_carteira' | 'pool' | 'gestor' | 'ninguem'
+export type DestinoHandoff = 'dono_carteira' | 'filial' | 'pool' | 'gestor_filial' | 'gestor' | 'ninguem'
 
 export interface Roteamento {
   readonly destino: DestinoHandoff
   readonly usuarioId: string | null
+  /** A filial pela qual roteou (destinos 'filial' e 'gestor_filial'); null nos demais. */
+  readonly filialId?: string | null
 }
 
 const disponivel = (p: PessoaRoteavel | null | undefined): p is PessoaRoteavel => !!p && p.ativo && !p.ausente
 
+/** Próximo da vez entre os disponíveis, por id, depois de `ultimo` (volta ao primeiro). */
+function proximoDisponivel(pessoas: readonly PessoaRoteavel[], ultimo: string | null): PessoaRoteavel | undefined {
+  const lista = [...new Map(pessoas.filter(disponivel).map((p) => [p.id, p])).values()]
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  if (lista.length === 0) return undefined
+  return (ultimo ? lista.find((p) => p.id > ultimo) : undefined) ?? lista[0]!
+}
+
 /**
  * Para quem vai o handoff (puro, sem banco):
  *   1. o DONO DA CARTEIRA, se ativo e não ausente — quem tem a relação responde;
- *   2. o POOL do número, em RODÍZIO: o próximo (por id) depois do último que
+ *   2. os VENDEDORES DA FILIAL roteada do contato que atendem o número, em
+ *      RODÍZIO da filial (G4);
+ *   3. o POOL do número, em RODÍZIO: o próximo (por id) depois do último que
  *      recebeu; volta ao primeiro no fim da lista;
- *   3. um GESTOR ativo;
- *   4. ninguém — a fila do número continua sendo avisada como antes.
+ *   4. um GESTOR DA FILIAL roteada (G4);
+ *   5. um GESTOR ativo do tenant;
+ *   6. ninguém — a fila do número continua sendo avisada como antes.
  */
 export function rotearHandoff(e: EntradaRoteamento): Roteamento {
   if (disponivel(e.donoCarteira)) return { destino: 'dono_carteira', usuarioId: e.donoCarteira.id }
-  const pool = [...new Map(e.pool.filter(disponivel).map((p) => [p.id, p])).values()]
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-  if (pool.length > 0) {
-    const proximo = e.ultimoDoRodizio ? pool.find((p) => p.id > e.ultimoDoRodizio!) : undefined
-    return { destino: 'pool', usuarioId: (proximo ?? pool[0]!).id }
-  }
+  const daFilial = e.filial ? proximoDisponivel(e.filial.vendedores, e.filial.ultimoDoRodizio) : undefined
+  if (daFilial) return { destino: 'filial', usuarioId: daFilial.id, filialId: e.filial!.id }
+  const doPool = proximoDisponivel(e.pool, e.ultimoDoRodizio)
+  if (doPool) return { destino: 'pool', usuarioId: doPool.id }
+  const gestorFilial = e.filial?.gestores.find(disponivel)
+  if (gestorFilial) return { destino: 'gestor_filial', usuarioId: gestorFilial.id, filialId: e.filial!.id }
   const gestor = e.gestores.find(disponivel)
   if (gestor) return { destino: 'gestor', usuarioId: gestor.id }
   return { destino: 'ninguem', usuarioId: null }
