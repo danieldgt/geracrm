@@ -43,7 +43,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | G3 pós-venda, NPS, indicações, prova social | 3 | 🔍 | integrada (0130); revisão Opus em curso |
 | G4 roteamento e rodízio | 3 | 🔄 | Opus; migration 0136 |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
-| H1 importador | 3 | 🔍 | integrada (0133); revisão: aprovado com correções (alto: LGPD — não ressuscitar titular nem editar anonimizado; arrendamento do worker; simulação fiel); correção em curso pelo agente da raia |
+| H1 importador | 3 | ✅ | integrada com as 13 correções da revisão (LGPD: titular bloqueado e contato anonimizado ignorados; arrendamento pelo relógio do banco e contagens dos itens; simulação fiel; venda sem referência idempotente por conteúdo; `simulada_em` obrigatória — migration 0140; windows-1252 e UTF-16 recusado; conferência só criados/atualizados) |
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
 | E2 relatórios 1ª leva | 3 | ✅ | integrada com as correções da revisão (sistema e falhas fora de "enviadas", ranking no escopo, vazio, base do percentual, escopo materializado, 1ª resposta negativa, cliente antigo do ERP fora do tempo de conversão) |
 | E3 relatórios 2ª leva | 3 | 🔄 | Sonnet |
