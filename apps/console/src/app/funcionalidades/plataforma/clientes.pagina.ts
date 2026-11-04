@@ -1,11 +1,14 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { AuthServico } from '../../nucleo/auth.servico.js'
 import { FormsModule } from '@angular/forms'
 import {
-  ModalComponente, SelectPaginadoComponente, ToastServico, mensagemDeErro, type CarregarOpcoes,
+  BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EsqueletoComponente,
+  EstadoComponente, GradeFormComponente, IconeComponente, ModalComponente, SecaoFormComponente, SelectComponente,
+  SelectPaginadoComponente, TabelaComponente, ToastServico, mensagemDeErro, type CarregarOpcoes, type ColunaTabela,
+  type LinhaTabela, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
 import { ModelosClienteComponente } from './modelos-cliente.componente.js'
 
@@ -42,163 +45,160 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
  *
  * ⚠️ A senha inicial aparece UMA vez, no retorno da criação — como o segredo do
  * webhook. Não há como buscá-la depois; se perder, o caminho é redefinir.
+ *
+ * Padrão Lista com modal: empresas em ui-tabela; cadastro em modal M; entrada
+ * com motivo em modal A; "Nomear admin" com select paginado (X4).
  */
 @Component({
   selector: 'app-clientes-plataforma',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, FormsModule, ModelosClienteComponente, ModalComponente, SelectPaginadoComponente],
+  imports: [
+    BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, DatePipe, EsqueletoComponente, EstadoComponente,
+    FormsModule, GradeFormComponente, IconeComponente, ModelosClienteComponente, ModalComponente, SecaoFormComponente,
+    SelectComponente, SelectPaginadoComponente, TabelaComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <h1 class="txt-titulo">Clientes</h1>
-      <p class="sub">As empresas que usam o sistema. Cadastrar aqui já monta o funil e o acesso.</p>
-    </header>
+    <ui-cabecalho-tela titulo="Clientes" subtitulo="As empresas que usam o sistema. Cadastrar aqui já monta o funil e o acesso.">
+      <button type="button" class="btn btn--primario" (click)="abrirNova()"><ui-icone nome="plus" />Nova empresa</button>
+    </ui-cabecalho-tela>
 
-    @if (opcoes(); as o) {
-      @if (!o.podeCriarLogin) {
-        <p class="aviso-login" role="status">
-          Esta API não está configurada para criar logins — dá para cadastrar a empresa,
-          mas o acesso terá de ser criado à parte.
-        </p>
-      }
-    }
-
-    @if (criado(); as c) {
-      <section class="painel novo" role="status">
-        <h2 class="txt-secao">{{ c.nome }} foi criada</h2>
-        @if (c.login.criado) {
-          <p class="novo-dica">⚠️ Anote a senha agora — ela não aparece de novo.</p>
-          <dl class="credenciais">
-            <div><dt>Acesso</dt><dd class="txt-dados">{{ c.login.email }}</dd></div>
-            <div><dt>Senha inicial</dt><dd class="txt-dados senha">{{ c.login.senha }}</dd></div>
-          </dl>
-        } @else if (c.login.erro) {
-          <p class="novo-erro">A empresa foi criada, mas o login não: {{ c.login.erro }}</p>
-        } @else {
-          <p class="novo-dica">Sem login por enquanto — cadastre o acesso quando quiser.</p>
+    <div class="corpo">
+      @if (opcoes(); as o) {
+        @if (!o.podeCriarLogin) {
+          <p class="aviso-login" role="status">
+            <ui-icone nome="alert-triangle" />
+            <span>Esta API não está configurada para criar logins — dá para cadastrar a empresa,
+            mas o acesso terá de ser criado à parte.</span>
+          </p>
         }
-        <button class="btn btn--secundario" (click)="criado.set(null)">Fechar</button>
-      </section>
-    }
+      }
 
-    <form class="painel form" (submit)="cadastrar($event)">
-      <h2 class="txt-secao">Nova empresa</h2>
-      <div class="grade">
-        <label class="campo rotulado">
-          <span>Nome da empresa</span>
-          <input [value]="nome()" (input)="nome.set(valor($event))" placeholder="Confecção Exemplo Ltda" />
-        </label>
-        <label class="campo rotulado">
-          <span>Plano</span>
-          <select [value]="plano()" (change)="plano.set(valor($event))">
-            <option value="">Escolha…</option>
-            @for (p of opcoes()?.planos ?? []; track p.codigo) {
-              <option [value]="p.codigo">{{ p.nome }}</option>
-            }
-          </select>
-        </label>
-        <label class="campo rotulado">
-          <span>Perfil de vertical</span>
-          <select [value]="vertical()" (change)="vertical.set(valor($event))">
-            <option value="">Escolha…</option>
-            @for (v of opcoes()?.verticais ?? []; track v.codigo) {
-              <option [value]="v.codigo">{{ v.nome }}</option>
-            }
-          </select>
-        </label>
-        <label class="campo rotulado">
-          <span>Modelo de funil</span>
-          <select [value]="modelo()" (change)="modelo.set(valor($event))">
-            @for (m of opcoes()?.modelosFunil ?? []; track m.codigo) {
-              <option [value]="m.codigo">{{ m.nome }}</option>
-            }
-          </select>
-        </label>
-      </div>
-
-      @if (modeloEscolhido(); as m) {
-        <p class="preview-dica">{{ m.descricao }}</p>
-        <div class="preview">
-          @for (e of m.etapas; track e.nome) {
-            <span class="raia" [class]="'raia--' + e.tipo">{{ e.nome }}</span>
+      @if (criado(); as c) {
+        <section class="painel novo" role="status">
+          <h2 class="txt-secao">{{ c.nome }} foi criada</h2>
+          @if (c.login.criado) {
+            <p class="novo-dica"><ui-icone nome="alert-triangle" /> Anote a senha agora — ela não aparece de novo.</p>
+            <dl class="credenciais">
+              <div><dt>Acesso</dt><dd class="txt-dados">{{ c.login.email }}</dd></div>
+              <div><dt>Senha inicial</dt><dd class="txt-dados senha">{{ c.login.senha }}</dd></div>
+            </dl>
+          } @else if (c.login.erro) {
+            <p class="novo-erro">A empresa foi criada, mas o login não: {{ c.login.erro }}</p>
+          } @else {
+            <p class="novo-dica">Sem login por enquanto — cadastre o acesso quando quiser.</p>
           }
-        </div>
+          <button type="button" class="btn btn--secundario" (click)="criado.set(null)">Fechar</button>
+        </section>
       }
 
-      <h3 class="txt-rotulo bloco-sub">Primeiro acesso <span class="opcional">(opcional)</span></h3>
-      <div class="grade">
-        <label class="campo rotulado">
-          <span>Nome de quem vai acessar</span>
-          <input [value]="adminNome()" (input)="adminNome.set(valor($event))" placeholder="Maria Silva" />
-        </label>
-        <label class="campo rotulado">
-          <span>E-mail</span>
-          <input [value]="adminEmail()" (input)="adminEmail.set(valor($event))"
-                 type="email" inputmode="email" placeholder="maria@confeccao.com.br" />
-        </label>
-      </div>
-      <p class="dica-email">
-        ⚠️ O e-mail fica preso à empresa para sempre — o vínculo não pode ser alterado depois.
-      </p>
-
-      @if (erroForm(); as e) { <p class="erro-add" role="alert">{{ e }}</p> }
-      <button class="btn btn--primario" type="submit" [disabled]="salvando() || !podeEnviar()">
-        {{ salvando() ? 'Cadastrando…' : 'Cadastrar empresa' }}
-      </button>
-    </form>
-
-    @switch (estado()) {
-      @case ('carregando') { <div class="painel"><div class="esqueleto"></div><div class="esqueleto"></div></div> }
-      @case ('sem_permissao') {
-        <div class="painel aviso"><h2 class="txt-secao">Esta área é do staff</h2>
-          <p>Seu usuário não está no grupo que administra clientes.</p></div>
-      }
-      @case ('erro') {
-        <div class="painel aviso"><h2 class="txt-secao">Não foi possível carregar</h2>
-          <button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div>
-      }
-      @case ('pronto') {
-        @if (itens().length === 0) {
-          <div class="painel vazio"><h2 class="txt-secao">Nenhuma empresa ainda</h2>
-            <p>A primeira empresa cadastrada aparece aqui.</p></div>
-        } @else {
-          <ul class="lista">
-            @for (c of itens(); track c.id) {
-              <li class="item" [class.item--aberto]="pedindoMotivo() === c.id || modelosAberto() === c.id">
-                <div class="linha">
-                  <span class="c-nome encolhe">{{ c.nome }}</span>
-                  <span class="c-plano">{{ c.plano }}</span>
-                  <span class="c-data txt-dados">{{ c.criadoEm | date: 'dd/MM/yyyy' }}</span>
-                  <span class="c-estado" [class.c-estado--off]="!c.ativo">{{ c.ativo ? 'Ativa' : 'Inativa' }}</span>
-                  <button class="btn btn--fantasma btn--pequeno" type="button" (click)="alternarModelos(c)"
-                          [attr.aria-expanded]="modelosAberto() === c.id">
+      @switch (estado()) {
+        @case ('carregando') {
+          <div class="esqueletos" aria-busy="true">
+            <ui-esqueleto altura="18px" />
+            <ui-esqueleto altura="18px" />
+          </div>
+        }
+        @case ('sem_permissao') {
+          <ui-estado tipo="sem-permissao" titulo="Esta área é do staff" descricao="Seu usuário não está no grupo que administra clientes." />
+        }
+        @case ('erro') {
+          <ui-estado tipo="erro" titulo="Não foi possível carregar as empresas" descricao="Verifique a conexão e tente de novo.">
+            <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+          </ui-estado>
+        }
+        @case ('pronto') {
+          @if (itens().length === 0) {
+            <ui-estado titulo="Nenhuma empresa ainda" descricao="A primeira empresa cadastrada aparece aqui.">
+              <button type="button" class="btn btn--primario" (click)="abrirNova()">Nova empresa</button>
+            </ui-estado>
+          } @else {
+            <ui-tabela [colunas]="colunas" [linhas]="linhas()" [rotuloLinha]="rotuloLinha">
+              <ng-template uiCelula="nome" let-c>
+                <span class="c-nome">{{ c.nome }}</span>
+              </ng-template>
+              <ng-template uiCelula="estado" let-c>
+                <ui-badge [tom]="c.ativo ? 'sucesso' : 'neutro'">{{ c.ativo ? 'Ativa' : 'Inativa' }}</ui-badge>
+              </ng-template>
+              <ng-template uiCelula="criadoEm" let-c>{{ c.criadoEm | date: 'dd/MM/yyyy' }}</ng-template>
+              <ng-template uiCelula="acoes" let-c>
+                <span class="acoes">
+                  <button type="button" class="btn btn--fantasma btn--pequeno" (click)="alternarModelos(c)"
+                    [attr.aria-expanded]="modelosAberto() === c.id">
                     {{ modelosAberto() === c.id ? 'Fechar modelos' : 'Modelos de IA' }}
                   </button>
-                  <button class="btn btn--secundario btn--pequeno" type="button" (click)="abrirNomear(c)">Nomear admin</button>
-                  <button class="btn btn--secundario btn--pequeno" (click)="pedirMotivo(c)"
-                          [disabled]="entrando() === c.id">
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrirNomear(c)">Nomear admin</button>
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="pedirMotivo(c)"
+                    [disabled]="entrando() === c.id">
                     {{ entrando() === c.id ? 'Entrando…' : 'Entrar' }}
                   </button>
-                </div>
-                @if (modelosAberto() === c.id) {
-                  <app-modelos-cliente [clienteId]="c.id" [clienteNome]="c.nome" (fechar)="modelosAberto.set(null)" />
-                }
-                @if (pedindoMotivo() === c.id) {
-                  <div class="motivo-linha">
-                    <input class="motivo-in" [value]="motivo()" (input)="motivo.set(valor($event))"
-                           (keydown.enter)="entrar(c)" (keydown.escape)="cancelarMotivo()"
-                           placeholder="Por que precisa entrar? (fica na trilha do cliente)"
-                           aria-label="Motivo do acesso" />
-                    <button class="btn btn--primario btn--pequeno" (click)="entrar(c)"
-                            [disabled]="!motivo().trim()">Confirmar</button>
-                    <button class="btn btn--fantasma btn--pequeno" (click)="cancelarMotivo()">Cancelar</button>
-                  </div>
-                }
-              </li>
+                </span>
+              </ng-template>
+            </ui-tabela>
+
+            @if (clienteModelos(); as c) {
+              <section class="painel expansao" [attr.aria-label]="'Modelos de IA de ' + c.nome">
+                <app-modelos-cliente [clienteId]="c.id" [clienteNome]="c.nome" (fechar)="modelosAberto.set(null)" />
+              </section>
             }
-          </ul>
+          }
         }
       }
-    }
+    </div>
+
+    <!-- Cadastro de empresa (M): campos com rótulo visível; erro no campo, não em toast. -->
+    <ui-modal [aberto]="novaAberta()" titulo="Nova empresa" largura="g" (fechar)="fecharNova()">
+      <form id="form-nova-empresa" (submit)="cadastrar($event)">
+        <ui-grade-form>
+          <ui-campo class="largo" rotulo="Nome da empresa" placeholder="Confecção Exemplo Ltda" [obrigatorio]="true"
+            [(valor)]="nome" [erro]="erroNome()" />
+          <ui-select rotulo="Plano" placeholder="Escolha o plano" [opcoes]="opcoesPlanos()" [obrigatorio]="true"
+            [(valor)]="plano" [erro]="erroPlano()" />
+          <ui-select rotulo="Perfil de vertical" placeholder="Escolha o perfil" [opcoes]="opcoesVerticais()" [obrigatorio]="true"
+            [(valor)]="vertical" [erro]="erroVertical()" />
+          <ui-select class="largo" rotulo="Modelo de funil" [opcoes]="opcoesModelos()" [(valor)]="modelo" />
+        </ui-grade-form>
+
+        @if (modeloEscolhido(); as m) {
+          <p class="preview-dica">{{ m.descricao }}</p>
+          <div class="preview" aria-label="Etapas do funil">
+            @for (e of m.etapas; track e.nome) {
+              <span class="raia" [class]="'raia--' + e.tipo">{{ e.nome }}</span>
+            }
+          </div>
+        }
+
+        <ui-secao-form titulo="Primeiro acesso (opcional)">
+          <ui-grade-form>
+            <ui-campo rotulo="Nome de quem vai acessar" placeholder="Maria Silva" [(valor)]="adminNome" />
+            <ui-campo rotulo="E-mail" tipo="email" placeholder="maria@confeccao.com.br" [(valor)]="adminEmail"
+              dica="O e-mail fica preso à empresa para sempre: o vínculo não pode ser alterado depois." />
+          </ui-grade-form>
+        </ui-secao-form>
+
+        @if (erroForm(); as e) { <p class="erro-add" role="alert">{{ e }}</p> }
+      </form>
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharNova()">Cancelar</button>
+        <button type="submit" form="form-nova-empresa" class="btn btn--primario" [disabled]="salvando()">
+          {{ salvando() ? 'Cadastrando…' : 'Cadastrar empresa' }}
+        </button>
+      </div>
+    </ui-modal>
+
+    <!-- Entrada com motivo (A): o motivo vai para a trilha do cliente. -->
+    <ui-modal [aberto]="entrada() !== null" [titulo]="'Entrar em ' + (entrada()?.nome ?? '')" largura="p" (fechar)="cancelarMotivo()">
+      <form id="form-entrar-cliente" (submit)="confirmarEntrada($event)">
+        <p class="nomear-texto">Você vai entrar nesta empresa como staff. O motivo fica registrado na trilha do cliente.</p>
+        <ui-campo rotulo="Motivo do acesso" placeholder="Ex.: suporte a pedido do cliente" [obrigatorio]="true"
+          dica="Sem motivo, o acesso não é aberto." [(valor)]="motivo" [erro]="erroEntrar()" />
+      </form>
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="cancelarMotivo()">Cancelar</button>
+        <button type="submit" form="form-entrar-cliente" class="btn btn--primario" [disabled]="entrando() !== null">
+          {{ entrando() !== null ? 'Entrando…' : 'Entrar' }}
+        </button>
+      </div>
+    </ui-modal>
 
     <ui-modal [aberto]="nomeando() !== null" titulo="Nomear administrador" largura="p" (fechar)="fecharNomear()">
       <form id="form-nomear-admin" (submit)="nomearAdmin($event)">
@@ -220,32 +220,22 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     </ui-modal>
   `,
   styles: `
-    :host { display: block; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
+    :host { display: block; width: 100%; padding: var(--espacamento-6); }
+    .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-3); min-width: 0; }
+    .esqueletos { display: grid; gap: var(--espacamento-2); padding: var(--espacamento-4); }
     .nomear-texto { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
-    .cabecalho { margin-bottom: var(--espacamento-5); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .painel { padding: var(--espacamento-5); border: 1px solid var(--borda); border-radius: var(--raio-painel);
-      background: var(--superficie-elevada); margin-bottom: var(--espacamento-4); }
-    .painel h2 { margin: 0 0 var(--espacamento-4); color: var(--texto); }
-    .aviso-login { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3);
+    .painel { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel);
+      background: var(--superficie-elevada); min-width: 0; }
+    .painel h2 { margin: 0 0 var(--espacamento-3); color: var(--texto); }
+    .aviso-login { display: flex; align-items: flex-start; gap: var(--espacamento-2); margin: 0; padding: var(--espacamento-3);
       border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--atencao); font-size: 13px; }
     .novo { border-color: var(--sucesso); }
-    .novo-dica { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
+    .novo-dica { display: flex; align-items: center; gap: var(--espacamento-2); margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
     .novo-erro { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
     .credenciais { display: flex; flex-wrap: wrap; gap: var(--espacamento-5); margin: 0 0 var(--espacamento-4); }
     .credenciais dt { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--texto-suave); }
     .credenciais dd { margin: 2px 0 0; color: var(--texto); font-size: 14px; }
     .senha { padding: 2px 8px; border-radius: var(--raio-controle); background: var(--fundo); user-select: all; }
-    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--espacamento-3); }
-    .campo.rotulado { display: flex; flex-direction: column; gap: var(--espacamento-1); }
-    .campo.rotulado > span { font-size: 12px; color: var(--texto-secundario); }
-    .campo.rotulado input, .campo.rotulado select { padding: var(--espacamento-2) var(--espacamento-3);
-      border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
-      background: var(--superficie); color: var(--texto); font: inherit; font-size: 14px; }
-    .bloco-sub { display: block; margin: var(--espacamento-5) 0 var(--espacamento-2); color: var(--texto); }
-    .opcional { color: var(--texto-suave); font-weight: 400; }
-    .dica-email { margin: var(--espacamento-2) 0 0; color: var(--texto-suave); font-size: 12px; }
     .preview-dica { margin: var(--espacamento-3) 0 var(--espacamento-2); color: var(--texto-secundario); font-size: 12px; }
     .preview { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); }
     .raia { font-size: 12px; padding: 2px 10px; border-radius: var(--raio-completo);
@@ -253,27 +243,9 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .raia--ganho { border-color: transparent; background: var(--sucesso-suave); color: var(--sucesso); }
     .raia--perdido { border-color: transparent; background: var(--erro-suave); color: var(--erro); }
     .erro-add { margin: var(--espacamento-3) 0 0; color: var(--erro); font-size: 13px; }
-    .form button[type='submit'] { margin-top: var(--espacamento-4); }
-    .esqueleto { height: 18px; border-radius: var(--raio-controle); background: var(--superficie);
-      margin-bottom: var(--espacamento-2); }
-    .aviso, .vazio { text-align: center; }
-    .aviso p, .vazio p { color: var(--texto-secundario); font-size: 13px; }
-    .lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--espacamento-2); }
-    .item { display: flex; flex-direction: column; gap: var(--espacamento-2); padding: var(--espacamento-3);
-      border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie-elevada); }
-    .item--aberto { border-color: var(--acao); }
-    .linha { display: flex; align-items: center; gap: var(--espacamento-3); width: 100%; flex-wrap: wrap; min-width: 0; }
-    .item { min-width: 0; }
-    .motivo-linha { display: flex; gap: var(--espacamento-2); width: 100%; }
-    .motivo-in { flex: 1; min-width: 0; padding: var(--espacamento-2) var(--espacamento-3);
-      border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
-      background: var(--superficie); color: var(--texto); font: inherit; font-size: 13px; }
-    .c-nome { flex: 1; min-width: 0; color: var(--texto); font-size: 14px; }
-    .c-plano { font-size: 12px; color: var(--texto-suave); }
-    .c-data { font-size: 12px; color: var(--texto-secundario); }
-    .c-estado { font-size: 11px; padding: 2px 8px; border-radius: var(--raio-completo);
-      background: var(--sucesso-suave); color: var(--sucesso); }
-    .c-estado--off { background: var(--fundo); color: var(--texto-suave); }
+    .c-nome { color: var(--texto); font-size: 14px; font-weight: 500; }
+    .acoes { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--espacamento-1); }
+    .expansao { margin-top: var(--espacamento-2); }
   `,
 })
 export class ClientesPlataformaPagina implements OnInit {
@@ -281,6 +253,7 @@ export class ClientesPlataformaPagina implements OnInit {
 
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly Cliente[]>([])
+  readonly linhas = computed(() => this.itens() as unknown as LinhaTabela[])
   readonly opcoes = signal<Opcoes | null>(null)
   readonly criado = signal<Criado | null>(null)
   readonly salvando = signal(false)
@@ -288,10 +261,12 @@ export class ClientesPlataformaPagina implements OnInit {
   readonly entrando = signal<string | null>(null)
   readonly pedindoMotivo = signal<string | null>(null)
   readonly motivo = signal('')
+  readonly erroEntrar = signal<string | null>(null)
   /** Um painel de modelos aberto por vez — o id do cliente expandido. */
   readonly modelosAberto = signal<string | null>(null)
   private readonly auth = inject(AuthServico)
   private readonly toast = inject(ToastServico)
+  private readonly confirmacao = inject(ConfirmacaoServico)
 
   /** Cliente cujo modal "Nomear admin" está aberto. */
   readonly nomeando = signal<Cliente | null>(null)
@@ -299,23 +274,43 @@ export class ClientesPlataformaPagina implements OnInit {
   readonly erroNomear = signal<string | null>(null)
   readonly nomeandoSalvando = signal(false)
 
+  readonly novaAberta = signal(false)
   readonly nome = signal('')
   readonly plano = signal('')
   readonly vertical = signal('')
   readonly modelo = signal('crm-recompra')
   readonly adminNome = signal('')
   readonly adminEmail = signal('')
+  readonly erroNome = signal<string | null>(null)
+  readonly erroPlano = signal<string | null>(null)
+  readonly erroVertical = signal<string | null>(null)
+
+  protected readonly colunas: readonly ColunaTabela[] = [
+    { chave: 'nome', rotulo: 'Empresa' },
+    { chave: 'plano', rotulo: 'Plano', mono: true, largura: '120px' },
+    { chave: 'criadoEm', rotulo: 'Criada em', mono: true, largura: '120px' },
+    { chave: 'estado', rotulo: 'Estado', largura: '110px' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '340px' },
+  ]
+  protected readonly rotuloLinha = (l: LinhaTabela): string => String(l['nome'] ?? 'empresa')
+
+  /** Opções dos selects do cadastro: o `OpcaoSelect` é o que `ui-select` recebe. */
+  protected readonly opcoesPlanos = computed<OpcaoSelect[]>(() =>
+    (this.opcoes()?.planos ?? []).map((p) => ({ valor: p.codigo, rotulo: p.nome })))
+  protected readonly opcoesVerticais = computed<OpcaoSelect[]>(() =>
+    (this.opcoes()?.verticais ?? []).map((v) => ({ valor: v.codigo, rotulo: v.nome })))
+  protected readonly opcoesModelos = computed<OpcaoSelect[]>(() =>
+    (this.opcoes()?.modelosFunil ?? []).map((m) => ({ valor: m.codigo, rotulo: m.nome })))
+
+  /** Cliente cujo painel de modelos de IA está aberto. */
+  protected readonly clienteModelos = computed(() => this.itens().find((c) => c.id === this.modelosAberto()) ?? null)
+  /** Cliente da entrada com motivo (modal A). */
+  protected readonly entrada = computed(() => this.itens().find((c) => c.id === this.pedindoMotivo()) ?? null)
 
   ngOnInit(): void { void this.carregar() }
 
-  valor(ev: Event): string { return (ev.target as HTMLInputElement | HTMLSelectElement).value }
-
   modeloEscolhido(): ModeloFunil | undefined {
     return this.opcoes()?.modelosFunil.find((m) => m.codigo === this.modelo())
-  }
-
-  podeEnviar(): boolean {
-    return Boolean(this.nome().trim() && this.plano() && this.vertical())
   }
 
   async carregar(): Promise<void> {
@@ -333,10 +328,27 @@ export class ClientesPlataformaPagina implements OnInit {
     }
   }
 
+  abrirNova(): void {
+    this.erroForm.set(null)
+    this.erroNome.set(null); this.erroPlano.set(null); this.erroVertical.set(null)
+    this.novaAberta.set(true)
+  }
+
+  /** Fechar com dados digitados pede confirmação; sem nada digitado, fecha direto. */
+  async fecharNova(): Promise<void> {
+    if (this.salvando()) return
+    const digitado = [this.nome(), this.adminNome(), this.adminEmail(), this.plano(), this.vertical()].some((v) => v.trim() !== '')
+    if (digitado && !(await this.confirmacao.confirmar({
+      titulo: 'Descartar o cadastro?', mensagem: 'Os dados digitados da empresa ainda não foram salvos.',
+      acao: 'Descartar', cancelar: 'Continuar editando', perigo: true,
+    }))) return
+    this.novaAberta.set(false)
+  }
+
   pedirMotivo(c: Cliente): void {
     this.motivo.set('')
+    this.erroEntrar.set(null)
     this.pedindoMotivo.set(c.id)
-    this.erroForm.set(null)
   }
 
   alternarModelos(c: Cliente): void {
@@ -344,8 +356,10 @@ export class ClientesPlataformaPagina implements OnInit {
   }
 
   cancelarMotivo(): void {
+    if (this.entrando() !== null) return
     this.pedindoMotivo.set(null)
     this.motivo.set('')
+    this.erroEntrar.set(null)
   }
 
   /** Usuários do cliente do modal, por cursor, com busca no servidor (rota de staff). */
@@ -397,31 +411,45 @@ export class ClientesPlataformaPagina implements OnInit {
     }
   }
 
+  confirmarEntrada(ev: Event): void {
+    ev.preventDefault()
+    const c = this.entrada()
+    if (c) void this.entrar(c)
+  }
+
   /**
    * Abre uma sessão de acesso e entra no cliente (PLT-05).
    *
    * ⚠️ O motivo é pedido antes e vai para a trilha do CLIENTE — acesso a dado de
    * cliente sem justificativa registrada é o que uma auditoria externa cobra.
+   * Erro fica no modal (o motivo digitado não se perde).
    */
   async entrar(c: Cliente): Promise<void> {
     const motivo = this.motivo().trim()
-    if (!motivo) return
+    if (!motivo) {
+      this.erroEntrar.set('Informe o motivo do acesso.')
+      return
+    }
     this.entrando.set(c.id)
+    this.erroEntrar.set(null)
     try {
       const r = await firstValueFrom(this.http.post<{ token: string }>('/v1/staff/acessos',
         { tenantId: c.id, motivo }))
       this.auth.entrarNoCliente(r.token, c.nome) // recarrega a aplicação
     } catch (e) {
       const corpo = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string }) : null
-      this.erroForm.set(corpo?.mensagem ?? 'Não foi possível entrar neste cliente.')
+      this.erroEntrar.set(corpo?.mensagem ?? 'Não foi possível entrar neste cliente.')
       this.entrando.set(null)
-      this.pedindoMotivo.set(null)
     }
   }
 
   async cadastrar(ev: Event): Promise<void> {
     ev.preventDefault()
-    if (!this.podeEnviar() || this.salvando()) return
+    if (this.salvando()) return
+    this.erroNome.set(this.nome().trim() ? null : 'Informe o nome da empresa.')
+    this.erroPlano.set(this.plano() ? null : 'Escolha o plano.')
+    this.erroVertical.set(this.vertical() ? null : 'Escolha o perfil de vertical.')
+    if (this.erroNome() || this.erroPlano() || this.erroVertical()) return
     this.salvando.set(true)
     this.erroForm.set(null)
     try {
@@ -435,6 +463,7 @@ export class ClientesPlataformaPagina implements OnInit {
       }))
       this.criado.set(r)
       this.nome.set(''); this.adminNome.set(''); this.adminEmail.set('')
+      this.novaAberta.set(false)
       await this.carregar()
     } catch (e) {
       const corpo = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string }) : null
