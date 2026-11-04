@@ -240,6 +240,54 @@ describe('D6: filtros de /v1/auditoria', () => {
     expect((await todasAsPaginas(T, { q: 'assumido' })).length).toBe(3)
   })
 
+  it('X6: q sem período ganha a janela padrão de 30 dias e a resposta diz janelaPadrao', async () => {
+    await limparRastro()
+    // Partição só do teste, para ter linha ANTIGA (as de produção começam no mês corrente).
+    await dono.unsafe(`CREATE TABLE IF NOT EXISTS auditoria_x6_antiga PARTITION OF auditoria
+                       FOR VALUES FROM ('2020-01-01') TO ('2020-02-01')`)
+    try {
+      await inserir(T, [
+        { quando: quando(1), dados: { obs: 'urgente recente' } },
+        { quando: '2020-01-15T10:00:00.000000Z', dados: { obs: 'urgente antigo' } },
+      ])
+      const sem = await chamar(T, '/v1/auditoria?q=urgente')
+      const corpoSem = sem.json() as { itens: { dados: { obs: string } }[]; janelaPadrao: boolean; janelaDias: number | null }
+      expect(corpoSem.itens.map((i) => i.dados.obs)).toEqual(['urgente recente'])
+      expect(corpoSem.janelaPadrao).toBe(true)
+      expect(corpoSem.janelaDias).toBe(30)
+
+      // Com `de` explícito a janela é a pedida: acha o antigo e NÃO marca janela padrão.
+      const com = (await chamar(T, `/v1/auditoria?q=urgente&de=${encodeURIComponent('2020-01-01T00:00:00Z')}`)).json() as { itens: unknown[]; janelaPadrao: boolean }
+      expect(com.itens).toHaveLength(2)
+      expect(com.janelaPadrao).toBe(false)
+
+      // Só `ate`: a janela de 30 dias termina nele (o antigo continua de fora; o mês corrente, de dentro, se ate for futuro próximo).
+      const ate = encodeURIComponent(new Date(Date.now() + 10 * 86_400_000).toISOString())
+      const soAte = (await chamar(T, `/v1/auditoria?q=urgente&ate=${ate}`)).json() as { itens: { dados: { obs: string } }[]; janelaPadrao: boolean }
+      expect(soAte.itens.map((i) => i.dados.obs)).toEqual(['urgente recente'])
+      expect(soAte.janelaPadrao).toBe(true)
+
+      // Sem q não há janela: o rastro inteiro (ordem do índice), e o campo diz false.
+      const semQ = (await chamar(T, '/v1/auditoria')).json() as { itens: unknown[]; janelaPadrao: boolean; janelaDias: number | null }
+      expect(semQ.itens).toHaveLength(2)
+      expect(semQ.janelaPadrao).toBe(false)
+      expect(semQ.janelaDias).toBeNull()
+
+      // Paginação com a janela padrão: o cursor continua dentro dela (sem perder nem repetir).
+      await limparRastro()
+      await semear(T, 60)
+      const p1 = (await chamar(T, '/v1/auditoria?q=protocolo')).json() as { itens: { id: string }[]; proximoCursor: string | null; janelaPadrao: boolean }
+      expect(p1.itens).toHaveLength(50)
+      expect(p1.janelaPadrao).toBe(true)
+      const p2 = (await chamar(T, `/v1/auditoria?q=protocolo&cursor=${p1.proximoCursor}`)).json() as { itens: { id: string }[]; proximoCursor: string | null }
+      expect(p2.itens).toHaveLength(10)
+      expect(p2.proximoCursor).toBeNull()
+    } finally {
+      await limparRastro()
+      await dono.unsafe('DROP TABLE IF EXISTS auditoria_x6_antiga')
+    }
+  })
+
   it('combina filtros com AND (acao + usuário + período)', async () => {
     await limparRastro()
     await inserir(T, [

@@ -61,6 +61,9 @@ type EstadoDetalhe = 'ocioso' | 'carregando' | 'pronto' | 'erro'
         </ui-estado>
       }
       @case ('pronto') {
+        @if (servico.janelaPadraoDias(); as dias) {
+          <p class="aviso-janela" role="status">Buscando nos últimos {{ dias }} dias. Escolha um período para buscar em outras datas.</p>
+        }
         <ui-tabela [colunas]="colunas" [linhas]="linhas()">
           <ng-template uiCelula="ver" let-linha>
             <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrirDetalhe(linha.id)">Ver</button>
@@ -107,6 +110,7 @@ type EstadoDetalhe = 'ocioso' | 'carregando' | 'pronto' | 'erro'
     :host { display: block; width: 100%; min-width: 0; }
     .esqueletos { display: grid; gap: var(--espacamento-3); }
     .erro { margin: 0; color: var(--erro); }
+    .aviso-janela { margin: 0 0 var(--espacamento-3); font-size: 13px; color: var(--texto-secundario); }
     .secao { margin: var(--espacamento-5) 0 var(--espacamento-2); }
     .json { margin: 0; padding: var(--espacamento-3); max-height: 320px; overflow: auto;
       background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-controle);

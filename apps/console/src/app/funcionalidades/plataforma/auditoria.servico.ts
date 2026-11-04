@@ -12,7 +12,7 @@ export type { EntradaAuditoria } from './auditoria.regras.js'
 export type EstadoCarga = 'ocioso' | 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
 
 interface Membro { readonly id: string; readonly nome: string }
-interface Pagina { readonly itens: EntradaAuditoria[]; readonly proximoCursor: string | null }
+interface Pagina { readonly itens: EntradaAuditoria[]; readonly proximoCursor: string | null; readonly janelaPadrao?: boolean; readonly janelaDias?: number | null }
 
 /**
  * Rastro de auditoria (EP-07 / PLT-05).
@@ -32,6 +32,8 @@ export class AuditoriaServico {
   /** null quando não há próxima página — o botão "carregar mais" some. */
   readonly proximoCursor = signal<string | null>(null)
   readonly carregandoMais = signal(false)
+  /** A busca veio sem período: o servidor limitou aos últimos N dias e a tela precisa dizer. */
+  readonly janelaPadraoDias = signal<number | null>(null)
 
   readonly usuarios = signal<{ valor: string; rotulo: string }[]>([])
   /** Seletor de usuário degrada sozinho: a tela segue funcionando sem ele. */
@@ -50,6 +52,7 @@ export class AuditoriaServico {
       if (g !== this.geracao) return
       this.itens.set(r.itens)
       this.proximoCursor.set(r.proximoCursor)
+      this.janelaPadraoDias.set(r.janelaPadrao ? (r.janelaDias ?? 30) : null)
       this.estado.set('pronto')
     } catch (e) {
       if (g !== this.geracao) return
