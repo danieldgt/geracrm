@@ -162,10 +162,15 @@ async function notificar(
       --    SUBSTITUI o anterior na tela diga que houve novidade — sem ele, a
       --    segunda mensagem troca o aviso pelo mesmo texto e a pessoa conclui
       --    que o push morreu.
-      DO UPDATE SET criado_em = now(), titulo = EXCLUDED.titulo,
+      -- ⚠️ tipo = EXCLUDED.tipo: o aviso que substitui o anterior carrega o tipo do NOVO evento — sem isso a
+      --    preferência de push e o e-mail seriam avaliados pelo tipo velho.
+      DO UPDATE SET criado_em = now(), titulo = EXCLUDED.titulo, tipo = EXCLUDED.tipo,
                     vezes = notificacao.vezes + 1,
                     no_app = notificacao.no_app OR EXCLUDED.no_app,
-                    email_pendente = notificacao.email_pendente OR EXCLUDED.email_pendente`
+                    email_pendente = notificacao.email_pendente OR EXCLUDED.email_pendente,
+                    -- aviso novo com e-mail recomeça a conta de tentativas (e solta a reserva)
+                    email_tentativas = CASE WHEN EXCLUDED.email_pendente THEN 0 ELSE notificacao.email_tentativas END,
+                    email_reservado_ate = CASE WHEN EXCLUDED.email_pendente THEN NULL ELSE notificacao.email_reservado_ate END`
 
     // Evento no canal do usuário — só avisa "algo novo no seu sino".
     if (c.app) {

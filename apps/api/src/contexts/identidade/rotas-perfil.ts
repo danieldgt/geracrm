@@ -64,7 +64,7 @@ const recusa = (reply: FastifyReply, status: number, erro: string, mensagem: str
   reply.code(status).send({ erro, mensagem, ...(campo ? { campos: { [campo]: mensagem } } : {}) })
 
 export async function rotasPerfil(app: FastifyInstance, opcoes: OpcoesRotasPerfil = {}): Promise<void> {
-  const provedorSenha = opcoes.provedorSenha ?? provedorSenhaCognito()
+  const provedorSenha = opcoes.provedorSenha ?? provedorSenhaCognito(app.log)
   await app.register(multipart, { limits: { fileSize: FOTO_MAX_BYTES, files: 1, fields: 2 } })
 
   app.get('/v1/perfil', { preHandler: exigirTenant }, async (req, reply) => {
@@ -254,8 +254,10 @@ export async function rotasPerfil(app: FastifyInstance, opcoes: OpcoesRotasPerfi
           await req.comTenant((tx) => auditar(tx, {
             atorId: eu.id, acao: 'usuario.senha_alterada', entidade: 'usuario', entidadeId: eu.id, dados: { origem: 'perfil' },
           }))
-          return reply.send({ ok: true })
+          // Todas as sessões (inclusive esta) foram encerradas no provedor: o console manda entrar de novo.
+          return reply.send({ ok: true, reloginObrigatorio: true })
         }
+        case 'desafio': return recusa(reply, 422, 'perfil.senha_desafio', 'Sua conta está com a senha temporária. Use "Esqueci a senha" na tela de login para definir uma nova.')
         case 'senha_atual_errada': return recusa(reply, 422, 'perfil.senha_atual_errada', 'A senha atual está incorreta.', 'senhaAtual')
         case 'senha_invalida': return recusa(reply, 422, 'perfil.senha_invalida', r.mensagem, 'novaSenha')
         case 'limite': return recusa(reply, 429, 'limite.excedido', 'Muitas tentativas. Aguarde alguns minutos.')

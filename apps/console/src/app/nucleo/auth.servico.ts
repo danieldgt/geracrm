@@ -1,6 +1,6 @@
 import { Injectable, computed, inject, signal } from '@angular/core'
 import { Router } from '@angular/router'
-import { criarArmazenamento } from './auth.armazenamento.js'
+import { criarArmazenamento, lerSessaoStaffGuardada } from './auth.armazenamento.js'
 import { resultadoDaRecuperacao, type ResultadoRecuperacao } from './login.regras.js'
 
 /**
@@ -23,7 +23,7 @@ const CHAVE_EXPIRA = 'geracrm.expiraEm'
 const CHAVE_SESSAO_STAFF = 'geracrm.sessaoStaff'
 /**
  * Onde moram token, refresh, usuário e expiração: localStorage com "Lembrar-me", sessionStorage sem ele
- * (ver `auth.armazenamento.ts`). A sessão de staff continua só no localStorage.
+ * (ver `auth.armazenamento.ts`). A sessão de staff mora no MESMO armazém do token.
  */
 const armazem = criarArmazenamento(localStorage, sessionStorage)
 
@@ -34,14 +34,6 @@ const MARGEM_MS = 2 * 60 * 1000
 export function ehProducao(): boolean {
   const h = location.hostname
   return h !== 'localhost' && h !== '127.0.0.1' && h !== '[::1]'
-}
-
-/** Lê a sessão de acesso guardada; storage corrompido não derruba o boot. */
-function lerSessaoStaff(): { token: string; clienteNome: string } | null {
-  try {
-    const cru = localStorage.getItem(CHAVE_SESSAO_STAFF)
-    return cru ? (JSON.parse(cru) as { token: string; clienteNome: string }) : null
-  } catch { return null }
 }
 
 export type ResultadoLogin =
@@ -94,7 +86,9 @@ export class AuthServico {
    * grupos (o token de acesso é opaco e não se decodifica), e é para ele que a
    * sessão volta ao sair.
    */
-  readonly sessaoStaff = signal<{ token: string; clienteNome: string } | null>(lerSessaoStaff())
+  readonly sessaoStaff = signal<{ token: string; clienteNome: string } | null>(
+    lerSessaoStaffGuardada(armazem, CHAVE_SESSAO_STAFF, this.idToken() !== null, ehProducao()),
+  )
 
   /**
    * O token que vai na requisição. ⚠️ Use SEMPRE isto, nunca `idToken()` direto:
@@ -120,7 +114,8 @@ export class AuthServico {
    */
   entrarNoCliente(token: string, clienteNome: string): void {
     if (this.timerRefresh) { clearTimeout(this.timerRefresh); this.timerRefresh = null }
-    localStorage.setItem(CHAVE_SESSAO_STAFF, JSON.stringify({ token, clienteNome }))
+    // Mesmo armazém do token: sem "Lembrar-me" a sessão de staff morre com a aba, e não é herdada.
+    armazem.gravar(CHAVE_SESSAO_STAFF, JSON.stringify({ token, clienteNome }), armazem.lembrando(CHAVE_TOKEN))
     this.sessaoStaff.set({ token, clienteNome })
     location.assign('/')
   }
@@ -145,7 +140,7 @@ export class AuthServico {
         })
       } catch { /* rede/timeout: o servidor expira a sessão sozinho; a saída local segue */ }
     }
-    localStorage.removeItem(CHAVE_SESSAO_STAFF)
+    armazem.remover(CHAVE_SESSAO_STAFF)
     this.sessaoStaff.set(null)
     location.assign('/')
   }
@@ -239,12 +234,17 @@ export class AuthServico {
   sair(registrar = true): void {
     const token = registrar && !this.sessaoStaff() ? this.idToken() : null
     if (token) {
-      void fetch('/v1/auth/logout', { method: 'POST', headers: { authorization: `Bearer ${token}` }, keepalive: true })
+      // O refresh token vai junto: o servidor o REVOGA no provedor (logout de verdade).
+      void fetch('/v1/auth/logout', {
+        method: 'POST', keepalive: true,
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ refreshToken: armazem.ler(CHAVE_REFRESH) }),
+      })
         .catch(() => undefined)
     }
     if (this.timerRefresh) { clearTimeout(this.timerRefresh); this.timerRefresh = null }
     for (const k of [CHAVE_TOKEN, CHAVE_REFRESH, CHAVE_USUARIO, CHAVE_EXPIRA]) armazem.remover(k)
-    localStorage.removeItem(CHAVE_SESSAO_STAFF)
+    armazem.remover(CHAVE_SESSAO_STAFF)
     this.idToken.set(null)
     this.sessaoStaff.set(null)
   }
@@ -304,6 +304,8 @@ export class AuthServico {
   private guardar(r: RespostaApi, usuario?: string, lembrar?: boolean): void {
     // Login decide ("Lembrar-me"); o refresh grava onde a sessão já mora.
     const lembrando = lembrar ?? armazem.lembrando(CHAVE_TOKEN)
+    // Login novo descarta a sessão de staff que tenha sobrado: ela não é desta pessoa.
+    if (lembrar !== undefined) { armazem.remover(CHAVE_SESSAO_STAFF); this.sessaoStaff.set(null) }
     armazem.gravar(CHAVE_TOKEN, r.idToken!, lembrando)
     if (r.refreshToken) armazem.gravar(CHAVE_REFRESH, r.refreshToken, lembrando)
     if (usuario) armazem.gravar(CHAVE_USUARIO, usuario, lembrando)

@@ -1,6 +1,6 @@
 import { Component, ChangeDetectionStrategy, computed, inject, OnInit, signal } from '@angular/core'
 import { HttpClient } from '@angular/common/http'
-import { RouterLink } from '@angular/router'
+import { Router, RouterLink } from '@angular/router'
 import { firstValueFrom } from 'rxjs'
 import { AuthServico, ehProducao } from './auth.servico.js'
 import { PresencaServico } from './presenca.servico.js'
@@ -176,6 +176,7 @@ export class PerfilPagina implements OnInit {
   readonly dev = !ehProducao()
   private readonly http = inject(HttpClient)
   private readonly toast = inject(ToastServico)
+  private readonly router = inject(Router)
 
   protected readonly estado = signal<'carregando' | 'pronto' | 'erro' | 'sem_perfil'>('carregando')
   protected readonly erroCarga = signal<string | null>(null)
@@ -284,7 +285,10 @@ export class PerfilPagina implements OnInit {
     try {
       await firstValueFrom(this.http.post('/v1/perfil/senha', { senhaAtual: this.senha().atual, novaSenha: this.senha().nova }))
       this.senha.set({ atual: '', nova: '', confirmacao: '' })
-      this.toast.sucesso('Senha trocada.')
+      // O servidor encerrou TODAS as sessões (inclusive esta): sem sair aqui, a próxima chamada cai em 401.
+      this.toast.sucesso('Senha trocada. Entre de novo com a nova senha.')
+      this.auth.sair(false)
+      void this.router.navigateByUrl('/login')
     } catch (e) {
       // Senha atual errada e política vêm tipificadas por campo; o digitado fica.
       const doServidor = camposDoCorpo(corpoDoErro(e))

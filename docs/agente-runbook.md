@@ -281,3 +281,11 @@ para acordar gente de madrugada, recalibrar com 2–4 semanas de histórico.
 - **Nunca:** a sessão de staff não grava mais linha em `usuario` do cliente (era a porta para o admin do cliente
   redefinir a senha da conta do staff). Ação que exige um usuário do cliente como dono (assumir conversa, ser
   responsável) responde 403 `acesso.staff_sem_usuario` na sessão de staff — peça a alguém da empresa.
+
+## 19. IP na auditoria de login e redefinição de senha (LGPD)
+
+`auditoria.dados.ip` guarda o IP de `usuario.login`, `usuario.logout` e `usuario.senha_redefinida` (D4/D6), para investigar acesso indevido. IP é dado pessoal: base legal é segurança da conta (legítimo interesse), e ele **só aparece para gestor** na tela de Auditoria (detalhe do evento).
+
+- **Retenção hoje**: igual à da própria tabela `auditoria` (sem expurgo próprio). Anonimização de contato (LGPD) não toca nessas linhas — o titular aqui é o usuário do sistema, não o contato.
+- **Pendente (não implementado)**: expurgo do campo `ip` após N meses (sugestão: 12) por job mensal que faz `dados = dados - 'ip'` nas partições antigas, e menção do prazo na política de privacidade do tenant. Decisão do dono do produto sobre N.
+- **Nunca** logar o IP junto do e-mail em log de aplicação; a trilha de auditoria é o único lugar.
