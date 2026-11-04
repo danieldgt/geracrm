@@ -12,7 +12,7 @@ import {
 } from '../../compartilhado/ui/index.js'
 import { EtiquetasServico } from '../crm/etiquetas.servico.js'
 import {
-  FORM_VAZIO, PASSOS, ROTULO_ORIGEM_JANELA, ROTULO_PASSO, TIPO_NAO_OFICIAL, TIPO_OFICIAL, errosDoPasso, excluidosOrdenados,
+  FORM_VAZIO, PASSOS, avisoJanelaAjustada, ROTULO_ORIGEM_JANELA, ROTULO_PASSO, TIPO_NAO_OFICIAL, TIPO_OFICIAL, errosDoPasso, excluidosOrdenados,
   formDaCampanha, formatarCusto, loteEfetivo, mapearErro, montarCorpo, montarCorpoPrevia, passosComErro, resumoJanela, resumoPublico,
   textoAquecimento, textoDuracao, textoPrecoUnitario, textoVariaveisFaltando, variaveisSemMapeamento,
   type ErrosCampo, type FormCampanha, type OpcaoEscolhida, type PassoWizard, type PreviaApi, type PublicoForm,
@@ -247,6 +247,7 @@ const OPCOES_QUALIFICACAO: OpcaoChip[] = QUALIFICACOES_CONTATO.map((q) => ({ val
                           Sem janela própria, vale o expediente do número; se ele não tiver, segunda a sábado, 8h às 20h.
                         }
                       </p>
+                      @if (previa(); as p) { @if (avisoJanela(p); as a) { <p class="aviso aviso--atencao" role="status">{{ a }}</p> } }
                     }
                   </fieldset>
                 }
@@ -495,6 +496,7 @@ export class CampanhaWizardPagina implements OnInit {
   protected rotuloExclusao(m: string): string { return (ROTULO_MOTIVO_EXCLUSAO as Record<string, string>)[m] ?? m }
   protected rotuloOrigemJanela(o: string): string { return ROTULO_ORIGEM_JANELA[o] ?? o }
   protected resumoDaJanela(p: PreviaApi): string { return resumoJanela(p.janelaDoNumero.horario) }
+  protected avisoJanela(p: PreviaApi): string | null { return avisoJanelaAjustada(p.janelaDoNumero.ajustada) }
 
   protected async carregar(): Promise<void> {
     this.estado.set('carregando')

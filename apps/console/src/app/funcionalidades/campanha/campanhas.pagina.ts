@@ -5,7 +5,7 @@ import {
   BadgeComponente, CabecalhoTelaComponente, CelulaDiretiva, EstadoComponente, PaginacaoComponente, SelectComponente, TabelaComponente,
   ToastServico, ehStatus, mensagemDeErro, mesclarPagina, type ColunaTabela, type LinhaTabela, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
-import { avisoDePausa, rotuloEstado, rotuloMotivoPausa, tomDoEstado } from './campanhas.regras.js'
+import { avisoDeBloqueio, avisoDePausa, rotuloEstado, rotuloMotivoPausa, tomDoEstado } from './campanhas.regras.js'
 import { CampanhasServico, type CampanhaResumo } from './campanhas.servico.js'
 
 type EstadoLista = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
@@ -53,6 +53,7 @@ const OPCOES_ESTADO: OpcaoSelect[] = [
             <ng-template uiCelula="estado" let-c>
               <ui-badge [tom]="tom(c.estado)">{{ rotulo(c.estado) }}</ui-badge>
               @if (pausa(c); as p) { <span class="pausa">{{ p }}</span> }
+              @if (bloqueio(c); as b) { <span class="bloqueio" role="status"><strong>{{ b.titulo }}.</strong> {{ b.acao }}</span> }
             </ng-template>
             <ng-template uiCelula="onde" let-c>{{ onde(c) }}</ng-template>
             <ng-template uiCelula="lote" let-c>{{ c.loteDiario ? c.loteDiario + ' por dia' : '—' }}</ng-template>
@@ -84,6 +85,7 @@ const OPCOES_ESTADO: OpcaoSelect[] = [
     .nome:hover { color: var(--acao); text-decoration: underline; }
     .legada { display: block; font-size: 11px; color: var(--texto-suave); }
     .pausa { display: block; margin-top: var(--espacamento-1); font-size: 12px; color: var(--atencao); max-width: 320px; white-space: normal; }
+    .bloqueio { display: block; margin-top: var(--espacamento-1); font-size: 12px; color: var(--erro); max-width: 320px; white-space: normal; }
   `,
 })
 export class CampanhasPagina implements OnInit {
@@ -122,6 +124,9 @@ export class CampanhasPagina implements OnInit {
     if (c.estado === 'pausada') return rotuloMotivoPausa(c.pausaMotivo)
     return avisoDePausa(c.pausadaPorQualidade)?.titulo ?? null
   }
+
+  /** Envio parado pelo número (campanha em curso): título e ação corretiva na própria linha. */
+  protected bloqueio(c: CampanhaResumo) { return avisoDeBloqueio(c.bloqueio) }
 
   protected filtrar(estado: string): void {
     this.filtro.set(estado)
