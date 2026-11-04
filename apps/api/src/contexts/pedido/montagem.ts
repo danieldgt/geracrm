@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { perfilDeCotacao, type ItemPedidoEntrada, type OrigemPedido, type PerfilPreco } from '@geracrm/shared'
-import type { Sql } from '../../db/index.js'
+import { emSavepoint, type Sql } from '../../db/index.js'
+import { atribuirCampanhaAoPedido } from '../crm/campanha-destinatario.js'
 import { jsonbDe } from '../../db/jsonb.js'
 import { precosDeVenda } from './preco-de-venda.js'
 import { regrasPedidoDe, type RegrasPedido } from './regras-pedido.js'
@@ -72,6 +73,11 @@ export async function obterOuCriarRascunho(
           WHERE cv.tenant_id = tenant_atual() AND cv.id = ${conversaId}::uuid)
       ),
       ${conversaId}, ${entrada.nome?.trim() || null}, 'rascunho', ${entrada.origem ?? 'humano'})`
+  // Atribuição EXATA da campanha (F1): o pedido que nasce na conversa herda a campanha
+  // que alcançou o contato na janela. Acessório: o rascunho nunca se perde por ele.
+  if (conversaId) {
+    try { await emSavepoint(tx, (sp) => atribuirCampanhaAoPedido(sp, id)) } catch { /* sem atribuição */ }
+  }
   return { id, criado: true }
 }
 

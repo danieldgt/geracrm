@@ -70,7 +70,7 @@ export interface ContextoEnvio {
 export type ResultadoEnvioGateway =
   | { ok: true; idExterno: string }
   | { ok: false; classe: 'recusa'; motivo: MotivoRecusa }
-  | { ok: false; classe: 'transporte'; motivo: string; detalhe?: string | undefined }
+  | { ok: false; classe: 'transporte'; motivo: string; detalhe?: string | undefined; codigo?: string | undefined }
 
 /**
  * Decisão pura: podemos enviar? A ordem é intencional — o opt-out vem primeiro
@@ -114,5 +114,5 @@ export async function enviarPeloGateway(
 
   const r = await despachar()
   if (r.ok) return { ok: true, idExterno: r.idExterno }
-  return { ok: false, classe: 'transporte', motivo: r.motivo, detalhe: r.detalhe }
+  return { ok: false, classe: 'transporte', motivo: r.motivo, detalhe: r.detalhe, ...(r.codigo ? { codigo: r.codigo } : {}) }
 }

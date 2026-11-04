@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  classificarErroMeta, limitarJanelaMarketing, validarJanelaCampanha,
   acaoPermitida, confirmacaoDoNomeConfere, custoCampanhaCentavos, custoPorVenda, duracaoDias, motivoPausaAutomatica,
 } from './campanha.js'
 
@@ -48,5 +49,32 @@ describe('Campanhas v2 — regras puras', () => {
     expect(confirmacaoDoNomeConfere('Volta às aulas', 'volta às aulas')).toBe(false)
     expect(confirmacaoDoNomeConfere('   ', '   ')).toBe(false)
     expect(confirmacaoDoNomeConfere('X', undefined)).toBe(false)
+  })
+
+  it('erros da Meta: destinatário fora da taxa; número em risco pausa; sem código é outro', () => {
+    expect(classificarErroMeta(131026)).toBe('destinatario')
+    expect(classificarErroMeta('131049')).toBe('destinatario')
+    expect(classificarErroMeta('131048')).toBe('numero_em_risco')
+    expect(classificarErroMeta(368)).toBe('numero_em_risco')
+    expect(classificarErroMeta(null)).toBe('outro')
+    expect(classificarErroMeta('999')).toBe('outro')
+  })
+
+  it('janela de marketing: recorta o expediente a 08:00–21:00 e avisa', () => {
+    expect(limitarJanelaMarketing({ seg: { de: '09:00', ate: '18:00' }, dom: null }))
+      .toEqual({ horario: { seg: { de: '09:00', ate: '18:00' }, dom: null }, ajustada: false })
+    expect(limitarJanelaMarketing({ seg: { de: '06:00', ate: '23:00' } }))
+      .toEqual({ horario: { seg: { de: '08:00', ate: '21:00' } }, ajustada: true })
+    // Vira a meia-noite (22h–02h): nada sobra na faixa → fechado.
+    expect(limitarJanelaMarketing({ sex: { de: '22:00', ate: '02:00' } })).toEqual({ horario: { sex: null }, ajustada: true })
+    // 18h–09h: sobram 18–21 (3h) e 08–09 (1h) → fica a maior.
+    expect(limitarJanelaMarketing({ sab: { de: '18:00', ate: '09:00' } }).horario).toEqual({ sab: { de: '18:00', ate: '21:00' } })
+  })
+
+  it('janela da campanha: precisa de um dia aberto e cabe em 08:00–21:00', () => {
+    expect(validarJanelaCampanha({ seg: null, dom: null })).toBe('vazia')
+    expect(validarJanelaCampanha({ seg: { de: '07:00', ate: '12:00' } })).toBe('fora_do_permitido')
+    expect(validarJanelaCampanha({ seg: { de: '20:00', ate: '09:00' } })).toBe('fora_do_permitido')
+    expect(validarJanelaCampanha({ seg: { de: '08:00', ate: '21:00' } })).toBe('ok')
   })
 })

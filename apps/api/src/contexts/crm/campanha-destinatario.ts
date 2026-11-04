@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { JANELA_RESPOSTA_DIAS, ROTULO_MOTIVO_PAUSA, type MotivoPausa } from '@geracrm/shared'
+import {
+  ERROS_META_DESTINATARIO, JANELA_RESPOSTA_DIAS, ROTULO_MOTIVO_PAUSA, classificarErroMeta, type MotivoPausa,
+} from '@geracrm/shared'
 import type { Sql } from '../../db/index.js'
 import { auditar } from '../plataforma/auditoria.js'
+import { algumCanal, canaisDosUsuarios } from '../plataforma/preferencia-notificacao.js'
 
 /**
  * O DESTINATÁRIO DA CAMPANHA V2 depois do envio: status da Meta, resposta, opt-out e a
@@ -41,18 +44,25 @@ export async function registrarStatusDestinatario(
 }
 
 /**
- * A Meta avisou que a mensagem FALHOU depois de aceita (número inexistente, fora do
- * WhatsApp, limite do portfólio…). Vira `falhou` com o código — e entra na taxa de
- * falha da pausa automática. Entregue/lida não regridem.
+ * A Meta avisou que a mensagem FALHOU depois de aceita. Vira `falhou` com o código.
+ *   - erro do DESTINATÁRIO (131026, 131049…): é da pessoa, não do número — fica FORA da
+ *     taxa de falha da pausa automática;
+ *   - erro de NÚMERO EM RISCO (131031, 131048, 131056, 130429, 368): a campanha pausa NA
+ *     HORA (`numero_em_risco`), sem esperar a amostra de 50 — insistir derruba o número;
+ *   - o resto entra na taxa de falha.
+ * Entregue/lida não regridem.
  */
 export async function registrarFalhaDestinatario(
   tx: Sql, idExterno: string, erroCodigo: string | null, em: Date,
 ): Promise<boolean> {
-  const linhas = await tx`
+  const linhas = await tx<{ campanha_id: string }[]>`
     UPDATE campanha_destinatario
        SET estado = 'falhou', erro_codigo = ${erroCodigo ?? 'falha_meta'}, atualizado_em = ${em}
      WHERE tenant_id = tenant_atual() AND wamid = ${idExterno} AND estado IN ('enviando', 'enviada')
-    RETURNING id`
+    RETURNING campanha_id`
+  if (linhas[0] && classificarErroMeta(erroCodigo) === 'numero_em_risco') {
+    await pausarCampanha(tx, { campanhaId: linhas[0].campanha_id, motivo: 'numero_em_risco', agora: em })
+  }
   return linhas.length > 0
 }
 
@@ -108,7 +118,9 @@ export async function contagemParaPausa(
     SELECT count(*) FILTER (WHERE enviado_em IS NOT NULL)::int AS enviados,
            count(*) FILTER (WHERE estado = 'optout')::int AS optouts,
            count(*) FILTER (WHERE enviado_em IS NOT NULL OR estado = 'falhou')::int AS processados,
-           count(*) FILTER (WHERE estado = 'falhou')::int AS falhas
+           -- Erro do DESTINATÁRIO (não é WhatsApp, limite por pessoa…) não é falha do número.
+           count(*) FILTER (WHERE estado = 'falhou'
+                              AND coalesce(erro_codigo, '') <> ALL(${[...ERROS_META_DESTINATARIO]}::text[]))::int AS falhas
       FROM campanha_destinatario
      WHERE tenant_id = tenant_atual() AND campanha_id = ${campanhaId} AND ${aPartir}`
   return r ?? { enviados: 0, optouts: 0, processados: 0, falhas: 0 }
@@ -158,13 +170,20 @@ export async function pausarCampanha(
     alvos = (await tx<{ id: string }[]>`
       SELECT id FROM usuario WHERE tenant_id = tenant_atual() AND ativo LIMIT ${TETO_NOTIFICADOS}`).map((u) => u.id)
   }
+  // D4: cada pessoa escolhe por onde recebe; quem desligou o aviso não ganha linha.
+  const canais = await canaisDosUsuarios(tx, alvos, 'campanha.pausada')
   for (const usuarioId of alvos) {
+    const canal = canais.get(usuarioId)
+    if (!canal || !algumCanal(canal)) continue
     await tx`
-      INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, conversa_id)
-      VALUES (tenant_atual(), ${randomUUID()}, ${usuarioId}, 'campanha.pausada', ${`Campanha "${c.nome}" pausada automaticamente`}, NULL)`
-    await tx`
-      INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
-      VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${usuarioId}, ${JSON.stringify({ usuarioId })}::text::jsonb)`
+      INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, conversa_id, no_app, email_pendente)
+      VALUES (tenant_atual(), ${randomUUID()}, ${usuarioId}, 'campanha.pausada',
+              ${`Campanha "${c.nome}" pausada automaticamente`}, NULL, ${canal.app}, ${canal.email})`
+    if (canal.app) {
+      await tx`
+        INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+        VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${usuarioId}, ${JSON.stringify({ usuarioId })}::text::jsonb)`
+    }
   }
   return true
 }
@@ -179,4 +198,27 @@ export async function resolverAlertaSeNenhumaPausada(tx: Sql, agora: Date): Prom
       UPDATE alerta SET resolvido_em = ${agora}
        WHERE tenant_id = tenant_atual() AND tipo = ${TIPO_ALERTA_CAMPANHA} AND resolvido_em IS NULL`
   }
+}
+
+/**
+ * Atribuição EXATA (M4): o pedido que nasce numa CONVERSA herda a campanha do envio mais
+ * recente que alcançou o contato (entregue, lida ou respondida) dentro da janela de
+ * atribuição DAQUELA campanha. Sem envio na janela, o pedido fica sem campanha (avulso).
+ * Não sobrescreve um `campanha_id` já gravado.
+ */
+export async function atribuirCampanhaAoPedido(tx: Sql, pedidoId: string): Promise<string | null> {
+  const [r] = await tx<{ campanha_id: string | null }[]>`
+    UPDATE pedido p
+       SET campanha_id = (
+             SELECT d.campanha_id FROM campanha_destinatario d
+               JOIN campanha k ON k.tenant_id = d.tenant_id AND k.id = d.campanha_id
+              WHERE d.tenant_id = p.tenant_id AND d.contato_id = p.contato_id
+                AND d.estado IN ('entregue', 'lida', 'respondeu')
+                AND d.enviado_em >= p.criado_em - make_interval(days => k.janela_atribuicao_dias)
+                AND d.enviado_em <= p.criado_em
+              ORDER BY d.enviado_em DESC LIMIT 1)
+     WHERE p.tenant_id = tenant_atual() AND p.id = ${pedidoId} AND p.campanha_id IS NULL
+       AND p.conversa_id IS NOT NULL AND p.contato_id IS NOT NULL
+    RETURNING p.campanha_id`
+  return r?.campanha_id ?? null
 }

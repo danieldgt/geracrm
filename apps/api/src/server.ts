@@ -199,7 +199,7 @@ if (process.env.DATABASE_ADMIN_URL) {
     void despacharCampanhas(donoAquisicao as never, new Date())
       .then((r) => {
         if (r.enviados > 0 || r.falhas > 0 || r.campanhasConcluidas > 0
-            || r.v2.enviados > 0 || r.v2.falhas > 0 || r.v2.pausadas > 0 || r.v2.concluidas > 0 || r.v2.interrompidos > 0) {
+            || r.v2.enviados > 0 || r.v2.falhas > 0 || r.v2.pausadas > 0 || r.v2.concluidas > 0 || r.v2.interrompidos > 0 || r.tenantsComErro > 0) {
           app.log.info(r, 'despacho de campanha')
         }
       })

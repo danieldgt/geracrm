@@ -51,6 +51,8 @@ const contatoId = (n: number) => `f1a20000-6666-4000-8000-${String(n).padStart(1
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
 let app: FastifyInstance
+/** Gancho do iniciar entre as fatias do snapshot (simula uma edição concorrente). */
+let ganchoFatia: (() => Promise<void>) | null = null
 
 /** O que o adaptador falso recebeu (a Meta nunca é chamada). */
 const enviados: { para: string; template?: TemplateParaEnvio; texto?: string }[] = []
@@ -151,12 +153,16 @@ beforeAll(async () => {
   await dono`INSERT INTO contato_etiqueta (tenant_id, contato_id, etiqueta_id) VALUES
                (${T}, ${contatoId(1)}, ${ETQ_A}), (${T}, ${contatoId(2)}, ${ETQ_B}), (${T}, ${contatoId(10)}, ${ETQ_A})`
 
-  app = await criarApp({ campanha: { criarCanal: criarCanalFalso, agora: () => AGORA } })
+  app = await criarApp({ campanha: { criarCanal: criarCanalFalso, agora: () => AGORA, aoMaterializarFatia: async () => { await ganchoFatia?.() } } })
   await app.ready()
 })
 
 beforeEach(async () => {
   enviados.length = 0
+  ganchoFatia = null
+  await dono`DELETE FROM auditoria WHERE tenant_id = ${T} AND acao = 'campanha.teste_enviado'`
+  await dono`DELETE FROM canal_configuracao WHERE tenant_id = ${T}`
+  await dono`DELETE FROM canal_aquecimento WHERE tenant_id = ${T}`
   await dono`DELETE FROM campanha_destinatario WHERE tenant_id IN (${T}, ${OUTRO})`
   await dono`DELETE FROM campanha WHERE tenant_id IN (${T}, ${OUTRO}) AND modelo_versao = 2`
   await dono`DELETE FROM usuario_filial WHERE tenant_id = ${T}`
@@ -166,7 +172,7 @@ beforeEach(async () => {
 })
 
 afterAll(async () => {
-  const tabelas = ['campanha_destinatario', 'campanha_envio', 'campanha', 'auditoria', 'alerta', 'notificacao', 'outbox', 'mensagem', 'conversa',
+  const tabelas = ['campanha_destinatario', 'campanha_envio', 'campanha', 'auditoria', 'canal_configuracao', 'canal_aquecimento', 'alerta', 'notificacao', 'outbox', 'mensagem', 'conversa',
     'contato_etiqueta', 'etiqueta', 'lista_membro', 'lista', 'lista_bloqueio', 'contato_endereco', 'contato_telefone', 'pedido', 'venda',
     'contato', 'origem', 'preco_whatsapp', 'template_versao', 'template', 'usuario_filial', 'usuario', 'canal_conectado', 'filial']
   for (const t of tabelas) await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id IN ('${T}', '${OUTRO}')`).catch(() => undefined)
@@ -508,5 +514,99 @@ describe('Papel e isolamento', () => {
     // O canal do outro tenant não serve para criar campanha aqui.
     const r = await chamar(OUTRO, 'POST', '/v1/campanhas', corpoOficial())
     expect(r.json()).toMatchObject({ erro: 'campanha.canal_invalido' })
+  })
+})
+
+describe('Revisão F1a — janela, teste, bloqueio, corrida, LGPD e custo', () => {
+  it('B6: janela sem dia aberto ou fora de 08:00–21:00 → 422; expediente do número é recortado e a prévia avisa', async () => {
+    const vazia = await chamar(T, 'POST', '/v1/campanhas', corpoOficial({ janela: { seg: null, dom: null } }))
+    expect(vazia.json()).toMatchObject({ erro: 'campanha.janela_vazia', campos: { janela: expect.any(String) } })
+    const cedo = await chamar(T, 'POST', '/v1/campanhas', corpoOficial({ janela: { seg: { de: '07:00', ate: '12:00' } } }))
+    expect(cedo.json()).toMatchObject({ erro: 'campanha.janela_fora_do_permitido' })
+    expect((await chamar(T, 'POST', '/v1/campanhas', corpoOficial({ janela: { seg: { de: '09:00', ate: '18:00' } } }))).statusCode).toBe(201)
+
+    await dono`INSERT INTO canal_configuracao (tenant_id, canal_id, horario_atendimento)
+               VALUES (${T}, ${OFICIAL}, ${JSON.stringify({ seg: { de: '06:00', ate: '23:00' } })}::text::jsonb)`
+    const p = await chamar(T, 'POST', '/v1/campanhas/previa', { canalId: OFICIAL, templateId: TPL_OK, publico: PUBLICO })
+    expect(p.json()).toMatchObject({ janelaDoNumero: { origem: 'canal', ajustada: true, horario: { seg: { de: '08:00', ate: '21:00' } } } })
+  })
+
+  it('B4: teste tem teto por usuário (20 telefones/hora) e, no não oficial em aquecimento, cabe no teto do dia', async () => {
+    const id = await criar()
+    const cinco = ['81911110001', '81911110002', '81911110003', '81911110004', '81911110005']
+    for (let i = 0; i < 4; i++) expect((await chamar(T, 'POST', `/v1/campanhas/${id}/teste`, { telefones: cinco })).statusCode).toBe(200)
+    const quinto = await chamar(T, 'POST', `/v1/campanhas/${id}/teste`, { telefones: ['81911110006'] })
+    expect(quinto.statusCode).toBe(429)
+    expect(quinto.json()).toMatchObject({ erro: 'campanha.teste_limite', limiteUsuarioHora: 20, limiteNumeroHora: 30 })
+
+    await dono`DELETE FROM auditoria WHERE tenant_id = ${T} AND acao = 'campanha.teste_enviado'`
+    const promo = await criar(T, { nome: 'Promo', canalId: NAO_OFICIAL, publico: PUBLICO, mensagem: 'Oi!', confirmaRiscoBanimento: true })
+    // Número no dia 0 do aquecimento (teto 20) com 20 envios de hoje: sem cota nem para teste.
+    await dono`INSERT INTO canal_aquecimento (tenant_id, canal_id, iniciado_em) VALUES (${T}, ${NAO_OFICIAL}, ${AGORA})`
+    const velha = randomUUID()
+    await dono`INSERT INTO campanha (tenant_id, id, nome, mensagem, estado, canal_id) VALUES (${T}, ${velha}, 'Gasta cota', 'x', 'concluida', ${NAO_OFICIAL})`
+    for (let n = 1; n <= 10; n++) {
+      await dono`INSERT INTO campanha_envio (tenant_id, id, campanha_id, contato_id, estado, enviado_em)
+                 VALUES (${T}, ${randomUUID()}, ${velha}, ${contatoId(n)}, 'enviado', ${AGORA})`
+    }
+    const velha2 = randomUUID()
+    await dono`INSERT INTO campanha (tenant_id, id, nome, mensagem, estado, canal_id) VALUES (${T}, ${velha2}, 'Gasta cota 2', 'x', 'concluida', ${NAO_OFICIAL})`
+    for (let n = 1; n <= 10; n++) {
+      await dono`INSERT INTO campanha_envio (tenant_id, id, campanha_id, contato_id, estado, enviado_em)
+                 VALUES (${T}, ${randomUUID()}, ${velha2}, ${contatoId(n)}, 'enviado', ${AGORA})`
+    }
+    try {
+      const r = await chamar(T, 'POST', `/v1/campanhas/${promo}/teste`, { telefones: ['81911110001'] })
+      expect(r.statusCode).toBe(409)
+      expect(r.json()).toMatchObject({ erro: 'campanha.teste_sem_cota' })
+    } finally {
+      await dono`DELETE FROM campanha_envio WHERE tenant_id = ${T} AND campanha_id IN (${velha}, ${velha2})`
+      await dono`DELETE FROM campanha WHERE tenant_id = ${T} AND id IN (${velha}, ${velha2})`
+    }
+  })
+
+  it('B5: campanha em curso com o número de disparo pausado expõe bloqueio na lista e no detalhe', async () => {
+    const id = await criar()
+    await chamar(T, 'POST', `/v1/campanhas/${id}/iniciar`, { confirmacaoNome: 'Volta às aulas' })
+    expect(((await chamar(T, 'GET', `/v1/campanhas/${id}`)).json() as { bloqueio: unknown }).bloqueio).toBeNull()
+    await dono`INSERT INTO canal_configuracao (tenant_id, canal_id, disparo_pausado, pausado_motivo, pausado_em)
+               VALUES (${T}, ${OFICIAL}, true, 'manual', now())`
+    expect((await chamar(T, 'GET', `/v1/campanhas/${id}`)).json()).toMatchObject({ bloqueio: { motivo: 'disparo_pausado' } })
+    const lista = (await chamar(T, 'GET', '/v1/campanhas?estado=enviando')).json() as { itens: { id: string; bloqueio: unknown }[] }
+    expect(lista.itens.find((c) => c.id === id)?.bloqueio).toEqual({ motivo: 'disparo_pausado' })
+  })
+
+  it('M2: editada enquanto o snapshot era montado → 409 e o snapshot é apagado (não inicia com o público antigo)', async () => {
+    const id = await criar()
+    ganchoFatia = async () => { await dono`UPDATE campanha SET atualizado_em = clock_timestamp() WHERE tenant_id = ${T} AND id = ${id}` }
+    const r = await chamar(T, 'POST', `/v1/campanhas/${id}/iniciar`, { confirmacaoNome: 'Volta às aulas' })
+    expect(r.statusCode).toBe(409)
+    expect(r.json()).toMatchObject({ erro: 'campanha.alterada_durante_inicio' })
+    expect(await dono`SELECT 1 FROM campanha_destinatario WHERE tenant_id = ${T} AND campanha_id = ${id}`).toHaveLength(0)
+    const [k] = await dono<{ estado: string }[]>`SELECT estado FROM campanha WHERE tenant_id = ${T} AND id = ${id}`
+    expect(k!.estado).toBe('rascunho')
+    ganchoFatia = null
+    expect((await chamar(T, 'POST', `/v1/campanhas/${id}/iniciar`, { confirmacaoNome: 'Volta às aulas' })).statusCode).toBe(200)
+  })
+
+  it('M5: anonimizado (LGPD) vem antes do opt-out na prévia', async () => {
+    await dono`UPDATE contato SET anonimizado_em = now(), anonimizacao_modo = 'canais' WHERE tenant_id = ${T} AND id = ${contatoId(3)}`
+    try {
+      const r = await chamar(T, 'POST', '/v1/campanhas/previa', { canalId: OFICIAL, templateId: TPL_OK, publico: PUBLICO })
+      expect(r.json()).toMatchObject({ excluidos: { anonimizado: 2, optout: 0 } })
+    } finally {
+      await dono`UPDATE contato SET anonimizado_em = NULL, anonimizacao_modo = NULL WHERE tenant_id = ${T} AND id = ${contatoId(3)}`
+    }
+  })
+
+  it('B3: mensagem que a Meta devolveu como falha não entra no custo', async () => {
+    const id = await criar()
+    await chamar(T, 'POST', `/v1/campanhas/${id}/iniciar`, { confirmacaoNome: 'Volta às aulas' })
+    await dono`UPDATE campanha_destinatario SET estado = 'entregue', enviado_em = ${antes(1)}, entregue_em = ${antes(1)}
+                WHERE tenant_id = ${T} AND campanha_id = ${id} AND contato_id = ${contatoId(1)}`
+    await dono`UPDATE campanha_destinatario SET estado = 'falhou', enviado_em = ${antes(1)}, erro_codigo = '131026'
+                WHERE tenant_id = ${T} AND campanha_id = ${id} AND contato_id = ${contatoId(2)}`
+    const r = (await chamar(T, 'GET', `/v1/campanhas/${id}/relatorio`)).json()
+    expect(r).toMatchObject({ funil: { enviadas: 2 }, custo: { mensagensCobradas: 1, totalCentavos: 40 } })
   })
 })

@@ -14,7 +14,7 @@ import { roiCampanha, type Roi } from './campanha-analise.js'
  *    fora de ordem continua entregue). Assim o funil nunca "sobe" de um degrau para o outro.
  * ⚠️ Pedido (exata) e venda na janela (estimada) vêm SEPARADOS — somar infla o número
  *    (skill funil-de-vendas). O custo por venda sai das duas formas, rotuladas.
- * ⚠️ Custo: mensagens ENVIADAS × preço da categoria do template (preços da F2, padrão da
+ * ⚠️ Custo: mensagens ENVIADAS SEM FALHA devolvida pela Meta × preço da categoria do template (preços da F2, padrão da
  *    API quando o tenant não definiu) — a mesma regra da tela de Consumo, para os dois
  *    números baterem. Número não oficial não tem tarifa da Meta: custo 0.
  */
@@ -39,6 +39,8 @@ export interface RelatorioCampanha {
   readonly falhasPorCodigo: readonly { codigo: string; n: number }[]
   readonly custo: {
     readonly categoria: string | null
+    /** Mensagens que entram no custo: enviadas sem falha devolvida pela Meta. */
+    readonly mensagensCobradas: number
     readonly precoUnitarioCentavos: number
     readonly totalCentavos: number
     readonly porPedidoCentavos: number | null
@@ -58,7 +60,7 @@ export async function relatorioCampanha(tx: Sql, campanhaId: string): Promise<Re
 
   const [f] = await tx<{
     elegiveis: number; enviadas: number; entregues: number; lidas: number; responderam: number
-    pendentes: number; enviando: number; falhas: number; optouts: number
+    pendentes: number; enviando: number; falhas: number; optouts: number; cobradas: number
   }[]>`
     SELECT count(*) FILTER (WHERE estado <> 'excluida')::int AS elegiveis,
            count(*) FILTER (WHERE enviado_em IS NOT NULL)::int AS enviadas,
@@ -69,7 +71,9 @@ export async function relatorioCampanha(tx: Sql, campanhaId: string): Promise<Re
            count(*) FILTER (WHERE estado = 'pendente')::int AS pendentes,
            count(*) FILTER (WHERE estado = 'enviando')::int AS enviando,
            count(*) FILTER (WHERE estado = 'falhou')::int AS falhas,
-           count(*) FILTER (WHERE estado = 'optout')::int AS optouts
+           count(*) FILTER (WHERE estado = 'optout')::int AS optouts,
+           -- Cobradas: saíram e a Meta não devolveu falha (failed não é cobrado).
+           count(*) FILTER (WHERE enviado_em IS NOT NULL AND estado <> 'falhou')::int AS cobradas
       FROM campanha_destinatario
      WHERE tenant_id = tenant_atual() AND campanha_id = ${campanhaId}`
   const excl = await tx<{ motivo: string; n: number }[]>`
@@ -91,8 +95,8 @@ export async function relatorioCampanha(tx: Sql, campanhaId: string): Promise<Re
     preco = precosEfetivos(linhas)[categoria]
   }
 
-  const z = f ?? { elegiveis: 0, enviadas: 0, entregues: 0, lidas: 0, responderam: 0, pendentes: 0, enviando: 0, falhas: 0, optouts: 0 }
-  const total = custoCampanhaCentavos(z.enviadas, preco)
+  const z = f ?? { elegiveis: 0, enviadas: 0, entregues: 0, lidas: 0, responderam: 0, pendentes: 0, enviando: 0, falhas: 0, optouts: 0, cobradas: 0 }
+  const total = custoCampanhaCentavos(z.cobradas, preco)
   const processados = z.elegiveis - z.pendentes - z.enviando
   return {
     campanhaId, estado: c.estado, pausaMotivo: c.pausa_motivo,
@@ -109,7 +113,7 @@ export async function relatorioCampanha(tx: Sql, campanhaId: string): Promise<Re
     falhas: z.falhas,
     falhasPorCodigo: codigos,
     custo: {
-      categoria, precoUnitarioCentavos: preco, totalCentavos: total,
+      categoria, mensagensCobradas: z.cobradas, precoUnitarioCentavos: preco, totalCentavos: total,
       porPedidoCentavos: custoPorVenda(total, roi.exata.pedidos),
       porVendaEstimadaCentavos: custoPorVenda(total, roi.estimada.vendas),
     },

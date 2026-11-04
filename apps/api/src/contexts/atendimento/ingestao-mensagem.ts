@@ -87,6 +87,28 @@ export async function registrarStatusMensagem(
   return { atualizada: true }
 }
 
+/**
+ * A Meta avisou que a mensagem NOSSA falhou depois de aceita (`failed` no webhook): a
+ * mensagem da thread vira `falhou` — o inbox mostra o tique de falha e o Consumo não a
+ * cobra. Só sai de `pendente`/`enviada`: entregue/lida não regridem. Idempotente.
+ */
+export async function registrarFalhaMensagem(tx: Sql, idExterno: string): Promise<{ atualizada: boolean }> {
+  const [m] = await tx<{ conversa_id: string }[]>`
+    UPDATE mensagem SET status = 'falhou'
+     WHERE tenant_id = tenant_atual() AND id_externo = ${idExterno} AND direcao = 'saliente'
+       AND status IN ('pendente', 'enviada')
+     RETURNING conversa_id`
+  if (!m) return { atualizada: false }
+  const [conv] = await tx<{ versao: string }[]>`
+    UPDATE conversa SET versao = versao + 1
+     WHERE tenant_id = tenant_atual() AND id = ${m.conversa_id} RETURNING versao`
+  await tx`
+    INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+    VALUES (tenant_atual(), 'mensagem.status', 'conversa', ${m.conversa_id},
+            ${JSON.stringify({ conversaId: m.conversa_id, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
+  return { atualizada: true }
+}
+
 /** Monta o `conteudo` (jsonb) da mensagem entrante conforme o tipo. */
 function conteudoEntrante(msg: MensagemEntrante): Record<string, unknown> {
   if (msg.tipo === 'imagem') {

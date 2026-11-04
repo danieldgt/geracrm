@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { sql, comTenantServico } from '../../db/index.js'
 import { parseWebhookMeta, verificarAssinaturaMeta, type EventoMeta } from './canais/meta.js'
-import { ingerirMensagemEntrante, registrarStatusMensagem } from './ingestao-mensagem.js'
+import { ingerirMensagemEntrante, registrarFalhaMensagem, registrarStatusMensagem } from './ingestao-mensagem.js'
 import { PREFIXO_MIDIA_META } from './canais/meta-oficial.js'
 import { aplicarQualidadeNumero, aplicarStatusTemplate } from './qualidade-numero.js'
 import type { MensagemEntrante } from './canais/porta.js'
@@ -145,11 +145,14 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
         } else if (ev.status === 'enviada' || ev.status === 'entregue' || ev.status === 'lida') {
           await comTenantServico(canal.tenant_id, (tx) => registrarStatusMensagem(tx, ev.idExterno, ev.status as 'enviada' | 'entregue' | 'lida', agora))
         } else if (ev.status === 'falhou') {
-          // Campanha v2 (F1): o destinatário do wamid vira `falhou` com o código da Meta e
-          // entra na taxa da pausa automática. A mensagem da thread continua como está
-          // (o tique de falha no inbox é outro passo).
+          // A mensagem da thread vira `falhou` (tique no inbox; o Consumo não cobra) e o
+          // destinatário de campanha do wamid também, com o código da Meta — que decide se
+          // entra na taxa de falha ou se pausa a campanha na hora (número em risco).
           const erroCodigo = ev.erroCodigo ?? null
-          await comTenantServico(canal.tenant_id, (tx) => registrarFalhaDestinatario(tx, ev.idExterno, erroCodigo, agora))
+          await comTenantServico(canal.tenant_id, async (tx) => {
+            await registrarFalhaMensagem(tx, ev.idExterno)
+            await registrarFalhaDestinatario(tx, ev.idExterno, erroCodigo, agora)
+          })
         }
       } catch (erro) {
         // ⚠️ Erro NOSSO (transitório, ex.: banco) → 500 para a Meta reenviar.

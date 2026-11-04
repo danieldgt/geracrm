@@ -69,7 +69,8 @@ export type ResultadoMidiaBaixada =
  */
 export type ResultadoEnvio =
   | { ok: true; idExterno: string }
-  | { ok: false; motivo: MotivoFalhaEnvio; detalhe?: string | undefined }
+  /** `codigo`: o código de erro do fornecedor, quando há (Meta: `error.code`) — campanha usa para pausar. */
+  | { ok: false; motivo: MotivoFalhaEnvio; detalhe?: string | undefined; codigo?: string | undefined }
 
 export type MotivoFalhaEnvio =
   /** A instância/número não está conectada (não-oficial: celular desligado). */

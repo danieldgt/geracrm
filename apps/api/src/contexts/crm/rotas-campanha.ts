@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import {
-  JANELA_CAMPANHA_PADRAO, LOTE_DIARIO_MAXIMO, LOTE_DIARIO_PADRAO, MAX_TELEFONES_TESTE, acaoPermitida, confirmacaoDoNomeConfere,
+  JANELA_CAMPANHA_PADRAO, LIMITE_TESTE_NUMERO_HORA, LIMITE_TESTE_USUARIO_HORA, LOTE_DIARIO_MAXIMO, LOTE_DIARIO_PADRAO,
+  limitarJanelaMarketing, validarJanelaCampanha, MAX_TELEFONES_TESTE, acaoPermitida, confirmacaoDoNomeConfere,
   custoCampanhaCentavos, duracaoDias, ehEstadoCampanha, ehEstadoDestinatario, type EstadoCampanha,
 } from '@geracrm/shared'
 import type { Sql } from '../../db/index.js'
@@ -50,6 +51,8 @@ export interface OpcoesRotasCampanha {
   readonly criarCanal?: typeof criarCanal
   /** Relógio injetável (teste). */
   readonly agora?: () => Date
+  /** Teste: chamado depois de cada fatia do snapshot no iniciar (simula edição concorrente). */
+  readonly aoMaterializarFatia?: () => Promise<void>
 }
 
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
@@ -88,6 +91,19 @@ function invalido(reply: FastifyReply, e: z.ZodError): FastifyReply {
 
 const erroConteudo = (reply: FastifyReply, e: ErroConteudo) => reply.code(422).send(e)
 
+/** Janela da campanha: ao menos um dia aberto e dentro de 08:00–21:00. `null` = ok. */
+function erroJanela(reply: FastifyReply, janela: CorpoV2['janela']): FastifyReply | null {
+  if (!janela) return null
+  const v = validarJanelaCampanha(janela)
+  if (v === 'vazia') {
+    return reply.code(422).send({ erro: 'campanha.janela_vazia', mensagem: 'Abra ao menos um dia na janela de envio.', campos: { janela: 'Nenhum dia aberto.' } })
+  }
+  if (v === 'fora_do_permitido') {
+    return reply.code(422).send({ erro: 'campanha.janela_fora_do_permitido', mensagem: 'Campanha de marketing só sai entre 08:00 e 21:00, sem virar a meia-noite.', campos: { janela: 'Use horários entre 08:00 e 21:00.' } })
+  }
+  return null
+}
+
 const naoEncontrada = (reply: FastifyReply) => reply.code(404).send({ erro: 'campanha.nao_encontrada' })
 
 const estadoInvalido = (reply: FastifyReply, estado: string, acao: string) =>
@@ -101,7 +117,7 @@ interface LinhaCampanha {
   mensagem: string | null; publico: unknown; lote_diario: number | null; inicio_em: Date | null
   janela: unknown; pausa_motivo: string | null; pausada_em: Date | null; confirma_risco_banimento: boolean
   iniciada_em: Date | null; iniciada_por: string | null; concluida_em: Date | null; atualizado_em: Date | null
-  suspensa_desde: Date | null; suspensa_motivo: string | null
+  suspensa_desde: Date | null; suspensa_motivo: string | null; bloqueio_motivo: string | null
 }
 
 function selecionarCampanhas(tx: Sql) {
@@ -114,9 +130,18 @@ function selecionarCampanhas(tx: Sql) {
            -- Número com ATIVAS suspensas pela Meta (P11): o despachante segura a
            -- campanha em curso; a tela precisa dizer por quê (P0c-m).
            CASE WHEN k.estado IN ('disparando', 'enviando', 'agendada') THEN cc.ativas_suspensas_em END AS suspensa_desde,
-           CASE WHEN k.estado IN ('disparando', 'enviando', 'agendada') THEN cc.ativas_suspensas_motivo END AS suspensa_motivo
+           CASE WHEN k.estado IN ('disparando', 'enviando', 'agendada') THEN cc.ativas_suspensas_motivo END AS suspensa_motivo,
+           -- Campanha em curso parada porque o NÚMERO não pode enviar: a tela diz o quê.
+           CASE WHEN k.modelo_versao = 2 AND k.estado IN ('enviando', 'agendada') THEN
+             CASE WHEN cc.id IS NULL THEN 'sem_numero'
+                  WHEN cc.arquivado_em IS NOT NULL THEN 'numero_arquivado'
+                  WHEN cc.estado IN ('desconectado', 'suspenso') THEN 'numero_desconectado'
+                  WHEN cc.credenciais_cifradas IS NULL THEN 'numero_sem_credencial'
+                  WHEN coalesce(cfg.disparo_pausado, false) THEN 'disparo_pausado'
+             END END AS bloqueio_motivo
       FROM campanha k
       LEFT JOIN canal_conectado cc ON cc.tenant_id = k.tenant_id AND cc.id = k.canal_id
+      LEFT JOIN canal_configuracao cfg ON cfg.tenant_id = k.tenant_id AND cfg.canal_id = k.canal_id
       LEFT JOIN template t ON t.tenant_id = k.tenant_id AND t.id = k.template_id`
 }
 
@@ -129,6 +154,7 @@ function resumo(l: LinhaCampanha) {
     loteDiario: l.lote_diario, inicioEm: l.inicio_em, pausaMotivo: l.pausa_motivo, pausadaEm: l.pausada_em,
     iniciadaEm: l.iniciada_em, concluidaEm: l.concluida_em,
     pausadaPorQualidade: l.suspensa_desde ? { desde: l.suspensa_desde, motivo: l.suspensa_motivo } : null,
+    bloqueio: l.bloqueio_motivo ? { motivo: l.bloqueio_motivo } : null,
   }
 }
 
@@ -157,14 +183,19 @@ async function precoDaCampanha(tx: Sql, tipoCanal: string, categoriaTemplate: st
  */
 async function janelaEfetiva(tx: Sql, canalId: string | null, daCampanha: unknown) {
   if (daCampanha && typeof daCampanha === 'object' && Object.keys(daCampanha).length > 0) {
-    return { origem: 'campanha' as const, horario: daCampanha }
+    return { origem: 'campanha' as const, horario: daCampanha, ajustada: false }
   }
   const [cfg] = canalId
-    ? await tx<{ horario: Record<string, unknown> | null }[]>`
+    ? await tx<{ horario: Record<string, { de: string; ate: string } | null> | null }[]>`
         SELECT horario_atendimento AS horario FROM canal_configuracao WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}`
     : []
-  if (cfg?.horario && Object.keys(cfg.horario).length > 0) return { origem: 'canal' as const, horario: cfg.horario }
-  return { origem: 'padrao' as const, horario: JANELA_CAMPANHA_PADRAO }
+  if (cfg?.horario && Object.keys(cfg.horario).length > 0) {
+    // Marketing só de 08:00 às 21:00: o expediente do número é RECORTADO a isso.
+    // `ajustada` = o recorte mudou algo (a tela avisa).
+    const { horario, ajustada } = limitarJanelaMarketing(cfg.horario)
+    return { origem: 'canal' as const, horario, ajustada }
+  }
+  return { origem: 'padrao' as const, horario: JANELA_CAMPANHA_PADRAO, ajustada: false }
 }
 
 export async function rotasCampanha(app: FastifyInstance, opcoes: OpcoesRotasCampanha = {}): Promise<void> {
@@ -273,6 +304,8 @@ export async function rotasCampanha(app: FastifyInstance, opcoes: OpcoesRotasCam
 
       const p = esquemaV2.safeParse(b)
       if (!p.success) return invalido(reply, p.error)
+      const ej = erroJanela(reply, p.data.janela)
+      if (ej) return ej
       const pub = lerPublico(p.data.publico)
       if (!pub.ok) return reply.code(422).send({ erro: 'campanha.publico_invalido', mensagem: 'Público inválido.', campos: Object.fromEntries(pub.campos.map((c) => [c, 'Inválido.'])) })
       const id = randomUUID()
@@ -330,6 +363,8 @@ export async function rotasCampanha(app: FastifyInstance, opcoes: OpcoesRotasCam
       if (!UUID.test(req.params.id)) return naoEncontrada(reply)
       const p = esquemaV2.safeParse(req.body ?? {})
       if (!p.success) return invalido(reply, p.error)
+      const ej = erroJanela(reply, p.data.janela)
+      if (ej) return ej
       const pub = lerPublico(p.data.publico)
       if (!pub.ok) return reply.code(422).send({ erro: 'campanha.publico_invalido', mensagem: 'Público inválido.', campos: Object.fromEntries(pub.campos.map((c) => [c, 'Inválido.'])) })
       const r = await req.comTenant(async (tx) => {
@@ -403,12 +438,34 @@ export async function rotasCampanha(app: FastifyInstance, opcoes: OpcoesRotasCam
         if (k.modelo_versao !== 2 || !acaoPermitida(k.estado, 'testar')) return { e: 'estado' as const, estado: k.estado }
         const v = await validarConteudo(tx, { canalId: k.canal_id, templateId: k.template_id, mensagem: k.mensagem, confirmaRiscoBanimento: k.confirma })
         if (!v.ok) return { e: 'conteudo' as const, erro: v.e }
-        await auditar(tx, { atorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
-          acao: 'campanha.teste_enviado', entidade: 'campanha', entidadeId: req.params.id, dados: { quantos: corpo.data.telefones.length } })
+        const usuarioId = await garantirUsuarioId(tx, req)
+        const quantos = corpo.data.telefones.length
+        // ⚠️ Teste repetido vira disparo disfarçado: teto por usuário e por número, na última hora.
+        const [uso] = await tx<{ usuario: number; numero: number }[]>`
+          SELECT coalesce(sum((dados->>'quantos')::int) FILTER (WHERE ator_id = ${usuarioId}), 0)::int AS usuario,
+                 coalesce(sum((dados->>'quantos')::int) FILTER (WHERE dados->>'canalId' = ${k.canal_id}), 0)::int AS numero
+            FROM auditoria
+           WHERE tenant_id = tenant_atual() AND acao = 'campanha.teste_enviado' AND criado_em >= now() - interval '1 hour'`
+        if ((uso?.usuario ?? 0) + quantos > LIMITE_TESTE_USUARIO_HORA || (uso?.numero ?? 0) + quantos > LIMITE_TESTE_NUMERO_HORA) {
+          return { e: 'limite' as const }
+        }
+        // No não oficial em aquecimento, o teste também cabe no teto do dia do número.
+        if (v.canal.tipo === 'whatsapp_nao_oficial' && (await statusAquecimento(tx, k.canal_id!, agora())).restante < quantos) {
+          return { e: 'sem_cota' as const }
+        }
+        await auditar(tx, { atorId: usuarioId, atorStaff: req.atorStaff ?? false,
+          acao: 'campanha.teste_enviado', entidade: 'campanha', entidadeId: req.params.id, dados: { quantos, canalId: k.canal_id } })
         return { e: null, k }
       })
       if (prep.e === 'nao_encontrada') return naoEncontrada(reply)
       if (prep.e === 'estado') return estadoInvalido(reply, prep.estado, 'envio de teste')
+      if (prep.e === 'limite') {
+        return reply.code(429).send({ erro: 'campanha.teste_limite', mensagem: `Limite de testes: ${LIMITE_TESTE_USUARIO_HORA} telefones por pessoa e ${LIMITE_TESTE_NUMERO_HORA} por número a cada hora.`,
+          limiteUsuarioHora: LIMITE_TESTE_USUARIO_HORA, limiteNumeroHora: LIMITE_TESTE_NUMERO_HORA })
+      }
+      if (prep.e === 'sem_cota') {
+        return reply.code(409).send({ erro: 'campanha.teste_sem_cota', mensagem: 'O número está em aquecimento e o teto de hoje acabou; o teste também conta.' })
+      }
       if (prep.e === 'conteudo') return erroConteudo(reply, prep.erro)
       const resultados = await enviarTesteCampanha(tenantId, {
         canalId: prep.k.canal_id!, templateId: prep.k.template_id, texto: prep.k.template_id ? null : prep.k.mensagem,
@@ -432,8 +489,9 @@ export async function rotasCampanha(app: FastifyInstance, opcoes: OpcoesRotasCam
       if (!UUID.test(req.params.id)) return naoEncontrada(reply)
       const instante = agora()
       const prep = await req.comTenant(async (tx) => {
-        const [k] = await tx<{ nome: string; estado: EstadoCampanha; modelo_versao: number; canal_id: string | null; template_id: string | null; mensagem: string | null; confirma: boolean; publico: unknown }[]>`
-          SELECT nome, estado, modelo_versao, canal_id, template_id, mensagem, confirma_risco_banimento AS confirma, publico
+        const [k] = await tx<{ nome: string; estado: EstadoCampanha; modelo_versao: number; canal_id: string | null; template_id: string | null; mensagem: string | null; confirma: boolean; publico: unknown; versao: string | null }[]>`
+          SELECT nome, estado, modelo_versao, canal_id, template_id, mensagem, confirma_risco_banimento AS confirma, publico,
+                 atualizado_em::text AS versao
             FROM campanha WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!k) return { e: 'nao_encontrada' as const }
         if (k.modelo_versao !== 2 || !acaoPermitida(k.estado, 'iniciar')) return { e: 'estado' as const, estado: k.estado }
@@ -442,7 +500,7 @@ export async function rotasCampanha(app: FastifyInstance, opcoes: OpcoesRotasCam
         if (!v.ok) return { e: 'conteudo' as const, erro: v.e }
         const escopo = await escopoDaRequisicao(tx, req)
         const usuarioId = await garantirUsuarioId(tx, req)
-        return { e: null, publico: publicoGravado(k.publico), escopo, usuarioId }
+        return { e: null, publico: publicoGravado(k.publico), escopo, usuarioId, versao: k.versao }
       })
       if (prep.e === 'nao_encontrada') return naoEncontrada(reply)
       if (prep.e === 'estado') return estadoInvalido(reply, prep.estado, 'iniciar')
@@ -458,6 +516,7 @@ export async function rotasCampanha(app: FastifyInstance, opcoes: OpcoesRotasCam
         }))
         if (fatia.ultimo === null) break
         depoisDe = fatia.ultimo
+        await opcoes.aoMaterializarFatia?.()
       }
 
       const r = await req.comTenant(async (tx) => {
@@ -476,14 +535,27 @@ export async function rotasCampanha(app: FastifyInstance, opcoes: OpcoesRotasCam
                  disparada_em = greatest(coalesce(inicio_em, ${instante}), ${instante}),
                  lote_diario = coalesce(lote_diario, ${LOTE_DIARIO_PADRAO}), atualizado_em = ${instante}
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id} AND estado = 'rascunho'
+             -- ⚠️ A campanha não pode ter sido editada enquanto o snapshot era montado: o
+             --    público congelado seria o ANTIGO. Mesmo atualizado_em do começo, ou nada.
+             AND atualizado_em::text IS NOT DISTINCT FROM ${prep.versao}
           RETURNING estado`
-        if (!k) return { e: 'concorrencia' as const }
+        if (!k) {
+          const [atual] = await tx<{ estado: string }[]>`SELECT estado FROM campanha WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+          if (atual?.estado === 'rascunho') {
+            await tx`DELETE FROM campanha_destinatario WHERE tenant_id = tenant_atual() AND campanha_id = ${req.params.id}`
+            return { e: 'alterada' as const }
+          }
+          return { e: 'concorrencia' as const }
+        }
         await auditar(tx, { atorId: prep.usuarioId, atorStaff: req.atorStaff ?? false, acao: 'campanha.iniciada',
           entidade: 'campanha', entidadeId: req.params.id, dados: { destinatarios: n!.pendentes, excluidos: n!.excluidos } })
         return { e: null, estado: k.estado, destinatarios: n!.pendentes, excluidos: n!.excluidos }
       })
       if (r.e === 'vazio') return reply.code(422).send({ erro: 'campanha.sem_elegiveis', mensagem: 'Nenhum contato elegível neste público depois das exclusões.' })
       if (r.e === 'concorrencia') return reply.code(409).send({ erro: 'campanha.ja_iniciada', mensagem: 'A campanha já foi iniciada.' })
+      if (r.e === 'alterada') {
+        return reply.code(409).send({ erro: 'campanha.alterada_durante_inicio', mensagem: 'A campanha foi editada enquanto era iniciada. Confira e inicie de novo.' })
+      }
       return reply.send({ ok: true, estado: r.estado, destinatarios: r.destinatarios, excluidos: r.excluidos })
     },
   )

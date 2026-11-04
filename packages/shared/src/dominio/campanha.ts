@@ -43,11 +43,12 @@ export const ROTULO_ESTADO_DESTINATARIO: Readonly<Record<EstadoDestinatario, str
 /**
  * Motivos de exclusão, NA ORDEM em que são avaliados (o primeiro que casa vence).
  * `foraDoEscopo` vem primeiro: quem não enxerga o contato não precisa saber por que
- * ele ficaria de fora. `telefoneDuplicado`: dois contatos com a mesma chave de
+ * ele ficaria de fora. `anonimizado` (LGPD, ou contato inativo) vem antes do opt-out:
+ * o titular esquecido também está na lista de bloqueio, e o motivo certo é o LGPD. `telefoneDuplicado`: dois contatos com a mesma chave de
  * telefone (com e sem o nono dígito) — só o primeiro recebe.
  */
 export const MOTIVOS_EXCLUSAO = [
-  'foraDoEscopo', 'optout', 'anonimizado', 'semTelefone',
+  'foraDoEscopo', 'anonimizado', 'optout', 'semTelefone',
   'conversaRecente', 'campanhaRecente', 'compraRecente', 'telefoneDuplicado',
 ] as const
 export type MotivoExclusao = (typeof MOTIVOS_EXCLUSAO)[number]
@@ -61,6 +62,15 @@ export const ROTULO_MOTIVO_EXCLUSAO: Readonly<Record<MotivoExclusao, string>> = 
   campanhaRecente: 'Recebeu campanha recentemente',
   compraRecente: 'Comprou recentemente',
   telefoneDuplicado: 'Telefone repetido em outro contato',
+}
+
+/**
+ * Motivos que só aparecem NO ENVIO (destinatário `excluida`), além dos de cima:
+ * a variável do template ficou sem valor para o contato.
+ */
+export const MOTIVOS_EXCLUSAO_NO_ENVIO = ['variavelSemValor'] as const
+export const ROTULO_MOTIVO_EXCLUSAO_NO_ENVIO: Readonly<Record<(typeof MOTIVOS_EXCLUSAO_NO_ENVIO)[number], string>> = {
+  variavelSemValor: 'Variável do template sem valor para o contato',
 }
 
 /** Janelas padrão das exclusões configuráveis (dias). 0 desliga a exclusão. */
@@ -108,6 +118,9 @@ export const LOTE_DIARIO_PADRAO = 500
 export const LOTE_DIARIO_MAXIMO = 10000
 /** Envio de teste: no máximo 5 números, fora do lote. */
 export const MAX_TELEFONES_TESTE = 5
+/** Envio de teste: teto por usuário e por número, em telefones por hora (abuso vira disparo disfarçado). */
+export const LIMITE_TESTE_USUARIO_HORA = 20
+export const LIMITE_TESTE_NUMERO_HORA = 30
 /** Resposta do cliente até 7 dias depois do envio conta para a campanha. */
 export const JANELA_RESPOSTA_DIAS = 7
 
@@ -120,6 +133,57 @@ export const JANELA_RESPOSTA_DIAS = 7
 export const JANELA_CAMPANHA_PADRAO: Readonly<Record<string, { de: string; ate: string } | null>> = {
   seg: { de: '08:00', ate: '20:00' }, ter: { de: '08:00', ate: '20:00' }, qua: { de: '08:00', ate: '20:00' },
   qui: { de: '08:00', ate: '20:00' }, sex: { de: '08:00', ate: '20:00' }, sab: { de: '08:00', ate: '20:00' }, dom: null,
+}
+
+/** Faixa máxima de horário para marketing (fuso do tenant): 08:00 às 21:00. */
+export const JANELA_MARKETING_LIMITE = { de: '08:00', ate: '21:00' } as const
+
+type FaixaHorario = { de: string; ate: string }
+type Horario = Readonly<Record<string, FaixaHorario | null | undefined>>
+
+/** Uma faixa recortada a 08:00–21:00 (faixa que vira a meia-noite: a parte maior que sobra). */
+function recortarFaixa(f: FaixaHorario): FaixaHorario | null {
+  const L = JANELA_MARKETING_LIMITE
+  const pedacos: FaixaHorario[] = f.de <= f.ate ? [f] : [{ de: f.de, ate: '24:00' }, { de: '00:00', ate: f.ate }]
+  let melhor: FaixaHorario | null = null
+  for (const p of pedacos) {
+    const de = p.de > L.de ? p.de : L.de
+    const ate = p.ate < L.ate ? p.ate : L.ate
+    if (de < ate && (!melhor || minutos(ate) - minutos(de) > minutos(melhor.ate) - minutos(melhor.de))) {
+      melhor = { de, ate }
+    }
+  }
+  return melhor
+}
+
+const minutos = (h: string): number => Number(h.slice(0, 2)) * 60 + Number(h.slice(3, 5))
+
+/**
+ * Recorta um horário (expediente do número) à faixa de marketing. `ajustada` diz se
+ * algo mudou — a prévia avisa. Dia que sai inteiro da faixa vira fechado.
+ */
+export function limitarJanelaMarketing(h: Horario): { horario: Record<string, FaixaHorario | null>; ajustada: boolean } {
+  const horario: Record<string, FaixaHorario | null> = {}
+  let ajustada = false
+  for (const [dia, f] of Object.entries(h)) {
+    if (!f) { horario[dia] = null; continue }
+    const r = recortarFaixa(f)
+    if (!r || r.de !== f.de || r.ate !== f.ate) ajustada = true
+    horario[dia] = r
+  }
+  return { horario, ajustada }
+}
+
+/**
+ * A janela da CAMPANHA é válida? Ao menos um dia aberto; cada faixa com início antes do
+ * fim (sem virar a meia-noite) e dentro de 08:00–21:00.
+ */
+export function validarJanelaCampanha(h: Horario): 'ok' | 'vazia' | 'fora_do_permitido' {
+  const abertos = Object.values(h).filter((f): f is FaixaHorario => !!f)
+  if (abertos.length === 0) return 'vazia'
+  const L = JANELA_MARKETING_LIMITE
+  for (const f of abertos) if (!(f.de < f.ate) || f.de < L.de || f.ate > L.ate) return 'fora_do_permitido'
+  return 'ok'
 }
 
 /** Dias para enviar a todos os elegíveis no ritmo do lote diário. */
@@ -146,7 +210,8 @@ export const PAUSA_OPTOUT_PCT = 2
 export const PAUSA_FALHA_PCT = 10
 export const PAUSA_AMOSTRA_MINIMA = 50
 
-export type MotivoPausa = 'manual' | 'optout_alto' | 'falhas_altas' | 'qualidade_numero' | 'template_indisponivel'
+export type MotivoPausa =
+  | 'manual' | 'optout_alto' | 'falhas_altas' | 'qualidade_numero' | 'template_indisponivel' | 'numero_em_risco'
 
 export const ROTULO_MOTIVO_PAUSA: Readonly<Record<MotivoPausa, string>> = {
   manual: 'Pausada por uma pessoa',
@@ -154,6 +219,33 @@ export const ROTULO_MOTIVO_PAUSA: Readonly<Record<MotivoPausa, string>> = {
   falhas_altas: 'Pausa automática: muitas falhas de envio (acima de 10%)',
   qualidade_numero: 'Pausa automática: a Meta baixou a qualidade do número',
   template_indisponivel: 'Pausa automática: o template deixou de estar aprovado na Meta',
+  numero_em_risco: 'Pausa automática: a Meta sinalizou risco no número (limite, spam ou bloqueio temporário)',
+}
+
+// ── Erros da Meta no envio ───────────────────────────────────────────────────
+
+/**
+ * Erros do DESTINATÁRIO: o número não recebe (não é WhatsApp, limite de marketing
+ * por pessoa, pediu para parar marketing…). Dizem respeito a UMA pessoa e NÃO entram
+ * na taxa de falha da pausa automática — senão uma base com muitos fixos pausaria uma
+ * campanha saudável.
+ */
+export const ERROS_META_DESTINATARIO = ['131026', '131049', '131050', '131047', '131051', '131030', '131021'] as const
+/**
+ * Erros de NÚMERO EM RISCO: conta bloqueada, limite de spam, limite de par, limite de
+ * taxa, bloqueio temporário por política. Insistir derruba o número: pausa NA HORA.
+ */
+export const ERROS_META_NUMERO_EM_RISCO = ['131031', '131048', '131056', '130429', '368'] as const
+
+export type ClasseErroMeta = 'destinatario' | 'numero_em_risco' | 'outro'
+
+/** Classifica o código de erro da Meta (texto ou número). Sem código = `outro`. */
+export function classificarErroMeta(codigo: string | number | null | undefined): ClasseErroMeta {
+  if (codigo === null || codigo === undefined) return 'outro'
+  const c = String(codigo)
+  if ((ERROS_META_NUMERO_EM_RISCO as readonly string[]).includes(c)) return 'numero_em_risco'
+  if ((ERROS_META_DESTINATARIO as readonly string[]).includes(c)) return 'destinatario'
+  return 'outro'
 }
 
 export interface ContagemPausa {
