@@ -18,7 +18,8 @@ import { moduloAtivo } from '../plataforma/modulos.js'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DIA = /^\d{4}-\d{2}-\d{2}$/
 
-function diaReal(v: string): boolean {
+/** 'AAAA-MM-DD' que existe no calendário (2026-02-30 não). */
+export function diaReal(v: string): boolean {
   if (!DIA.test(v)) return false
   const [a, m, d] = v.split('-').map(Number) as [number, number, number]
   const dt = new Date(Date.UTC(a, m - 1, d))
@@ -55,6 +56,12 @@ export interface FiltrosContato {
   readonly carteiraAtiva: boolean
   readonly criadoDe: string | null
   readonly criadoAte: string | null
+}
+
+/** Nenhum filtro: base para compor um filtro de cada vez (público de campanha, F1). */
+export const FILTROS_VAZIOS: FiltrosContato = {
+  q: null, qualificacao: null, segmento: null, vendedorId: null, filialId: null, origemId: null,
+  etiquetaIds: [], semProximoPasso: false, criadoDe: null, criadoAte: null,
 }
 
 export type ResultadoFiltros =

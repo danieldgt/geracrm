@@ -28,7 +28,7 @@ import { rotasNps } from './contexts/crm/rotas-nps.js'
 import { rotasSequencia } from './contexts/crm/rotas-sequencia.js'
 import { rotasAutomacao } from './contexts/crm/rotas-automacao.js'
 import { rotasFidelidade } from './contexts/crm/rotas-fidelidade.js'
-import { rotasCampanha } from './contexts/crm/rotas-campanha.js'
+import { rotasCampanha, type OpcoesRotasCampanha } from './contexts/crm/rotas-campanha.js'
 import { rotasConversas } from './contexts/atendimento/rotas-conversas.js'
 import { rotasCanais } from './contexts/atendimento/rotas-canais.js'
 import { rotasCanalConfig } from './contexts/atendimento/rotas-canal-config.js'
@@ -116,7 +116,7 @@ export function saltosDeProxy(bruto = process.env.TRUST_PROXY_HOPS): number | fa
  * Cognito; os testes passam o falso — nenhum teste chama a AWS.
  */
 export async function criarApp(
-  opcoes: { provedorIdentidade?: ProvedorIdentidade } = {},
+  opcoes: { provedorIdentidade?: ProvedorIdentidade; campanha?: OpcoesRotasCampanha } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
     trustProxy: saltosDeProxy(),
@@ -186,7 +186,7 @@ export async function criarApp(
   await app.register(rotasSequencia)
   await app.register(rotasAutomacao)
   await app.register(rotasFidelidade)
-  await app.register(rotasCampanha)
+  await app.register(rotasCampanha, opcoes.campanha ?? {})
   await app.register(rotasConversas)
   await app.register(rotasCanais)
   await app.register(rotasCanalConfig)

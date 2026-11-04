@@ -11,6 +11,7 @@ import {
   cancelarDescarteEReativacaoDoContato, reabrirContatoDescartadoSemResposta, travarConversaEContato,
 } from './agente/descarte-reativacao.js'
 import { midiaHabilitada } from './midia/armazenamento.js'
+import { marcarRespostaDeCampanha, registrarStatusDestinatario } from '../crm/campanha-destinatario.js'
 
 /**
  * Ingestão de mensagem ENTRANTE — o nosso fluxo (INV-12), não o do ERP.
@@ -60,8 +61,13 @@ export async function registrarStatusMensagem(
   tx: Sql,
   idExterno: string,
   status: 'enviada' | 'entregue' | 'lida',
+  em: Date = new Date(),
 ): Promise<{ atualizada: boolean }> {
   const ordem = ORDEM_STATUS[status] ?? 0
+  // Campanha v2 (F1): o destinatário do wamid avança junto (entregue/lida). Antes do
+  // retorno abaixo — o destinatário tem a própria régua de "só avança", e o tique da
+  // mensagem já estar adiante não pode impedir o funil da campanha de contar.
+  await registrarStatusDestinatario(tx, idExterno, status, em)
   const [m] = await tx<{ conversa_id: string }[]>`
     UPDATE mensagem SET status = ${status}, status_ordem = ${ordem}
      WHERE tenant_id = tenant_atual() AND id_externo = ${idExterno} AND direcao = 'saliente'
@@ -258,6 +264,13 @@ export async function ingerirMensagemEntrante(
   try {
     await emSavepoint(tx, (sp) => reabrirContatoDescartadoSemResposta(sp, conversaId, msg.recebidaEm, msg.texto ?? null))
   } catch { /* reabrir é acessório; a mensagem não pode se perder por ele */ }
+
+  // 6.10 Resposta a uma campanha (F1, #78): o cliente escreveu neste número em até 7
+  //      dias do envio → o destinatário vira `respondeu`. Acessório: a mensagem não
+  //      pode se perder por ele.
+  try {
+    await emSavepoint(tx, (sp) => marcarRespostaDeCampanha(sp, { contatoId, canalId, recebidaEm: msg.recebidaEm }))
+  } catch { /* atribuição é acessória */ }
 
   // 7. Notifica o atendente que assumiu esta conversa (PLT-07), no mesmo commit.
   //    Só entrante NOVA chega aqui — a duplicada já retornou lá em cima.
