@@ -1200,6 +1200,7 @@ Forms (ControlValueAccessor). Cobre texto, e-mail, telefone, número, senha, bus
 - `mascara` — `'cpf' | 'cnpj' | 'cpfCnpj' | 'telefone' | 'cep' | null`.
 - `erro` — `string | null`; `dica` — string; `obrigatorio`, `largo`, `desabilitado` — boolean; `autocomplete` — string | null.
 - Slot `[acao]` — botão ao lado do controle (ex.: consultar CNPJ).
+- `maxlength` — `number | null`; `min`, `max`, `step` — `string | number | null`. Opcionais, repassados ao controle (`<input>` ou `<textarea>`). Em `tipo="textarea"` com `maxlength`, aparece o contador discreto "n/max" abaixo do campo.
 - Valor no CVA: texto; `tipo="number"` → número; `tipo="dinheiro"` → **centavos inteiros**; com `mascara` → **só dígitos**.
 
 **Estados:** repouso · foco (`--borda-foco`) · erro (`aria-invalid`, mensagem com `role="alert"`) · desabilitado (por input ou `setDisabledState`) · obrigatório (asterisco).
@@ -1414,6 +1415,7 @@ embutidos. Rola na horizontal dentro da caixa. A paginação **não** mora aqui:
 - `chaveLinha` — `(linha) => string`. Padrão: `String(linha['id'])`.
 - `selecionavel` — boolean; `selecionados` — `model<ReadonlySet<string>>`.
 - `carregando` — boolean; `linhasEsqueleto` — número (padrão 5).
+- `rodape` — `Record<chave, string> | null` (opcional). Linha de totais (`tfoot`) com um texto por chave de coluna, já formatado por quem chama (ex.: `formatarReais`); chave sem valor fica vazia. Some durante o carregamento.
 - Template por coluna: `<ng-template uiCelula="status" let-linha>…</ng-template>`.
 - Vazio: `<div uiVazio>…</div>`.
 
@@ -1534,12 +1536,30 @@ placeholder, dentro de um `<label>` com o texto "Busca".
 > ou as páginas já trazidas). Quem lê o CSV e espera o total do filtro se engana. O rótulo ou a dica deve
 > dizer o escopo, por exemplo "Exportar as linhas da tela".
 
-### 5B.20 `ui-icone` — ícone Lucide
+### 5B.20 `ui-botao` — botão
+
+**O que é:** botão com variantes (primário, secundário, perigo, fantasma), estado de carregamento e largura total opcional.
+
+**API:**
+- `variante` — `'primario' | 'secundario' | 'perigo' | 'fantasma'` (padrão `primario`).
+- `tipo` — `'button' | 'submit' | 'reset'` (padrão `button`, que não envia formulário).
+- `form` — `string | null`: id do `<form>` ao qual o botão pertence. Use para enviar um formulário a partir de um botão fora dele (rodapé do `ui-modal` ou do `ui-form-pagina`).
+- `desabilitado`, `carregando`, `bloco` — boolean.
+
+**Estados:** repouso · hover · pressionado · foco (`--borda-foco`) · desabilitado · carregando (spinner, botão desabilitado).
+
+**Acessibilidade:** `<button>` nativo; o spinner é `aria-hidden`.
+
+> ⚠️ **Armadilha: `tipo="submit"` sem `form` só envia o formulário que o contém.** Um botão no rodapé de um modal
+> fica fora do `<form>` do corpo: passe `form` com o id do formulário e `tipo="submit"`, e dê `id` ao `<form>`.
+> Sem isso, o clique não envia nada e a tela parece travada.
+
+### 5B.21 `ui-icone` — ícone Lucide
 
 **O que é:** ícone SVG do Lucide, a partir de um mapa local (`icones-lucide.ts`). Substitui emoji na casca e nas ações.
 
 **API:**
-- `nome` — `input.required<string>`, kebab-case: `house`, `bar-chart-3`. Os nomes válidos são as chaves de `ICONES`.
+- `nome` — `input.required<string>`, kebab-case: `house`, `bar-chart-3`. Os nomes válidos são as chaves de `ICONES`. Desenhos adicionados nesta rodada (conferidos no `lucide-static` 1.67.0): `pause`, `play`, `flame`, `zap`, `mail`, `bell-off`, `calendar-clock`, `route`, `shuffle`.
 - `tamanho` — `14 | 18` (padrão `18`). Só essas duas medidas da casca.
 - `rotulo` — string opcional.
 
