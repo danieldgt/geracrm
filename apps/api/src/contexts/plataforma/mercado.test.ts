@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
 import { criarApp } from '../../app.js'
@@ -71,4 +72,35 @@ describe('Visão de Mercado', () => {
     const r = (await chamar(OUTRO, '/v1/mercado')).json() as { total: number }
     expect(r.total).toBe(0)
   })
+
+  it('porOrigem: top 30 com porOrigemTruncado na fronteira (30 = não corta; 31 = corta)', async () => {
+    const lerOrigens = async (t: string) => (await chamar(t, '/v1/mercado')).json() as {
+      porOrigem: unknown[]; porOrigemTruncado: boolean
+    }
+    // Origens distintas já existentes em T ('erp', 'whatsapp') → completa até 30.
+    const base = (await lerOrigens(T)).porOrigem.length
+    try {
+      await origensExtras(1, 30 - base)
+      const na = await lerOrigens(T)
+      expect(na.porOrigem).toHaveLength(30)
+      expect(na.porOrigemTruncado).toBe(false)
+
+      await origensExtras(31 - base, 31 - base) // 31ª origem distinta
+      const com = await lerOrigens(T)
+      expect(com.porOrigem).toHaveLength(30)
+      expect(com.porOrigemTruncado).toBe(true)
+
+      expect((await lerOrigens(OUTRO)).porOrigemTruncado).toBe(false)
+    } finally {
+      await dono`DELETE FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Extra %'`
+    }
+  })
 })
+
+/** Contatos extras, cada um com uma origem distinta ("origem-NNN") — para a fronteira do top 30. */
+async function origensExtras(de: number, ate: number) {
+  for (let k = de; k <= ate; k++) {
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo)
+               VALUES (${T}, ${randomUUID()}, ${'Extra ' + k}, ${'origem-' + String(k).padStart(3, '0')}, true)`
+  }
+}

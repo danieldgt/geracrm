@@ -8,7 +8,10 @@ import { exigirTenant } from '../../plugins/tenant.js'
  * fingir cobertura. Quando houver geocoding, isto vira a camada de dados do mapa.
  *
  * Usa o endereço PRINCIPAL de cada contato (ou o de menor seq), um por contato.
+ * `porCidadeTruncado`: a lista de cidades é o top 50; `true` quando há mais cidades.
  */
+const LIMITE_CIDADES = 50
+
 export async function rotasMapa(app: FastifyInstance): Promise<void> {
   app.get('/v1/mapa', { preHandler: exigirTenant }, async (req, reply) => {
     const dados = await req.comTenant(async (tx) => {
@@ -30,24 +33,29 @@ export async function rotasMapa(app: FastifyInstance): Promise<void> {
                count(*) FILTER (WHERE uf IS NULL AND cidade IS NULL)::int AS sem
           FROM b`
 
+      // Limitado por construção: são 27 UFs (26 estados + DF). O LIMIT 30 é só freio para UF suja.
       const porEstado = await tx<{ uf: string; contatos: number }[]>`
         WITH b AS (${base})
         SELECT uf, count(*)::int AS contatos FROM b WHERE uf IS NOT NULL
          GROUP BY uf ORDER BY count(*) DESC, uf ASC LIMIT 30`
 
+      // Top 50 cidades; LIMIT 51 para saber se cortou.
       const porCidade = await tx<{ cidade: string; uf: string | null; contatos: number }[]>`
         WITH b AS (${base})
         SELECT cidade, max(uf) AS uf, count(*)::int AS contatos FROM b WHERE cidade IS NOT NULL
-         GROUP BY cidade ORDER BY count(*) DESC, cidade ASC LIMIT 15`
+         GROUP BY cidade ORDER BY count(*) DESC, cidade ASC LIMIT ${LIMITE_CIDADES + 1}`
 
       return { tot, porEstado, porCidade }
     })
 
+    const cortou = dados.porCidade.length > LIMITE_CIDADES
+    const cidades = cortou ? dados.porCidade.slice(0, LIMITE_CIDADES) : dados.porCidade
     return reply.send({
       total: dados.tot?.total ?? 0,
       semEndereco: dados.tot?.sem ?? 0,
       porEstado: dados.porEstado.map((e) => ({ uf: e.uf, contatos: e.contatos })),
-      porCidade: dados.porCidade.map((c) => ({ cidade: c.cidade, uf: c.uf, contatos: c.contatos })),
+      porCidade: cidades.map((c) => ({ cidade: c.cidade, uf: c.uf, contatos: c.contatos })),
+      porCidadeTruncado: cortou,
     })
   })
 }

@@ -23,6 +23,8 @@ interface Perf {
   readonly pctDentroSla: number | null
   readonly medianaRespostaSeg: number | null
   readonly porAtendente: { usuarioId: string | null; nome: string; respondidos: number; medianaRespostaSeg: number | null }[]
+  /** Teto da equipe (200): `true` quando há mais atendentes que os listados. */
+  readonly porAtendenteTruncado: boolean
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
@@ -96,6 +98,9 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
                   </ng-template>
                   <div uiVazio><ui-estado titulo="Ninguém respondeu no período" descricao="As respostas humanas aparecem aqui assim que houver." /></div>
                 </ui-tabela>
+                @if (p.porAtendenteTruncado) {
+                  <p class="dica">Mostrando os 200 atendentes com mais respostas; há mais atendentes fora desta lista.</p>
+                }
               </section>
             }
           }

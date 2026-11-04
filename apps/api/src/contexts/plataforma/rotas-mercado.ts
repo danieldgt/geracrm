@@ -7,7 +7,10 @@ import { distribuicaoRfv } from '../crm/rotas-segmentos.js'
  * o quanto ela é acionável (WhatsApp, telefone, opt-out) e onde ela está no RFV.
  * ⚠️ Leitura pura sobre o cadastro; a régua RFV é a MESMA `distribuicaoRfv` do
  * resto (shared), a tela não reinventa fronteira. Só contatos ATIVOS.
+ * `porOrigemTruncado`: top 30 origens; `rfv` não tem teto (conjunto fixo de segmentos).
  */
+const LIMITE_ORIGENS = 30
+
 export async function rotasMercado(app: FastifyInstance): Promise<void> {
   app.get('/v1/mercado', { preHandler: exigirTenant }, async (req, reply) => {
     const dados = await req.comTenant(async (tx) => {
@@ -28,16 +31,21 @@ export async function rotasMercado(app: FastifyInstance): Promise<void> {
         FROM contato c
         WHERE c.tenant_id = tenant_atual() AND c.ativo`
 
+      // Top 30 origens; LIMIT 31 para saber se cortou (origem_carga é texto livre do ERP/importação).
       const porOrigem = await tx<{ origem: string; contatos: number }[]>`
         SELECT COALESCE(NULLIF(origem_carga, ''), 'não informado') AS origem, count(*)::int AS contatos
           FROM contato
          WHERE tenant_id = tenant_atual() AND ativo
          GROUP BY COALESCE(NULLIF(origem_carga, ''), 'não informado')
-         ORDER BY count(*) DESC LIMIT 12`
+         ORDER BY count(*) DESC LIMIT ${LIMITE_ORIGENS + 1}`
 
+      // Limitado por construção: um balde por segmento RFV (CODIGOS_SEGMENTO_RFV, conjunto fixo). Sem teto.
       const rfv = await distribuicaoRfv(tx)
       return { cob, porOrigem, rfv }
     })
+
+    const cortou = dados.porOrigem.length > LIMITE_ORIGENS
+    const origens = cortou ? dados.porOrigem.slice(0, LIMITE_ORIGENS) : dados.porOrigem
 
     const c = dados.cob
     return reply.send({
@@ -49,7 +57,8 @@ export async function rotasMercado(app: FastifyInstance): Promise<void> {
         optOut: c?.opt_out ?? 0,
         jaCompraram: c?.ja_compraram ?? 0,
       },
-      porOrigem: dados.porOrigem.map((o) => ({ origem: o.origem, contatos: o.contatos })),
+      porOrigem: origens.map((o) => ({ origem: o.origem, contatos: o.contatos })),
+      porOrigemTruncado: cortou,
       rfv: dados.rfv.map((s) => ({ codigo: s.codigo, rotulo: s.rotulo, urgencia: s.urgencia, contatos: s.contatos })),
     })
   })

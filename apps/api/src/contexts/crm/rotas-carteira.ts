@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { atorDaRequisicao } from '../atendimento/rotas-fila.js'
 import { condicaoContato, escopoDaRequisicao, exigirNoEscopo, responsavelNoEscopo } from '../plataforma/escopo.js'
+import { TETO_EQUIPE } from '../plataforma/limites-listas.js'
 import { exigirPapel, temPapel } from '../plataforma/papel.js'
 import { naoEhLinhaDeStaff } from '../identidade/linha-staff.js'
 
@@ -46,7 +47,8 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
           JOIN usuario u ON u.tenant_id = ca.tenant_id AND u.id = ca.usuario_id
          WHERE ca.tenant_id = tenant_atual() AND ca.ate IS NULL AND ca.usuario_id IS NOT NULL
          GROUP BY u.id, u.nome
-         ORDER BY clientes DESC, u.nome ASC`
+         -- Lista de EQUIPE: teto TETO_EQUIPE; o corte é por carteira maior (o órfão vem à parte, sempre).
+         ORDER BY clientes DESC, u.nome ASC, u.id LIMIT ${TETO_EQUIPE + 1}`
       const [o] = await tx<{ orfaos: number }[]>`
         SELECT count(*)::int AS orfaos
           FROM contato c
@@ -57,8 +59,11 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
                 AND ca.ate IS NULL AND ca.usuario_id IS NOT NULL)`
       return { porVendedor, orfaos: o?.orfaos ?? 0 }
     })
+    const cortou = porVendedor.length > TETO_EQUIPE
+    const carteiras = cortou ? porVendedor.slice(0, TETO_EQUIPE) : porVendedor
     return reply.send({
-      itens: porVendedor.map((l) => ({ usuarioId: l.usuario_id, usuario: l.usuario, clientes: l.clientes })),
+      itens: carteiras.map((l) => ({ usuarioId: l.usuario_id, usuario: l.usuario, clientes: l.clientes })),
+      truncado: cortou,
       orfaos,
     })
   })

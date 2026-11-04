@@ -99,3 +99,40 @@ describe('NPS por atendente', () => {
     expect(r.geral.total).toBe(0)
   })
 })
+
+describe('NPS: teto da equipe em porAtendente', () => {
+  it('porAtendente: teto de 200 com porAtendenteTruncado na fronteira (200 = não corta; 201 = corta)', async () => {
+    const ler = async (t: string) => (await chamar(t, 'GET', '/v1/nps?dias=90')).json() as {
+      porAtendente: unknown[]; porAtendenteTruncado: boolean
+    }
+    // beforeEach zera as respostas: a base é 0 atendentes.
+    const base = (await ler(T)).porAtendente.length
+    try {
+      await atendentesExtras(1, 200 - base)
+      const no = await ler(T)
+      expect(no.porAtendente).toHaveLength(200)
+      expect(no.porAtendenteTruncado).toBe(false)
+
+      await atendentesExtras(201 - base, 201 - base)
+      const com = await ler(T)
+      expect(com.porAtendente).toHaveLength(200)
+      expect(com.porAtendenteTruncado).toBe(true)
+
+      expect((await ler(OUTRO)).porAtendenteTruncado).toBe(false)
+    } finally {
+      await dono`DELETE FROM nps_resposta WHERE tenant_id = ${T} AND atendente_id IN
+                 (SELECT id FROM usuario WHERE tenant_id = ${T} AND nome LIKE 'Extra %')`
+      await dono`DELETE FROM usuario WHERE tenant_id = ${T} AND nome LIKE 'Extra %'`
+    }
+  }, 120_000)
+})
+
+/** Atendentes extras de T, cada um com UMA resposta (nota 9) — para a fronteira do teto de 200. */
+async function atendentesExtras(de: number, ate: number) {
+  for (let k = de; k <= ate; k++) {
+    const usuario = randomUUID()
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
+               VALUES (${T}, ${usuario}, ${'sub-' + usuario}, ${'Extra ' + k}, ${'extra' + k + '-' + usuario.slice(0, 8) + '@ex.com'})`
+    await dono`INSERT INTO nps_resposta (tenant_id, id, nota, atendente_id) VALUES (${T}, ${randomUUID()}, 9, ${usuario})`
+  }
+}

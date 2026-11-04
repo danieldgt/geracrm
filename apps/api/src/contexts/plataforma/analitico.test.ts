@@ -95,6 +95,36 @@ describe('BI de vendas', () => {
     const r = (await chamar(OUTRO, '/v1/bi?dias=30')).json() as { topClientes: unknown[]; porVendedor: unknown[] }
     expect(r.topClientes.length).toBe(0)
   })
+
+  it('rankings top 10: truncado na fronteira (10 = não corta; 11 = corta) e total de grupos', async () => {
+    type Bi = {
+      topClientes: unknown[]; topClientesTruncado: boolean; topClientesTotal: number
+      topProdutos: unknown[]; topProdutosTruncado: boolean; topProdutosTotal: number
+      porVendedor: unknown[]; porVendedorTruncado: boolean; porVendedorTotal: number
+    }
+    const ler = async (t: string) => (await chamar(t, '/v1/bi?dias=30')).json() as Bi
+    // Cada extra acrescenta 1 cliente, 1 produto e 1 vendedor: as três listas andam juntas.
+    const base = (await ler(T)).topClientesTotal
+    try {
+      await extrasDeBi(1, 10 - base)
+      const no = await ler(T)
+      expect([no.topClientes.length, no.topProdutos.length, no.porVendedor.length]).toEqual([10, 10, 10])
+      expect([no.topClientesTruncado, no.topProdutosTruncado, no.porVendedorTruncado]).toEqual([false, false, false])
+      expect([no.topClientesTotal, no.topProdutosTotal, no.porVendedorTotal]).toEqual([10, 10, 10])
+
+      await extrasDeBi(11 - base, 11 - base) // 11º grupo em cada ranking
+      const com = await ler(T)
+      expect([com.topClientes.length, com.topProdutos.length, com.porVendedor.length]).toEqual([10, 10, 10])
+      expect([com.topClientesTruncado, com.topProdutosTruncado, com.porVendedorTruncado]).toEqual([true, true, true])
+      expect([com.topClientesTotal, com.topProdutosTotal, com.porVendedorTotal]).toEqual([11, 11, 11])
+
+      // OUTRO não tem venda: não herda o corte de T.
+      const out = await ler(OUTRO)
+      expect([out.topClientesTruncado, out.topProdutosTruncado, out.porVendedorTruncado]).toEqual([false, false, false])
+    } finally {
+      await limparExtras()
+    }
+  })
 })
 
 describe('Performance de atendimento', () => {
@@ -116,4 +146,74 @@ describe('Performance de atendimento', () => {
     const r = (await chamar(OUTRO, '/v1/performance?dias=30')).json() as { total: number }
     expect(r.total).toBe(0)
   })
+
+  it('porAtendente: teto de 200 com porAtendenteTruncado na fronteira (200 = não corta; 201 = corta)', async () => {
+    const ler = async (t: string) => (await chamar(t, '/v1/performance?dias=30')).json() as {
+      porAtendente: unknown[]; porAtendenteTruncado: boolean
+    }
+    const base = (await ler(T)).porAtendente.length
+    try {
+      await extrasDeAtendimento(1, 200 - base)
+      const no = await ler(T)
+      expect(no.porAtendente).toHaveLength(200)
+      expect(no.porAtendenteTruncado).toBe(false)
+
+      await extrasDeAtendimento(201 - base, 201 - base)
+      const com = await ler(T)
+      expect(com.porAtendente).toHaveLength(200)
+      expect(com.porAtendenteTruncado).toBe(true)
+
+      expect((await ler(OUTRO)).porAtendenteTruncado).toBe(false)
+    } finally {
+      await limparExtras()
+    }
+  }, 120_000)
 })
+
+/**
+ * Extras para a fronteira dos rankings do BI: cada k é um cliente, um vendedor e um produto com UMA venda
+ * (1000 centavos). Somados à semeadura (1 cliente, 1 vendedor, 1 produto), cada lista passa a ter 1 + k itens.
+ */
+async function extrasDeBi(de: number, ate: number) {
+  const ocorrida = new Date(Date.now() - 86400000).toISOString()
+  for (let k = de; k <= ate; k++) {
+    const contato = randomUUID(), usuario = randomUUID(), venda = randomUUID()
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${contato}, ${'Extra ' + k}, 'teste', true)`
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
+               VALUES (${T}, ${usuario}, ${'sub-' + usuario}, ${'Extra ' + k}, ${'extra' + k + '-' + usuario.slice(0, 8) + '@ex.com'})`
+    await dono`INSERT INTO venda (tenant_id, id, contato_id, ocorrida_em, valor_centavos, usuario_id)
+               VALUES (${T}, ${venda}, ${contato}, ${ocorrida}, 1000, ${usuario})`
+    await dono`INSERT INTO item_venda (tenant_id, venda_id, venda_ocorrida_em, seq, sku_externo, quantidade, valor_unitario_centavos)
+               VALUES (${T}, ${venda}, ${ocorrida}, 1, ${'Produto extra ' + k}, 1, 1000)`
+  }
+}
+
+/** Extras para o teto da equipe em Performance: cada k é um atendente com UM atendimento respondido em 2 min. */
+async function extrasDeAtendimento(de: number, ate: number) {
+  for (let k = de; k <= ate; k++) {
+    const contato = randomUUID(), usuario = randomUUID(), conversa = randomUUID()
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
+               VALUES (${T}, ${usuario}, ${'sub-' + usuario}, ${'Extra ' + k}, ${'extra' + k + '-' + usuario.slice(0, 8) + '@ex.com'})`
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${contato}, ${'Extra ' + k}, 'teste', true)`
+    await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id) VALUES (${T}, ${conversa}, ${CANAL}, ${contato})`
+    await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, estado, criado_em,
+                                        primeira_entrante_em, primeira_resposta_humana_em, primeira_resposta_por_id)
+               VALUES (${T}, ${randomUUID()}, ${conversa}, ${CANAL}, ${900_000_000_000 + k}, 'encerrado', now() - interval '1 day',
+                       now() - interval '1 day', now() - interval '1 day' + interval '2 minutes', ${usuario})`
+  }
+}
+
+/** Remove tudo que os extras criaram (ordem das FKs: filhos antes dos pais). */
+async function limparExtras() {
+  await dono`DELETE FROM item_venda WHERE tenant_id = ${T} AND sku_externo LIKE 'Produto extra %'`
+  await dono`DELETE FROM venda WHERE tenant_id = ${T} AND contato_id IN
+             (SELECT id FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Extra %')`
+  await dono`DELETE FROM atendimento WHERE tenant_id = ${T} AND (
+             primeira_resposta_por_id IN (SELECT id FROM usuario WHERE tenant_id = ${T} AND nome LIKE 'Extra %')
+             OR conversa_id IN (SELECT id FROM conversa WHERE tenant_id = ${T} AND contato_id IN
+                (SELECT id FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Extra %')))`
+  await dono`DELETE FROM conversa WHERE tenant_id = ${T} AND contato_id IN
+             (SELECT id FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Extra %')`
+  await dono`DELETE FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Extra %'`
+  await dono`DELETE FROM usuario WHERE tenant_id = ${T} AND nome LIKE 'Extra %'`
+}

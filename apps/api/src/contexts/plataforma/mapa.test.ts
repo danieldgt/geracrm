@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
 import { criarApp } from '../../app.js'
@@ -19,6 +20,21 @@ const C_SEM = 'ba7a0000-6666-4000-8000-000000000004'
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
 let app: FastifyInstance
 const chamar = (t: string, url: string) => app.inject({ method: 'GET', url, headers: { 'x-tenant-id': t } })
+
+/** Contatos extras, cada um numa cidade distinta ("Cidade k", UF GO) — para a fronteira do top 50. */
+async function cidadesExtras(de: number, ate: number) {
+  for (let k = de; k <= ate; k++) {
+    const id = randomUUID()
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${id}, ${'Extra ' + k}, 'teste', true)`
+    await dono`INSERT INTO contato_endereco (tenant_id, contato_id, seq, cidade, uf, principal, fonte)
+               VALUES (${T}, ${id}, 1, ${'Cidade ' + k}, 'GO', true, 'teste')`
+  }
+}
+async function limparExtras() {
+  await dono`DELETE FROM contato_endereco WHERE tenant_id = ${T}
+             AND contato_id IN (SELECT id FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Extra %')`
+  await dono`DELETE FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Extra %'`
+}
 
 async function contatoCom(id: string, cidade: string | null, uf: string | null) {
   await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${id}, ${'C-' + id.slice(-1)}, 'teste', true) ON CONFLICT DO NOTHING`
@@ -79,5 +95,29 @@ describe('Mapa de Clientes (sem geocoding)', () => {
   it('⚠️ isolamento: base de um tenant não conta para outro (RLS)', async () => {
     const r = (await chamar(OUTRO, '/v1/mapa')).json() as { total: number }
     expect(r.total).toBe(0)
+  })
+
+  it('porCidade: top 50 com porCidadeTruncado na fronteira (50 = não corta; 51 = corta)', async () => {
+    const lerCidades = async (t: string) => (await chamar(t, '/v1/mapa')).json() as {
+      porCidade: unknown[]; porCidadeTruncado: boolean
+    }
+    // Cidades distintas já existentes em T (SP, Campinas, Recife) → completa até 50.
+    const base = (await lerCidades(T)).porCidade.length
+    try {
+      await cidadesExtras(1, 50 - base)
+      const na = await lerCidades(T)
+      expect(na.porCidade).toHaveLength(50)
+      expect(na.porCidadeTruncado).toBe(false)
+
+      await cidadesExtras(51 - base, 51 - base) // 51ª cidade distinta
+      const com = await lerCidades(T)
+      expect(com.porCidade).toHaveLength(50)
+      expect(com.porCidadeTruncado).toBe(true)
+
+      // OUTRO não tem cidade alguma: não herda o corte de T.
+      expect((await lerCidades(OUTRO)).porCidadeTruncado).toBe(false)
+    } finally {
+      await limparExtras()
+    }
   })
 })
