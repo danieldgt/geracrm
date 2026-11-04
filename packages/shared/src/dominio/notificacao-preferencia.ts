@@ -24,8 +24,10 @@ export const TIPOS_NOTIFICACAO: readonly TipoNotificacao[] = [
   { codigo: 'pedido.confirmacao_sem_pendente', rotulo: 'Cliente confirmando sem pedido pendente', emailDisponivel: false },
   { codigo: 'sla.estourado', rotulo: 'SLA do atendimento estourado', emailDisponivel: true },
   { codigo: 'sla.reatribuicao', rotulo: 'Conversa devolvida ao grupo por SLA', emailDisponivel: false },
-  { codigo: 'conversa.mencao', rotulo: 'Você foi mencionado', emailDisponivel: true },
+  // ⚠️ `conversa.mencao` entra aqui QUANDO existir produtor (menção ainda não existe no produto): tipo sem
+  //    produtor na matriz é botão que não faz nada.
   { codigo: 'nps.detrator', rotulo: 'NPS detrator', emailDisponivel: false },
+  { codigo: 'campanha.pausada', rotulo: 'Campanha pausada automaticamente', emailDisponivel: false },
   { codigo: 'agenda.lembrete', rotulo: 'Lembrete de compromisso', emailDisponivel: false },
   { codigo: 'canal.qualidade', rotulo: 'Qualidade do número de WhatsApp', emailDisponivel: false },
   { codigo: 'agente.orcamento', rotulo: 'Orçamento de IA', emailDisponivel: false },
@@ -39,10 +41,10 @@ export const ehCanalNotificacao = (v: unknown): v is CanalNotificacao =>
 
 export type CanaisLigados = Readonly<Record<CanalNotificacao, boolean>>
 
-/** E-mail desligado por padrão, exceto onde o tipo existe justamente para isso (SLA e menção). */
-const EMAIL_LIGADO_POR_PADRAO: readonly string[] = ['sla.estourado', 'conversa.mencao']
+/** E-mail desligado por padrão, exceto onde o tipo existe justamente para isso (SLA estourado). */
+const EMAIL_LIGADO_POR_PADRAO: readonly string[] = ['sla.estourado']
 
-/** Sem linha gravada vale o padrão: no sistema e push ligados; e-mail só no SLA e na menção. */
+/** Sem linha gravada vale o padrão: no sistema e push ligados; e-mail só no SLA estourado. */
 export function padraoDoTipo(tipo: string): CanaisLigados {
   return { app: true, push: true, email: EMAIL_LIGADO_POR_PADRAO.includes(tipo) }
 }

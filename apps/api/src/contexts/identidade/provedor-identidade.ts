@@ -75,4 +75,6 @@ export interface ProvedorIdentidade {
   reativar(alvo: AlvoIdentidade): Promise<ResultadoOperacao>
   /** Define uma senha TEMPORÁRIA: o próximo login exige trocar. */
   redefinirSenha(alvo: AlvoIdentidade, senhaTemporaria: string): Promise<ResultadoOperacao>
+  /** Encerra TODAS as sessões do login (Cognito `AdminUserGlobalSignOut`) — usado depois de redefinir a senha por código. */
+  encerrarSessoes(alvo: AlvoIdentidade): Promise<ResultadoOperacao>
 }

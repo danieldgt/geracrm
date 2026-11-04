@@ -386,7 +386,7 @@ if (process.env.DATABASE_ADMIN_URL) {
   intervalosAquisicao.push(setInterval(() => {
     if (enviandoEmail) return
     enviandoEmail = true
-    void despacharEmails(donoAquisicao as never, portaEmail)
+    void despacharEmails(donoAquisicao as never, portaEmail, app.log)
       .catch((e) => app.log.warn({ codigo: codigoDoErro(e), contexto: 'plataforma.email' }, 'despacho de e-mail falhou'))
       .finally(() => { enviandoEmail = false })
   }, 60_000))

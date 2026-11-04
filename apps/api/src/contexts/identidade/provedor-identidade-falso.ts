@@ -66,6 +66,10 @@ export class ProvedorIdentidadeFalso implements ProvedorIdentidade {
     return this.mudar('reativar', alvo, (u) => { u.ativo = true })
   }
 
+  async encerrarSessoes(alvo: AlvoIdentidade): Promise<ResultadoOperacao> {
+    return this.mudar('encerrar_sessoes', alvo, () => undefined)
+  }
+
   async redefinirSenha(alvo: AlvoIdentidade, senhaTemporaria: string): Promise<ResultadoOperacao> {
     return this.mudar('redefinir_senha', alvo, (u) => { u.senhaTemporaria = senhaTemporaria })
   }

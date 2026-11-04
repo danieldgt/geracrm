@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { padraoDoTipo, resolverCanais, validarPreferencias } from './notificacao-preferencia.js'
+import { TIPOS_NOTIFICACAO, padraoDoTipo, resolverCanais, validarPreferencias } from './notificacao-preferencia.js'
 
 describe('preferências de notificação', () => {
-  it('sem linha: app e push ligados; e-mail só no SLA e na menção', () => {
+  it('sem linha: app e push ligados; e-mail só no SLA estourado', () => {
     expect(padraoDoTipo('mensagem.nova')).toEqual({ app: true, push: true, email: false })
     expect(padraoDoTipo('sla.estourado').email).toBe(true)
-    expect(padraoDoTipo('conversa.mencao').email).toBe(true)
+    expect(padraoDoTipo('campanha.pausada')).toEqual({ app: true, push: true, email: false })
+    expect(TIPOS_NOTIFICACAO.some((t) => t.codigo === 'conversa.mencao')).toBe(false)
   })
   it('a linha do usuário vence o padrão, só no tipo e canal dela', () => {
     const c = resolverCanais('mensagem.nova', [

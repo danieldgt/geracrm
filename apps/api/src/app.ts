@@ -234,9 +234,10 @@ export async function criarApp(
   await app.register(rotasFormularios)
   await app.register(rotasFormularioPublico)
   await app.register(rotasPush)
-  await app.register(rotasAuth, opcoes.provedorSenha ? { provedorSenha: opcoes.provedorSenha } : {})
+  const identidade = opcoes.provedorIdentidade ?? provedorIdentidadeCognito()
+  await app.register(rotasAuth, { provedorIdentidade: identidade, ...(opcoes.provedorSenha ? { provedorSenha: opcoes.provedorSenha } : {}) })
   // Cadastro de usuários e filiais (D3) — admin; o login nasce atrás da porta.
-  await app.register(rotasUsuarios, { provedor: opcoes.provedorIdentidade ?? provedorIdentidadeCognito() })
+  await app.register(rotasUsuarios, { provedor: identidade })
   await app.register(rotasFiliais)
   // Meu perfil (D4): dados da pessoa, foto no bucket, troca de senha pela porta de senha.
   await app.register(rotasPerfil, opcoes.provedorSenha ? { provedorSenha: opcoes.provedorSenha } : {})

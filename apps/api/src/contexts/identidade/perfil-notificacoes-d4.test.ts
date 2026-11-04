@@ -6,12 +6,13 @@ import { pluginTenant } from '../../plugins/tenant.js'
 import { rotasAuth } from './rotas-auth.js'
 import { rotasPerfil } from './rotas-perfil.js'
 import { ProvedorSenhaFalso } from './provedor-senha-falso.js'
+import { ProvedorIdentidadeFalso } from './provedor-identidade-falso.js'
 import { rotasNotificacoes } from '../atendimento/rotas-notificacoes.js'
 import { rotasNotificacoesPreferencias } from '../atendimento/rotas-notificacoes-preferencias.js'
 import { notificarPessoasDaConversa } from '../atendimento/notificacao.js'
 import { definirArquivosBucket, type ArquivosBucket } from '../crm/arquivos-bucket.js'
 import { despacharPushDoTenant, type EnviarPush } from '../plataforma/push.js'
-import { despacharEmailsDoTenant, EmailEmMemoria } from '../plataforma/email-notificacao.js'
+import { despacharEmailsDoTenant, EmailEmMemoria, MAX_TENTATIVAS_EMAIL } from '../plataforma/email-notificacao.js'
 
 /**
  * D4 — notificações (página, preferências), meu perfil, troca de senha, "esqueci a senha" e a
@@ -35,6 +36,7 @@ const EMAIL = { a1: 'a1@d4.test', a2: 'a2@d4.test', b1: 'b1@d4.test' }
 
 const dono = postgres(process.env.DATABASE_ADMIN_URL!, { max: 2, onnotice: () => {} })
 const senhas = new ProvedorSenhaFalso()
+const identidade = new ProvedorIdentidadeFalso()
 const objetos = new Map<string, Buffer>()
 const bucketFalso: ArquivosBucket = {
   disponivel: () => true,
@@ -113,6 +115,7 @@ beforeAll(async () => {
   await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${A}, ${CONTATO}, 'Cliente Zé', 'teste', true)`
   await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${A}, ${CONVERSA}, ${CANAL}, ${CONTATO}, 0)`
   senhas.semear(EMAIL.a1, 'SenhaAtual#1')
+  identidade.semear(EMAIL.a2, { tenantId: A, sub: SUB.a2 })
   definirArquivosBucket(bucketFalso)
 
   app = Fastify()
@@ -125,7 +128,7 @@ beforeAll(async () => {
   await app.register(rotasNotificacoes)
   await app.register(rotasNotificacoesPreferencias)
   await app.register(rotasPerfil, { provedorSenha: senhas })
-  await app.register(rotasAuth, { provedorSenha: senhas })
+  await app.register(rotasAuth, { provedorSenha: senhas, provedorIdentidade: identidade })
   await app.ready()
 })
 
@@ -287,12 +290,45 @@ describe('preferências por tipo × canal', () => {
     expect((await despacharEmailsDoTenant(dono as never, A, porta)).enviados).toBe(0)
   })
 
+  it('M5: o aviso que substitui o anterior leva o TIPO do novo evento', async () => {
+    await emitir([U_A1], 'nps.detrator')
+    await emitir([U_A1], 'sla.estourado')
+    const l = await dono<{ tipo: string; email_pendente: boolean }[]>`SELECT tipo, email_pendente FROM notificacao WHERE tenant_id = ${A} AND usuario_id = ${U_A1}`
+    expect(l).toEqual([{ tipo: 'sla.estourado', email_pendente: true }])
+  })
+
+  it('B1: reserva antes de enviar, idempotência pelo id e teto de tentativas', async () => {
+    await emitir([U_A1], 'sla.estourado')
+    const porta = new EmailEmMemoria()
+    const [n] = await dono<{ id: string }[]>`SELECT id FROM notificacao WHERE tenant_id = ${A}`
+    // Reservada por outra instância: esta passada não pega.
+    await dono`UPDATE notificacao SET email_reservado_ate = now() + interval '5 minutes' WHERE tenant_id = ${A}`
+    expect((await despacharEmailsDoTenant(dono as never, A, porta)).enviados).toBe(0)
+    await dono`UPDATE notificacao SET email_reservado_ate = NULL WHERE tenant_id = ${A}`
+    await despacharEmailsDoTenant(dono as never, A, porta)
+    expect(porta.enviados[0]!.chaveIdempotencia).toBe(n!.id)
+    // Teto: falha repetida abandona o e-mail (e loga sem o endereço).
+    await dono`DELETE FROM notificacao WHERE tenant_id = ${A}`
+    await emitir([U_A1], 'sla.estourado')
+    porta.falhar = true
+    const avisos: object[] = []
+    for (let i = 0; i < MAX_TENTATIVAS_EMAIL; i++) {
+      await dono`UPDATE notificacao SET email_reservado_ate = NULL WHERE tenant_id = ${A}`
+      await despacharEmailsDoTenant(dono as never, A, porta, { warn: (o) => { avisos.push(o) } })
+    }
+    const [p] = await dono<{ email_pendente: boolean; email_tentativas: number }[]>`SELECT email_pendente, email_tentativas FROM notificacao WHERE tenant_id = ${A}`
+    expect(p).toEqual({ email_pendente: false, email_tentativas: MAX_TENTATIVAS_EMAIL })
+    expect(JSON.stringify(avisos)).not.toContain('@')
+    expect(avisos.length).toBe(MAX_TENTATIVAS_EMAIL)
+  })
+
   it('e-mail com falha fica pendente para a próxima passada', async () => {
     await emitir([U_A1], 'sla.estourado')
     const porta = new EmailEmMemoria()
     porta.falhar = true
     expect(await despacharEmailsDoTenant(dono as never, A, porta)).toEqual({ enviados: 0, falhas: 1 })
     porta.falhar = false
+    await dono`UPDATE notificacao SET email_reservado_ate = NULL WHERE tenant_id = ${A}` // a reserva expiraria sozinha
     expect((await despacharEmailsDoTenant(dono as never, A, porta)).enviados).toBe(1)
   })
 })
@@ -363,6 +399,9 @@ describe('trocar senha (porta de identidade)', () => {
 
     const ok = await pedir('a1', 'POST', '/v1/perfil/senha', { senhaAtual: 'SenhaAtual#1', novaSenha: 'NovaSenha#2' })
     expect(ok.status).toBe(200)
+    expect(ok.corpo['reloginObrigatorio']).toBe(true)
+    // M1: a troca derruba as outras sessões (GlobalSignOut no provedor).
+    expect(senhas.sessoesEncerradas).toContain(EMAIL.a1)
     expect(senhas.senhas.get(EMAIL.a1)).toBe('NovaSenha#2')
     const [a] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM auditoria WHERE tenant_id = ${A} AND acao = 'usuario.senha_alterada' AND ator_id = ${U_A1}`
     expect(a?.n).toBe(1)
@@ -374,6 +413,14 @@ describe('trocar senha (porta de identidade)', () => {
     await pedir('a1', 'POST', '/v1/perfil/senha', { senhaAtual: 'x', novaSenha: 'y', email: EMAIL.a2 })
     expect(senhas.chamadas).toEqual([{ op: 'trocar', email: EMAIL.a1 }])
     expect((await pedir('staff', 'POST', '/v1/perfil/senha', { senhaAtual: 'x', novaSenha: 'y' })).status).toBe(403)
+  })
+
+  it('conta em desafio (senha temporária) é erro próprio, não "senha atual incorreta"', async () => {
+    senhas.desafio = true
+    const r = await pedir('a2', 'POST', '/v1/perfil/senha', { senhaAtual: 'x', novaSenha: 'NovaSenha#2' })
+    senhas.desafio = false
+    expect(r.status).toBe(422)
+    expect(r.corpo['erro']).toBe('perfil.senha_desafio')
   })
 
   it('provedor indisponível é 503 tipificado', async () => {
@@ -410,30 +457,67 @@ describe('esqueci a senha', () => {
     expect((await pedirEsqueci('x9@d4.test', '10.4.0.3')).statusCode).toBe(200)
   })
 
+  it('M2: limite por E-MAIL (3/15 min) igual para existente e inexistente, mesmo vindo de IPs diferentes', async () => {
+    for (const email of ['m2-existe@d4.test', 'fantasma@d4.test']) {
+      for (let i = 0; i < 3; i++) expect((await pedirEsqueci(email, `10.4.5.${i + (email.startsWith('m2') ? 10 : 20)}`)).statusCode).toBe(200)
+      const barrada = await pedirEsqueci(email, '10.4.5.99')
+      expect(barrada.statusCode).toBe(429)
+      expect(barrada.json()['erro']).toBe('limite.excedido')
+    }
+  })
+
   it('e-mail malformado é 422', async () => {
     expect((await pedirEsqueci('sem-arroba', '10.4.0.4')).statusCode).toBe(422)
   })
 
+  const red = (usuario: string, codigo: string, novaSenha: string, ip: string) => app.inject({
+    method: 'POST', url: '/v1/auth/redefinir-senha', payload: { usuario, codigo, novaSenha }, remoteAddress: ip,
+  })
+
   it('confirma com o código; código errado e e-mail sem pedido são a mesma resposta', async () => {
-    const ip = '10.4.0.5'
-    const red = (usuario: string, codigo: string, novaSenha: string) => app.inject({
-      method: 'POST', url: '/v1/auth/redefinir-senha', payload: { usuario, codigo, novaSenha }, remoteAddress: ip,
-    })
     senhas.codigos.set(EMAIL.a2, { codigo: '123456', expirado: false })
     senhas.semear(EMAIL.a2, 'Antiga#123')
 
-    const errado = await red(EMAIL.a2, '000000', 'Nova#12345')
-    const semPedido = await red('ninguem@d4.test', '000000', 'Nova#12345')
+    const errado = await red(EMAIL.a2, '000000', 'Nova#12345', '10.4.0.5')
+    const semPedido = await red('ninguem@d4.test', '000000', 'Nova#12345', '10.4.0.5')
     expect(errado.statusCode).toBe(422)
     expect(semPedido.body).toBe(errado.body)
     expect(errado.json()['erro']).toBe('auth.codigo_invalido')
+    expect((await red(EMAIL.a2, '123456', 'curta', '10.4.0.5')).json()['erro']).toBe('auth.senha_invalida')
+  })
 
-    expect((await red(EMAIL.a2, '123456', 'curta')).json()['erro']).toBe('auth.senha_invalida')
-    senhas.codigos.set(EMAIL.a2, { codigo: '123456', expirado: true })
-    expect((await red(EMAIL.a2, '123456', 'Nova#12345')).json()['erro']).toBe('auth.codigo_expirado')
+  it('código expirado tem nome próprio', async () => {
+    senhas.semear(EMAIL.b1, 'Antiga#123')
+    senhas.codigos.set(EMAIL.b1, { codigo: '123456', expirado: true })
+    expect((await red(EMAIL.b1, '123456', 'Nova#12345', '10.4.0.6')).json()['erro']).toBe('auth.codigo_expirado')
+  })
+
+  it('M2: o limite do provedor cai na MESMA resposta do código inválido (não é oráculo)', async () => {
+    senhas.codigos.set('lim@d4.test', { codigo: '123456', expirado: false })
+    senhas.semear('lim@d4.test', 'x')
+    senhas.limite = true
+    const comLimite = await red('lim@d4.test', '123456', 'Nova#12345', '10.4.0.7')
+    senhas.limite = false
+    const inexistente = await red('nao-existe@d4.test', '123456', 'Nova#12345', '10.4.0.7')
+    expect(comLimite.statusCode).toBe(422)
+    expect(comLimite.body).toBe(inexistente.body)
+  })
+
+  it('M2/M3: redefinir por código derruba as sessões, audita com IP e o 4º pedido do e-mail é 429', async () => {
+    await dono`DELETE FROM auditoria WHERE tenant_id = ${A}`
+    identidade.chamadas.length = 0
+    senhas.semear(EMAIL.a2, 'Antiga#123')
     senhas.codigos.set(EMAIL.a2, { codigo: '123456', expirado: false })
-    expect((await red(EMAIL.a2, '123456', 'Nova#12345')).statusCode).toBe(200)
+    // a2 já gastou 2 tentativas nos testes acima; esta é a 3ª, a próxima é barrada.
+    const ok = await red(EMAIL.a2, '123456', 'Nova#12345', '10.4.0.8')
+    expect(ok.statusCode).toBe(200)
     expect(senhas.senhas.get(EMAIL.a2)).toBe('Nova#12345')
+    expect(identidade.chamadas.filter((c) => c.op === 'encerrar_sessoes' && c.operou)).toHaveLength(1)
+    const [a] = await dono<{ ator_id: string; dados: { ip: string } }[]>`
+      SELECT ator_id, dados FROM auditoria WHERE tenant_id = ${A} AND acao = 'usuario.senha_redefinida'`
+    expect(a?.ator_id).toBe(U_A2)
+    expect(a?.dados.ip).toBe('10.4.0.8')
+    expect((await red(EMAIL.a2, '123456', 'Nova#12345', '10.4.0.9')).statusCode).toBe(429)
   })
 })
 
@@ -463,6 +547,29 @@ describe('auditoria de login e logout (D6)', () => {
     expect(r.statusCode).toBe(400)
     const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM auditoria WHERE tenant_id = ${A} AND acao = 'usuario.login'`
     expect(n?.n).toBe(0)
+  })
+
+  it('B4: usuário inexistente tem a mesma frase de senha errada; limite por usuário vira 429', async () => {
+    fetchMock.mockResolvedValue({ status: 400, json: async () => ({ __type: 'UserNotFoundException', message: 'x' }) })
+    const r = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { usuario: 'ghost@d4.test', senha: 'x' }, remoteAddress: '10.4.2.1' })
+    fetchMock.mockResolvedValue({ status: 400, json: async () => ({ __type: 'NotAuthorizedException', message: 'x' }) })
+    const r2 = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { usuario: 'ghost2@d4.test', senha: 'x' }, remoteAddress: '10.4.2.1' })
+    expect(r.json()['mensagem']).toBe(r2.json()['mensagem'])
+    let ultimo = 0
+    for (let i = 0; i < 11; i++) {
+      ultimo = (await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { usuario: 'alvo@d4.test', senha: 'x' }, remoteAddress: `10.4.3.${i}` })).statusCode
+    }
+    expect(ultimo).toBe(429)
+  })
+
+  it('logout revoga o refresh token no provedor', async () => {
+    senhas.revogados.length = 0
+    const r = await app.inject({
+      method: 'POST', url: '/v1/auth/logout', payload: { refreshToken: 'refresh.abc' },
+      headers: { 'x-tenant-id': A, 'x-teste-sub': SUB.a2 },
+    })
+    expect(r.statusCode).toBe(204)
+    expect(senhas.revogados).toEqual(['refresh.abc'])
   })
 
   it('o logout entra na trilha com o ator do token', async () => {

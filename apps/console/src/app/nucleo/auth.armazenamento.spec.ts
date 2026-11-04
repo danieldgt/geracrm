@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { criarArmazenamento, type StorageMinimo } from './auth.armazenamento.js'
+import { criarArmazenamento, lerSessaoStaffGuardada, type StorageMinimo } from './auth.armazenamento.js'
 
 const falso = (): StorageMinimo & { dados: Map<string, string> } => {
   const dados = new Map<string, string>()
@@ -51,5 +51,37 @@ describe('lembrar-me', () => {
     a.gravar('t', 'b', a.lembrando('t'))
     expect(sessao.getItem('t')).toBe('b')
     expect(local.getItem('t')).toBeNull()
+  })
+})
+
+describe('sessão de staff não é herdada', () => {
+  const guardar = (a: ReturnType<typeof criarArmazenamento>, lembrar: boolean) =>
+    a.gravar('staff', JSON.stringify({ token: 'ses_x', clienteNome: 'Cliente' }), lembrar)
+
+  it('sem "Lembrar-me" a sessão de staff vai para a sessionStorage — nada no localStorage', () => {
+    const local = falso(), sessao = falso()
+    const a = criarArmazenamento(local, sessao)
+    a.gravar('t', 'tok', false)
+    guardar(a, a.lembrando('t'))
+    expect(local.getItem('staff')).toBeNull()
+    expect(sessao.getItem('staff')).not.toBeNull()
+  })
+
+  it('no boot, sessão de staff SEM login por baixo é descartada (produção)', () => {
+    const local = falso(), sessao = falso()
+    const a = criarArmazenamento(local, sessao)
+    guardar(a, true)
+    expect(lerSessaoStaffGuardada(a, 'staff', false, true)).toBeNull()
+    expect(local.getItem('staff')).toBeNull()
+  })
+
+  it('com login por baixo a sessão é lida; em dev (sem exigir login) também; JSON corrompido não derruba', () => {
+    const local = falso(), sessao = falso()
+    const a = criarArmazenamento(local, sessao)
+    guardar(a, true)
+    expect(lerSessaoStaffGuardada(a, 'staff', true, true)).toEqual({ token: 'ses_x', clienteNome: 'Cliente' })
+    expect(lerSessaoStaffGuardada(a, 'staff', false, false)?.token).toBe('ses_x')
+    a.gravar('staff', '{quebrado', true)
+    expect(lerSessaoStaffGuardada(a, 'staff', true, true)).toBeNull()
   })
 })

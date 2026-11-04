@@ -33,3 +33,20 @@ export function criarArmazenamento(local: StorageMinimo, sessao: StorageMinimo):
     lembrando: (chaveReferencia) => sessao.getItem(chaveReferencia) === null,
   }
 }
+
+export interface SessaoStaffGuardada { readonly token: string; readonly clienteNome: string }
+
+/**
+ * Lê a sessão de acesso do staff. ⚠️ Sessão de staff SEM login por baixo é herança de outra pessoa (ficou no
+ * navegador de um login anterior): com `exigeLogin` e sem token, é DESCARTADA do storage em vez de lida.
+ * Storage corrompido não derruba o boot.
+ */
+export function lerSessaoStaffGuardada(
+  armazem: ArmazenamentoDeSessao, chave: string, temLogin: boolean, exigeLogin: boolean,
+): SessaoStaffGuardada | null {
+  if (exigeLogin && !temLogin) { armazem.remover(chave); return null }
+  try {
+    const cru = armazem.ler(chave)
+    return cru ? (JSON.parse(cru) as SessaoStaffGuardada) : null
+  } catch { return null }
+}

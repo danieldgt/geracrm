@@ -38,6 +38,7 @@ export const ACOES_AUDITORIA: readonly { readonly valor: string; readonly rotulo
   { valor: 'usuario.login', rotulo: 'Entrou no sistema' },
   { valor: 'usuario.logout', rotulo: 'Saiu do sistema' },
   { valor: 'usuario.senha_alterada', rotulo: 'Trocou a própria senha' },
+  { valor: 'usuario.senha_redefinida', rotulo: 'Redefiniu a senha por código' },
   { valor: 'usuario.perfil_alterado', rotulo: 'Alterou o próprio perfil' },
   { valor: 'usuario.foto_alterada', rotulo: 'Alterou a própria foto' },
 ]

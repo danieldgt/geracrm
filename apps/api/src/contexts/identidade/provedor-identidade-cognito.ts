@@ -3,6 +3,7 @@ import {
   AdminDisableUserCommand,
   AdminEnableUserCommand,
   AdminListGroupsForUserCommand,
+  AdminUserGlobalSignOutCommand,
   AdminSetUserPasswordCommand,
   CognitoIdentityProviderClient,
   InvalidPasswordException,
@@ -122,6 +123,10 @@ export function provedorIdentidadeCognito(): ProvedorIdentidade {
     }))),
 
     reativar: (alvo) => operar(alvo, (c, username) => c.client.send(new AdminEnableUserCommand({
+      UserPoolId: c.poolId, Username: username,
+    }))),
+
+    encerrarSessoes: (alvo) => operar(alvo, (c, username) => c.client.send(new AdminUserGlobalSignOutCommand({
       UserPoolId: c.poolId, Username: username,
     }))),
 
