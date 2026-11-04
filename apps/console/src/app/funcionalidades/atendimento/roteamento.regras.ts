@@ -1,5 +1,6 @@
 /**
  * Regras puras da seção Roteamento (raia G4) — sem DOM, testáveis.
+ * `prioridade` é ordem de exibição e desempate no MESMO alcance — nunca muda a precedência.
  * A validação é a MESMA de `@geracrm/shared` (a API é a regra; aqui é conveniência).
  */
 import {
@@ -18,6 +19,8 @@ const ERROS: Record<string, ErroRoteamento> = {
   'roteamento.filial_invalida': { campo: 'filialId', mensagem: 'Filial não encontrada.' },
   'roteamento.filial_inativa': { campo: 'filialId', mensagem: 'Esta filial está desativada.' },
   'roteamento.numero_invalido': { campo: 'canalId', mensagem: 'Número não encontrado.' },
+  'roteamento.numero_obrigatorio': { campo: 'canalId', mensagem: 'Escolha um número da sua filial.' },
+  'roteamento.valor_indisponivel': { campo: 'valor', mensagem: 'Este valor não pode ser usado neste número.' },
   'roteamento.regra_duplicada': { campo: 'valor', mensagem: 'Já existe uma regra igual (mesmo tipo, valor e número).' },
   'roteamento.regra_nao_encontrada': { campo: null, mensagem: 'A regra não existe mais. Recarregue a lista.' },
   'roteamento.nada_a_mudar': { campo: null, mensagem: 'Nada foi alterado.' },
@@ -110,12 +113,14 @@ export function formDaRegra(r: RegraRoteamento): FormRegra {
 
 /** As frases do resultado do simulador — o MESMO vocabulário que a API usou para decidir. */
 export function descreverSimulacao(s: SimulacaoRoteamento): { filial: string; vendedor: string; aviso: string | null } {
-  const filial = s.filial
-    ? `${s.filial.nome} — ${ROTULO_MOTIVO_FILIAL[s.motivo]}${s.motivo === 'ddd' && s.ddd ? ` (${s.ddd})` : ''}`
-    : `Nenhuma filial — ${ROTULO_MOTIVO_FILIAL.nenhuma}`
+  const motivo = `${ROTULO_MOTIVO_FILIAL[s.motivo]}${s.motivo === 'ddd' && s.ddd ? ` (${s.ddd})` : ''}`
+  const filial = s.foraDoEscopo
+    ? `Outra filial (fora do seu acesso) — ${motivo}`
+    : s.filial ? `${s.filial.nome} — ${motivo}` : `Nenhuma filial — ${ROTULO_MOTIVO_FILIAL.nenhuma}`
   const vendedor = s.vendedor
     ? `${s.vendedor.nome} (a vez de ${s.elegiveis === 1 ? '1 vendedor' : `${s.elegiveis} vendedores`} no rodízio)`
-    : s.filial ? 'Ninguém disponível nesta filial para este número' : '—'
+    : s.foraDoEscopo ? 'Definido pela outra filial'
+      : s.filial ? 'Ninguém disponível nesta filial para este número' : '—'
   const aviso = s.rodizioNaEntrada === false
     ? 'O rodízio na entrada está DESLIGADO neste número: o contato novo nasce sem dono.'
     : null

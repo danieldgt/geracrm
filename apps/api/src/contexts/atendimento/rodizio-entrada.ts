@@ -19,9 +19,16 @@ import { escolherVendedorDaFilial, filialDoContato } from './roteamento.js'
  *     a mesma maquinaria sem buraco nem sobreposição da tela —, a filial é
  *     carimbada no contato (se ainda não tiver) e a decisão vai para a
  *     `auditoria` (ator nulo = sistema);
- *   - UMA notificação ao vendedor ("novo cliente na sua carteira"), na pendência
- *     da conversa — quem chama não avisa a fila de novo (seria o ruído que a
- *     regra existe para evitar).
+ *   - UMA notificação ao vendedor ("novo cliente na sua carteira", tipo
+ *     `carteira.novo_cliente`, desligável nas preferências), na pendência da
+ *     conversa — quem chama não avisa a fila de novo (seria o ruído que a regra
+ *     existe para evitar).
+ *   - ⚠️ O CARIMBO da filial (`contato.filial_id`) fica: transferir depois a
+ *     carteira para um vendedor de OUTRA filial não o muda. Efeito: o contato
+ *     segue visível ao gestor da filial carimbada (escopo D3, regra (a)) além da
+ *     filial do novo dono (regra (b)), e o roteamento de um handoff futuro sem
+ *     dono disponível usa a filial carimbada. Para mudar, edite a filial no
+ *     cadastro do contato (decisão registrada na skill geracrm-agente-vendas).
  *
  * Roda dentro da transação da ingestão (tenant setado). O ponteiro do rodízio é
  * travado até o commit: dois contatos novos ao mesmo tempo não pegam o mesmo
@@ -29,7 +36,7 @@ import { escolherVendedorDaFilial, filialDoContato } from './roteamento.js'
  */
 export type ResultadoRodizioEntrada =
   | { readonly tipo: 'atribuido'; readonly usuarioId: string; readonly filialId: string; readonly motivo: MotivoFilial }
-  | { readonly tipo: 'desligado' | 'ja_tem_dono' | 'sem_filial' }
+  | { readonly tipo: 'desligado' | 'ja_tem_dono' | 'sem_telefone' | 'sem_filial' }
   | { readonly tipo: 'sem_vendedor'; readonly filialId: string }
 
 export async function atribuirCarteiraNaEntrada(
@@ -43,6 +50,13 @@ export async function atribuirCarteiraNaEntrada(
     SELECT 1 FROM carteira_atribuicao
      WHERE tenant_id = tenant_atual() AND contato_id = ${p.contatoId} AND ate IS NULL AND usuario_id IS NOT NULL`
   if (dono) return { tipo: 'ja_tem_dono' }
+
+  // ⚠️ Só contato com TELEFONE PRINCIPAL próprio. Dois webhooks paralelos do mesmo
+  //    número criam dois contatos e o 2º perde o telefone no ON CONFLICT DO NOTHING
+  //    da ingestão: sem esta trava, o fantasma ganharia dono e gastaria a vez.
+  const [fone] = await tx`
+    SELECT 1 FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${p.contatoId} AND principal`
+  if (!fone) return { tipo: 'sem_telefone' }
 
   const filial = await filialDoContato(tx, p.contatoId, p.canalId)
   if (!filial.filialId) return { tipo: 'sem_filial' }

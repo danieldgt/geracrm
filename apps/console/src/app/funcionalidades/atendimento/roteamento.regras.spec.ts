@@ -51,6 +51,8 @@ describe('formulário da regra', () => {
 describe('erros da API', () => {
   it('código → campo, com a mensagem da API quando vem', () => {
     expect(mapearErroRoteamento('roteamento.regra_duplicada')).toMatchObject({ campo: 'valor' })
+    expect(mapearErroRoteamento('roteamento.numero_obrigatorio')).toMatchObject({ campo: 'canalId' })
+    expect(mapearErroRoteamento('roteamento.valor_indisponivel')).toMatchObject({ campo: 'valor' })
     expect(mapearErroRoteamento('roteamento.filial_inativa', 'Esta filial está desativada.')).toEqual({ campo: 'filialId', mensagem: 'Esta filial está desativada.' })
     expect(mapearErroRoteamento('roteamento.regra_nao_encontrada')?.campo).toBeNull()
     expect(mapearErroRoteamento('outro.codigo')).toBeNull()
@@ -61,7 +63,7 @@ describe('erros da API', () => {
 describe('simulador', () => {
   const base: SimulacaoRoteamento = {
     ddd: '85', filial: { id: FILIAL, nome: 'Norte' }, motivo: 'ddd', regraId: 'r1',
-    vendedor: { id: 'u1', nome: 'Ana' }, elegiveis: 3, rodizioNaEntrada: true,
+    vendedor: { id: 'u1', nome: 'Ana' }, elegiveis: 3, rodizioNaEntrada: true, foraDoEscopo: false,
   }
   it('explica a filial com o motivo e o vendedor da vez', () => {
     expect(descreverSimulacao(base)).toEqual({
@@ -71,6 +73,10 @@ describe('simulador', () => {
   it('avisa quando o rodízio na entrada está desligado no número', () => {
     expect(descreverSimulacao({ ...base, rodizioNaEntrada: false }).aviso).toMatch(/DESLIGADO/)
     expect(descreverSimulacao({ ...base, rodizioNaEntrada: null }).aviso).toBeNull()
+  })
+  it('filial de fora do escopo: só "outra filial", sem nome nem vendedor', () => {
+    expect(descreverSimulacao({ ...base, filial: null, vendedor: null, regraId: null, elegiveis: 0, foraDoEscopo: true }))
+      .toMatchObject({ filial: 'Outra filial (fora do seu acesso) — regra por DDD (85)', vendedor: 'Definido pela outra filial' })
   })
   it('sem filial e sem vendedor', () => {
     expect(descreverSimulacao({ ...base, filial: null, motivo: 'nenhuma', vendedor: null, elegiveis: 0 }))

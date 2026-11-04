@@ -27,8 +27,9 @@ export class RoteamentoServico {
   numeros(): Promise<{ itens: readonly NumeroRoteamento[]; truncado: boolean }> {
     return firstValueFrom(this.http.get<{ itens: readonly NumeroRoteamento[]; truncado: boolean }>('/v1/roteamento/numeros'))
   }
-  ligarRodizio(canalId: string, rodizioNaEntrada: boolean): Promise<unknown> {
-    return firstValueFrom(this.http.put(`/v1/roteamento/numeros/${canalId}`, { rodizioNaEntrada }))
+  /** `aviso`: ao ligar, o número não distribuiria para alguma filial (sem regra ou sem vendedor). */
+  ligarRodizio(canalId: string, rodizioNaEntrada: boolean): Promise<{ ok: true; aviso: string | null }> {
+    return firstValueFrom(this.http.put<{ ok: true; aviso: string | null }>(`/v1/roteamento/numeros/${canalId}`, { rodizioNaEntrada }))
   }
   filiais(): Promise<{ itens: readonly FilialOpcao[]; truncado: boolean }> {
     return firstValueFrom(this.http.get<{ itens: readonly FilialOpcao[]; truncado: boolean }>('/v1/roteamento/filiais'))

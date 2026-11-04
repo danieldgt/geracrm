@@ -54,7 +54,8 @@ const OPCOES_SITUACAO: OpcaoSelect[] = [{ valor: 'true', rotulo: 'Ativa' }, { va
                 <h2 class="txt-secao">Regras de roteamento</h2>
                 <p class="txt-denso explica">
                   Para qual filial vai cada cliente: filial já gravada no contato → origem → DDD → padrão do número →
-                  filial do número → padrão geral. A regra de um número vence a geral; no mesmo nível, a menor prioridade.
+                  filial do número → padrão geral. A regra de um número vence a geral. A prioridade é só a ordem
+                  desta lista (e desempata regras do mesmo alcance) — não muda a ordem acima.
                 </p>
               </div>
               <button type="button" class="btn btn--primario" (click)="nova()">+ Nova regra</button>
@@ -111,6 +112,9 @@ const OPCOES_SITUACAO: OpcaoSelect[] = [{ valor: 'true', rotulo: 'Ativa' }, { va
                   </li>
                 }
               </ul>
+              @if (avisoRodizio(); as a) {
+                <p class="aviso txt-denso" role="alert"><strong>{{ a.numero }}:</strong> {{ a.texto }}</p>
+              }
               @if (numerosTruncados()) { <p class="txt-denso vazio">Mostrando os primeiros 200 números.</p> }
             }
           </ui-painel>
@@ -162,7 +166,7 @@ const OPCOES_SITUACAO: OpcaoSelect[] = [{ valor: 'true', rotulo: 'Ativa' }, { va
           <ui-select rotulo="Número" placeholder="Todos os números" [opcoes]="opcoesNumero()"
             [valor]="form().canalId" (valorChange)="mudar('canalId', $event)" [erro]="erros().canalId ?? null" />
           <ui-campo rotulo="Prioridade" tipo="number" [valor]="form().prioridade" (valorChange)="mudar('prioridade', $event)"
-            [erro]="erros().prioridade ?? null" dica="Menor vence no mesmo nível." />
+            [erro]="erros().prioridade ?? null" dica="Ordem na lista; desempata só regras do mesmo alcance." />
           <ui-select rotulo="Situação" [opcoes]="opcoesSituacao" [valor]="form().ativa ? 'true' : 'false'"
             (valorChange)="mudar('ativa', $event === 'true')" />
         </ui-grade-form>
@@ -232,6 +236,8 @@ export class RoteamentoComponente implements OnInit {
   protected readonly numerosFalharam = signal(false)
   protected readonly numerosTruncados = signal(false)
   protected readonly alternando = signal<string | null>(null)
+  /** Ligou a chave num número que não distribuiria para alguma filial (a API diz qual). */
+  protected readonly avisoRodizio = signal<{ numero: string; texto: string } | null>(null)
   protected readonly opcoesFilial = computed<OpcaoSelect[]>(() => this.filiais().map((f) => ({ valor: f.id, rotulo: f.nome })))
   protected readonly opcoesNumero = computed<OpcaoSelect[]>(() => this.numeros().map((n) => ({ valor: n.id, rotulo: n.nome })))
 
@@ -367,8 +373,9 @@ export class RoteamentoComponente implements OnInit {
     const ligar = el.checked
     this.alternando.set(n.id)
     try {
-      await this.api.ligarRodizio(n.id, ligar)
+      const r = await this.api.ligarRodizio(n.id, ligar)
       this.numeros.update((lista) => lista.map((x) => (x.id === n.id ? { ...x, rodizioNaEntrada: ligar } : x)))
+      this.avisoRodizio.set(r.aviso ? { numero: n.nome, texto: r.aviso } : null)
       this.toast.sucesso(ligar ? `Rodízio na entrada ligado em ${n.nome}.` : `Rodízio na entrada desligado em ${n.nome}.`)
     } catch (err) {
       // Volta a chave ao que o servidor tem (o binding não mudou, então o DOM é desfeito à mão).

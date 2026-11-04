@@ -9,6 +9,10 @@
  *   - `dddDoTelefone` — o DDD de um telefone brasileiro;
  *   - `resolverFilial` — a filial do contato, pela precedência fixa;
  *   - `proximoDoRodizio` — o próximo da vez (por id), voltando ao início.
+ *
+ * ⚠️ PRIORIDADE não escolhe entre níveis nem entre a regra do número e a geral:
+ *    é só a ORDEM DE EXIBIÇÃO e o desempate entre regras do MESMO alcance (com a
+ *    unicidade número+tipo+valor, isso quase nunca acontece). A tela diz isso.
  */
 import { z } from 'zod'
 import { normalizarTelefone } from './telefone.js'
@@ -224,6 +228,11 @@ export interface SimulacaoRoteamento {
   readonly vendedor: { readonly id: string; readonly nome: string } | null
   /** Quantos estão na vez (ativos, não ausentes, que atendem o número). */
   readonly elegiveis: number
+  /**
+   * A filial resolvida está FORA do escopo de quem simula (gestor de outra
+   * filial): `filial`, `vendedor` e `regraId` vêm nulos — só se diz "outra filial".
+   */
+  readonly foraDoEscopo: boolean
   /** O rodízio na entrada está ligado neste número? (null sem número) */
   readonly rodizioNaEntrada: boolean | null
 }

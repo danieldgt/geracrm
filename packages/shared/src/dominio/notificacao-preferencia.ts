@@ -19,6 +19,7 @@ export const TIPOS_NOTIFICACAO: readonly TipoNotificacao[] = [
   { codigo: 'mensagem.nova', rotulo: 'Mensagem nova numa conversa sua', emailDisponivel: false },
   { codigo: 'fila.nova', rotulo: 'Conversa nova na fila', emailDisponivel: false },
   { codigo: 'agente.handoff', rotulo: 'O agente transferiu uma conversa', emailDisponivel: false },
+  { codigo: 'carteira.novo_cliente', rotulo: 'Novo cliente na sua carteira (rodízio na entrada)', emailDisponivel: false },
   { codigo: 'atendimento.reatribuido', rotulo: 'Conversa reatribuída para você', emailDisponivel: false },
   { codigo: 'pedido.confirmacao_sem_pendente', rotulo: 'Cliente confirmando sem pedido pendente', emailDisponivel: false },
   { codigo: 'sla.estourado', rotulo: 'SLA do atendimento estourado', emailDisponivel: true },

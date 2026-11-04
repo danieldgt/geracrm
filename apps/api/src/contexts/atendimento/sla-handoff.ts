@@ -3,7 +3,7 @@ import type { Sql } from '../../db/index.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import type { HorarioAtendimento } from './expediente.js'
 import { somarMinutosUteis } from './minutos-uteis.js'
-import { elegiveisDaFilial, filialDoContato, gestoresDaFilial, gravarRodizio, travarRodizio } from './roteamento.js'
+import { elegiveisDaFilial, filialDoContato, gestoresDaFilial, gravarRodizio, roteamentoPorFilialLigado, travarRodizio } from './roteamento.js'
 
 /**
  * SLA DO HANDOFF — o lado com banco (raia P18, ADR-034). As decisões são puras
@@ -96,6 +96,8 @@ export async function poolDoNumero(tx: Sql, canalId: string): Promise<PessoaRote
  *   dono da carteira → vendedores da FILIAL roteada do contato em rodízio (que
  *   atendem o número) → pool do número em rodízio → gestor da filial → gestor.
  *
+ * ⚠️ A filial só entra com o roteamento por filial LIGADO no tenant
+ *    (`roteamentoPorFilialLigado`); sem isso é o P18 puro.
  * ⚠️ Com filial e vendedores, o ponteiro do rodízio da filial fica TRAVADO até o
  *    fim da transação (`travarRodizio`); quem grava o escolhido é
  *    `armarSlaDoHandoff`, SÓ se o SLA armou — handoff repetido não gasta a vez.
@@ -114,7 +116,8 @@ export async function rotearHandoffDaConversa(tx: Sql, conversaId: string, canal
     return rotearHandoff({ donoCarteira: dono, pool: [], ultimoDoRodizio: null, gestores: [] })
   }
 
-  const filial = conv ? await filialDoContato(tx, conv.contato_id, canalId) : null
+  // Opt-in (revisão G4): sem regra ativa nem rodízio na entrada em algum número, nada de filial.
+  const filial = conv && await roteamentoPorFilialLigado(tx) ? await filialDoContato(tx, conv.contato_id, canalId) : null
   let daFilial: NonNullable<EntradaFilial> | null = null
   if (filial?.filialId) {
     const vendedores = await elegiveisDaFilial(tx, filial.filialId, canalId, 'handoff')
@@ -132,6 +135,8 @@ export async function rotearHandoffDaConversa(tx: Sql, conversaId: string, canal
     SELECT responsavel_id FROM atendimento
      WHERE tenant_id = tenant_atual() AND canal_id = ${canalId} AND responsavel_id IS NOT NULL
        AND responsavel_id IN ${tx(ids)}
+       -- A vez do POOL não conta o que foi roteado pela filial (G4): esse tem ponteiro próprio.
+       AND (responsavel_origem IS NULL OR responsavel_origem NOT IN ('filial', 'gestor_filial'))
      ORDER BY sla_inicio_em DESC NULLS LAST LIMIT 1`
   const gestores = await gestoresDoTenant(tx)
   return rotearHandoff({
