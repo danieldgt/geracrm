@@ -11,9 +11,9 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 
 | Raia | Onda | Estado | Branch / observação |
 |---|---|---|---|
-| L0a primitivos de formulário | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
-| L0b composição (página, modal, abas) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
-| L0c lista (tabela, filtros, paginação) | 0 | ✅ | integrada; console 449 testes verdes; revisão conjunta de L0 pendente |
+| L0a primitivos de formulário | 0 | ✅ | integrada; revisão conjunta feita (R0) e corrigida (R0b) |
+| L0b composição (página, modal, abas) | 0 | ✅ | integrada; revisão conjunta feita (R0) e corrigida (R0b) |
+| L0c lista (tabela, filtros, paginação) | 0 | ✅ | integrada; revisão conjunta feita (R0) e corrigida (R0b) |
 | L0d ícones Lucide | 0 | ✅ | integrada; desenhos de memória — revisão aponta os suspeitos |
 | L0e docs e skill de formulários | 0 | ✅ | integrada; skill `geracrm-formularios` criada; docs ajustados ao contrato por cursor |
 | D3 escopo por papel + usuários + filiais | 0 | ✅ | integrada com as correções de segurança (staff fora do cadastro, assumir no escopo, SSE filtrado, modo fundador fora do cadastro); suíte verde api 2676; **dono: IAM ListUsers+AdminListGroupsForUser e semear admin de cada cliente (runbook §18)** |
@@ -30,7 +30,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | H2 LGPD retenção/anonimização | 2 | ✅ | integrada após 2 revisões (seletor reavaliado na transação, pedidos pendentes protegem, automática desligada por padrão com prévia, admin do tenant, contato anonimizado imutável, worker de mídia) |
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
 | B1 panorama do funil | 2 | ✅ | integrada (0131) |
-| C2 agenda (módulo) | 2 | ✅ | integrada (0117); pendente: trocar escopo por papéis pelo `escopo.ts` e montar `app-agenda-contato` na ficha |
+| C2 agenda (módulo) | 2 | ✅ | integrada (0117); escopo comum e aba na ficha entregues pela C2b |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | 🔍 | integrada (0137); chave por número padrão desligado; lembretes H-24/H-2 e no-show só para reuniões nascidas na conversa; revisão Opus em curso |
 | D4 notificações, perfil, esqueci a senha | 2 | ✅ | integrada com as correções da revisão (0144/0145: sessão de staff no armazém do token, GlobalSignOut na troca de senha e AdminUserGlobalSignOut na redefinição, limite por e-mail, upsert com tipo novo, worker de e-mail com reserva); **dono: IAM `cognito-idp:AdminUserGlobalSignOut`** |
 | D6 auditoria v2 | 2 | ✅ | integrada; login/logout entregues pela D4; pendente: janela padrão da busca `q` |
@@ -58,6 +58,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
 | X4 cursor em listas/metas/segmentos + usuários do cliente para o staff | — | ✅ | integrada; listas por cursor; metas e segmentos com teto documentado (limitados por construção); "Nomear admin" com select paginado; agregação RFV movida para SQL |
 | X5 busca/filtros no servidor (templates por status/categoria/número; q em listas, etiquetas, origens) | — | 🔄 | Haiku; para as telas da F1b |
+| X6 sobras: pedidos com busca/período/contadores na API (A5), janela padrão da busca `q` da auditoria (D6), SLA estourado avisa primeiro o gestor da filial (G4) | — | ⬜ | Sonnet; abrir quando a carga baixar |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 > Última suíte completa em `feat` (após G4, D4, E3): api 2973, console 856, shared 1075 — verde. `formularios.test.ts` (anexo) oscilou uma vez sob carga 50+; passou isolado.
