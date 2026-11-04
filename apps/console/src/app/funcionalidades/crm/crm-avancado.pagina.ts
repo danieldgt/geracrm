@@ -1,5 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, OnInit } from '@angular/core'
 import { CrmAvancadoServico, type CardCliente } from './crm-avancado.servico.js'
+import { CabecalhoTelaComponente, EstadoComponente } from '../../compartilhado/ui/index.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 
 /**
@@ -10,22 +11,24 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
 @Component({
   selector: 'app-crm-avancado',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [],
+  imports: [CabecalhoTelaComponente, EstadoComponente],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1 class="txt-titulo">CRM Avançado</h1>
-        <p class="sub">A base inteira por nº de pedidos e segmento RFV — quem esfria aparece de relance.</p>
-      </div>
-    </header>
+    <ui-cabecalho-tela titulo="CRM Avançado"
+      subtitulo="A base inteira por nº de pedidos e segmento RFV — quem esfria aparece de relance." />
 
     @if (servico.erroAcao(); as e) { <p class="erro-move" role="alert">{{ e }}</p> }
 
     @switch (servico.estado()) {
       @case ('carregando') { <div class="board"><div class="col-esq"></div><div class="col-esq"></div><div class="col-esq"></div></div> }
-      @case ('sem_permissao') { <div class="bloco aviso"><h2 class="txt-secao">Sem acesso à base</h2></div> }
-      @case ('erro') { <div class="bloco aviso"><h2 class="txt-secao">Não foi possível carregar</h2>
-        <button (click)="servico.carregar()">Tentar de novo</button></div> }
+      @case ('sem_permissao') {
+        <ui-estado tipo="sem-permissao" titulo="Você não tem acesso à base"
+          descricao="Peça a um administrador da sua empresa para liberar este acesso." />
+      }
+      @case ('erro') {
+        <ui-estado tipo="erro" titulo="Não foi possível carregar a base" descricao="Tente de novo; nenhum dado foi alterado.">
+          <button class="btn btn--primario" type="button" (click)="servico.carregar()">Tentar de novo</button>
+        </ui-estado>
+      }
       @case ('pronto') {
         <div class="board rolagem-x">
           @for (col of servico.colunas(); track col.chave) {
@@ -60,9 +63,9 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                     </button>
                     <div class="card-acoes">
                       @if (col.chave === 'descartados') {
-                        <button class="a-reabrir" (click)="reabrir(card)">Reabrir</button>
+                        <button type="button" class="a-reabrir" (click)="reabrir(card)">Reabrir</button>
                       } @else {
-                        <button class="a-descartar" (click)="descartar(card)">Descartar</button>
+                        <button type="button" class="a-descartar" (click)="descartar(card)">Descartar</button>
                       }
                     </div>
                   </article>
@@ -70,7 +73,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                 @if (col.cards.length === 0) { <p class="col-vazia">Vazio</p> }
               </div>
               @if (col.proximoCursor) {
-                <button class="mais" (click)="servico.carregarMais(col.chave)" [disabled]="col.carregandoMais">
+                <button type="button" class="mais" (click)="servico.carregarMais(col.chave)" [disabled]="col.carregandoMais">
                   {{ col.carregandoMais ? 'Carregando…' : 'Carregar mais' }}
                 </button>
               }
@@ -96,11 +99,7 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
        O que sobra é a viewport menos a barra da casca. */
     :host { display: flex; flex-direction: column; height: calc(100dvh - var(--altura-barra-topo));
       padding: var(--espacamento-6); overflow: hidden; }
-    .cabecalho { margin-bottom: var(--espacamento-4); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .board { display: flex; gap: var(--espacamento-3); align-items: stretch; flex: 1; min-height: 0; overflow-x: auto; padding-bottom: var(--espacamento-2); }
     .col-esq { width: 300px; height: 200px; border-radius: var(--raio-painel); background: var(--superficie); flex: none; }
     .coluna { width: 300px; flex: none; display: flex; flex-direction: column; min-height: 0;
