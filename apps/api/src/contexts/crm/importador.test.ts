@@ -84,6 +84,7 @@ async function limpar(): Promise<void> {
   for (const t of [A, B]) {
     await dono`DELETE FROM auditoria WHERE tenant_id = ${t}`
     await dono`DELETE FROM importacao WHERE tenant_id = ${t}`
+    await dono`DELETE FROM lista_bloqueio WHERE tenant_id = ${t}`
     await dono`DELETE FROM tarefa WHERE tenant_id = ${t}`
     await dono`DELETE FROM venda_identidade_externa WHERE tenant_id = ${t}`
     await dono`DELETE FROM venda WHERE tenant_id = ${t}`
@@ -472,5 +473,180 @@ describe('H1 — histórico e isolamento entre tenants', () => {
     expect(await contarContatos(B)).toBe(1)
     const [c] = await dono<{ nome: string }[]>`SELECT nome FROM contato WHERE tenant_id = ${A} AND nome = 'Maria Souza'`
     expect(c!.nome).toBe('Maria Souza')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Correções da revisão adversarial
+// ---------------------------------------------------------------------------
+
+const itensDe = async (id: string) =>
+  dono<{ linha: number; resultado: string; motivo: string | null }[]>`SELECT linha, resultado, motivo FROM importacao_item WHERE importacao_id = ${id} ORDER BY linha`
+const contar = async (consulta: Promise<{ n: number }[]>) => (await consulta)[0]!.n
+
+describe('H1 revisão — LGPD', () => {
+  const ANON = 'b1e00000-0006-4000-8000-0000000000a1'
+
+  it('⚠️ chave com lgpd_em é ignorada (bloqueado_lgpd) e contato anonimizado nunca é completado nem recebe venda/tarefa', async () => {
+    const lgpd = normalizarTelefone('81955551111')!
+    await dono`INSERT INTO lista_bloqueio (tenant_id, chave_bloqueio, motivo, lgpd_em) VALUES (${A}, ${lgpd.chaveBloqueio}, 'lgpd', now())`
+    const anon = normalizarTelefone('81955552222')!
+    await dono`INSERT INTO contato (tenant_id, id, nome, anonimizado_em, anonimizacao_modo) VALUES (${A}, ${ANON}, 'Anonimizado', now(), 'completa')`
+    await dono`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, fonte) VALUES (${A}, ${ANON}, 1, ${anon.e164}, ${anon.chaveBloqueio}, true, 'erp')`
+
+    const csv = 'Nome;Telefone;E-mail\nTitular;81955551111;t@x.com\nAnon;81955552222;novo@x.com'
+    const s = await simular('ges', 'contatos', csv)
+    expect(s.json().contagens).toMatchObject({ criados: 0, ignorados: 2 })
+    const antes = await contarContatos()
+    const { id, detalhe } = await importar('contatos', csv)
+    expect(detalhe.contagens).toMatchObject({ criados: 0, atualizados: 0, ignorados: 2 })
+    expect((await itensDe(id)).map((i) => i.motivo)).toEqual(['bloqueado_lgpd', 'contato_anonimizado'])
+    expect(await contarContatos()).toBe(antes)
+    const [c] = await dono<{ email: string | null }[]>`SELECT email FROM contato WHERE id = ${ANON}`
+    expect(c!.email).toBeNull()
+
+    const v = await importar('vendas', 'Telefone;Data;Valor\n81955552222;20/05/2024;10,00\n81955551111;20/05/2024;10,00')
+    expect((await itensDe(v.id)).map((i) => i.motivo)).toEqual(['contato_anonimizado', 'bloqueado_lgpd'])
+    const t = await importar('tarefas', 'Telefone;Título;Vence em\n81955552222;Ligar;30/11/2030\n81955551111;Ligar 2;30/11/2030')
+    expect((await itensDe(t.id)).map((i) => i.motivo)).toEqual(['contato_anonimizado', 'bloqueado_lgpd'])
+    expect(await contar(dono<{ n: number }[]>`SELECT count(*)::int AS n FROM venda WHERE contato_id = ${ANON}`)).toBe(0)
+    expect(await contar(dono<{ n: number }[]>`SELECT count(*)::int AS n FROM tarefa WHERE contato_id = ${ANON}`)).toBe(0)
+  })
+})
+
+describe('H1 revisão — simulação = execução', () => {
+  it('(a) doc+tel na linha 1 e só o tel na 2; (b) existente repetido: simulação e execução batem', async () => {
+    const EX = 'b1e00000-0006-4000-8000-0000000000b1'
+    await dono`INSERT INTO contato (tenant_id, id, nome) VALUES (${A}, ${EX}, 'Já existente')`
+    const ex = normalizarTelefone('81944440001')!
+    await dono`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, fonte) VALUES (${A}, ${EX}, 1, ${ex.e164}, ${ex.chaveBloqueio}, true, 'erp')`
+    const csv = [
+      'Nome;Telefone;CNPJ;Observações',
+      'Empresa D;81944440002;529.982.247-25;a',
+      'Empresa D só fone;81944440002;;b',
+      'Existente 1;81944440001;;c',
+      'Existente 2;81944440001;;d',
+    ].join('\n')
+    const s = await simular('ges', 'contatos', csv)
+    const previsto = (await itensDe(s.json().importacaoId)).map((i) => i.resultado)
+    const { id, detalhe } = await importar('contatos', csv)
+    expect(detalhe.contagens).toEqual(s.json().contagens)
+    const real = await itensDe(id)
+    expect(real.map((i) => i.resultado)).toEqual(previsto)
+    expect(real.map((i) => i.resultado)).toEqual(['criado', 'ignorado', 'atualizado', 'ignorado'])
+    expect(real[3]!.motivo).toBe('duplicada_no_arquivo')
+    expect(await contar(dono<{ n: number }[]>`SELECT count(*)::int AS n FROM contato WHERE tenant_id = ${A} AND nome LIKE 'Empresa D%'`)).toBe(1)
+  })
+
+  it('venda sem referência: reenviar arquivo corrigido (linhas deslocadas) não duplica', async () => {
+    await importar('contatos', 'Nome;Telefone\nComprador;81933339999')
+    const l1 = '81933339999;10/04/2024;100,00;Camisetas'
+    const l2 = '81933339999;11/04/2024;200,00;Calças'
+    await importar('vendas', `Telefone;Data;Valor;Descrição\n${l1}\n${l2}`)
+    const r = await importar('vendas', `Telefone;Data;Valor;Descrição\n81933339999;12/04/2024;50,00;Nova\n81933339999;11/04/2024;200,00; calças \n${l1}`)
+    expect(r.detalhe.contagens).toMatchObject({ criados: 1, ignorados: 2 })
+    expect(await contar(dono<{ n: number }[]>`SELECT count(*)::int AS n FROM venda WHERE tenant_id = ${A} AND ocorrida_em >= '2024-04-01' AND ocorrida_em < '2024-05-01'`)).toBe(3)
+  })
+
+  it('a sonda do horizonte de partições não grava nada e aceita o passado', async () => {
+    const antes = await contar(dono<{ n: number }[]>`SELECT count(*)::int AS n FROM venda WHERE tenant_id = ${A}`)
+    const s = await simular('ges', 'vendas', 'Telefone;Data;Valor\n81933339999;01/01/1999;10,00')
+    expect(s.json().contagens.criados).toBe(1)
+    expect(await contar(dono<{ n: number }[]>`SELECT count(*)::int AS n FROM venda WHERE tenant_id = ${A}`)).toBe(antes)
+  })
+})
+
+describe('H1 revisão — gates da simulação e da execução', () => {
+  it('simulação incompleta não executa; opções enviadas no executar são ignoradas; simulação abandonada expira', async () => {
+    const csv = 'Nome;Telefone;Origem\nGate Dois;81955550002;Origem Nova'
+    const s = await simular('ges', 'contatos', csv)
+    const id = s.json().importacaoId
+    await dono`UPDATE importacao SET simulada_em = NULL WHERE id = ${id}`
+    const e = await executar('ges', id, csv)
+    expect(e.status).toBe(409)
+    expect(e.json().erro).toBe('importacao.simulacao_incompleta')
+    await dono`UPDATE importacao SET simulada_em = now() WHERE id = ${id}`
+    expect((await executar('ges', id, csv, { opcoes: JSON.stringify({ criarOrigens: true }) })).status).toBe(202)
+    await rodarWorker()
+    expect(await contar(dono<{ n: number }[]>`SELECT count(*)::int AS n FROM origem WHERE tenant_id = ${A} AND nome = 'Origem Nova'`)).toBe(0)
+
+    const velha = await simular('ges', 'contatos', 'Nome;Telefone\nExpira;81955550003')
+    const velhaId = velha.json().importacaoId
+    await rodarWorker(A, {}, new Date(Date.now() + 25 * 3600_000))
+    expect(await contar(dono<{ n: number }[]>`SELECT count(*)::int AS n FROM importacao WHERE id = ${velhaId}`)).toBe(0)
+    expect(await contar(dono<{ n: number }[]>`SELECT count(*)::int AS n FROM importacao_item WHERE importacao_id = ${velhaId}`)).toBe(0)
+  })
+
+  it('conferência: 409 enquanto não concluída; conta só criados e atualizados', async () => {
+    const csv = 'Nome;Telefone\nConf Um;81955550010'
+    const s = await simular('ges', 'contatos', csv)
+    const id = s.json().importacaoId
+    await executar('ges', id, csv)
+    expect((await pedir('ges', 'GET', `/v1/importacoes/${id}/conferencia`)).status).toBe(409)
+    await rodarWorker()
+    const outra = await importar('contatos', csv) // reexecução: 1 ignorado
+    const r = await pedir('ges', 'GET', `/v1/importacoes/${outra.id}/conferencia`)
+    expect(r.status).toBe(200)
+    expect(r.json().total).toBe(0)
+  })
+})
+
+describe('H1 revisão — encoding e WhatsApp', () => {
+  it('Windows-1252 (aspas 0x93/0x94) é lido certo; UTF-16 e NUL → 422 importacao.encoding', async () => {
+    const win = Buffer.concat([Buffer.from('Nome;Telefone\n'), Buffer.from([0x93, 0x41, 0x6e, 0x61, 0x94]), Buffer.from(';81955550020')])
+    const s = await simular('ges', 'contatos', win)
+    expect(s.status).toBe(201)
+    await executar('ges', s.json().importacaoId, win)
+    await rodarWorker()
+    const [c] = await dono<{ nome: string }[]>`SELECT nome FROM contato WHERE tenant_id = ${A} AND nome LIKE '%Ana%' AND nome <> 'Ana'`
+    expect(c!.nome).toBe('“Ana”')
+    const u16 = await simular('ges', 'contatos', Buffer.from('﻿Nome;Telefone\nA;81955550021', 'utf16le'))
+    expect(u16.status).toBe(422)
+    expect(u16.json().erro).toBe('importacao.encoding')
+    expect((await simular('ges', 'contatos', Buffer.from('Nome;Telefone\nA\u0000;81955550022'))).json().erro).toBe('importacao.encoding')
+  })
+
+  it('whatsapp vazio ou ilegível fica NULL; só "sim"/"não" definem', async () => {
+    await importar('contatos', 'Nome;Telefone;Tem WhatsApp\nWa Vazio;81955550030;\nWa Lixo;81955550031;talvez\nWa Sim;81955550032;sim\nWa Nao;81955550033;não')
+    const r = await dono<{ nome: string; whatsapp: boolean | null }[]>`
+      SELECT c.nome, t.whatsapp FROM contato c JOIN contato_telefone t ON t.tenant_id = c.tenant_id AND t.contato_id = c.id
+       WHERE c.tenant_id = ${A} AND c.nome LIKE 'Wa %' ORDER BY c.nome`
+    expect(Object.fromEntries(r.map((x) => [x.nome, x.whatsapp]))).toEqual({ 'Wa Lixo': null, 'Wa Nao': false, 'Wa Sim': true, 'Wa Vazio': null })
+  })
+})
+
+describe('H1 revisão — worker concorrente', () => {
+  it('outra réplica termina enquanto a primeira ainda tem lote: contagens = itens, sem duplicar', async () => {
+    const linhas = ['Nome;Telefone']
+    for (let i = 1; i <= 6; i++) linhas.push(`Conc ${i};8195000004${i}`)
+    const csv = linhas.join('\n')
+    const s = await simular('ges', 'contatos', csv)
+    const id = s.json().importacaoId
+    await executar('ges', id, csv)
+    let segunda = false
+    await rodarWorker(A, {
+      lote: 2,
+      depoisDoLote: async () => {
+        if (segunda) return
+        segunda = true
+        // Arrendamento "vencido" para a outra réplica: ela processa o resto.
+        await rodarWorker(A, { lote: 2 }, new Date(Date.now() + 10 * 60_000))
+      },
+    })
+    const d = (await pedir('ges', 'GET', `/v1/importacoes/${id}`)).json()
+    const [it] = await dono<{ n: number; c: number }[]>`SELECT count(*)::int AS n, count(*) FILTER (WHERE resultado = 'criado')::int AS c FROM importacao_item WHERE importacao_id = ${id}`
+    expect(it).toEqual({ n: 6, c: 6 })
+    expect(d.contagens).toEqual({ linhas: 6, criados: 6, atualizados: 0, ignorados: 0, rejeitados: 0 })
+    expect(await contar(dono<{ n: number }[]>`SELECT count(*)::int AS n FROM contato WHERE tenant_id = ${A} AND nome LIKE 'Conc %'`)).toBe(6)
+  })
+
+  it('duas passadas simultâneas: só uma reivindica', async () => {
+    const csv = 'Nome;Telefone\nSim 1;81955550051\nSim 2;81955550052'
+    const s = await simular('ges', 'contatos', csv)
+    await executar('ges', s.json().importacaoId, csv)
+    const [a, b] = await Promise.all([rodarWorker(), rodarWorker()])
+    expect(a.concluidas + b.concluidas).toBe(1)
+    const d = (await pedir('ges', 'GET', `/v1/importacoes/${s.json().importacaoId}`)).json()
+    expect(d.contagens.criados).toBe(2)
   })
 })

@@ -12,7 +12,7 @@ function linha(tipo: 'contatos' | 'vendas' | 'tarefas', csv: string) {
 describe('leitura de linha (pura)', () => {
   it('contato: normaliza telefone, documento, uf e qualificação', () => {
     const r = lerContato(linha('contatos', 'Nome;Telefone;CNPJ;UF;Qualificação\nAna;(81) 99861-7049;11.222.333/0001-81;pe;Descartado'), AGORA)
-    expect(r).toMatchObject({ ok: true, dado: { nome: 'Ana', documento: '11222333000181', qualificacao: 'descartado', whatsapp: true } })
+    expect(r).toMatchObject({ ok: true, dado: { nome: 'Ana', documento: '11222333000181', qualificacao: 'descartado', whatsapp: null } })
     if (r.ok) { expect(r.dado.telefone.e164).toBe('+5581998617049'); expect(r.dado.endereco.uf).toBe('PE') }
   })
 

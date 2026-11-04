@@ -1,6 +1,7 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { ResultadoItem, DePara, TipoImportacao } from '@geracrm/shared'
 import type { Sql } from '../../db/index.js'
+import { emSavepoint } from '../../db/index.js'
 import { gravarDocumento, gravarEndereco } from './contato-gravacao.js'
 import {
   LinhaCsv, lerContato, lerTarefa, lerVenda,
@@ -47,8 +48,10 @@ export interface ContextoLinha {
   readonly colunas: readonly string[]
   readonly dePara: DePara
   readonly catalogos: Catalogos
-  /** Só na simulação: chaves já vistas no arquivo (duplicada_no_arquivo). */
+  /** Só na simulação: chaves já vistas no arquivo (duplicada_no_arquivo). Na execução vale o que já está em importacao_item. */
   readonly vistos: Set<string>
+  /** Só na simulação: mês (AAAA-MM) → existe partição de venda para ele? (sondado uma vez por mês). */
+  readonly horizonte: Map<string, boolean>
 }
 
 const rejeitado = (motivo: string): Desfecho => ({ resultado: 'rejeitado', motivo, referenciaId: null })
@@ -96,20 +99,33 @@ export async function processarLinha(
  * é o CNPJ e o telefone é do escritório (mesma regra do import simples). `fallbackTelefone`: vendas e tarefas só
  * IDENTIFICAM, então, se o documento não achou, o telefone ainda serve.
  */
-async function acharContato(tx: Sql, k: ChaveContato, fallbackTelefone: boolean): Promise<string | null> {
+interface ContatoAchado { readonly id: string; readonly anonimizado: boolean }
+
+async function acharContato(tx: Sql, k: ChaveContato, fallbackTelefone: boolean): Promise<ContatoAchado | null> {
   if (k.documento) {
-    const [d] = await tx<{ contato_id: string }[]>`
-      SELECT contato_id FROM contato_documento WHERE tenant_id = tenant_atual() AND numero = ${k.documento} LIMIT 1`
-    if (d) return d.contato_id
+    const [d] = await tx<{ contato_id: string; anonimizado: boolean }[]>`
+      SELECT d.contato_id, (c.anonimizado_em IS NOT NULL) AS anonimizado
+        FROM contato_documento d JOIN contato c ON c.tenant_id = d.tenant_id AND c.id = d.contato_id
+       WHERE d.tenant_id = tenant_atual() AND d.numero = ${k.documento} LIMIT 1`
+    if (d) return { id: d.contato_id, anonimizado: d.anonimizado }
     if (!fallbackTelefone) return null
   }
   if (k.chaveBloqueio) {
-    const [t] = await tx<{ contato_id: string }[]>`
-      SELECT contato_id FROM contato_telefone
-       WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${k.chaveBloqueio} AND principal LIMIT 1`
-    if (t) return t.contato_id
+    const [t] = await tx<{ contato_id: string; anonimizado: boolean }[]>`
+      SELECT t.contato_id, (c.anonimizado_em IS NOT NULL) AS anonimizado
+        FROM contato_telefone t JOIN contato c ON c.tenant_id = t.tenant_id AND c.id = t.contato_id
+       WHERE t.tenant_id = tenant_atual() AND t.chave_bloqueio = ${k.chaveBloqueio} AND t.principal LIMIT 1`
+    if (t) return { id: t.contato_id, anonimizado: t.anonimizado }
   }
   return null
+}
+
+/** ⚠️ LGPD: a chave do telefone pertence a titular que pediu para ser esquecido — a importação não o traz de volta. */
+async function bloqueadoLgpd(tx: Sql, chaveBloqueio: string | null): Promise<boolean> {
+  if (!chaveBloqueio) return false
+  const [l] = await tx`
+    SELECT 1 FROM lista_bloqueio WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${chaveBloqueio} AND lgpd_em IS NOT NULL LIMIT 1`
+  return !!l
 }
 
 // ---------------------------------------------------------------------------
@@ -167,24 +183,37 @@ async function resolverReferencias(tx: Sql, l: ContatoLido, c: ContextoLinha): P
 }
 
 async function contato(tx: Sql, l: ContatoLido, c: ContextoLinha): Promise<Desfecho> {
-  const chave = l.documento ? `d:${l.documento}` : `t:${l.telefone.chaveBloqueio}`
+  if (await bloqueadoLgpd(tx, l.telefone.chaveBloqueio)) return ignorado('bloqueado_lgpd')
+  const achado = await acharContato(tx, { documento: l.documento, chaveBloqueio: l.telefone.chaveBloqueio }, false)
+  if (achado?.anonimizado) return ignorado('contato_anonimizado', achado.id)
+  const chaveNova = l.documento ? `d:${l.documento}` : `t:${l.telefone.chaveBloqueio}`
   if (c.modo === 'simular') {
-    if (c.vistos.has(chave)) return ignorado('duplicada_no_arquivo')
+    // A MESMA decisão da execução, por contato RESOLVIDO: repetir o contato (existente ou criado antes) é duplicada.
+    const chave = achado ? `c:${achado.id}` : chaveNova
+    if (c.vistos.has(chave)) return ignorado('duplicada_no_arquivo', achado?.id ?? null)
     c.vistos.add(chave)
   }
-  const existenteId = await acharContato(tx, { documento: l.documento, chaveBloqueio: l.telefone.chaveBloqueio }, false)
   const ref = await resolverReferencias(tx, l, c)
-  if (existenteId) {
+  if (achado) {
     if (c.modo === 'executar') {
-      const [jaCriado] = await tx`
+      const [jaTratado] = await tx`
         SELECT 1 FROM importacao_item
-         WHERE tenant_id = tenant_atual() AND importacao_id = ${c.importacaoId} AND resultado = 'criado' AND referencia_id = ${existenteId}
+         WHERE tenant_id = tenant_atual() AND importacao_id = ${c.importacaoId} AND resultado <> 'rejeitado' AND referencia_id = ${achado.id}
          LIMIT 1`
-      if (jaCriado) return ignorado('duplicada_no_arquivo', existenteId)
+      if (jaTratado) return ignorado('duplicada_no_arquivo', achado.id)
     }
-    return completarExistente(tx, existenteId, l, ref, c)
+    return completarExistente(tx, achado.id, l, ref, c)
   }
-  if (c.modo === 'simular') return { resultado: 'criado', motivo: ref.avisos[0] ?? null, referenciaId: null }
+  if (c.modo === 'simular') {
+    // O telefone da linha criada vira principal (se ninguém o detém): outra linha só com ele cai neste contato.
+    if (l.documento) {
+      const [dono] = await tx`
+        SELECT 1 FROM contato_telefone
+         WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${l.telefone.chaveBloqueio} AND principal LIMIT 1`
+      if (!dono) c.vistos.add(`t:${l.telefone.chaveBloqueio}`)
+    }
+    return { resultado: 'criado', motivo: ref.avisos[0] ?? null, referenciaId: null }
+  }
   return criarContato(tx, l, ref, c)
 }
 
@@ -304,19 +333,54 @@ async function completarExistente(tx: Sql, id: string, l: ContatoLido, ref: Refe
 /** Sistema da venda importada em `venda_identidade_externa` (guardiã da idempotência — sem partição, vale para sempre). */
 export const SISTEMA_IMPORTACAO = 'importacao'
 
-async function venda(tx: Sql, l: VendaLida, numeroLinha: number, c: ContextoLinha): Promise<Desfecho> {
-  const idExterno = l.referencia ?? `imp:${c.arquivoHash.slice(0, 16)}:${numeroLinha}`
+/** Descrição comparável: minúsculas, sem acento, espaços colapsados. */
+const normalizarTexto = (t: string | null): string => (t ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim()
+
+class SondaRevertida extends Error {}
+
+/** Existe partição de venda para o mês? Sonda por INSERT revertido (savepoint) — a única resposta exata. */
+async function mesComParticao(tx: Sql, c: ContextoLinha, quando: Date): Promise<boolean> {
+  const mes = quando.toISOString().slice(0, 7)
+  const sabido = c.horizonte.get(mes)
+  if (sabido !== undefined) return sabido
+  let ok = true
+  try {
+    await emSavepoint(tx, async (sp) => {
+      await sp`INSERT INTO venda (tenant_id, id, contato_id, ocorrida_em, valor_centavos)
+               VALUES (tenant_atual(), ${randomUUID()}, NULL, ${quando}, 1)`
+      throw new SondaRevertida()
+    })
+  } catch (e) {
+    if (!(e instanceof SondaRevertida)) {
+      if ((e as { code?: string }).code === '23514') ok = false
+      else throw e
+    }
+  }
+  c.horizonte.set(mes, ok)
+  return ok
+}
+
+async function venda(tx: Sql, l: VendaLida, _numeroLinha: number, c: ContextoLinha): Promise<Desfecho> {
+  if (await bloqueadoLgpd(tx, l.contato.chaveBloqueio)) return ignorado('bloqueado_lgpd')
+  const achado = await acharContato(tx, l.contato, true)
+  if (!achado) return rejeitado('contato_nao_encontrado')
+  if (achado.anonimizado) return ignorado('contato_anonimizado', achado.id)
+  const contatoId = achado.id
+  // Sem referência, a chave é o CONTEÚDO (contato + instante + valor + descrição): reenviar o arquivo corrigido não duplica.
+  const idExterno = l.referencia
+    ?? `imp:c:${createHash('sha256').update(`${contatoId}|${l.ocorridaEm.toISOString()}|${l.valorCentavos}|${normalizarTexto(l.descricao)}`).digest('hex').slice(0, 40)}`
   if (c.modo === 'simular') {
     if (c.vistos.has(`v:${idExterno}`)) return ignorado('duplicada_no_arquivo')
     c.vistos.add(`v:${idExterno}`)
   }
-  const contatoId = await acharContato(tx, l.contato, true)
-  if (!contatoId) return rejeitado('contato_nao_encontrado')
   const [existe] = await tx<{ venda_id: string }[]>`
     SELECT venda_id FROM venda_identidade_externa
      WHERE tenant_id = tenant_atual() AND sistema = ${SISTEMA_IMPORTACAO} AND id_externo = ${idExterno}`
   if (existe) return ignorado('ja_existe', existe.venda_id)
-  if (c.modo === 'simular') return { resultado: 'criado', motivo: null, referenciaId: null }
+  if (c.modo === 'simular') {
+    if (!(await mesComParticao(tx, c, l.ocorridaEm))) return rejeitado('data_fora_do_horizonte')
+    return { resultado: 'criado', motivo: null, referenciaId: null }
+  }
 
   const id = randomUUID()
   await tx`
@@ -343,8 +407,11 @@ async function venda(tx: Sql, l: VendaLida, numeroLinha: number, c: ContextoLinh
 async function tarefa(tx: Sql, l: TarefaLida, c: ContextoLinha): Promise<Desfecho> {
   let contatoId: string | null = null
   if (l.contato) {
-    contatoId = await acharContato(tx, l.contato, true)
-    if (!contatoId) return rejeitado('contato_nao_encontrado')
+    if (await bloqueadoLgpd(tx, l.contato.chaveBloqueio)) return ignorado('bloqueado_lgpd')
+    const achado = await acharContato(tx, l.contato, true)
+    if (!achado) return rejeitado('contato_nao_encontrado')
+    if (achado.anonimizado) return ignorado('contato_anonimizado', achado.id)
+    contatoId = achado.id
   }
   let aviso: string | null = null
   let responsavelId: string | null = null

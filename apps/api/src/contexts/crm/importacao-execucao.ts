@@ -49,10 +49,10 @@ export interface ParamsLote {
 
 /** SIMULAÇÃO de um pedaço do arquivo: lê o banco, devolve o previsto e NÃO grava contato/venda/tarefa. */
 export async function simularPedaco(
-  tx: Sql, p: ParamsLote, linhas: CsvLido['linhas'], vistos: Set<string>,
+  tx: Sql, p: ParamsLote, linhas: CsvLido['linhas'], vistos: Set<string>, horizonte: Map<string, boolean>,
 ): Promise<ItemParaGravar[]> {
   const catalogos = await carregarCatalogos(tx)
-  const ctx = { modo: 'simular' as const, ...base(p), catalogos, vistos }
+  const ctx = { modo: 'simular' as const, ...base(p), catalogos, vistos, horizonte }
   const itens: ItemParaGravar[] = []
   for (const l of linhas) {
     const d = await processarLinha(tx, p.tipo, l.campos, l.numero, ctx)
@@ -64,13 +64,15 @@ export async function simularPedaco(
 /** Um LOTE da execução, DENTRO da transação do chamador (tenant já escolhido). */
 export async function executarPedaco(tx: Sql, p: ParamsLote, linhas: CsvLido['linhas']): Promise<ItemParaGravar[]> {
   const catalogos = await carregarCatalogos(tx)
-  const ctx = { modo: 'executar' as const, ...base(p), catalogos, vistos: new Set<string>() }
+  const ctx = { modo: 'executar' as const, ...base(p), catalogos, vistos: new Set<string>(), horizonte: new Map<string, boolean>() }
   const itens: ItemParaGravar[] = []
   for (const l of linhas) {
     let d: Desfecho
     try {
       d = await emSavepoint(tx, (sp) => processarLinha(sp, p.tipo, l.campos, l.numero, ctx))
     } catch (erro) {
+      // Só erro do Postgres (SQLSTATE) vira rejeição da linha; o resto (bug, rede) sobe e o lote inteiro recomeça.
+      if (!/^[0-9A-Z]{5}$/.test((erro as { code?: string } | null)?.code ?? '')) throw erro
       d = { resultado: 'rejeitado', motivo: motivoDeErro(erro), referenciaId: null }
     }
     const item = { linha: l.numero, resultado: d.resultado, motivo: d.motivo, referenciaId: d.referenciaId }

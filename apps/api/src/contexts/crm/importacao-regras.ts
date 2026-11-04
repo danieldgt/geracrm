@@ -49,7 +49,7 @@ function documentoDe(bruto: string | undefined): { documento: string | null; tip
 export interface ContatoLido {
   readonly nome: string
   readonly telefone: TelefoneNormalizado
-  readonly whatsapp: boolean
+  readonly whatsapp: boolean | null
   readonly email: string | null
   readonly razaoSocial: string | null
   readonly nomeFantasia: string | null
@@ -99,7 +99,8 @@ export function lerContato(l: LinhaCsv, agora: Date): Lido<ContatoLido> {
   }
 
   const waBruto = l.v('whatsapp')
-  const whatsapp = waBruto === undefined ? true : (parseSimNao(waBruto) ?? true)
+  // Vazio ou ilegível = NÃO informado (null); nunca vira "tem WhatsApp" por omissão.
+  const whatsapp = waBruto === undefined ? null : parseSimNao(waBruto)
   const limitado = (c: string, max: number) => { const t = l.v(c); return t ? t.slice(0, max) : null }
 
   return {

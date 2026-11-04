@@ -1,6 +1,6 @@
 import { IMPORTACAO_LOTE, parseCsv, type ContagensImportacao, type DePara, type TipoImportacao } from '@geracrm/shared'
 import { comTenantServico, type Sql } from '../db/index.js'
-import { executarPedaco, somar } from '../contexts/crm/importacao-execucao.js'
+import { executarPedaco } from '../contexts/crm/importacao-execucao.js'
 import type { OpcoesImportacao } from '../contexts/crm/importacao-dominio.js'
 
 /**
@@ -22,6 +22,8 @@ const ATRASO_APOS_FALHA_MS = 30_000
 const MAX_FALHAS_SEGUIDAS = 5
 /** Importações reivindicadas por passada (uma de cada vez por processo, em sequência). */
 const POR_PASSADA = 3
+/** Simulação não executada some depois de 24 h (com os itens). */
+export const VALIDADE_SIMULACAO_MS = 24 * 60 * 60_000
 
 export interface DepsImportacao {
   readonly somenteTenant?: string | undefined
@@ -50,6 +52,13 @@ interface Reivindicada {
 }
 
 export async function processarImportacoes(dono: Sql, deps: DepsImportacao = {}, agora: Date = new Date()): Promise<RelatorioImportacao> {
+  // Simulação abandonada (nunca executada) expira: some com os itens (ON DELETE CASCADE) — dado pessoal não fica à toa.
+  await dono`
+    DELETE FROM importacao
+     WHERE (tenant_id, id) IN (SELECT tenant_id, id FROM importacao
+                                WHERE estado = 'simulada' AND criado_em < ${new Date(agora.getTime() - VALIDADE_SIMULACAO_MS)}
+                                ${deps.somenteTenant ? dono`AND tenant_id = ${deps.somenteTenant}` : dono``}
+                                LIMIT 50)`
   const candidatas = await dono<{ tenant_id: string; id: string }[]>`
     SELECT tenant_id, id FROM importacao
      WHERE estado = 'executando' AND (arrendado_ate IS NULL OR arrendado_ate < ${agora})
@@ -86,7 +95,6 @@ async function processarUma(
   }
 
   const csv = parseCsv(imp.conteudo)
-  let contagens = imp.contagens
   let feitos = 0
   let tentativas = imp.tentativas
   try {
@@ -99,22 +107,28 @@ async function processarUma(
         if (!estado || estado.estado !== 'executando') return { fim: 'parada' as const }
         const pendentes = csv.linhas.filter((l) => l.numero > estado.ultima).slice(0, lote)
         if (pendentes.length === 0) return { fim: 'terminou' as const }
-        const itens = await executarPedaco(tx, {
+        await executarPedaco(tx, {
           tipo: imp.tipo, importacaoId: id, arquivoHash: imp.arquivo_hash, usuarioId: imp.criado_por,
           opcoes: imp.opcoes, dePara: imp.de_para, csv, agora,
         }, pendentes)
-        let novas = contagens
-        for (const i of itens) novas = somar(novas, i.resultado)
-        // Absoluto, a partir do que ESTA passada sabe — o arrendamento garante que ninguém mais escreve.
+        // ⚠️ Contagens RECALCULADAS dos itens (a verdade gravada), nunca da memória desta passada: se outra réplica
+        //    gravou linhas, o placar não regride. O arrendamento renova pelo relógio do BANCO, não pelo `agora` da passada.
         await tx`
-          UPDATE importacao SET contagens = ${JSON.stringify(novas)}::text::jsonb, arrendado_ate = ${venceEm()},
+          UPDATE importacao i
+             SET contagens = i.contagens || (
+                   SELECT jsonb_build_object(
+                            'criados', count(*) FILTER (WHERE resultado = 'criado'),
+                            'atualizados', count(*) FILTER (WHERE resultado = 'atualizado'),
+                            'ignorados', count(*) FILTER (WHERE resultado = 'ignorado'),
+                            'rejeitados', count(*) FILTER (WHERE resultado = 'rejeitado'))
+                     FROM importacao_item WHERE tenant_id = i.tenant_id AND importacao_id = i.id),
+                 arrendado_ate = greatest(i.arrendado_ate, now() + interval '2 minutes'),
                  atualizado_em = now(), tentativas = 0
-           WHERE tenant_id = tenant_atual() AND id = ${id}`
-        return { fim: null, contagens: novas }
+           WHERE i.tenant_id = tenant_atual() AND i.id = ${id}`
+        return { fim: null }
       })
       if (resultado.fim === 'parada') return { lotes: feitos, concluida: false, falhou: false }
       if (resultado.fim === 'terminou') break
-      contagens = resultado.contagens
       tentativas = 0
       feitos++
       await deps.depoisDoLote?.(feitos)
@@ -127,9 +141,11 @@ async function processarUma(
       await encerrar(tenantId, id, 'falhou', String(codigo).slice(0, 60))
       return { lotes: feitos, concluida: false, falhou: true }
     }
-    await comTenantServico(tenantId, (tx) => tx`
-      UPDATE importacao SET tentativas = ${tentativas}, arrendado_ate = ${new Date(agora.getTime() + ATRASO_APOS_FALHA_MS)}
-       WHERE tenant_id = tenant_atual() AND id = ${id} AND estado = 'executando'`)
+    try {
+      await comTenantServico(tenantId, (tx) => tx`
+        UPDATE importacao SET tentativas = ${tentativas}, arrendado_ate = ${new Date(agora.getTime() + ATRASO_APOS_FALHA_MS)}
+         WHERE tenant_id = tenant_atual() AND id = ${id} AND estado = 'executando'`)
+    } catch { /* banco fora: o arrendamento vence sozinho e a próxima passada retoma; uma importação não derruba as outras */ }
     return { lotes: feitos, concluida: false, falhou: true }
   }
 
