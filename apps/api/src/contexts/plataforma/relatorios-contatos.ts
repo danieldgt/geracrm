@@ -38,6 +38,8 @@ type Fragmento = postgres.PendingQuery<postgres.Row[]>
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+const ISO_ESTRITO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/
+
 export function ehUuid(v: string): boolean { return UUID.test(v) }
 
 /** Valida os filtros da query (função pura). Devolve o filtro ou o NOME do campo inválido. */
@@ -80,7 +82,7 @@ export function montarCursor(emIso: string, id: string): string {
 }
 export function lerCursor(c: string): { em: string; id: string } | null {
   const [em, id, resto] = Buffer.from(c, 'base64url').toString().split('|')
-  if (resto !== undefined || !em || !id || !ehUuid(id) || Number.isNaN(Date.parse(em))) return null
+  if (resto !== undefined || !em || !id || !ehUuid(id) || !ISO_ESTRITO.test(em) || Number.isNaN(Date.parse(em))) return null
   return { em, id }
 }
 
@@ -99,6 +101,7 @@ export function coorteDetalhada(tx: Sql, p: PeriodoResolvido, escopo: Escopo): F
       LEFT JOIN usuario u ON u.tenant_id = ca.tenant_id AND u.id = ca.usuario_id
       LEFT JOIN LATERAL (SELECT x.filial_id FROM usuario_filial x
                           WHERE x.tenant_id = c.tenant_id AND x.usuario_id = ca.usuario_id AND x.filial_id IS NOT NULL
+                            AND ${escopo.tipo === 'filial' ? tx`x.filial_id IN ${tx(escopo.filialIds)}` : tx`true`}
                           ORDER BY x.filial_id LIMIT 1) fv ON true
       LEFT JOIN filial fi ON fi.tenant_id = c.tenant_id AND fi.id = coalesce(c.filial_id, fv.filial_id)
       LEFT JOIN LATERAL (SELECT x.tipo FROM contato_documento x
@@ -223,7 +226,7 @@ const ROTULO_QUAL: Record<QualificacaoContato, string> = { novo: 'Novo', qualifi
 
 function celula(v: unknown): string {
   let s = v === null || v === undefined ? '' : String(v)
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
+  if (/^[=+\-@\t\r]/.test(s) && !/^\+\d+$/.test(s)) s = `'${s}`
   return /[";\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
@@ -260,12 +263,12 @@ export const TOP_GRUPOS = 20
  * `truncado` quando houve corte. `juncao` entra depois de `FROM k` e pode referenciar `k.id`.
  */
 export async function agruparCoorte(
-  tx: Sql, p: PeriodoResolvido, escopo: Escopo,
+  tx: Sql,
   def: { chave: Fragmento; rotulo: Fragmento; juncao?: Fragmento },
   totalCoorte: number, filtro?: Fragmento, top = TOP_GRUPOS,
 ): Promise<{ itens: GrupoCoorte[]; truncado: boolean }> {
   const linhas = await tx<{ chave: string; rotulo: string; contatos: number; convertidos: number; valor: string }[]>`
-    WITH k AS (${coorteDetalhada(tx, p, escopo)})
+    WITH k AS (SELECT * FROM coorte_e3)
     SELECT ${def.chave} AS chave, min(${def.rotulo}) AS rotulo, count(*)::int AS contatos,
            count(*) FILTER (WHERE k.pedidos > 0)::int AS convertidos, coalesce(sum(k.valor), 0)::text AS valor
       FROM k ${def.juncao ?? tx``}
@@ -282,4 +285,14 @@ export async function agruparCoorte(
       percentual: totalCoorte > 0 ? Math.round((l.contatos / totalCoorte) * 10_000) / 10_000 : 0,
     })),
   }
+}
+
+/**
+ * Materializa a coorte UMA vez por transação (tabela temporária que some no COMMIT) para os relatórios que
+ * fazem várias agregações sobre ela. É privada da sessão/transação — nada vaza entre tenants. Chame antes de
+ * `agruparCoorte` e de qualquer `WITH k AS (SELECT * FROM coorte_e3)`.
+ */
+export async function materializarCoorte(tx: Sql, p: PeriodoResolvido, escopo: Escopo): Promise<void> {
+  await tx`DROP TABLE IF EXISTS pg_temp.coorte_e3`
+  await tx`CREATE TEMP TABLE coorte_e3 ON COMMIT DROP AS ${coorteDetalhada(tx, p, escopo)}`
 }

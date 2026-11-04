@@ -5,7 +5,7 @@ import { encerrarBanco } from '../../db/index.js'
 import { pluginTenant } from '../../plugins/tenant.js'
 import { rotasRelatoriosAnalise } from './rotas-relatorios-analise.js'
 import { lerVendedores } from './relatorios-analise.js'
-import { lerCursor, lerFiltros, montarCursor } from './relatorios-contatos.js'
+import { contatosParaCsv, lerCursor, lerFiltros, montarCursor, type LinhaContato } from './relatorios-contatos.js'
 
 /**
  * Relatórios de análise, 2ª leva (E3). Banco real, papel da aplicação (RLS), fuso America/Sao_Paulo (-03:00).
@@ -199,6 +199,19 @@ describe('regras puras', () => {
     const cur = montarCursor('2026-09-10T12:00:00.000000Z', c(1))
     expect(lerCursor(cur)).toEqual({ em: '2026-09-10T12:00:00.000000Z', id: c(1) })
     expect(lerCursor('lixo')).toBeNull()
+    for (const ruim of ['1|' + c(1), '2026-09-10|' + c(1), '2026-09-10T12:00:00|' + c(1), '2026-09-10T12:00:00Z|nao-uuid']) {
+      expect(lerCursor(Buffer.from(ruim).toString('base64url')), ruim).toBeNull()
+    }
+    expect(lerCursor(Buffer.from('2026-09-10T12:00:00Z|' + c(1)).toString('base64url'))).not.toBeNull()
+  })
+  it('CSV: telefone com + não ganha apóstrofo; o resto continua neutralizado', () => {
+    const base: LinhaContato = { id: c(1), nome: '=CMD()', telefone: '+5511999990001', email: '@x', tipoPessoa: null, uf: null, cidade: null,
+      origem: null, vendedor: null, filial: null, qualificacao: 'novo', formulario: null, criadoEm: '2026-09-10T12:00:00Z', convertido: false, pedidos: 0, valorCentavos: 0 }
+    const csv = contatosParaCsv([base, { ...base, telefone: '+55 (11) 9' }], 'America/Sao_Paulo')
+    expect(csv).toContain(';+5511999990001;')
+    expect(csv).toContain(`'=CMD()`)
+    expect(csv).toContain(`;'+55 (11) 9;`)
+    expect(csv).toContain(`;'@x;`)
   })
 })
 
@@ -216,6 +229,9 @@ describe('validação comum', () => {
     expect((await chamar(ADM, `/v1/relatorios/contatos?${SET}&uf=zzz`)).corpo).toMatchObject({ erro: 'relatorio.filtro_invalido', campo: 'uf' })
     expect((await chamar(ADM, `/v1/relatorios/contatos?${SET}&limite=101`)).corpo.erro).toBe('relatorio.limite_invalido')
     expect((await chamar(ADM, `/v1/relatorios/contatos?${SET}&cursor=lixo`)).corpo.erro).toBe('relatorio.cursor_invalido')
+    const forjado = Buffer.from('1|' + c(1)).toString('base64url')
+    const r = await chamar(ADM, `/v1/relatorios/contatos?${SET}&cursor=${forjado}`)
+    expect([r.status, r.corpo.erro]).toEqual([422, 'relatorio.cursor_invalido'])
     expect((await chamar(ADM, `/v1/relatorios/raio-x/produto/${VA}?${SET}`)).status).toBe(404)
     expect((await chamar(ADM, `/v1/relatorios/raio-x/vendedor/nao-uuid?${SET}`)).corpo.erro).toBe('relatorio.chave_invalida')
     expect((await chamar(ADM, `/v1/relatorios/opcoes/produto`)).status).toBe(404)
@@ -252,6 +268,39 @@ describe('comparativo de vendedores', () => {
     expect(va.corpo.itens[0]).toMatchObject({ contatosNovos: 3, valorCentavos: 28000 })
     const gx = await chamar(GX, `/v1/relatorios/comparativo?${SET}&vendedores=${VA},${VB}`)
     expect(gx.corpo.itens.map((i: any) => i.usuarioId)).toEqual([VA])
+  })
+})
+
+describe('filial do contato dentro do escopo e vendedor inativo', () => {
+  const GY = u(20), VM = u(21)
+  const AGO = 'inicio=2026-08-01&fim=2026-08-31'
+  it('dono em duas filiais: o gestor de Y vê "Filial Y" (não a X, fora do escopo dele)', async () => {
+    for (const [uid, nome] of [[GY, 'Gabi Gestora'], [VM, 'Vitor Multi']] as const) {
+      await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${T}, ${uid}, ${sub(uid)}, ${nome}, ${sub(uid) + '@e3.test'})`
+    }
+    await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES
+      (${T}, ${GY}, ${FY}, 'gestor'), (${T}, ${VM}, ${FX}, 'vendedor'), (${T}, ${VM}, ${FY}, 'vendedor')`
+    await contato(20, '2026-08-10T12:00:00Z', VM)
+    try {
+      const gy = await chamar(GY, `/v1/relatorios/visao-geral?${AGO}`)
+      expect(gy.corpo.porFilial.map((g: any) => [g.rotulo, g.contatos])).toEqual([['Filial Y', 1]])
+      const rx = await chamar(GY, `/v1/relatorios/raio-x/filial/${FY}?${AGO}`)
+      expect(rx.corpo.cartoes.contatos).toBe(1)
+      const adm = await chamar(ADM, `/v1/relatorios/visao-geral?${AGO}`)
+      expect(adm.corpo.porFilial.map((g: any) => g.rotulo)).toEqual(['Filial X']) // admin: menor id, determinístico
+    } finally {
+      await dono`DELETE FROM carteira_atribuicao WHERE tenant_id = ${T} AND contato_id = ${c(20)}`
+      await dono`DELETE FROM contato WHERE tenant_id = ${T} AND id = ${c(20)}`
+      await dono`DELETE FROM usuario_filial WHERE tenant_id = ${T} AND usuario_id IN (${GY}, ${VM})`
+      await dono`DELETE FROM usuario WHERE tenant_id = ${T} AND id IN (${GY}, ${VM})`
+    }
+  })
+  it('vendedor inativo não entra no comparativo', async () => {
+    await dono`UPDATE usuario SET ativo = false WHERE tenant_id = ${T} AND id = ${VB}`
+    try {
+      const r = await chamar(ADM, `/v1/relatorios/comparativo?${SET}&vendedores=${VB}`)
+      expect(r.corpo.itens).toEqual([])
+    } finally { await dono`UPDATE usuario SET ativo = true WHERE tenant_id = ${T} AND id = ${VB}` }
   })
 })
 
@@ -387,6 +436,10 @@ describe('raio-x', () => {
     expect(f.corpo).toMatchObject({ rotulo: 'Filial Y' })
     expect(f.corpo.cartoes).toMatchObject({ contatos: 2, convertidos: 1, valorCentavos: 7000 })
   })
+  it('formulário inexistente → 404 (não 200 zerado)', async () => {
+    const r = await chamar(ADM, `/v1/relatorios/raio-x/formulario/${id('dddd', 99)}?${SET}`)
+    expect([r.status, r.corpo.erro]).toEqual([404, 'relatorio.nao_encontrado'])
+  })
   it('escopo e tenant: vendedor não vê o raio-x do colega; id de outro tenant → 404', async () => {
     expect((await chamar(VA, `/v1/relatorios/raio-x/vendedor/${VB}?${SET}`)).status).toBe(404)
     expect((await chamar(VA, `/v1/relatorios/raio-x/vendedor/${VA}?${SET}`)).corpo.cartoes.contatos).toBe(3)
@@ -447,4 +500,21 @@ describe('motivos de perda e imprimíveis', () => {
     const r = await chamar(VB, `/v1/relatorios/motivos-perda?${SET}`)
     expect(r.corpo.total).toBe(1)
   })
+})
+
+describe('volume: coorte materializada uma vez por requisição', () => {
+  it('20 mil contatos: desempenho e raio-x respondem em poucos segundos', async () => {
+    await dono`INSERT INTO contato (tenant_id, id, nome, criado_em)
+               SELECT ${B}, gen_random_uuid(), 'Volume ' || n, '2026-07-10T12:00:00Z'::timestamptz + (n || ' seconds')::interval FROM generate_series(1, 20000) n`
+    await dono`ANALYZE contato`
+    const JUL = 'inicio=2026-07-01&fim=2026-07-31'
+    const t0 = Date.now()
+    const d = await chamar(BADM, `/v1/relatorios/desempenho?${JUL}`, B)
+    const ms = Date.now() - t0
+    expect(d.corpo.contatos).toBe(20000)
+    console.log(`desempenho com 20 mil contatos: ${ms} ms`)
+    expect(ms).toBeLessThan(8000)
+    const v = await chamar(BADM, `/v1/relatorios/visao-geral?${JUL}`, B)
+    expect(v.corpo.totais.contatos).toBe(20000)
+  }, 60_000)
 })
