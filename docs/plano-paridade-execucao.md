@@ -37,7 +37,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
 | D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
-| F1 campanhas v2 | 3 | 🔄 | F1a API+despachante (Opus, migration 0134) em curso; F1b wizard (Sonnet) depois |
+| F1 campanhas v2 | 3 | 🔄 | F1a API+despachante integrada (0134; legado intacto) — revisão Opus em curso; F1b telas (wizard, lista, detalhe) Sonnet em curso; pendente: `pedido.campanha_id` não é preenchido (atribuição exata 0), limite 250/24h do portfólio não verificado (#117) |
 | F3 formulários públicos | 3 | ✅ | integrada com as correções de segurança (upload fora da transação, IP real via `TRUST_PROXY_HOPS`, contato existente só com "Aplicar ao contato", assinatura de arquivo, clickjacking, hash do texto LGPD); 0127 editada no lugar; **dono: `TRUST_PROXY_HOPS=2` na API do Railway**; re-revisão curta pendente |
 | G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
 | G3 pós-venda, NPS, indicações, prova social | 3 | 🔍 | integrada (0130); revisão Opus: aprovado com correções (alto: indicações viram oráculo de "já é cliente" e não têm portão/teto; resposta do NPS barrada pelo portão com equipe disponível). Decisão: `indicacoes` padrão desligado. Correção em curso pelo agente da raia (migration 0141) — **não ligar pós-venda em cliente antes** |
