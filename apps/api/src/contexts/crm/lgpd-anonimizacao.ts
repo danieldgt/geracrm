@@ -256,6 +256,9 @@ export async function anonimizarContato(tx: Sql, contatoId: string, o: OpcoesAno
   // 5. Canais e identificadores. O que veio do ERP só sai no modo completa (vínculo fiscal) — e o
   //    modo completa nunca tem identidade de ERP (ela conta como compra).
   await tx`DELETE FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${contatoId}`
+  // Campanha (F1): a chave do telefone no destinatário também é dado pessoal.
+  await tx`UPDATE campanha_destinatario SET telefone_chave = NULL
+            WHERE tenant_id = tenant_atual() AND contato_id = ${contatoId} AND telefone_chave IS NOT NULL`
   await tx`DELETE FROM contato_nome WHERE tenant_id = tenant_atual() AND contato_id = ${contatoId}`
   await tx`DELETE FROM contato_identidade_externa
             WHERE tenant_id = tenant_atual() AND contato_id = ${contatoId}

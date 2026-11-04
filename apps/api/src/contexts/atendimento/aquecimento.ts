@@ -90,12 +90,18 @@ export async function statusAquecimento(sql: Sql, canalId: string, agora: Date):
   // Campanha v2 (F1): o que saiu hoje por este número e o que está SAINDO agora
   // (reivindicado por um worker, ainda sem desfecho) — senão duas passadas
   // simultâneas leriam o mesmo "resta" e estourariam o teto juntas.
+  // ⚠️ Duas contagens por campanha, cada uma no seu índice (enviados de hoje; em voo
+  //    reivindicados hoje) — o OR das duas numa consulta só varria o histórico inteiro.
+  //    `enviando` antigo (linha presa) não conta: a varredura do despachante resolve.
   const [usoV2] = await sql<{ n: number }[]>`
-    SELECT count(*)::int AS n
-      FROM campanha_destinatario d
-      JOIN campanha c ON c.tenant_id = d.tenant_id AND c.id = d.campanha_id
-     WHERE d.tenant_id = tenant_atual() AND c.canal_id = ${canalId}
-       AND (d.enviado_em >= ${desde} OR d.estado = 'enviando')`
+    SELECT coalesce(sum(
+             (SELECT count(*) FROM campanha_destinatario d
+               WHERE d.tenant_id = c.tenant_id AND d.campanha_id = c.id AND d.enviado_em >= ${desde})
+           + (SELECT count(*) FROM campanha_destinatario d
+               WHERE d.tenant_id = c.tenant_id AND d.campanha_id = c.id AND d.estado = 'enviando'
+                 AND d.enviando_desde >= ${desde})), 0)::int AS n
+      FROM campanha c
+     WHERE c.tenant_id = tenant_atual() AND c.canal_id = ${canalId} AND c.modelo_versao = 2`
   const usadoHoje = (uso?.n ?? 0) + (usoV2?.n ?? 0) + await reativacoesEnviadasHoje(sql, canalId, desde) + await posVendaEnviadasHoje(sql, canalId, desde)
     + await avisosReuniaoEnviadosHoje(sql, canalId, desde)
   return { emAquecimento: true, dia, limiteHoje, usadoHoje, restante: Math.max(0, limiteHoje - usadoHoje) }

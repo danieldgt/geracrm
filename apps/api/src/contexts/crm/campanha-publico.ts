@@ -27,9 +27,9 @@ import { FILTROS_VAZIOS, condicaoFiltros, contextoDosFiltros, diaReal } from './
  *
  * ── AS EXCLUSÕES (o primeiro motivo que casa vence; ordem de MOTIVOS_EXCLUSAO) ──
  *   foraDoEscopo   o contato não está no escopo de quem prevê/inicia (D3)
+ *   anonimizado    LGPD (contato.anonimizado_em, H2) ou contato inativo — antes do opt-out:
+ *                  o titular esquecido também está na lista de bloqueio
  *   optout         recebe_campanhas = false, ou QUALQUER telefone na lista_bloqueio
- *   anonimizado    contato inativo (c.ativo = false): hoje é a única marca de contato
- *                  retirado; a anonimização LGPD (H2) usará a mesma
  *   semTelefone    sem telefone principal, ou marcado como "não é WhatsApp"
  *   conversaRecente  conversa com mensagem nos últimos N dias (padrão 7)
  *   campanhaRecente  recebeu outra campanha nos últimos N dias (padrão 30; v2 e legado)
@@ -161,11 +161,11 @@ function motivoBase(tx: Sql, p: Publico, escopo: Escopo, agora: Date, campanhaId
   const outraCampanha = campanhaId === null ? tx`true` : tx`rd.campanha_id <> ${campanhaId}::uuid`
   return tx`CASE
       WHEN NOT (${condicaoContato(tx, escopo, 'c')}) THEN 'foraDoEscopo'
+      WHEN c.anonimizado_em IS NOT NULL OR NOT c.ativo THEN 'anonimizado'
       WHEN NOT c.recebe_campanhas OR EXISTS (
              SELECT 1 FROM contato_telefone ot
                JOIN lista_bloqueio lb ON lb.tenant_id = ot.tenant_id AND lb.chave_bloqueio = ot.chave_bloqueio
               WHERE ot.tenant_id = c.tenant_id AND ot.contato_id = c.id) THEN 'optout'
-      WHEN NOT c.ativo THEN 'anonimizado'
       WHEN tp.e164 IS NULL THEN 'semTelefone'
       ${x.conversaRecenteDias > 0 ? tx`
       WHEN EXISTS (SELECT 1 FROM conversa rcv WHERE rcv.tenant_id = c.tenant_id AND rcv.contato_id = c.id
@@ -283,4 +283,36 @@ export async function materializarFatia(
            (SELECT count(*) FROM ins)::int AS inseridos,
            (SELECT f.id::text FROM fatia f ORDER BY f.id DESC LIMIT 1) AS ultimo`
   return { lidos: r?.lidos ?? 0, inseridos: r?.inseridos ?? 0, ultimo: r?.ultimo ?? null }
+}
+
+/**
+ * Exclusões REAVALIADAS NO ENVIO (o snapshot é do iniciar; a campanha pode levar dias):
+ * contato anonimizado/inativo, conversa recente, outra campanha que o alcançou (enviada
+ * na janela ou SAINDO agora) e compra recente — com as janelas do público da campanha.
+ * Opt-out e telefone ficam com o gateway no próprio envio. `null` = segue.
+ */
+export async function motivoNoEnvio(
+  tx: Sql, p: { campanhaId: string; contatoId: string; publico: Publico; agora: Date },
+): Promise<MotivoExclusao | null> {
+  const x = p.publico.exclusoes
+  const desde = (dias: number) => tx`${p.agora}::timestamptz - make_interval(days => ${dias})`
+  const [r] = await tx<{ motivo: MotivoExclusao | null }[]>`
+    SELECT CASE
+        WHEN c.anonimizado_em IS NOT NULL OR NOT c.ativo THEN 'anonimizado'
+        ${x.conversaRecenteDias > 0 ? tx`
+        WHEN EXISTS (SELECT 1 FROM conversa rcv WHERE rcv.tenant_id = c.tenant_id AND rcv.contato_id = c.id
+                        AND rcv.ultima_mensagem_em >= ${desde(x.conversaRecenteDias)}) THEN 'conversaRecente'` : tx``}
+        ${x.campanhaRecenteDias > 0 ? tx`
+        WHEN EXISTS (SELECT 1 FROM campanha_destinatario rd WHERE rd.tenant_id = c.tenant_id AND rd.contato_id = c.id
+                        AND rd.campanha_id <> ${p.campanhaId}::uuid
+                        AND (rd.enviado_em >= ${desde(x.campanhaRecenteDias)} OR rd.estado = 'enviando'))
+          OR EXISTS (SELECT 1 FROM campanha_envio re WHERE re.tenant_id = c.tenant_id AND re.contato_id = c.id
+                        AND re.estado = 'enviado' AND re.enviado_em >= ${desde(x.campanhaRecenteDias)}) THEN 'campanhaRecente'` : tx``}
+        ${x.compraRecenteDias > 0 ? tx`
+        WHEN c.ultima_venda_em >= ${desde(x.compraRecenteDias)}
+          OR EXISTS (SELECT 1 FROM metricas_contato m WHERE m.tenant_id = c.tenant_id AND m.contato_id = c.id
+                        AND m.ultima_venda_em >= ${desde(x.compraRecenteDias)}) THEN 'compraRecente'` : tx``}
+        ELSE NULL END AS motivo
+      FROM contato c WHERE c.tenant_id = tenant_atual() AND c.id = ${p.contatoId}`
+  return r ? r.motivo : 'anonimizado'
 }

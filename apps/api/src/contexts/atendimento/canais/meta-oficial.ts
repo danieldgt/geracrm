@@ -111,6 +111,12 @@ export class CanalMetaOficial implements PortaCanal {
     if (status >= 500) return { ok: false, motivo: 'indisponivel', detalhe: `HTTP ${status}` }
     const err = (corpo as { error?: { message?: string; code?: number } } | null)?.error
     const code = err?.code
+    const r = this.#falhaPorCodigo(status, code, err?.message)
+    return code !== undefined ? { ...r, codigo: String(code) } : r
+  }
+
+  #falhaPorCodigo(status: number, code: number | undefined, mensagem: string | undefined): ResultadoEnvio & { ok: false } {
+    const err = { message: mensagem }
     // 190 = token inválido/expirado; 10/200/803 = permissão.
     if (code === 190 || code === 10 || code === 200) return { ok: false, motivo: 'credencial_invalida', detalhe: err?.message }
     // 131030 = destino fora da lista permitida; 131026/131047 = não é WhatsApp / fora da janela.

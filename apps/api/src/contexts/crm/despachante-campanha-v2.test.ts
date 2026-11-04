@@ -9,6 +9,9 @@ import { despacharCampanhasV2DoTenant, type EnviarDestinatario } from './despach
 import { enviarCampanhaParaContato, type ResultadoEnvioCampanha } from '../atendimento/envio-campanha.js'
 import { ingerirMensagemEntrante, registrarStatusMensagem } from '../atendimento/ingestao-mensagem.js'
 import type { PortaCanal, TemplateParaEnvio } from '../atendimento/canais/porta.js'
+import { registrarFalhaDestinatario } from './campanha-destinatario.js'
+import { anonimizarContato } from './lgpd-anonimizacao.js'
+import { obterOuCriarRascunho } from '../pedido/montagem.js'
 
 /**
  * DESPACHANTE DA CAMPANHA V2 (F1a). O que este arquivo guarda é de NEGÓCIO:
@@ -87,9 +90,18 @@ async function criarContatos(ns: number[]): Promise<void> {
 }
 
 /** Campanha v2 já iniciada com `ns` pendentes. */
+let seqCampanha = 0
+/** Id de destinatário ORDENADO pelo número do contato (o despachante reivindica por id). */
+const destinatarioId = (seq: number, n: number) => `f1a3${seq.toString(16).padStart(4, '0')}-dddd-4000-8000-${String(n).padStart(12, '0')}`
+
+/**
+ * Campanha v2 já iniciada com `ns` pendentes. Padrão: número OFICIAL (sem intervalo
+ * mínimo; tier padrão 250) — o não oficial tem teste próprio do intervalo.
+ */
 async function novaCampanha(ns: number[], o: { lote?: number; canal?: string; template?: boolean; estado?: string; inicio?: Date | null; janela?: unknown } = {}): Promise<string> {
   const id = randomUUID()
-  const canal = o.canal ?? CANAL
+  const seq = ++seqCampanha
+  const canal = o.canal ?? OFICIAL
   await dono`
     INSERT INTO campanha (tenant_id, id, nome, canal_id, mensagem, template_id, modelo_versao, estado, publico, lote_diario,
                           inicio_em, janela, iniciada_em, contagem_desde, disparada_em)
@@ -98,7 +110,7 @@ async function novaCampanha(ns: number[], o: { lote?: number; canal?: string; te
             ${o.janela ? JSON.stringify(o.janela) : null}::text::jsonb, ${AGORA}, ${new Date(AGORA.getTime() - DIA)}, ${AGORA})`
   for (const n of ns) {
     await dono`INSERT INTO campanha_destinatario (tenant_id, id, campanha_id, contato_id, telefone_chave)
-               VALUES (${T}, ${randomUUID()}, ${id}, ${contatoId(n)}, ${tel(n).chave})`
+               VALUES (${T}, ${destinatarioId(seq, n)}, ${id}, ${contatoId(n)}, ${tel(n).chave})`
   }
   return id
 }
@@ -109,7 +121,8 @@ const estados = (id: string) => dono<{ estado: string; n: number }[]>`
 const campanha = (id: string) => dono<{ estado: string; pausa_motivo: string | null }[]>`
   SELECT estado, pausa_motivo FROM campanha WHERE tenant_id = ${T} AND id = ${id}`.then((r) => r[0]!)
 
-const TABELAS = ['campanha_destinatario', 'campanha', 'canal_aquecimento', 'lista_bloqueio', 'alerta', 'notificacao', 'auditoria', 'outbox', 'mensagem_id_externo', 'mensagem', 'conversa']
+const TABELAS = ['campanha_destinatario', 'campanha', 'canal_aquecimento', 'lista_bloqueio', 'alerta', 'notificacao', 'auditoria', 'outbox',
+  'mensagem_id_externo', 'mensagem', 'conversa', 'numero_conversa_iniciada', 'numero_throttle', 'numero_whatsapp']
 
 beforeAll(async () => {
   process.env.DEV_TENANT_HEADER = 'on'
@@ -188,7 +201,7 @@ describe('Lote diário, janela e aquecimento seguram a campanha', () => {
   it('a janela da campanha vence o expediente do número; o expediente do número vence o padrão', async () => {
     // Número atende só das 13h às 18h → 11h está fechado.
     await dono`INSERT INTO canal_configuracao (tenant_id, canal_id, horario_atendimento)
-               VALUES (${T}, ${CANAL}, ${JSON.stringify({ ter: { de: '13:00', ate: '18:00' } })}::text::jsonb)`
+               VALUES (${T}, ${OFICIAL}, ${JSON.stringify({ ter: { de: '13:00', ate: '18:00' } })}::text::jsonb)`
     const segueExpediente = await novaCampanha([1])
     const comJanela = await novaCampanha([2], { janela: { ter: { de: '10:00', ate: '12:00' } } })
     const { enviar, chamadas } = envioFalso()
@@ -200,7 +213,7 @@ describe('Lote diário, janela e aquecimento seguram a campanha', () => {
   })
 
   it('aquecimento: número no dia 0 (teto 20) com lote 100 manda 20 e segura o resto', async () => {
-    await dono`INSERT INTO canal_aquecimento (tenant_id, canal_id, iniciado_em) VALUES (${T}, ${CANAL}, ${AGORA})`
+    await dono`INSERT INTO canal_aquecimento (tenant_id, canal_id, iniciado_em) VALUES (${T}, ${OFICIAL}, ${AGORA})`
     const id = await novaCampanha(Array.from({ length: 25 }, (_, i) => i + 1), { lote: 100 })
     const { enviar } = envioFalso()
     const r1 = await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)
@@ -306,17 +319,29 @@ describe('Nunca envia duas vezes', () => {
     expect((await estados(id)).find((e) => e.estado === 'enviada')?.n).toBe(10)
   })
 
-  it('linha presa em "enviando" há mais de 15 min vira falhou/envio_interrompido — e não é reenviada', async () => {
-    const id = await novaCampanha([1, 2])
-    await dono`UPDATE campanha_destinatario SET estado = 'enviando', enviando_desde = ${new Date(AGORA.getTime() - 20 * 60_000)}
-                WHERE tenant_id = ${T} AND campanha_id = ${id} AND contato_id = ${contatoId(1)}`
+  it('varredura de linha presa em "enviando": sem mensagem volta à fila; mensagem pendente falha; mensagem enviada é recuperada', async () => {
+    const id = await novaCampanha([1, 2, 3])
+    const presa = new Date(AGORA.getTime() - 20 * 60_000)
+    await dono`UPDATE campanha_destinatario SET estado = 'enviando', enviando_desde = ${presa}
+                WHERE tenant_id = ${T} AND campanha_id = ${id}`
+    // 2: a mensagem chegou a ser gravada e ficou pendente (pode ter saído) → ambíguo.
+    // 3: a mensagem saiu (id externo gravado) → o envio é recuperado, não repetido.
+    for (const [n, status, wamid] of [[2, 'pendente', null], [3, 'entregue', 'wamid.recuperado.3']] as const) {
+      const conv = randomUUID()
+      await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${conv}, ${OFICIAL}, ${contatoId(n)}, 1)`
+      await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem, campanha_id, id_externo)
+                 VALUES (${T}, ${randomUUID()}, ${conv}, 'saliente', 'texto', '{}'::jsonb, ${status}, 1, ${id}, ${wamid})`
+    }
     const { enviar, chamadas } = envioFalso()
     const r = await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)
-    expect(r.interrompidos).toBe(1)
-    expect(chamadas).toEqual([contatoId(2)])
-    const [l] = await dono<{ estado: string; erro_codigo: string }[]>`
-      SELECT estado, erro_codigo FROM campanha_destinatario WHERE tenant_id = ${T} AND campanha_id = ${id} AND contato_id = ${contatoId(1)}`
-    expect(l).toEqual({ estado: 'falhou', erro_codigo: 'envio_interrompido' })
+    expect(r.interrompidos).toBe(3)
+    // Só o 1 (nunca saiu) volta à fila e é enviado — uma vez.
+    expect(chamadas).toEqual([contatoId(1)])
+    const l = await dono<{ contato_id: string; estado: string; erro_codigo: string | null; wamid: string | null }[]>`
+      SELECT contato_id, estado, erro_codigo, wamid FROM campanha_destinatario WHERE tenant_id = ${T} AND campanha_id = ${id} ORDER BY contato_id`
+    expect(l[0]).toMatchObject({ estado: 'enviada' })
+    expect(l[1]).toMatchObject({ estado: 'falhou', erro_codigo: 'envio_interrompido' })
+    expect(l[2]).toMatchObject({ estado: 'entregue', wamid: 'wamid.recuperado.3' })
   })
 
   it('mesma chave de telefone (com e sem o nono dígito) de quem já recebeu: excluída, não manda de novo', async () => {
@@ -403,7 +428,7 @@ describe('Pausa automática', () => {
 
   it('qualidade do número caiu (ativas suspensas pela Meta): pausa com o motivo', async () => {
     const id = await novaCampanha([1])
-    await dono`UPDATE canal_conectado SET ativas_suspensas_em = ${AGORA}, ativas_suspensas_motivo = 'qualidade:FLAGGED:RED' WHERE tenant_id = ${T} AND id = ${CANAL}`
+    await dono`UPDATE canal_conectado SET ativas_suspensas_em = ${AGORA}, ativas_suspensas_motivo = 'qualidade:FLAGGED:RED' WHERE tenant_id = ${T} AND id = ${OFICIAL}`
     const { enviar, chamadas } = envioFalso()
     const r = await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)
     expect(r.pausadas).toBe(1)
@@ -433,6 +458,11 @@ describe('Status do webhook e resposta do cliente', () => {
 
   it('webhook da Meta "failed" com código: destinatário falhou com o código (rota real, assinatura válida)', async () => {
     const { id, wamid } = await enviada(2)
+    // A mensagem da thread com o mesmo wamid: o webhook "failed" a marca como falhou (B3).
+    const conv = randomUUID()
+    await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${conv}, ${OFICIAL}, ${contatoId(2)}, 1)`
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, status, status_ordem, id_externo)
+               VALUES (${T}, ${randomUUID()}, ${conv}, 'saliente', 'texto', '{}'::jsonb, 'enviada', 1, ${wamid})`
     const corpo = JSON.stringify({
       object: 'whatsapp_business_account',
       entry: [{ id: 'WABA-F1A3', changes: [{ field: 'messages', value: {
@@ -448,6 +478,10 @@ describe('Status do webhook e resposta do cliente', () => {
       expect(r.statusCode).toBe(200)
     } finally { await app.close() }
     expect(await linha(id)).toMatchObject({ estado: 'falhou', erro_codigo: '131026' })
+    const [m] = await dono<{ status: string }[]>`SELECT status FROM mensagem WHERE tenant_id = ${T} AND id_externo = ${wamid}`
+    expect(m!.status).toBe('falhou')
+    // 131026 é erro do destinatário: a campanha segue (não pausa).
+    expect((await campanha(id)).estado).toBe('enviando')
   })
 
   it('o cliente respondeu no mesmo número em até 7 dias → respondeu; depois de 7 dias, não', async () => {
@@ -464,5 +498,195 @@ describe('Status do webhook e resposta do cliente', () => {
       recebidaEm: new Date(AGORA.getTime() + 8 * DIA),
     }))
     expect((await linha(tarde.id)).estado).toBe('enviada')
+  })
+})
+
+describe('Revisão F1a — limites do número, queda no meio e reavaliação no envio', () => {
+  it('A1: tier do oficial = contatos DISTINTOS em 24 h; quem já tem vaga não gasta outra; sem vaga, fica na fila', async () => {
+    await dono`INSERT INTO numero_whatsapp (tenant_id, canal_id, telefone_e164, waba_id, phone_number_id, tier)
+               VALUES (${T}, ${OFICIAL}, '+5581999990000', 'WABA', ${PHONE_ID}, 2)`
+    // O contato 1 já falou com este número há 1 h (vaga ocupada na janela de 24 h).
+    await dono`INSERT INTO numero_conversa_iniciada (tenant_id, canal_id, contato_id, iniciada_em)
+               VALUES (${T}, ${OFICIAL}, ${contatoId(1)}, ${new Date(AGORA.getTime() - 3_600_000)})`
+    const id = await novaCampanha([1, 2, 3])
+    const { enviar, chamadas } = envioFalso()
+    const r = await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)
+    expect(chamadas).toEqual([contatoId(1), contatoId(2)])
+    expect(r.aguardandoTier).toBe(1)
+    expect((await estados(id)).find((e) => e.estado === 'pendente')?.n).toBe(1)
+    const [n] = await dono<{ n: number }[]>`
+      SELECT count(DISTINCT contato_id)::int AS n FROM numero_conversa_iniciada WHERE tenant_id = ${T} AND canal_id = ${OFICIAL}`
+    expect(n!.n).toBe(2)
+  })
+
+  it('A1: sem tier informado no número, o teto é 250 contatos em 24 h (#117)', async () => {
+    const antes = new Date(AGORA.getTime() - 3_600_000)
+    await dono`INSERT INTO numero_conversa_iniciada (tenant_id, canal_id, contato_id, iniciada_em)
+               SELECT ${T}, ${OFICIAL}, gen_random_uuid(), ${antes} FROM generate_series(1, 250)`
+    const id = await novaCampanha([1])
+    const { enviar, chamadas } = envioFalso()
+    expect((await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)).aguardandoTier).toBe(1)
+    expect(chamadas).toHaveLength(0)
+    expect(await estados(id)).toEqual([{ estado: 'pendente', n: 1 }])
+  })
+
+  it('A2: não oficial tem intervalo mínimo aleatório (3–10 s) por número — sem rajada', async () => {
+    const id = await novaCampanha([1, 2, 3], { canal: CANAL })
+    const { enviar, chamadas } = envioFalso()
+    const r1 = await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)
+    expect(r1.enviados).toBe(1)
+    expect(r1.aguardandoIntervalo).toBe(1)
+    expect((await despacharCampanhasV2DoTenant(w, T, new Date(AGORA.getTime() + 2_000), enviar)).enviados).toBe(0)
+    expect((await despacharCampanhasV2DoTenant(w, T, new Date(AGORA.getTime() + 11_000), enviar)).enviados).toBe(1)
+    expect(chamadas).toHaveLength(2)
+    const [t] = await dono<{ espera: number }[]>`
+      SELECT extract(epoch FROM proximo_envio_permitido_em - ${new Date(AGORA.getTime() + 11_000)}::timestamptz)::int AS espera
+        FROM numero_throttle WHERE tenant_id = ${T} AND canal_id = ${CANAL}`
+    expect(t!.espera).toBeGreaterThanOrEqual(3)
+    expect(t!.espera).toBeLessThanOrEqual(10)
+    expect((await estados(id)).find((e) => e.estado === 'pendente')?.n).toBe(1)
+  })
+
+  it('M1: a campanha pausada NO MEIO da passada não manda o resto', async () => {
+    const id = await novaCampanha([1, 2, 3])
+    const chamadas: string[] = []
+    const enviar: EnviarDestinatario = async (_t, p) => {
+      chamadas.push(p.contatoId)
+      await dono`UPDATE campanha SET estado = 'pausada', pausa_motivo = 'manual' WHERE tenant_id = ${T} AND id = ${id}`
+      return { ok: true, conversaId: randomUUID(), mensagemId: randomUUID(), idExterno: `wamid.${randomUUID()}` }
+    }
+    await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)
+    expect(chamadas).toHaveLength(1)
+    expect((await estados(id)).find((e) => e.estado === 'pendente')?.n).toBe(2)
+  })
+
+  it('M3: exclusões reavaliadas no envio — outra campanha em curso alcançou o contato; conversou depois do snapshot', async () => {
+    const outra = await novaCampanha([2])
+    await dono`UPDATE campanha SET estado = 'concluida' WHERE tenant_id = ${T} AND id = ${outra}`
+    await dono`UPDATE campanha_destinatario SET estado = 'enviada', enviado_em = ${new Date(AGORA.getTime() - 5 * DIA)}
+                WHERE tenant_id = ${T} AND campanha_id = ${outra}`
+    const id = await novaCampanha([1, 2, 3])
+    await dono`UPDATE campanha SET publico = '{"exclusoes":{"conversaRecenteDias":7,"campanhaRecenteDias":30,"compraRecenteDias":7}}'::jsonb
+                WHERE tenant_id = ${T} AND id = ${id}`
+    await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, ultima_mensagem_em, versao)
+               VALUES (${T}, ${randomUUID()}, ${CANAL}, ${contatoId(3)}, ${new Date(AGORA.getTime() - DIA)}, 1)`
+    const { enviar, chamadas } = envioFalso()
+    const r = await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)
+    expect(chamadas).toEqual([contatoId(1)])
+    expect(r.excluidos).toBe(2)
+    const l = await dono<{ contato_id: string; motivo_exclusao: string | null }[]>`
+      SELECT contato_id, motivo_exclusao FROM campanha_destinatario WHERE tenant_id = ${T} AND campanha_id = ${id} ORDER BY contato_id`
+    expect(l.map((x) => x.motivo_exclusao)).toEqual([null, 'campanhaRecente', 'conversaRecente'])
+  })
+
+  it('M5: contato anonimizado depois do snapshot não recebe; a anonimização apaga a chave do telefone do destinatário', async () => {
+    const id = await novaCampanha([1, 2])
+    await dono`UPDATE contato SET anonimizado_em = ${AGORA}, anonimizacao_modo = 'canais' WHERE tenant_id = ${T} AND id = ${contatoId(2)}`
+    try {
+      const { enviar, chamadas } = envioFalso()
+      await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)
+      expect(chamadas).toEqual([contatoId(1)])
+      const [l] = await dono<{ estado: string; motivo_exclusao: string }[]>`
+        SELECT estado, motivo_exclusao FROM campanha_destinatario WHERE tenant_id = ${T} AND campanha_id = ${id} AND contato_id = ${contatoId(2)}`
+      expect(l).toEqual({ estado: 'excluida', motivo_exclusao: 'anonimizado' })
+    } finally {
+      await dono`UPDATE contato SET anonimizado_em = NULL, anonimizacao_modo = NULL WHERE tenant_id = ${T} AND id = ${contatoId(2)}`
+    }
+    // H2: anonimizar de verdade um contato que estava numa campanha.
+    const alvo = randomUUID()
+    await dono`INSERT INTO contato (tenant_id, id, nome) VALUES (${T}, ${alvo}, 'Titular')`
+    await dono`INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, fonte)
+               VALUES (${T}, ${alvo}, 1, '+5581977776655', '558177776655', true, 'teste')`
+    await dono`INSERT INTO campanha_destinatario (tenant_id, id, campanha_id, contato_id, telefone_chave, estado, enviado_em)
+               VALUES (${T}, ${randomUUID()}, ${id}, ${alvo}, '558177776655', 'enviada', ${AGORA})`
+    const r = await comTenantServico(T, (tx) => anonimizarContato(tx, alvo, { motivo: 'titular', agora: AGORA }))
+    expect(r.ok).toBe(true)
+    const [d] = await dono<{ telefone_chave: string | null }[]>`
+      SELECT telefone_chave FROM campanha_destinatario WHERE tenant_id = ${T} AND contato_id = ${alvo}`
+    expect(d!.telefone_chave).toBeNull()
+  })
+
+  it('M6: erro de número em risco no envio pausa NA HORA e devolve a linha; erro do destinatário não entra na taxa', async () => {
+    const risco = await novaCampanha([1, 2])
+    const { enviar } = envioFalso(() => ({ ok: false, classe: 'transporte', motivo: 'indisponivel', codigo: '131048' }))
+    const r = await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)
+    expect(r.pausadas).toBe(1)
+    expect(await campanha(risco)).toEqual({ estado: 'pausada', pausa_motivo: 'numero_em_risco' })
+    expect(await estados(risco)).toEqual([{ estado: 'pendente', n: 2 }])
+
+    for (const t of ['campanha_destinatario', 'campanha', 'alerta', 'notificacao', 'auditoria']) await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id = '${T}'`)
+    const fixos = await novaCampanha(Array.from({ length: 60 }, (_, i) => i + 1))
+    const naoEhWhats = envioFalso(() => ({ ok: false, classe: 'transporte', motivo: 'destino_invalido', codigo: '131026' }))
+    const r2 = await despacharCampanhasV2DoTenant(w, T, AGORA, naoEhWhats.enviar)
+    expect(r2.falhas).toBe(50)
+    expect(r2.pausadas).toBe(0)
+    expect((await campanha(fixos)).estado).toBe('enviando')
+  })
+
+  it('M6: webhook "failed" com erro de número em risco pausa a campanha na hora', async () => {
+    const id = await novaCampanha([1])
+    await dono`UPDATE campanha_destinatario SET estado = 'enviada', enviado_em = ${AGORA}, wamid = 'wamid.risco.1'
+                WHERE tenant_id = ${T} AND campanha_id = ${id}`
+    await comTenantServico(T, (tx) => registrarFalhaDestinatario(tx, 'wamid.risco.1', '131031', AGORA))
+    expect(await campanha(id)).toEqual({ estado: 'pausada', pausa_motivo: 'numero_em_risco' })
+  })
+
+  it('B1: o status que o webhook gravou ANTES do desfecho (lida) vale para o destinatário', async () => {
+    const id = await novaCampanha([1], { template: true })
+    const falso = canalFalso()
+    const enviar: EnviarDestinatario = async (t, p, a) => {
+      const r = await enviarCampanhaParaContato(t, p, a, { criar: falso.criar })
+      if (r.ok) await dono`UPDATE mensagem SET status = 'lida', status_ordem = 3 WHERE tenant_id = ${T} AND id_externo = ${r.idExterno}`
+      return r
+    }
+    await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)
+    const [l] = await dono<{ estado: string; lido_em: Date | null }[]>`
+      SELECT estado, lido_em FROM campanha_destinatario WHERE tenant_id = ${T} AND campanha_id = ${id}`
+    expect(l!.estado).toBe('lida')
+    expect(l!.lido_em).not.toBeNull()
+  })
+
+  it('B5: número com disparo pausado — a campanha nem reivindica (tentativas não sobem em laço)', async () => {
+    const id = await novaCampanha([1])
+    await dono`INSERT INTO canal_configuracao (tenant_id, canal_id, disparo_pausado, pausado_motivo, pausado_em)
+               VALUES (${T}, ${OFICIAL}, true, 'manual', ${AGORA})`
+    const { enviar, chamadas } = envioFalso()
+    for (let i = 0; i < 3; i++) expect((await despacharCampanhasV2DoTenant(w, T, AGORA, enviar)).bloqueadas).toBe(1)
+    expect(chamadas).toHaveLength(0)
+    const [l] = await dono<{ estado: string; tentativas: number }[]>`
+      SELECT estado, tentativas FROM campanha_destinatario WHERE tenant_id = ${T} AND campanha_id = ${id}`
+    expect(l).toEqual({ estado: 'pendente', tentativas: 0 })
+  })
+
+  it('B7: opt-out depois da campanha concluída ainda conta, dentro da janela de atribuição', async () => {
+    const id = await novaCampanha([1])
+    await dono`UPDATE campanha SET estado = 'concluida', concluida_em = ${new Date(AGORA.getTime() - DIA)} WHERE tenant_id = ${T} AND id = ${id}`
+    await dono`UPDATE campanha_destinatario SET estado = 'enviada', enviado_em = ${new Date(AGORA.getTime() - 2 * DIA)}
+                WHERE tenant_id = ${T} AND campanha_id = ${id}`
+    await dono`INSERT INTO lista_bloqueio (tenant_id, chave_bloqueio, motivo, origem, bloqueado_em)
+               VALUES (${T}, ${tel(1).chave}, 'opt_out', 'opt_out_mensagem', ${new Date(AGORA.getTime() - DIA)})`
+    await despacharCampanhasV2DoTenant(w, T, AGORA, envioFalso().enviar)
+    expect(await estados(id)).toEqual([{ estado: 'optout', n: 1 }])
+  })
+
+  it('M4: o pedido que nasce na conversa herda a campanha que alcançou o contato na janela; fora da janela, não', async () => {
+    const id = await novaCampanha([1, 2])
+    await dono`UPDATE campanha_destinatario SET estado = 'respondeu', enviado_em = now() - interval '2 days'
+                WHERE tenant_id = ${T} AND campanha_id = ${id} AND contato_id = ${contatoId(1)}`
+    await dono`UPDATE campanha_destinatario SET estado = 'lida', enviado_em = now() - interval '20 days'
+                WHERE tenant_id = ${T} AND campanha_id = ${id} AND contato_id = ${contatoId(2)}`
+    const pedidoDa = async (n: number) => {
+      const conv = randomUUID()
+      await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${conv}, ${OFICIAL}, ${contatoId(n)}, 1)`
+      const p = await comTenantServico(T, (tx) => obterOuCriarRascunho(tx, { conversaId: conv }))
+      const [l] = await dono<{ campanha_id: string | null }[]>`SELECT campanha_id FROM pedido WHERE tenant_id = ${T} AND id = ${p.id}`
+      return l!.campanha_id
+    }
+    try {
+      expect(await pedidoDa(1)).toBe(id)
+      expect(await pedidoDa(2)).toBeNull() // 20 dias > janela de 7
+    } finally {
+      await dono`DELETE FROM pedido WHERE tenant_id = ${T}`
+    }
   })
 })

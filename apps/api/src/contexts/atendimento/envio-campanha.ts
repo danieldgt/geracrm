@@ -163,7 +163,8 @@ export interface PedidoEnvioCampanha {
 
 export type ResultadoEnvioCampanha =
   | { ok: true; conversaId: string; mensagemId: string; idExterno: string }
-  | { ok: false; classe: ClasseFalha; motivo: string; conversaId?: string; mensagemId?: string }
+  /** `codigo`: código de erro do provedor (Meta), quando a falha é de transporte. */
+  | { ok: false; classe: ClasseFalha; motivo: string; conversaId?: string; mensagemId?: string; codigo?: string }
 
 export interface DepsEnvioCampanha {
   readonly criar?: typeof criarCanal | undefined
@@ -185,8 +186,9 @@ export async function enviarCampanhaParaContato(
   const preparo = await comTenantServico(tenantId, async (tx): Promise<Preparo | Falha> => {
     const canal = await lerCanal(tx, p.canalId)
     if (!canal) return { ok: false, classe: 'alvo', motivo: 'canal_nao_encontrado' }
-    const [alvo] = await tx<{ destino: string | null; bloqueado: boolean; conversaId: string | null; ultimaEntranteEm: Date | null }[]>`
-      SELECT (SELECT ct.e164 FROM contato_telefone ct
+    const [alvo] = await tx<{ destino: string | null; bloqueado: boolean; anonimizado: boolean; conversaId: string | null; ultimaEntranteEm: Date | null }[]>`
+      SELECT (c.anonimizado_em IS NOT NULL OR NOT c.ativo) AS anonimizado,
+             (SELECT ct.e164 FROM contato_telefone ct
                WHERE ct.tenant_id = c.tenant_id AND ct.contato_id = c.id AND ct.principal
                  AND ct.whatsapp IS DISTINCT FROM false) AS destino,
              (NOT c.recebe_campanhas OR NOT c.ativo OR EXISTS (
@@ -198,6 +200,8 @@ export async function enviarCampanhaParaContato(
         LEFT JOIN conversa cv ON cv.tenant_id = c.tenant_id AND cv.canal_id = ${p.canalId} AND cv.contato_id = c.id
        WHERE c.tenant_id = tenant_atual() AND c.id = ${p.contatoId}`
     if (!alvo) return { ok: false, classe: 'alvo', motivo: 'contato_nao_encontrado' }
+    // ⚠️ LGPD (H2): contato anonimizado não recebe nada — antes até do opt-out.
+    if (alvo.anonimizado) return { ok: false, classe: 'alvo', motivo: 'contato_anonimizado' }
     if (!alvo.destino) return { ok: false, classe: 'alvo', motivo: 'sem_telefone' }
 
     let template: Preparo['template'] = null
@@ -270,7 +274,10 @@ export async function enviarCampanhaParaContato(
 
   return r.ok
     ? { ok: true, conversaId: preparo.conversaId, mensagemId: preparo.mensagemId, idExterno: r.idExterno }
-    : { ok: false, classe: r.classe, motivo: r.motivo, conversaId: preparo.conversaId, mensagemId: preparo.mensagemId }
+    : {
+        ok: false, classe: r.classe, motivo: r.motivo, conversaId: preparo.conversaId, mensagemId: preparo.mensagemId,
+        ...(r.classe === 'transporte' && r.codigo ? { codigo: r.codigo } : {}),
+      }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
