@@ -41,7 +41,7 @@ export async function reativacoesEnviadasHoje(sql: Sql, canalId: string, desde: 
 
 /**
  * Status de aquecimento de um número: dia, teto de hoje, quanto já disparou hoje
- * (envios de campanha por este canal + reativações do agente, G5) e quanto
+ * (envios de campanha por este canal, legado e v2, + reativações do agente, G5) e quanto
  * resta. "Hoje" é o dia no fuso do tenant. Sem registro de aquecimento → sem
  * teto (número já quente / oficial).
  */
@@ -63,6 +63,15 @@ export async function statusAquecimento(sql: Sql, canalId: string, agora: Date):
       JOIN campanha c ON c.tenant_id = ce.tenant_id AND c.id = ce.campanha_id
      WHERE ce.tenant_id = tenant_atual() AND c.canal_id = ${canalId}
        AND ce.estado = 'enviado' AND ce.enviado_em >= ${desde}`
-  const usadoHoje = (uso?.n ?? 0) + await reativacoesEnviadasHoje(sql, canalId, desde)
+  // Campanha v2 (F1): o que saiu hoje por este número e o que está SAINDO agora
+  // (reivindicado por um worker, ainda sem desfecho) — senão duas passadas
+  // simultâneas leriam o mesmo "resta" e estourariam o teto juntas.
+  const [usoV2] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n
+      FROM campanha_destinatario d
+      JOIN campanha c ON c.tenant_id = d.tenant_id AND c.id = d.campanha_id
+     WHERE d.tenant_id = tenant_atual() AND c.canal_id = ${canalId}
+       AND (d.enviado_em >= ${desde} OR d.estado = 'enviando')`
+  const usadoHoje = (uso?.n ?? 0) + (usoV2?.n ?? 0) + await reativacoesEnviadasHoje(sql, canalId, desde)
   return { emAquecimento: true, dia, limiteHoje, usadoHoje, restante: Math.max(0, limiteHoje - usadoHoje) }
 }
