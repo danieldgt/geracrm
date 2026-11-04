@@ -9,6 +9,7 @@ import { auditar } from '../plataforma/auditoria.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import { naoEhLinhaDeStaff } from '../identidade/linha-staff.js'
 import { acharConflito } from './rotas-agenda.js'
+import { algumCanal, canaisDosUsuarios } from '../plataforma/preferencia-notificacao.js'
 
 /**
  * REUNIÃO MARCADA PELO CRM E PELO AGENTE (raia C3) — o lado com banco. As regras são puras
@@ -184,13 +185,19 @@ export async function agendarReuniao(tx: Sql, p: {
   })
 
   if (p.usuarioId !== p.criadoPor) {
-    await tx`
-      INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo)
-      VALUES (tenant_atual(), ${randomUUID()}, ${p.usuarioId}, 'agenda.reuniao', ${`Reunião marcada com ${cv.contato} — ${quando}`})`
-    await tx`
-      INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
-      VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${p.usuarioId},
-              ${JSON.stringify({ usuarioId: p.usuarioId })}::text::jsonb)`
+    // Preferência do usuário (D4): sem canal ligado, nem grava; app desligado = só push, sem evento no outbox.
+    const c = (await canaisDosUsuarios(tx, [p.usuarioId], 'agenda.reuniao')).get(p.usuarioId)
+    if (c && algumCanal(c)) {
+      await tx`
+        INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, no_app, email_pendente)
+        VALUES (tenant_atual(), ${randomUUID()}, ${p.usuarioId}, 'agenda.reuniao', ${`Reunião marcada com ${cv.contato} — ${quando}`}, ${c.app}, ${c.email})`
+      if (c.app) {
+        await tx`
+          INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+          VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${p.usuarioId},
+                  ${JSON.stringify({ usuarioId: p.usuarioId })}::text::jsonb)`
+      }
+    }
   }
   return { tipo: 'ok', eventoId, responsavelAlterado: assumiu }
 }

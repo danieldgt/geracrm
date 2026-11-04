@@ -29,6 +29,7 @@ export const TIPOS_NOTIFICACAO: readonly TipoNotificacao[] = [
   { codigo: 'nps.detrator', rotulo: 'NPS detrator', emailDisponivel: false },
   { codigo: 'campanha.pausada', rotulo: 'Campanha pausada automaticamente', emailDisponivel: false },
   { codigo: 'agenda.lembrete', rotulo: 'Lembrete de compromisso', emailDisponivel: false },
+  { codigo: 'agenda.reuniao', rotulo: 'Reunião marcada para você por outra pessoa ou pelo agente', emailDisponivel: false },
   { codigo: 'canal.qualidade', rotulo: 'Qualidade do número de WhatsApp', emailDisponivel: false },
   { codigo: 'agente.orcamento', rotulo: 'Orçamento de IA', emailDisponivel: false },
 ]
