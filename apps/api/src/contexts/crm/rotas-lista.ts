@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { atorDaRequisicao, garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { condicaoContato, contatoNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
+import { lerBusca, padraoContem } from '../../db/busca.js'
 
 const PAGINA = 30
 // Listas: página maior que a de membros (o console anterior esperava até 200 de uma vez).
@@ -18,18 +19,22 @@ export async function rotasLista(app: FastifyInstance): Promise<void> {
   // Listas do tenant, com a contagem de membros. ⚠️ Cresce sem teto por
   // construção (o cliente cria quantas quiser): cursor (nome, id), como os vizinhos.
   // A resposta só ACRESCENTA `proximoCursor` — o console anterior ignora o campo.
-  app.get<{ Querystring: { cursor?: string } }>('/v1/listas', { preHandler: exigirTenant }, async (req, reply) => {
+  // `?q=` filtra por nome (ILIKE "contém", termo literal) e mantém o cursor.
+  app.get<{ Querystring: { cursor?: string; q?: string } }>('/v1/listas', { preHandler: exigirTenant }, async (req, reply) => {
     let curNome: string | null = null, curId: string | null = null
     if (req.query.cursor) {
       const [nome, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
       if (nome === undefined || !id || !UUID.test(id)) return reply.code(422).send({ erro: 'cursor.invalido' })
       curNome = nome; curId = id
     }
+    const busca = lerBusca(req.query.q)
+    if (busca === 'invalido') return reply.code(422).send({ erro: 'busca.invalida', campos: { q: 'Use até 100 caracteres.' } })
     const linhas = await req.comTenant((tx) => tx<{ id: string; nome: string; descricao: string | null; membros: number }[]>`
       SELECT l.id, l.nome, l.descricao,
              (SELECT count(*)::int FROM lista_membro m WHERE m.tenant_id = l.tenant_id AND m.lista_id = l.id) AS membros
         FROM lista l
        WHERE l.tenant_id = tenant_atual()
+         AND ${busca === null ? tx`true` : tx`l.nome ILIKE ${padraoContem(busca)}`}
          AND ${curNome === null ? tx`true` : tx`(l.nome, l.id) > (${curNome}, ${curId}::uuid)`}
        ORDER BY l.nome ASC, l.id ASC LIMIT ${PAGINA_LISTAS + 1}`)
     const temMais = linhas.length > PAGINA_LISTAS

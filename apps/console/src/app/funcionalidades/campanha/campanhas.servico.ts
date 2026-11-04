@@ -47,6 +47,13 @@ export interface TemplateCampanha {
   readonly corpo: { body: { texto: string } }
   readonly mapeamentoVariaveis?: Readonly<Record<string, string>>
 }
+/** Filtros do catálogo de templates (todos opcionais; o servidor valida os valores). */
+export interface FiltrosTemplates {
+  readonly status?: string
+  readonly categoria?: string
+  readonly canalId?: string | null
+  readonly q?: string | null
+}
 export interface ItemNomeado { readonly id: string; readonly nome: string }
 export interface EtapaFunil { readonly id: string; readonly nome: string; readonly tipo: string; readonly ativo: boolean }
 
@@ -109,11 +116,12 @@ export class CampanhasServico {
   canais(): Promise<{ itens: readonly CanalCampanha[] }> {
     return firstValueFrom(this.http.get<{ itens: readonly CanalCampanha[] }>('/v1/canais'))
   }
-  templates(cursor: string | null): Promise<Pagina<TemplateCampanha>> {
-    return firstValueFrom(this.http.get<Pagina<TemplateCampanha>>(`/v1/templates${queryDeLista({ cursor })}`))
+  /** Templates que o número envia numa campanha: `status=APPROVED&categoria=MARKETING&canalId=…&q=` no servidor. */
+  templates(cursor: string | null, filtros: FiltrosTemplates = {}): Promise<Pagina<TemplateCampanha>> {
+    return firstValueFrom(this.http.get<Pagina<TemplateCampanha>>(`/v1/templates${queryDeLista({ cursor, ...filtros })}`))
   }
-  listas(cursor: string | null): Promise<Pagina<ItemNomeado>> {
-    return firstValueFrom(this.http.get<Pagina<ItemNomeado>>(`/v1/listas${queryDeLista({ cursor })}`))
+  listas(cursor: string | null, q: string | null = null): Promise<Pagina<ItemNomeado>> {
+    return firstValueFrom(this.http.get<Pagina<ItemNomeado>>(`/v1/listas${queryDeLista({ cursor, q })}`))
   }
   etapas(): Promise<{ itens: readonly EtapaFunil[] }> {
     return firstValueFrom(this.http.get<{ itens: readonly EtapaFunil[] }>('/v1/funil/config/etapas'))

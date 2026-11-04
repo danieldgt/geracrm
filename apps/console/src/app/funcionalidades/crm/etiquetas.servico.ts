@@ -12,9 +12,9 @@ export interface Pagina<T> { readonly itens: readonly T[]; readonly proximoCurso
 export class EtiquetasServico {
   private readonly http = inject(HttpClient)
 
-  etiquetas(cursor?: string | null, soAtivas = false): Promise<Pagina<Etiqueta>> {
+  etiquetas(cursor?: string | null, soAtivas = false, q: string | null = null): Promise<Pagina<Etiqueta>> {
     return firstValueFrom(this.http.get<Pagina<Etiqueta>>(
-      `/v1/etiquetas${queryDeLista({ cursor, ativas: soAtivas ? 'true' : null })}`))
+      `/v1/etiquetas${queryDeLista({ cursor, ativas: soAtivas ? 'true' : null, q })}`))
   }
   criarEtiqueta(corpo: { nome: string; cor: string }): Promise<Etiqueta> {
     return firstValueFrom(this.http.post<Etiqueta>('/v1/etiquetas', corpo))
@@ -23,9 +23,9 @@ export class EtiquetasServico {
     return firstValueFrom(this.http.patch<Etiqueta>(`/v1/etiquetas/${id}`, corpo))
   }
 
-  origens(cursor?: string | null, soAtivas = false): Promise<Pagina<Origem>> {
+  origens(cursor?: string | null, soAtivas = false, q: string | null = null): Promise<Pagina<Origem>> {
     return firstValueFrom(this.http.get<Pagina<Origem>>(
-      `/v1/origens${queryDeLista({ cursor, ativas: soAtivas ? 'true' : null })}`))
+      `/v1/origens${queryDeLista({ cursor, ativas: soAtivas ? 'true' : null, q })}`))
   }
   criarOrigem(corpo: { nome: string; ordem: number }): Promise<Origem> {
     return firstValueFrom(this.http.post<Origem>('/v1/origens', corpo))
