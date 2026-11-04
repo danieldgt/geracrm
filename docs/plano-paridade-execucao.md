@@ -47,7 +47,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
 | E2 relatórios 1ª leva | 3 | ✅ | integrada com as correções da revisão (sistema e falhas fora de "enviadas", ranking no escopo, vazio, base do percentual, escopo materializado, 1ª resposta negativa, cliente antigo do ERP fora do tempo de conversão) |
 | E3 relatórios 2ª leva | 3 | ✅ | integrada com as correções da revisão (cursor estrito, filial no escopo do gestor, coorte materializada por requisição, telefone sem apóstrofo no CSV); faixa etária fora (sem data de nascimento) |
-| L1 retrofit das telas restantes | 4 | 🔄 | L1a ✅ (8 telas); L1b ✅ (canais, canal-config, templates, automações, catálogo, catálogo-produtos, conexões, mídia); L1c Haiku em curso (nps, fidelidade, carteiras, leads, anúncio-ROI, mapa, mercado, BI, performance, clientes da plataforma); depois L1d Sonnet (kanban de atendimento, fila do dia, CRM avançado, funil, pedido, inbox após C3); R1 Haiku em curso (lacunas da biblioteca: maxlength/min/max/step, type/form no botão, rodapé da tabela, ícones) |
+| L1 retrofit das telas restantes | 4 | 🔄 | L1a ✅ (8 telas); L1b ✅ (canais, canal-config, templates, automações, catálogo, catálogo-produtos, conexões, mídia); L1c Haiku em curso (nps, fidelidade, carteiras, leads, anúncio-ROI, mapa, mercado, BI, performance, clientes da plataforma); L1d Sonnet em curso (kanban de atendimento, fila do dia, CRM avançado, funil, pedido); inbox depois da C3; R1 Haiku em curso (lacunas da biblioteca: maxlength/min/max/step, type/form no botão, rodapé da tabela, ícones) |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
@@ -57,6 +57,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D3.4b telas de usuário sem admin atribuído + nomear admin | 0 | ✅ | integrada; API passou a responder `acesso.admin_atribuido` no modo fundador; select de usuários entregue pela X4 |
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
 | X4 cursor em listas/metas/segmentos + usuários do cliente para o staff | — | ✅ | integrada; listas por cursor; metas e segmentos com teto documentado (limitados por construção); "Nomear admin" com select paginado; agregação RFV movida para SQL |
+| X5 busca/filtros no servidor (templates por status/categoria/número; q em listas, etiquetas, origens) | — | 🔄 | Haiku; para as telas da F1b |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 > Última suíte completa em `feat` (após G4, D4, E3): api 2973, console 856, shared 1075 — verde. `formularios.test.ts` (anexo) oscilou uma vez sob carga 50+; passou isolado.
