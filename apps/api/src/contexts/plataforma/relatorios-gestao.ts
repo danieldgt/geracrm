@@ -138,6 +138,12 @@ interface LinhaVendedor {
 export async function desempenhoVendedores(
   tx: Sql, p: PeriodoResolvido, escopo: Escopo,
 ): Promise<{ itens: VendedorDesempenho[]; totalVendedores: number }> {
+  const todos = await metricasVendedores(tx, p, escopo)
+  return { itens: todos.slice(0, TOP_VENDEDORES), totalVendedores: todos.length }
+}
+
+/** Todos os vendedores com atividade no recorte (sem o corte do top 10) — base do comparativo (E3). */
+export async function metricasVendedores(tx: Sql, p: PeriodoResolvido, escopo: Escopo): Promise<VendedorDesempenho[]> {
   const linhas = await tx<LinhaVendedor[]>`
     WITH coorte AS (
       SELECT c.id, ca.usuario_id
@@ -175,12 +181,11 @@ export async function desempenhoVendedores(
       LEFT JOIN por_tarefa pt ON pt.usuario_id = u.id
      WHERE u.tenant_id = tenant_atual() AND (pc.usuario_id IS NOT NULL OR pt.usuario_id IS NOT NULL)
      ORDER BY coalesce(pc.valor, 0) DESC, coalesce(pc.conv, 0) DESC, u.nome, u.id`
-  const todos = linhas.map((l): VendedorDesempenho => ({
+  return linhas.map((l): VendedorDesempenho => ({
     usuarioId: l.id, nome: l.nome, contatosNovos: l.contatos, tarefasConcluidas: l.tarefas, conversoes: l.conv,
     taxa: taxaDe(l.conv, l.contatos), pedidos: l.pedidos, valorCentavos: Number(l.valor),
     ticketMedioCentavos: ticketMedio(Number(l.valor), l.pedidos),
   }))
-  return { itens: todos.slice(0, TOP_VENDEDORES), totalVendedores: todos.length }
 }
 
 // ── Operacional ─────────────────────────────────────────────────────────────────────────────────
@@ -232,15 +237,9 @@ async function cartoesDaJanela(tx: Sql, j: JanelaBruta, fuso: string, escopo: Es
   }
 }
 
-export async function operacional(tx: Sql, p: PeriodoResolvido, escopo: Escopo): Promise<{
-  mesAtual: JanelaMes; mesAnterior: JanelaMes; funil: EtapaFunil[]; topOrigens: TopItem[]; topFormularios: TopItem[]
-}> {
-  const { atual, anterior } = await janelasDoMes(tx, p)
-  const mesAtual = await cartoesDaJanela(tx, atual, p.fuso, escopo)
-  const mesAnterior = await cartoesDaJanela(tx, anterior, p.fuso, escopo)
-
-  // Funil: FOTO de agora — oportunidades abertas por etapa ativa, na ordem do funil.
-  const funil = await tx<{ chave: string; rotulo: string; n: number }[]>`
+/** Funil: FOTO de agora — oportunidades abertas por etapa ativa, na ordem do funil. */
+export async function funilAtual(tx: Sql, escopo: Escopo): Promise<EtapaFunil[]> {
+  const linhas = await tx<{ chave: string; rotulo: string; n: number }[]>`
     SELECT fe.chave, fe.nome AS rotulo, count(o.id)::int AS n
       FROM funil_etapa fe
       LEFT JOIN oportunidade o ON o.tenant_id = fe.tenant_id AND o.etapa_id = fe.id AND o.estado = 'aberta'
@@ -248,6 +247,17 @@ export async function operacional(tx: Sql, p: PeriodoResolvido, escopo: Escopo):
      WHERE fe.tenant_id = tenant_atual() AND fe.ativo
      GROUP BY fe.id, fe.chave, fe.nome, fe.ordem
      ORDER BY fe.ordem, fe.chave`
+  return linhas.map((l) => ({ chave: l.chave, rotulo: l.rotulo, oportunidades: l.n }))
+}
+
+export async function operacional(tx: Sql, p: PeriodoResolvido, escopo: Escopo): Promise<{
+  mesAtual: JanelaMes; mesAnterior: JanelaMes; funil: EtapaFunil[]; topOrigens: TopItem[]; topFormularios: TopItem[]
+}> {
+  const { atual, anterior } = await janelasDoMes(tx, p)
+  const mesAtual = await cartoesDaJanela(tx, atual, p.fuso, escopo)
+  const mesAnterior = await cartoesDaJanela(tx, anterior, p.fuso, escopo)
+
+  const funil = await funilAtual(tx, escopo)
 
   // Top 5 origens: contatos criados na janela atual.
   const origens = await tx<{ chave: string; rotulo: string; n: number }[]>`
@@ -273,7 +283,7 @@ export async function operacional(tx: Sql, p: PeriodoResolvido, escopo: Escopo):
 
   return {
     mesAtual, mesAnterior,
-    funil: funil.map((l) => ({ chave: l.chave, rotulo: l.rotulo, oportunidades: l.n })),
+    funil,
     topOrigens: origens.map((l) => ({ chave: l.chave, rotulo: l.rotulo, total: l.n })),
     topFormularios: formularios.map((l) => ({ chave: l.chave, rotulo: l.rotulo, total: l.n })),
   }

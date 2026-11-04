@@ -170,3 +170,22 @@ select:focus-visible, textarea:focus-visible {
 @media (max-width: 640px) {
   .lateral .wordmark { display: none; }
 }
+
+/* ─── Impressão (relatórios imprimíveis, E3) ─────────────────────────────────
+ * Sem menu, sem barra do topo, sem trilho de conversas, sem faixas de alerta e sem
+ * o que a tela marca como `.nao-imprimir` (período, botões, abas). A casca vira
+ * fluxo normal (sem altura fixa nem rolagem interna) para o papel paginar.
+ * Cores: no papel o texto é sempre escuro sobre claro, mesmo com o tema escuro ligado
+ * (por isso os tokens são redefinidos só dentro de `.imprimivel`, só ao imprimir). */
+@media print {
+  app-shell .lateral, app-shell .topo, app-shell app-chat-rail, app-shell .alertas, app-shell .faixa-staff, app-shell .veu,
+  .nao-imprimir { display: none !important; }
+  html, body, app-shell, app-shell .grade, app-shell .conteudo {
+    display: block !important; height: auto !important; min-height: 0 !important; overflow: visible !important; background: none !important;
+  }
+  .imprimivel {
+    color-scheme: light; color: CanvasText; background: Canvas;
+    --texto: CanvasText; --texto-secundario: CanvasText; --superficie: Canvas; --superficie-elevada: Canvas; --acao: GrayText;
+  }
+  .imprimivel * { box-shadow: none !important; }
+}
