@@ -1,5 +1,7 @@
 import { Injectable, computed, inject, signal } from '@angular/core'
 import { Router } from '@angular/router'
+import { criarArmazenamento } from './auth.armazenamento.js'
+import { resultadoDaRecuperacao, type ResultadoRecuperacao } from './login.regras.js'
 
 /**
  * Login via a NOSSA API (`/v1/auth/*`), não direto no Cognito.
@@ -19,6 +21,12 @@ const CHAVE_USUARIO = 'geracrm.usuario'
 const CHAVE_EXPIRA = 'geracrm.expiraEm'
 /** Sessão de acesso do staff a um cliente (PLT-05), sobreposta ao login. */
 const CHAVE_SESSAO_STAFF = 'geracrm.sessaoStaff'
+/**
+ * Onde moram token, refresh, usuário e expiração: localStorage com "Lembrar-me", sessionStorage sem ele
+ * (ver `auth.armazenamento.ts`). A sessão de staff continua só no localStorage.
+ */
+const armazem = criarArmazenamento(localStorage, sessionStorage)
+
 /** Renova ANTES de expirar, com esta folga (evita 401 por corrida de relógio). */
 const MARGEM_MS = 2 * 60 * 1000
 
@@ -52,7 +60,7 @@ interface RespostaApi {
 
 @Injectable({ providedIn: 'root' })
 export class AuthServico {
-  readonly idToken = signal<string | null>(localStorage.getItem(CHAVE_TOKEN))
+  readonly idToken = signal<string | null>(armazem.ler(CHAVE_TOKEN))
   readonly autenticado = computed(() => this.idToken() !== null)
 
   /** Dados do usuário decodificados do idToken (para o menu). null em dev/local. */
@@ -162,6 +170,28 @@ export class AuthServico {
     return (await resp.json().catch(() => ({}))) as RespostaApi
   }
 
+  /** Como `postar`, mas devolvendo o status e o corpo de erro tipificado (esqueci a senha). */
+  private async postarTipificado(caminho: string, corpo: object): Promise<{ status: number; corpo: { erro?: string; mensagem?: string; campos?: Record<string, string> } }> {
+    try {
+      const resp = await fetch(caminho, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(corpo) })
+      return { status: resp.status, corpo: (await resp.json().catch(() => ({}))) as { erro?: string; mensagem?: string } }
+    } catch {
+      return { status: 0, corpo: {} }
+    }
+  }
+
+  /** "Esqueci a senha": pede o código por e-mail. A resposta é a mesma para e-mail cadastrado ou não. */
+  async esqueciSenha(usuario: string): Promise<ResultadoRecuperacao> {
+    const r = await this.postarTipificado('/v1/auth/esqueci-senha', { usuario })
+    return resultadoDaRecuperacao(r.status, r.corpo)
+  }
+
+  /** Confirma o código e define a nova senha. */
+  async redefinirSenha(usuario: string, codigo: string, novaSenha: string): Promise<ResultadoRecuperacao> {
+    const r = await this.postarTipificado('/v1/auth/redefinir-senha', { usuario, codigo, novaSenha })
+    return resultadoDaRecuperacao(r.status, r.corpo)
+  }
+
   /** Timer de renovação proativa; null quando não há sessão. */
   private timerRefresh: ReturnType<typeof setTimeout> | null = null
 
@@ -172,7 +202,7 @@ export class AuthServico {
     // Ao abrir o app com sessão salva, agenda a renovação (ou renova já se está
     // perto/passou do vencimento). E renova ao voltar para a aba — setTimeout é
     // estrangulado em aba oculta e pode não disparar a tempo.
-    if (this.idToken() && localStorage.getItem(CHAVE_REFRESH)) this.agendarRefresh()
+    if (this.idToken() && armazem.ler(CHAVE_REFRESH)) this.agendarRefresh()
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible' && this.idToken()) this.agendarRefresh()
@@ -180,10 +210,10 @@ export class AuthServico {
     }
   }
 
-  async entrar(usuario: string, senha: string): Promise<ResultadoLogin> {
+  async entrar(usuario: string, senha: string, lembrar = true): Promise<ResultadoLogin> {
     const r = await this.postar('/v1/auth/login', { usuario, senha })
     if (r.tipo === 'ok' && r.idToken) {
-      this.guardar(r, usuario)
+      this.guardar(r, usuario, lembrar)
       return { tipo: 'ok' }
     }
     if (r.tipo === 'nova_senha' && r.session) {
@@ -192,20 +222,29 @@ export class AuthServico {
     return { tipo: 'erro', mensagem: r.mensagem ?? 'Falha ao entrar.' }
   }
 
-  async definirNovaSenha(usuario: string, novaSenha: string, session: string): Promise<ResultadoLogin> {
+  async definirNovaSenha(usuario: string, novaSenha: string, session: string, lembrar = true): Promise<ResultadoLogin> {
     const r = await this.postar('/v1/auth/nova-senha', { usuario, novaSenha, session })
     if (r.tipo === 'ok' && r.idToken) {
-      this.guardar(r, usuario)
+      this.guardar(r, usuario, lembrar)
       return { tipo: 'ok' }
     }
     return { tipo: 'erro', mensagem: r.mensagem ?? 'Não foi possível definir a nova senha.' }
   }
 
-  sair(): void {
-    if (this.timerRefresh) { clearTimeout(this.timerRefresh); this.timerRefresh = null }
-    for (const k of [CHAVE_TOKEN, CHAVE_REFRESH, CHAVE_USUARIO, CHAVE_EXPIRA, CHAVE_SESSAO_STAFF]) {
-      localStorage.removeItem(k)
+  /**
+   * Sai: limpa a sessão local. `registrar` deixa o logout na trilha de auditoria (D6/D4) — melhor
+   * esforço, sem esperar a rede (a saída nunca fica presa). Não registra quando a sessão JÁ morreu
+   * (refresh recusado): não haveria token válido para autenticar o registro.
+   */
+  sair(registrar = true): void {
+    const token = registrar && !this.sessaoStaff() ? this.idToken() : null
+    if (token) {
+      void fetch('/v1/auth/logout', { method: 'POST', headers: { authorization: `Bearer ${token}` }, keepalive: true })
+        .catch(() => undefined)
     }
+    if (this.timerRefresh) { clearTimeout(this.timerRefresh); this.timerRefresh = null }
+    for (const k of [CHAVE_TOKEN, CHAVE_REFRESH, CHAVE_USUARIO, CHAVE_EXPIRA]) armazem.remover(k)
+    localStorage.removeItem(CHAVE_SESSAO_STAFF)
     this.idToken.set(null)
     this.sessaoStaff.set(null)
   }
@@ -215,8 +254,8 @@ export class AuthServico {
    * expirar. Falhou (refresh expirado ~30 dias) → encerra a sessão para o login.
    */
   private async refrescar(): Promise<void> {
-    const refreshToken = localStorage.getItem(CHAVE_REFRESH)
-    const usuario = localStorage.getItem(CHAVE_USUARIO)
+    const refreshToken = armazem.ler(CHAVE_REFRESH)
+    const usuario = armazem.ler(CHAVE_USUARIO)
     if (!refreshToken || !usuario) return
     try {
       const r = await this.postar('/v1/auth/refresh', { refreshToken, usuario })
@@ -238,7 +277,7 @@ export class AuthServico {
    * tela morta sem nenhuma mensagem.
    */
   encerrarSessao(): void {
-    this.sair()
+    this.sair(false)
     void this.router.navigateByUrl('/login')
   }
 
@@ -248,8 +287,8 @@ export class AuthServico {
     // ⚠️ Durante uma sessão de acesso o refresh fica suspenso: renovar
     //    reescreveria o idToken e jogaria o staff de volta ao tenant dele.
     if (this.sessaoStaff()) return
-    const expira = Number(localStorage.getItem(CHAVE_EXPIRA) ?? 0)
-    if (!expira || !localStorage.getItem(CHAVE_REFRESH)) return
+    const expira = Number(armazem.ler(CHAVE_EXPIRA) ?? 0)
+    if (!expira || !armazem.ler(CHAVE_REFRESH)) return
     const atraso = expira - Date.now() - MARGEM_MS
     if (atraso <= 0) { void this.refrescar(); return }
     // setTimeout aceita no máx ~24.8 dias; o IdToken vive ~1h, então cabe.
@@ -262,11 +301,13 @@ export class AuthServico {
    * ⚠️ O refresh token fica no localStorage, como o idToken — coerente com o
    * modelo atual (login server-side, SPA). É o vetor a fechar se endurecer XSS.
    */
-  private guardar(r: RespostaApi, usuario?: string): void {
-    localStorage.setItem(CHAVE_TOKEN, r.idToken!)
-    if (r.refreshToken) localStorage.setItem(CHAVE_REFRESH, r.refreshToken)
-    if (usuario) localStorage.setItem(CHAVE_USUARIO, usuario)
-    if (r.expiraEm) localStorage.setItem(CHAVE_EXPIRA, String(r.expiraEm))
+  private guardar(r: RespostaApi, usuario?: string, lembrar?: boolean): void {
+    // Login decide ("Lembrar-me"); o refresh grava onde a sessão já mora.
+    const lembrando = lembrar ?? armazem.lembrando(CHAVE_TOKEN)
+    armazem.gravar(CHAVE_TOKEN, r.idToken!, lembrando)
+    if (r.refreshToken) armazem.gravar(CHAVE_REFRESH, r.refreshToken, lembrando)
+    if (usuario) armazem.gravar(CHAVE_USUARIO, usuario, lembrando)
+    if (r.expiraEm) armazem.gravar(CHAVE_EXPIRA, String(r.expiraEm), lembrando)
     this.idToken.set(r.idToken!)
     this.agendarRefresh()
   }

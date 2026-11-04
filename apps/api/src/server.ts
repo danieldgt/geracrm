@@ -12,6 +12,7 @@ import {
 import { vigiarTodos } from './contexts/aquisicao/vigia.js'
 import { varrerResumoDiario, HORA_RESUMO_LOCAL } from './contexts/aquisicao/entrega-resumo.js'
 import { despacharPush, configVapid, envioReal } from './contexts/plataforma/push.js'
+import { despacharEmails, emailPorLog } from './contexts/plataforma/email-notificacao.js'
 import { enviarLembretesAgenda, INTERVALO_LEMBRETE_AGENDA_MS } from './contexts/crm/agenda-lembrete.js'
 import { despacharCampanhas } from './contexts/crm/despachante-campanha.js'
 import { vigiarConexaoCanais } from './contexts/atendimento/vigia-canal.js'
@@ -377,6 +378,18 @@ if (process.env.DATABASE_ADMIN_URL) {
   } else {
     app.log.info('push nativo desligado (sem VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY)')
   }
+
+  // E-mail de notificação (D4): SLA estourado e menção. Adaptador de LOG por padrão — nada sai da
+  // máquina até um provedor ser ligado atrás da porta `PortaEmail`.
+  const portaEmail = emailPorLog(app.log)
+  let enviandoEmail = false
+  intervalosAquisicao.push(setInterval(() => {
+    if (enviandoEmail) return
+    enviandoEmail = true
+    void despacharEmails(donoAquisicao as never, portaEmail)
+      .catch((e) => app.log.warn({ codigo: codigoDoErro(e), contexto: 'plataforma.email' }, 'despacho de e-mail falhou'))
+      .finally(() => { enviandoEmail = false })
+  }, 60_000))
 }
 
 // PERNA SEMÂNTICA (ADR-026): embute trechos de conhecimento e produtos pendentes.

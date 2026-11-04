@@ -4,6 +4,8 @@ import { NotificacoesServico, type Notificacao } from './notificacoes.servico.js
 import { EventosServico } from './eventos.servico.js'
 import { InboxServico } from './inbox.servico.js'
 import { PushServico } from './push.servico.js'
+import { Router } from '@angular/router'
+import { alvoDaNotificacao, tituloDaNotificacao } from './notificacoes.regras.js'
 
 /**
  * Sino de notificações (PLT-07). Fica no shell, sempre montado.
@@ -31,9 +33,12 @@ import { PushServico } from './push.servico.js'
         <div class="painel" role="dialog" aria-label="Notificações">
           <header class="painel-topo">
             <strong>Notificações</strong>
-            @if (servico.naoLidas() > 0) {
-              <button class="limpar" (click)="servico.marcarTodasLidas()">Marcar todas como lidas</button>
-            }
+            <span class="topo-acoes">
+              <button class="limpar" (click)="verTodas()">Ver todas</button>
+              @if (servico.naoLidas() > 0) {
+                <button class="limpar" (click)="servico.marcarTodasLidas()">Marcar todas como lidas</button>
+              }
+            </span>
           </header>
 
           <!-- ⚠️ O convite ao push mora AQUI, e a permissão é pedida no CLIQUE:
@@ -104,6 +109,7 @@ import { PushServico } from './push.servico.js'
     .painel-topo { display: flex; align-items: center; justify-content: space-between;
       padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); }
     .painel-topo strong { font-size: 13px; color: var(--texto); }
+    .topo-acoes { display: flex; gap: var(--espacamento-3); }
     .limpar { border: none; background: transparent; color: var(--acao); font-size: 12px; cursor: pointer; padding: 0; }
     .vazio { margin: 0; padding: var(--espacamento-6) var(--espacamento-4); color: var(--texto-suave); font-size: 13px; text-align: center; }
     .lista { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; }
@@ -124,6 +130,7 @@ export class SinoNotificacoesComponente implements OnInit, OnDestroy {
   readonly push = inject(PushServico)
   private readonly eventos = inject(EventosServico)
   private readonly inbox = inject(InboxServico)
+  private readonly router = inject(Router)
   readonly aberto = signal(false)
   readonly mexendoPush = signal(false)
   private cancelar?: () => void
@@ -167,7 +174,12 @@ export class SinoNotificacoesComponente implements OnInit, OnDestroy {
   fechar(): void { this.aberto.set(false) }
 
   rotulo(n: Notificacao): string {
-    return n.tipo === 'mensagem.nova' ? `Nova mensagem de ${n.titulo}` : n.titulo
+    return tituloDaNotificacao(n)
+  }
+
+  verTodas(): void {
+    this.fechar()
+    void this.router.navigateByUrl('/notificacoes')
   }
 
   rotuloAria(): string {
@@ -178,7 +190,9 @@ export class SinoNotificacoesComponente implements OnInit, OnDestroy {
   abrir(n: Notificacao): void {
     if (!n.lida) void this.servico.marcarLida(n.id)
     this.fechar()
-    // Abre a conversa no rail lateral (não navega — o chat vive na casca).
-    if (n.conversaId) void this.inbox.abrir(n.conversaId)
+    // Abre a conversa no rail lateral (não navega — o chat vive na casca); sem conversa, a tela do assunto.
+    const alvo = alvoDaNotificacao(n)
+    if (alvo.tipo === 'conversa') void this.inbox.abrir(alvo.conversaId)
+    else if (alvo.tipo === 'rota') void this.router.navigateByUrl(alvo.rota)
   }
 }

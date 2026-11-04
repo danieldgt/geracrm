@@ -3,6 +3,7 @@ import { exigirTenant } from '../../plugins/tenant.js'
 import { atorDaRequisicao } from './rotas-fila.js'
 
 const PAGINA = 30
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * Notificações pessoais (PLT-07) — o sino.
@@ -14,15 +15,23 @@ const PAGINA = 30
  * ⚠️ Lista paginada por CURSOR `(criado_em, id)` — nunca top-N cru (CLAUDE.md).
  */
 export async function rotasNotificacoes(app: FastifyInstance): Promise<void> {
-  app.get<{ Querystring: { cursor?: string } }>(
+  app.get<{ Querystring: { cursor?: string; lida?: string; tipo?: string } }>(
     '/v1/notificacoes',
     { preHandler: exigirTenant },
     async (req, reply) => {
+      // D4: filtros da página Notificações. Valor desconhecido é 422, nunca filtro ignorado em silêncio.
+      const { lida, tipo } = req.query
+      if (lida !== undefined && lida !== 'sim' && lida !== 'nao') {
+        return reply.code(422).send({ erro: 'notificacao.filtro_invalido', mensagem: 'O filtro "lida" aceita sim ou nao.', campos: ['lida'] })
+      }
+      if (tipo !== undefined && !/^[a-z_]+(\.[a-z_]+)?$/.test(tipo)) {
+        return reply.code(422).send({ erro: 'notificacao.filtro_invalido', mensagem: 'Tipo inválido.', campos: ['tipo'] })
+      }
       let cursorEm: string | null = null
       let cursorId: string | null = null
       if (req.query.cursor) {
         const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido', mensagem: 'Cursor inválido.' })
+        if (!em || !id || !UUID.test(id) || Number.isNaN(Date.parse(em))) return reply.code(422).send({ erro: 'cursor.invalido', mensagem: 'Cursor inválido.' })
         cursorEm = em
         cursorId = id
       }
@@ -31,13 +40,16 @@ export async function rotasNotificacoes(app: FastifyInstance): Promise<void> {
         const eu = await atorDaRequisicao(tx, req)
         const linhas = await tx<{
           id: string; tipo: string; titulo: string; conversa_id: string | null
-          lida_em: Date | null; criado_em: Date
+          lida_em: Date | null; criado_em: Date; em_txt: string
         }[]>`
-          SELECT id, tipo, titulo, conversa_id, lida_em, criado_em
+          SELECT id, tipo, titulo, conversa_id, lida_em, criado_em,
+                 to_char(criado_em AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS em_txt
             FROM notificacao
-           WHERE tenant_id = tenant_atual() AND usuario_id = ${eu}
+           WHERE tenant_id = tenant_atual() AND usuario_id = ${eu} AND no_app
+             AND ${lida === undefined ? tx`true` : lida === 'sim' ? tx`lida_em IS NOT NULL` : tx`lida_em IS NULL`}
+             AND ${tipo === undefined ? tx`true` : tx`tipo = ${tipo}`}
              AND ${cursorEm === null ? tx`true` : tx`
-                   (criado_em, id) < (${cursorEm}::timestamptz, ${cursorId}::uuid)`}
+                   (criado_em, id) < (${cursorEm}::text::timestamptz, ${cursorId}::uuid)`}
            ORDER BY criado_em DESC, id DESC
            LIMIT ${PAGINA + 1}`
         return linhas
@@ -47,7 +59,7 @@ export async function rotasNotificacoes(app: FastifyInstance): Promise<void> {
       const pagina = temMais ? r.slice(0, PAGINA) : r
       const ultimo = pagina[pagina.length - 1]
       const proximoCursor = temMais && ultimo
-        ? Buffer.from(`${ultimo.criado_em.toISOString()}§${ultimo.id}`).toString('base64url')
+        ? Buffer.from(`${ultimo.em_txt}§${ultimo.id}`).toString('base64url')
         : null
 
       return reply.send({
@@ -66,7 +78,7 @@ export async function rotasNotificacoes(app: FastifyInstance): Promise<void> {
       const eu = await atorDaRequisicao(tx, req)
       const [c] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM notificacao
-         WHERE tenant_id = tenant_atual() AND usuario_id = ${eu} AND lida_em IS NULL`
+         WHERE tenant_id = tenant_atual() AND usuario_id = ${eu} AND lida_em IS NULL AND no_app`
       return c?.n ?? 0
     })
     return reply.send({ naoLidas: total })

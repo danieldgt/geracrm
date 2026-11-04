@@ -201,6 +201,12 @@ export const ROTAS: Routes = [
         loadComponent: () =>
           import('./nucleo/perfil.pagina.js').then((m) => m.PerfilPagina),
       },
+      // Notificações (D4): a página inteira do sino — lista por cursor, filtros, marcar todas.
+      {
+        path: 'notificacoes',
+        loadComponent: () =>
+          import('./nucleo/notificacoes.pagina.js').then((m) => m.NotificacoesPagina),
+      },
       // ROI de um anúncio (AQ-16): detalhe, não vai no menu — chega pela lista
       // de Mídia paga.
       {

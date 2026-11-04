@@ -35,6 +35,11 @@ export const ACOES_AUDITORIA: readonly { readonly valor: string; readonly rotulo
   { valor: 'atendimento.assumido', rotulo: 'Assumiu o atendimento' },
   { valor: 'mensagem.apagada', rotulo: 'Apagou uma mensagem' },
   { valor: 'mensagem.editada', rotulo: 'Editou uma mensagem' },
+  { valor: 'usuario.login', rotulo: 'Entrou no sistema' },
+  { valor: 'usuario.logout', rotulo: 'Saiu do sistema' },
+  { valor: 'usuario.senha_alterada', rotulo: 'Trocou a própria senha' },
+  { valor: 'usuario.perfil_alterado', rotulo: 'Alterou o próprio perfil' },
+  { valor: 'usuario.foto_alterada', rotulo: 'Alterou a própria foto' },
 ]
 
 /** ⚠️ Rótulo no vocabulário da operação, não o código cru do evento. */

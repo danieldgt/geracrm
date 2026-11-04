@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Sql } from '../../db/index.js'
 import { alvosDoHandoff } from './sla-handoff.js'
+import { algumCanal, canaisDosUsuarios } from '../plataforma/preferencia-notificacao.js'
 
 /**
  * Notificações pessoais (PLT-07).
@@ -147,24 +148,32 @@ async function destinatariosDaFila(
 async function notificar(
   tx: Sql, usuarios: readonly string[], tipo: string, titulo: string, conversaId: string,
 ): Promise<void> {
+  // D4: a preferência do destinatário (tipo × canal) manda. Sem linha gravada vale o padrão.
+  const canais = await canaisDosUsuarios(tx, usuarios, tipo)
   for (const usuarioId of usuarios) {
+    const c = canais.get(usuarioId)
+    if (!c || !algumCanal(c)) continue
     // Uma pendência por (usuário, conversa): ON CONFLICT recende a existente.
     await tx`
-      INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, conversa_id)
-      VALUES (tenant_atual(), ${randomUUID()}, ${usuarioId}, ${tipo}, ${titulo}, ${conversaId})
+      INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, conversa_id, no_app, email_pendente)
+      VALUES (tenant_atual(), ${randomUUID()}, ${usuarioId}, ${tipo}, ${titulo}, ${conversaId}, ${c.app}, ${c.email})
       ON CONFLICT (tenant_id, usuario_id, conversa_id) WHERE lida_em IS NULL AND conversa_id IS NOT NULL
       -- ⚠️ A coluna vezes soma (0070). O push usa isso para que o aviso que
       --    SUBSTITUI o anterior na tela diga que houve novidade — sem ele, a
       --    segunda mensagem troca o aviso pelo mesmo texto e a pessoa conclui
       --    que o push morreu.
       DO UPDATE SET criado_em = now(), titulo = EXCLUDED.titulo,
-                    vezes = notificacao.vezes + 1`
+                    vezes = notificacao.vezes + 1,
+                    no_app = notificacao.no_app OR EXCLUDED.no_app,
+                    email_pendente = notificacao.email_pendente OR EXCLUDED.email_pendente`
 
     // Evento no canal do usuário — só avisa "algo novo no seu sino".
-    await tx`
-      INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
-      VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${usuarioId},
-              ${JSON.stringify({ usuarioId })}::text::jsonb)`
+    if (c.app) {
+      await tx`
+        INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+        VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${usuarioId},
+                ${JSON.stringify({ usuarioId })}::text::jsonb)`
+    }
   }
 }
 
