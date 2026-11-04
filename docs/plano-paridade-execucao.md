@@ -38,7 +38,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
 | F1 campanhas v2 | 3 | 🔄 | F1a integrada (0134) — correção da revisão em curso (alto: tier 250/24h, rajada no não-oficial, queda no meio); F1b ✅ telas integradas (lista, wizard, detalhe; console 899) — pendências de API: filtro de templates por status/categoria, busca em listas/etiquetas/origens, rótulos do público no GET — **não ligar campanha em cliente antes da correção da F1a** |
-| F3 formulários públicos | 3 | ✅ | re-revisão curta Sonnet em curso · integrada com as correções de segurança (upload fora da transação, IP real via `TRUST_PROXY_HOPS`, contato existente só com "Aplicar ao contato", assinatura de arquivo, clickjacking, hash do texto LGPD); 0127 editada no lugar; **dono: `TRUST_PROXY_HOPS=2` na API do Railway**; re-revisão curta pendente |
+| F3 formulários públicos | 3 | ✅ | integrada com as correções de segurança; re-revisão conferiu todas; pendência média: IP confiável (`TRUST_PROXY_HOPS` global deixa forjar IP em chamada direta) → F3c Sonnet em curso (segredo nginx→API + limitador global por IP); **dono: não publicar link de formulário antes da F3c** |
 | G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
 | G3 pós-venda, NPS, indicações, prova social | 3 | ✅ | integrada com as correções da revisão (0141: índice parcial e reagendamento; indicações padrão desligado, com portão e teto; NPS passa o portão com equipe disponível; prova social amarrada à versão; espalhamento e teto no não-oficial); runbook §19 |
 | G4 roteamento e rodízio | 3 | ✅ | integrada com as correções da revisão (gestor de filial só cria regra para número da própria filial; roteamento por filial no handoff só com opt-in; simulador e números no escopo; aviso ao ligar sem elegíveis) |
@@ -47,7 +47,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
 | E2 relatórios 1ª leva | 3 | ✅ | integrada com as correções da revisão (sistema e falhas fora de "enviadas", ranking no escopo, vazio, base do percentual, escopo materializado, 1ª resposta negativa, cliente antigo do ERP fora do tempo de conversão) |
 | E3 relatórios 2ª leva | 3 | ✅ | integrada com as correções da revisão (cursor estrito, filial no escopo do gestor, coorte materializada por requisição, telefone sem apóstrofo no CSV); faixa etária fora (sem data de nascimento) |
-| L1 retrofit das telas restantes | 4 | 🔄 | L1a ✅ (8 telas); L1b ✅ (canais, canal-config, templates, automações, catálogo, catálogo-produtos, conexões, mídia); L1c Haiku em curso (nps, fidelidade, carteiras, leads, anúncio-ROI, mapa, mercado, BI, performance, clientes da plataforma); L1d ✅ (kanban de atendimento, fila do dia, CRM avançado, funil, pedido); L1e Sonnet em curso (inbox); R2 Sonnet em curso (ui-select-multi, rodapé do modal em @if, ui-estado com ícone, ui-botao-icone, inputmode); R1 ✅ integrada (maxlength/min/max/step no campo, type/form no botão, rodapé da tabela, 9 ícones conferidos no lucide-static); pendente: multi-select local da F1b (`app-seletor-multi`) a promover para a biblioteca; `ui-modal` não projeta `[rodape]` dentro de `@if` com vários nós |
+| L1 retrofit das telas restantes | 4 | ✅ | L1a (8 telas), L1b (8), L1c (10), L1d (5 densas), L1e (inbox) integradas; R1 ✅ biblioteca; R2 Sonnet em curso (ui-select-multi, rodapé do modal em @if, ui-estado com ícone, ui-botao-icone, inputmode, ui-filtros compacto, ícones do composer, busca no servidor no wizard de campanhas) |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
@@ -57,8 +57,10 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D3.4b telas de usuário sem admin atribuído + nomear admin | 0 | ✅ | integrada; API passou a responder `acesso.admin_atribuido` no modo fundador; select de usuários entregue pela X4 |
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
 | X4 cursor em listas/metas/segmentos + usuários do cliente para o staff | — | ✅ | integrada; listas por cursor; metas e segmentos com teto documentado (limitados por construção); "Nomear admin" com select paginado; agregação RFV movida para SQL |
-| X5 busca/filtros no servidor (templates por status/categoria/número; q em listas, etiquetas, origens) | — | 🔄 | Haiku; para as telas da F1b |
-| X6 sobras: pedidos com busca/período/contadores na API (A5), janela padrão da busca `q` da auditoria (D6), SLA estourado avisa primeiro o gestor da filial (G4) | — | ⬜ | Sonnet; abrir quando a carga baixar |
+| X5 busca/filtros no servidor (templates por status/categoria/número; q em listas, etiquetas, origens) | — | ✅ | integrada; troca no wizard feita pela R2 |
+| X6 sobras: pedidos com busca/período/contadores na API (A5), janela padrão da busca `q` da auditoria (D6), SLA estourado avisa primeiro o gestor da filial (G4) | — | 🔄 | Sonnet |
+| X7 top-N com `truncado` no analítico (mapa, mercado, BI, NPS, performance, fidelidade, carteiras) | — | 🔄 | Haiku |
+| F3c IP confiável por segredo nginx→API + limitador global por IP | 3 | 🔄 | Sonnet |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 > Última suíte completa em `feat` (após G4, D4, E3): api 2973, console 856, shared 1075 — verde. `formularios.test.ts` (anexo) oscilou uma vez sob carga 50+; passou isolado.
