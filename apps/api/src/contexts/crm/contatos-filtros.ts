@@ -61,7 +61,7 @@ export interface FiltrosContato {
 /** Nenhum filtro: base para compor um filtro de cada vez (público de campanha, F1). */
 export const FILTROS_VAZIOS: FiltrosContato = {
   q: null, qualificacao: null, segmento: null, vendedorId: null, filialId: null, origemId: null,
-  etiquetaIds: [], semProximoPasso: false, criadoDe: null, criadoAte: null,
+  etiquetaIds: [], semProximoPasso: false, carteiraAtiva: false, criadoDe: null, criadoAte: null,
 }
 
 export type ResultadoFiltros =
