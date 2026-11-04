@@ -22,7 +22,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | A1 cadastro do contato | 1 | ✅ | integrada com correções (ERP preservado, 422 no telefone, origem validada); 0112 corrigida no lugar |
 | A4 etiquetas e origens | 1 | ✅ | integrada (0113); revisão aprovou |
 | C1 tarefas v2 | 1 | ✅ | integrada com correções (validação Zod, cursor µs, responsável nulo, autorização); 0114 corrigida no lugar |
-| A5 pedidos em lista | 1 | ✅ | integrada; API não tem busca/período/contadores — cards e busca só no carregado |
+| A5 pedidos em lista | 1 | ✅ | integrada; busca, período e contadores no servidor entregues pela X6 |
 | A2 lista de contatos + massa | 1 | ✅ | integrada (sem migration; filtro de etiqueta otimizado com EXISTS) |
 | B2 modais do funil + ganho | 1 | ✅ | integrada com correções (0122 corrigida no lugar) |
 | A3 ficha 2+1 | 1 | ✅ | integrada (0115); feed lê a auditoria de `qualificarContato`; 'Enviar no WhatsApp' do arquivo fica para quando o inbox enviar mídia por id |
@@ -33,7 +33,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | C2 agenda (módulo) | 2 | ✅ | integrada (0117); escopo comum e aba na ficha entregues pela C2b |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | 🔍 | integrada (0137); revisão Opus: aprovado com correções (alto: guarda de horário/"marcado" no pipeline, leitura conservadora da escolha, oferta = o que o cliente leu, fila de avisos travável). Decisões: sem convite automático de no-show (vendedor é avisado; convite só com "não compareceu" explícito); agente nunca transfere carteira. Correção em curso pelo agente da raia — **não ligar a chave do agente antes**; 0137 sem `lock_timeout`: rodar o deploy fora do horário comercial |
 | D4 notificações, perfil, esqueci a senha | 2 | ✅ | integrada com as correções da revisão (0144/0145: sessão de staff no armazém do token, GlobalSignOut na troca de senha e AdminUserGlobalSignOut na redefinição, limite por e-mail, upsert com tipo novo, worker de e-mail com reserva); **dono: IAM `cognito-idp:AdminUserGlobalSignOut`** |
-| D6 auditoria v2 | 2 | ✅ | integrada; login/logout entregues pela D4; pendente: janela padrão da busca `q` |
+| D6 auditoria v2 | 2 | ✅ | integrada; login/logout pela D4; janela padrão de 30 dias na busca `q` pela X6 |
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
 | D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
@@ -58,10 +58,12 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
 | X4 cursor em listas/metas/segmentos + usuários do cliente para o staff | — | ✅ | integrada; listas por cursor; metas e segmentos com teto documentado (limitados por construção); "Nomear admin" com select paginado; agregação RFV movida para SQL |
 | X5 busca/filtros no servidor (templates por status/categoria/número; q em listas, etiquetas, origens) | — | ✅ | integrada; troca no wizard feita pela R2 |
-| X6 sobras: pedidos com busca/período/contadores na API (A5), janela padrão da busca `q` da auditoria (D6), SLA estourado avisa primeiro o gestor da filial (G4) | — | 🔄 | Sonnet |
+| X6 sobras: pedidos com busca/período/contadores na API (A5), janela padrão da busca `q` da auditoria (D6), SLA estourado avisa primeiro o gestor da filial (G4) | — | ✅ | integrada (0146: índice de pedido por data) |
 | X7 top-N com `truncado` no analítico (mapa, mercado, BI, NPS, performance, fidelidade, carteiras) | — | 🔄 | Haiku |
 | F3c IP confiável por segredo nginx→API + limitador global por IP | 3 | ✅ | integrada; `TRUST_PROXY_HOPS` só 0/1; **dono: criar `PROXY_SEGREDO` (mesmo valor) nos serviços console e api do Railway e remover `TRUST_PROXY_HOPS=2` se existir** — sem o segredo, todo tráfego do console divide o IP do nginx |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
+
+> e2e em `feat` (após F3c): 8/8 verde.
 
 > Última suíte completa em `feat` (após F1a corrigida e R2): api 3089, console 926, shared 1100 — verde. `formularios.test.ts` (anexo) oscilou uma vez sob carga 50+; passou isolado.
 
