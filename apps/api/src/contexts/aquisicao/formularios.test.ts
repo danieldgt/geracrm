@@ -41,10 +41,14 @@ const transacoesDuranteUpload: number[] = []
 const bucketFalso: ArquivosBucket = {
   disponivel: () => bucketOn,
   subir: async (k, b) => {
-    const [r] = await dono`SELECT count(*)::int AS n FROM pg_stat_activity
-                            WHERE state LIKE 'idle in transaction%'
-                              AND (query ILIKE '%consentimento_contato%' OR query ILIKE '%INSERT INTO contato%'
-                                   OR query ILIKE '%formulario_resposta%')`
+    // Só transações que tocaram tabelas do FORMULÁRIO (lock em formulario*): outros arquivos de teste rodam em
+    // paralelo no mesmo banco e inserem contato, mas nenhum toca formulário — contar por texto da query oscilava.
+    const [r] = await dono`SELECT count(DISTINCT a.pid)::int AS n
+                             FROM pg_stat_activity a
+                             JOIN pg_locks l ON l.pid = a.pid
+                             JOIN pg_class c ON c.oid = l.relation
+                            WHERE a.state LIKE 'idle in transaction%' AND a.pid <> pg_backend_pid()
+                              AND c.relname IN ('formulario', 'formulario_campo', 'formulario_resposta', 'formulario_resposta_anexo')`
     transacoesDuranteUpload.push(Number(r!['n']))
     objetos.set(k, b)
   },
