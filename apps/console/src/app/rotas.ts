@@ -225,6 +225,22 @@ export const ROTAS: Routes = [
         loadComponent: () =>
           import('./funcionalidades/aquisicao/formulario-builder.pagina.js').then((m) => m.FormularioBuilderPagina),
       },
+      // Campanhas v2 (F1b): wizard e detalhe. `nova` ANTES de `:id`, senão "nova" casa como id.
+      {
+        path: 'campanhas/nova',
+        loadComponent: () =>
+          import('./funcionalidades/campanha/campanha-wizard.pagina.js').then((m) => m.CampanhaWizardPagina),
+      },
+      {
+        path: 'campanhas/:id/editar',
+        loadComponent: () =>
+          import('./funcionalidades/campanha/campanha-wizard.pagina.js').then((m) => m.CampanhaWizardPagina),
+      },
+      {
+        path: 'campanhas/:id',
+        loadComponent: () =>
+          import('./funcionalidades/campanha/campanha-detalhe.pagina.js').then((m) => m.CampanhaDetalhePagina),
+      },
       ...rotasFilhas,
       // Rota desconhecida volta para a base — não deixa tela órfã.
       { path: '**', redirectTo: 'contatos' },
