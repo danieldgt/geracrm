@@ -82,7 +82,8 @@ import { formatarPercentual } from './relatorios-gestao.regras.js'
         </ui-painel>
 
         <ui-painel>
-          <h2 class="txt-secao">Por formulário</h2>
+          <h2 class="txt-secao">Por formulário (respostas no período)</h2>
+          <p class="txt-denso nota">Conta cada resposta recebida no período e os contatos que responderam. No Raio-X, o formulário conta os contatos criados no período cujo primeiro formulário respondido foi ele; por isso os números podem diferir.</p>
           <ui-tabela [colunas]="colunasForm" [linhas]="linhasForm()" [chaveLinha]="chave">
             <ng-template uiCelula="valor" let-l>{{ reais(l['valorCentavos']) }}</ng-template>
           </ui-tabela>

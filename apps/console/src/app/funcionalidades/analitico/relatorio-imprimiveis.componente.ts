@@ -117,6 +117,6 @@ export class RelatorioImprimiveisComponente implements OnInit {
 }
 
 const ZERO_ZAP = {
-  recebidas: 0, enviadas: 0, enviadasHumanas: 0, enviadasAutomaticas: 0, conversasIniciadas: 0, atendimentos: 0,
+  recebidas: 0, enviadas: 0, enviadasHumanas: 0, enviadasAutomaticas: 0, falhas: 0, conversasIniciadas: 0, atendimentos: 0,
   respondidasNoLimite: 0, pctNoLimite: null,
 }

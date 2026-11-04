@@ -5,7 +5,7 @@ import { contatosPorDimensao, taxaDe } from './rotas-relatorios.js'
 import { metricasVendedores, funilAtual, type VendedorDesempenho } from './relatorios-gestao.js'
 import { relatorioWhatsapp } from './relatorios-whatsapp.js'
 import { diasDoPeriodo, fatia, ticketMedio } from './relatorios-vendas.js'
-import { agruparCoorte, coorteDetalhada, ehUuid, type GrupoCoorte } from './relatorios-contatos.js'
+import { agruparCoorte, ehUuid, materializarCoorte, type GrupoCoorte } from './relatorios-contatos.js'
 
 /**
  * RELATÓRIOS DE ANÁLISE (raia E3): comparativo de vendedores, visão geral, raio-x, desempenho do cadastro,
@@ -83,7 +83,7 @@ function restricaoFilial(tx: Sql, escopo: Escopo) {
 async function vendedoresPermitidos(tx: Sql, escopo: Escopo, ids: readonly string[]): Promise<Map<string, string>> {
   const linhas = await tx<{ id: string; nome: string }[]>`
     SELECT u.id, u.nome FROM usuario u
-     WHERE u.tenant_id = tenant_atual() AND u.id IN ${tx(ids)} AND ${restricaoUsuario(tx, escopo)}`
+     WHERE u.tenant_id = tenant_atual() AND u.ativo AND u.id IN ${tx(ids)} AND ${restricaoUsuario(tx, escopo)}`
   return new Map(linhas.map((l) => [l.id, l.nome]))
 }
 
@@ -146,6 +146,7 @@ function respostasVisiveis(tx: Sql, p: PeriodoResolvido, escopo: Escopo) {
       FROM formulario_resposta fr
       LEFT JOIN contato c ON c.tenant_id = fr.tenant_id AND c.id = fr.contato_id
      WHERE fr.tenant_id = tenant_atual() AND fr.criado_em >= ${p.desde} AND fr.criado_em < ${p.ate}
+       AND (c.id IS NULL OR (c.ativo AND coalesce(c.origem_carga, '') <> 'simulacao'))
        AND ${escopo.tipo === 'tudo' ? tx`true` : tx`(fr.contato_id IS NOT NULL AND ${condicaoContato(tx, escopo, 'c')})`}`
 }
 
@@ -153,8 +154,9 @@ export async function visaoGeral(tx: Sql, p: PeriodoResolvido, escopo: Escopo): 
   totais: TotaisVisao; porFilial: GrupoCoorte[]; porFilialTruncado: boolean
   filialPorDia: { dias: string[]; series: SerieFilialDia[]; truncado: boolean }; porFormulario: ItemFormulario[]; porFormularioTruncado: boolean
 }> {
+  await materializarCoorte(tx, p, escopo)
   const [t] = await tx<{ contatos: number; convertidos: number; pedidos: number; valor: string }[]>`
-    WITH k AS (${coorteDetalhada(tx, p, escopo)})
+    WITH k AS (SELECT * FROM coorte_e3)
     SELECT count(*)::int AS contatos, count(*) FILTER (WHERE pedidos > 0)::int AS convertidos,
            coalesce(sum(pedidos), 0)::int AS pedidos, coalesce(sum(valor), 0)::text AS valor FROM k`
   const [r] = await tx<{ n: number }[]>`WITH r AS (${respostasVisiveis(tx, p, escopo)}) SELECT count(*)::int AS n FROM r`
@@ -164,15 +166,18 @@ export async function visaoGeral(tx: Sql, p: PeriodoResolvido, escopo: Escopo): 
     valorCentavos: valor, ticketMedioCentavos: ticketMedio(valor, t!.pedidos), respostasFormulario: r!.n,
   }
 
-  const filiais = await agruparCoorte(tx, p, escopo,
+  const filiais = await agruparCoorte(tx,
     { chave: tx`coalesce(k.filial_id::text, 'sem-filial')`, rotulo: tx`coalesce(k.filial, 'Sem filial')` }, totais.contatos)
 
+  // Filial × dia: só as 10 filiais com mais contatos (limite explícito antes da consulta por dia).
+  const top10 = filiais.itens.slice(0, MAX_FILIAIS_DIA).map((g) => g.chave)
   const dias = diasDoPeriodo(p.inicio, p.fim)
   const porDiaBruto = await tx<{ chave: string; rotulo: string; dia: string; n: number }[]>`
-    WITH k AS (${coorteDetalhada(tx, p, escopo)})
+    WITH k AS (SELECT * FROM coorte_e3)
     SELECT coalesce(k.filial_id::text, 'sem-filial') AS chave, coalesce(min(k.filial), 'Sem filial') AS rotulo,
            to_char(k.criado_em AT TIME ZONE ${p.fuso}::text, 'YYYY-MM-DD') AS dia, count(*)::int AS n
-      FROM k GROUP BY 1, 3`
+      FROM k WHERE ${top10.length === 0 ? tx`false` : tx`coalesce(k.filial_id::text, 'sem-filial') IN ${tx(top10)}`}
+     GROUP BY 1, 3`
   const mapa = new Map<string, { chave: string; rotulo: string; total: number; porDia: number[] }>()
   const indice = new Map(dias.map((d, i) => [d, i]))
   for (const l of porDiaBruto) {
@@ -205,7 +210,7 @@ export async function visaoGeral(tx: Sql, p: PeriodoResolvido, escopo: Escopo): 
   return {
     totais,
     porFilial: filiais.itens, porFilialTruncado: filiais.truncado,
-    filialPorDia: { dias, series: ordenadas.slice(0, MAX_FILIAIS_DIA), truncado: ordenadas.length > MAX_FILIAIS_DIA },
+    filialPorDia: { dias, series: ordenadas.slice(0, MAX_FILIAIS_DIA), truncado: filiais.itens.length > MAX_FILIAIS_DIA || filiais.truncado },
     porFormulario: (formTrunc ? formularios.slice(0, 100) : formularios).map((l) => ({
       chave: l.id, rotulo: l.nome, respostas: l.respostas, contatos: l.contatos, convertidos: l.convertidos, valorCentavos: Number(l.valor),
     })),
@@ -249,17 +254,18 @@ export async function raioX(tx: Sql, p: PeriodoResolvido, escopo: Escopo, eixo: 
       : await tx<{ nome: string }[]>`SELECT f.nome FROM filial f WHERE f.tenant_id = tenant_atual() AND f.id = ${chave} AND ${restricaoFilial(tx, escopo)}`
   if (!nomeLinha) return null
 
+  await materializarCoorte(tx, p, escopo)
   const filtro = eixo === 'formulario' ? tx`k.formulario_id = ${chave}::uuid`
     : eixo === 'vendedor' ? tx`k.vendedor_id = ${chave}::uuid` : tx`k.filial_id = ${chave}::uuid`
 
   const [t] = await tx<{ contatos: number; convertidos: number; pedidos: number; valor: string }[]>`
-    WITH k AS (${coorteDetalhada(tx, p, escopo)})
+    WITH k AS (SELECT * FROM coorte_e3)
     SELECT count(*)::int AS contatos, count(*) FILTER (WHERE pedidos > 0)::int AS convertidos,
            coalesce(sum(pedidos), 0)::int AS pedidos, coalesce(sum(valor), 0)::text AS valor FROM k WHERE ${filtro}`
   const valor = Number(t!.valor)
 
   const dias = await tx<{ dia: string; contatos: number; convertidos: number }[]>`
-    WITH k AS (${coorteDetalhada(tx, p, escopo)})
+    WITH k AS (SELECT * FROM coorte_e3)
     SELECT to_char(k.criado_em AT TIME ZONE ${p.fuso}::text, 'YYYY-MM-DD') AS dia, count(*)::int AS contatos,
            count(*) FILTER (WHERE k.pedidos > 0)::int AS convertidos
       FROM k WHERE ${filtro} GROUP BY 1`
@@ -280,10 +286,10 @@ export async function raioX(tx: Sql, p: PeriodoResolvido, escopo: Escopo, eixo: 
     tarefas = n!.n
   }
 
-  const origens = await agruparCoorte(tx, p, escopo,
+  const origens = await agruparCoorte(tx,
     { chave: tx`coalesce(k.origem_id::text, 'sem-origem')`, rotulo: tx`coalesce(k.origem, 'Sem origem')` }, t!.contatos, filtro, 10)
-  const qual = await agruparCoorte(tx, p, escopo, { chave: QUALIFICACAO_SQL(tx), rotulo: QUALIFICACAO_SQL(tx) }, t!.contatos, filtro, 3)
-  const ufs = await agruparCoorte(tx, p, escopo,
+  const qual = await agruparCoorte(tx, { chave: QUALIFICACAO_SQL(tx), rotulo: QUALIFICACAO_SQL(tx) }, t!.contatos, filtro, 3)
+  const ufs = await agruparCoorte(tx,
     { chave: tx`coalesce(nullif(upper(k.uf), ''), 'sem-uf')`, rotulo: tx`coalesce(nullif(upper(k.uf), ''), 'Sem UF')` }, t!.contatos, filtro, 10)
 
   return {
@@ -324,8 +330,9 @@ const CAMPOS_COMPLETUDE: readonly (readonly [string, string])[] = [
 ]
 
 export async function desempenhoCadastro(tx: Sql, p: PeriodoResolvido, escopo: Escopo): Promise<RespostaDesempenho> {
+  await materializarCoorte(tx, p, escopo)
   const [c] = await tx<{ total: number; telefone: number; email: number; documento: number; endereco: number; origem: number; vendedor: number; completos: number }[]>`
-    WITH k AS (${coorteDetalhada(tx, p, escopo)}),
+    WITH k AS (SELECT * FROM coorte_e3),
     f AS (SELECT k.id,
                  k.telefone IS NOT NULL AS telefone, nullif(trim(k.email), '') IS NOT NULL AS email, k.tipo_doc IS NOT NULL AS documento,
                  (nullif(trim(k.uf), '') IS NOT NULL AND nullif(trim(k.cidade), '') IS NOT NULL) AS endereco,
@@ -341,24 +348,24 @@ export async function desempenhoCadastro(tx: Sql, p: PeriodoResolvido, escopo: E
   })
 
   const TIPO = tx`coalesce(k.tipo_doc, 'sem')`
-  const tipoPessoa = await agruparCoorte(tx, p, escopo, { chave: TIPO, rotulo: TIPO }, total, undefined, 3)
+  const tipoPessoa = await agruparCoorte(tx, { chave: TIPO, rotulo: TIPO }, total, undefined, 3)
   const ROT_TIPO: Record<string, string> = { cpf: 'Pessoa física (CPF)', cnpj: 'Pessoa jurídica (CNPJ)', sem: 'Sem documento' }
-  const qualificacao = await agruparCoorte(tx, p, escopo, { chave: QUALIFICACAO_SQL(tx), rotulo: QUALIFICACAO_SQL(tx) }, total, undefined, 3)
-  const origem = await agruparCoorte(tx, p, escopo,
+  const qualificacao = await agruparCoorte(tx, { chave: QUALIFICACAO_SQL(tx), rotulo: QUALIFICACAO_SQL(tx) }, total, undefined, 3)
+  const origem = await agruparCoorte(tx,
     { chave: tx`coalesce(k.origem_id::text, 'sem-origem')`, rotulo: tx`coalesce(k.origem, 'Sem origem')` }, total)
-  const uf = await agruparCoorte(tx, p, escopo,
+  const uf = await agruparCoorte(tx,
     { chave: tx`coalesce(nullif(upper(k.uf), ''), 'sem-uf')`, rotulo: tx`coalesce(nullif(upper(k.uf), ''), 'Sem UF')` }, total)
-  const cidade = await agruparCoorte(tx, p, escopo, {
+  const cidade = await agruparCoorte(tx, {
     chave: tx`coalesce(upper(nullif(k.uf, '')) || '|' || lower(nullif(trim(k.cidade), '')), 'sem-cidade')`,
     rotulo: tx`coalesce(nullif(trim(k.cidade), '') || ' / ' || upper(nullif(k.uf, '')), nullif(trim(k.cidade), ''), 'Sem cidade')`,
   }, total)
-  const canal = await agruparCoorte(tx, p, escopo, {
+  const canal = await agruparCoorte(tx, {
     chave: tx`coalesce(cn.canal_id::text, 'sem-conversa')`, rotulo: tx`coalesce(cc.nome_amigavel, 'Sem conversa')`,
     juncao: tx`LEFT JOIN LATERAL (SELECT DISTINCT cv.canal_id FROM conversa cv
                                    WHERE cv.tenant_id = tenant_atual() AND cv.contato_id = k.id) cn ON true
                LEFT JOIN canal_conectado cc ON cc.tenant_id = tenant_atual() AND cc.id = cn.canal_id`,
   }, total)
-  const funil = await agruparCoorte(tx, p, escopo, {
+  const funil = await agruparCoorte(tx, {
     chave: tx`coalesce(fe.chave, 'sem-etapa')`, rotulo: tx`coalesce(fe.nome, 'Sem etapa')`,
     juncao: tx`LEFT JOIN LATERAL (SELECT op.etapa_id FROM oportunidade op
                                    WHERE op.tenant_id = tenant_atual() AND op.contato_id = k.id
