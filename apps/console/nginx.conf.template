@@ -6,9 +6,13 @@ server {
 
     # ⚠️ IP REAL do visitante. Só a borda do Railway alcança este nginx, e ela ACRESCENTA o IP que viu ao
     #    fim do X-Forwarded-For; tudo antes disso foi escrito pelo cliente. Com `real_ip_recursive off`,
-    #    `$remote_addr` vira o ÚLTIMO valor (o da borda). Os proxies abaixo REESCREVEM o XFF com ele
-    #    (`$remote_addr`, não `$proxy_add_x_forwarded_for`): o "IP" forjado pelo cliente morre aqui. Na API,
-    #    TRUST_PROXY_HOPS=2 (este nginx + a borda da API) faz `req.ip` cair exatamente nesse valor.
+    #    `$remote_addr` vira o ÚLTIMO valor (o da borda). Os proxies abaixo mandam esse IP à API em
+    #    `X-Geracrm-Ip-Cliente`, junto de `X-Geracrm-Proxy` (segredo `PROXY_SEGREDO`, o MESMO nos serviços
+    #    console e API do Railway; este arquivo é template: o entrypoint do nginx:alpine substitui só
+    #    as variáveis de ambiente definidas, como PROXY_SEGREDO). `proxy_set_header` SUBSTITUI o valor que o
+    #    cliente mandou com o mesmo nome, então o cliente não injeta esses dois cabeçalhos. A API só confia
+    #    no IP quando o segredo confere (`apps/api/src/plugins/ip-cliente.ts`); sem PROXY_SEGREDO na API,
+    #    ignora e usa o IP do nginx (1 salto).
     set_real_ip_from 0.0.0.0/0;
     set_real_ip_from ::/0;
     real_ip_header X-Forwarded-For;
@@ -32,6 +36,8 @@ server {
         proxy_set_header Host geracrm-api-production.up.railway.app;
         proxy_ssl_server_name on;
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Geracrm-Ip-Cliente $remote_addr;
+        proxy_set_header X-Geracrm-Proxy "${PROXY_SEGREDO}";
         proxy_http_version 1.1;
         proxy_set_header Connection '';
         proxy_buffering off;
@@ -50,6 +56,8 @@ server {
         proxy_set_header Host geracrm-api-production.up.railway.app;
         proxy_ssl_server_name on;
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Geracrm-Ip-Cliente $remote_addr;
+        proxy_set_header X-Geracrm-Proxy "${PROXY_SEGREDO}";
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
@@ -68,6 +76,8 @@ server {
         #    o IP real, todo mundo divide o mesmo balde e o primeiro pico derruba
         #    a criação de sessão de todos. É o `$remote_addr` já resolvido acima.
         proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Geracrm-Ip-Cliente $remote_addr;
+        proxy_set_header X-Geracrm-Proxy "${PROXY_SEGREDO}";
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 

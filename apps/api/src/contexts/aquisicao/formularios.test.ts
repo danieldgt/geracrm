@@ -625,6 +625,22 @@ describe('revisão de segurança (F3b)', () => {
     expect(codigos[8]).toBe(429)
   })
 
+  it('F3c: 10 mil chaves aleatórias do mesmo IP são barradas pelo limite global e não afetam outro IP', async () => {
+    const f = await criarForm(T)
+    const atacante = novoIp()
+    const aleatoria = (i: number) => (i.toString(36) + 'q'.repeat(20)).slice(0, 24).toLowerCase()
+    const codigos: number[] = []
+    for (let i = 0; i < 10_000; i++) {
+      codigos.push((await pub('POST', `/publico/f/${aleatoria(i)}/respostas`, { respostas: {} }, atacante)).statusCode)
+    }
+    // Só os primeiros (teto global) chegam a consultar o banco; o resto é 429 antes de qualquer SELECT.
+    expect(codigos.filter((c) => c === 404).length).toBeLessThanOrEqual(60)
+    expect(codigos.filter((c) => c === 429).length).toBeGreaterThanOrEqual(9_900)
+    // O formulário legítimo, de outro IP, segue aceitando.
+    const ok = await envio(f.chavePublica, PESSOA('81 98888-7777'))
+    expect(ok.statusCode).toBe(201)
+  })
+
   it('M1: parte repetida é recusada antes de ler; nada sobe ao bucket', async () => {
     const f = await criarForm(T)
     const hash = await hashDe(f.chavePublica)

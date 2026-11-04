@@ -65,3 +65,15 @@ Regras completas: [`geracrm-console-angular`](../../.claude/skills/geracrm-conso
 
 Consome [`packages/design-tokens`](../../packages/design-tokens). ⚠️ Cor literal em componente é
 divergência garantida com o app Expo em três meses.
+
+## IP real do visitante (PROXY_SEGREDO)
+
+O nginx (`nginx.conf.template`, renderizado pelo entrypoint do `nginx:alpine` com `envsubst`) proxya `/v1`,
+`/publico` e `/v1/eventos` para a API e acrescenta `X-Geracrm-Ip-Cliente: $remote_addr` (o IP que a borda do
+Railway viu) e `X-Geracrm-Proxy: ${PROXY_SEGREDO}`. Qualquer valor desses cabeçalhos vindo do cliente é
+sobrescrito. A API só confia no IP quando o segredo confere (`apps/api/src/plugins/ip-cliente.ts`).
+
+⚠️ **Ação do dono no Railway:** criar `PROXY_SEGREDO` (ex.: `openssl rand -base64 32`) com o MESMO valor nos
+serviços **console** e **api**. Sem ele na API, o IP do cabeçalho é ignorado (seguro, mas todo o tráfego do
+console divide um balde de limite por IP). Sem ele no console, o cabeçalho é omitido. `TRUST_PROXY_HOPS` fica
+em 1 nos dois casos — não use 2.
