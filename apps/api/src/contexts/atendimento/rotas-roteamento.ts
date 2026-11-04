@@ -10,7 +10,7 @@ import { auditar } from '../plataforma/auditoria.js'
 import { escopoDaRequisicao, type Escopo } from '../plataforma/escopo.js'
 import { exigirPapel } from '../plataforma/papel.js'
 import { atorDaRequisicao, garantirUsuarioId } from './rotas-fila.js'
-import { escolherVendedorDaFilial, filialPorFatos } from './roteamento.js'
+import { elegiveisDaFilial, escolherVendedorDaFilial, filialPorFatos } from './roteamento.js'
 
 /**
  * ROTEAMENTO POR FILIAL (raia G4, #71/#91) — regras, a chave por número e o simulador.
@@ -20,14 +20,17 @@ import { escolherVendedorDaFilial, filialPorFatos } from './roteamento.js'
  *   PATCH  /v1/roteamento/regras/:id          → { ok }                                         (admin/gestor)
  *   DELETE /v1/roteamento/regras/:id          → { ok }                                         (admin/gestor)
  *   GET    /v1/roteamento/numeros             → { itens: NumeroRoteamento[] }                  (gestão)
- *   PUT    /v1/roteamento/numeros/:id         → { ok } corpo { rodizioNaEntrada }              (admin/gestor)
+ *   PUT    /v1/roteamento/numeros/:id         → { ok, aviso } corpo { rodizioNaEntrada }       (admin/gestor)
  *   GET    /v1/roteamento/filiais             → { itens: {id,nome,cor}[] } ativas do escopo    (gestão)
  *   GET    /v1/roteamento/simular?telefone=&origemId=&canalId= → SimulacaoRoteamento           (gestão)
  *
  * ⚠️ ESCOPO (D3): gestor/supervisor de FILIAL só vê e mexe nas regras das filiais
  *    dele (regra de outra filial = 404, indistinguível de inexistente; criar para
- *    outra filial = 422 no campo). Admin, gestor de todas e o modo fundador veem tudo.
- *    A chave do número: gestor de filial só nos números da filial dele.
+ *    outra filial = 422 no campo), sempre num NÚMERO da filial dele (regra para
+ *    todos os números é do escopo `tudo`). Números, chave e simulador: só os
+ *    números da filial dele; filial simulada de fora = "outra filial". Duplicada
+ *    de fora do escopo = 422 genérico (o 409 revelaria a regra alheia).
+ *    Admin, gestor de todas e o modo fundador veem tudo.
  * ⚠️ A simulação NÃO grava nada e NÃO avança o rodízio (`avancar: false`).
  * ⚠️ Tenant SEMPRE de `tenant_atual()` (ADR-001): filial, número e origem do
  *    corpo são conferidos sob RLS — de outro tenant, não existem (422).
@@ -44,6 +47,7 @@ const ehFalha = (v: unknown): v is Falha => typeof v === 'object' && v !== null 
 
 const NAO_ENCONTRADA = falha(404, 'roteamento.regra_nao_encontrada')
 const DUPLICADA = falha(409, 'roteamento.regra_duplicada', 'Já existe uma regra igual (mesmo tipo, valor e número).', ['valor'])
+const INDISPONIVEL = falha(422, 'roteamento.valor_indisponivel', 'Este valor não pode ser usado neste número.', ['valor'])
 
 const ehDuplicada = (e: unknown) =>
   (e as { code?: string })?.code === '23505'
@@ -57,6 +61,13 @@ async function garantirUsuario(req: FastifyRequest): Promise<void> {
 const filialNoEscopo = (escopo: Escopo, filialId: string) =>
   escopo.tipo === 'tudo' || (escopo.tipo === 'filial' && escopo.filialIds.includes(filialId))
 
+/** Fragmento: número (alias `cc`) do escopo — no escopo de filial, só os números das filiais dele. */
+function numeroNoEscopo(tx: Sql, escopo: Escopo) {
+  if (escopo.tipo === 'tudo') return tx`true`
+  if (escopo.tipo === 'filial') return tx`cc.filial_id = ANY(${[...escopo.filialIds]}::uuid[])`
+  return tx`false`
+}
+
 /** Fragmento: regra (alias `r`) visível no escopo. */
 function regraNoEscopo(tx: Sql, escopo: Escopo) {
   if (escopo.tipo === 'tudo') return tx`true`
@@ -64,11 +75,18 @@ function regraNoEscopo(tx: Sql, escopo: Escopo) {
   return tx`false`
 }
 
-/** Confere filial (ativa, do escopo), número e origem do tenant; normaliza o valor. */
+/**
+ * Confere filial (ativa, do escopo), número e origem do tenant; normaliza o valor.
+ *
+ * ⚠️ ESCOPO DE FILIAL (revisão G4, alto 1): a regra de um gestor de filial é
+ *    SEMPRE de um número da filial dele (`canal_conectado.filial_id` no escopo).
+ *    Regra geral (`canalId` null) vale para os números de TODAS as filiais — só
+ *    o escopo `tudo` cria. No PATCH o número é conferido quando muda.
+ */
 async function conferirAlvos(
   tx: Sql, escopo: Escopo,
   r: { tipo: TipoRegraRoteamento; valor: string | null; filialId: string; canalId: string | null },
-  op: { filialMudou: boolean },
+  op: { filialMudou: boolean; canalMudou: boolean; regraId?: string },
 ): Promise<Falha | { valor: string | null }> {
   const v = validarValorDaRegra(r.tipo, r.valor)
   if (!v.ok) return falha(422, 'roteamento.valor_invalido', v.mensagem, ['valor'])
@@ -77,15 +95,59 @@ async function conferirAlvos(
     if (!f || !filialNoEscopo(escopo, r.filialId)) return falha(422, 'roteamento.filial_invalida', 'Filial não encontrada.', ['filialId'])
     if (!f.ativa) return falha(422, 'roteamento.filial_inativa', 'Esta filial está desativada.', ['filialId'])
   }
-  if (r.canalId) {
-    const [c] = await tx`SELECT 1 FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${r.canalId}`
-    if (!c) return falha(422, 'roteamento.numero_invalido', 'Número não encontrado.', ['canalId'])
+  if (op.canalMudou) {
+    if (r.canalId) {
+      const [c] = await tx<{ filial_id: string | null }[]>`SELECT filial_id FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${r.canalId}`
+      if (!c || (escopo.tipo !== 'tudo' && !(c.filial_id && filialNoEscopo(escopo, c.filial_id)))) {
+        return falha(422, 'roteamento.numero_invalido', 'Número não encontrado.', ['canalId'])
+      }
+    } else if (escopo.tipo !== 'tudo') {
+      return falha(422, 'roteamento.numero_obrigatorio', 'Escolha um número da sua filial: regra para todos os números é de administrador.', ['canalId'])
+    }
   }
   if (r.tipo === 'origem') {
     const [o] = await tx`SELECT 1 FROM origem WHERE tenant_id = tenant_atual() AND id = ${v.valor}`
     if (!o) return falha(422, 'roteamento.origem_invalida', 'Origem não encontrada.', ['valor'])
   }
+  // Duplicada: 409 só quando a regra que já existe é VISÍVEL; de fora do escopo,
+  // 422 genérico no campo — o 409 revelaria a regra de outra filial.
+  const [dup] = await tx<{ filial_id: string }[]>`
+    SELECT filial_id FROM regra_roteamento
+     WHERE tenant_id = tenant_atual() AND tipo = ${r.tipo}
+       AND coalesce(canal_id, '00000000-0000-0000-0000-000000000000'::uuid)
+           = coalesce(${r.canalId}::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+       AND coalesce(valor, '') = coalesce(${v.valor}::text, '')
+       AND id <> coalesce(${op.regraId ?? null}::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+     LIMIT 1`
+  if (dup) return filialNoEscopo(escopo, dup.filial_id) ? DUPLICADA : INDISPONIVEL
   return { valor: v.valor }
+}
+
+/**
+ * Ao LIGAR o rodízio num número: as filiais que podem receber os contatos dele
+ * (regras ativas do número ou gerais + a filial do número) e quais estão sem
+ * ninguém elegível. Sem filial nenhuma ou com filial vazia, a tela avisa — a
+ * chave ligada não distribuiria nada para essas.
+ */
+async function avisoDoRodizio(tx: Sql, canalId: string): Promise<string | null> {
+  const filiais = await tx<{ id: string; nome: string }[]>`
+    SELECT f.id, f.nome FROM filial f
+     WHERE f.tenant_id = tenant_atual() AND f.ativa
+       AND (f.id IN (SELECT r.filial_id FROM regra_roteamento r
+                      WHERE r.tenant_id = tenant_atual() AND r.ativa AND (r.canal_id IS NULL OR r.canal_id = ${canalId}))
+            OR f.id = (SELECT cc.filial_id FROM canal_conectado cc WHERE cc.tenant_id = tenant_atual() AND cc.id = ${canalId}))
+     ORDER BY f.nome, f.id
+     LIMIT 50`
+  if (filiais.length === 0) {
+    return 'Nenhuma regra nem filial roteia este número: os contatos novos continuam sem dono até existir uma regra.'
+  }
+  const vazias: string[] = []
+  for (const f of filiais) {
+    if ((await elegiveisDaFilial(tx, f.id, canalId, 'entrada')).length === 0) vazias.push(f.nome)
+  }
+  return vazias.length > 0
+    ? `Sem vendedor ativo que atenda este número em: ${vazias.join(', ')}. Os contatos novos roteados para lá ficam sem dono.`
+    : null
 }
 
 function recusaZod(reply: FastifyReply, issues: readonly { message: string; path: readonly PropertyKey[] }[]) {
@@ -152,7 +214,7 @@ export async function rotasRoteamento(app: FastifyInstance): Promise<void> {
     try {
       const r = await req.comTenant(async (tx) => {
         const escopo = await escopoDaRequisicao(tx, req)
-        const alvo = await conferirAlvos(tx, escopo, b, { filialMudou: true })
+        const alvo = await conferirAlvos(tx, escopo, b, { filialMudou: true, canalMudou: true })
         if (ehFalha(alvo)) return alvo
         const atorId = await atorDaRequisicao(tx, req)
         await tx`
@@ -166,7 +228,8 @@ export async function rotasRoteamento(app: FastifyInstance): Promise<void> {
       })
       if (r) return reply.code(r.status).send(r.corpo)
     } catch (e) {
-      if (ehDuplicada(e)) return reply.code(DUPLICADA.status).send(DUPLICADA.corpo)
+      // Corrida com outra gravação (a pré-checagem não viu): genérico, sem revelar de quem é.
+      if (ehDuplicada(e)) return reply.code(INDISPONIVEL.status).send(INDISPONIVEL.corpo)
       throw e
     }
     return reply.code(201).send({ id })
@@ -199,7 +262,9 @@ export async function rotasRoteamento(app: FastifyInstance): Promise<void> {
           prioridade: b.prioridade ?? atual.prioridade,
           ativa: b.ativa ?? atual.ativa,
         }
-        const alvo = await conferirAlvos(tx, escopo, novo, { filialMudou: novo.filialId !== atual.filial_id })
+        const alvo = await conferirAlvos(tx, escopo, novo, {
+          filialMudou: novo.filialId !== atual.filial_id, canalMudou: novo.canalId !== atual.canal_id, regraId: id,
+        })
         if (ehFalha(alvo)) return alvo
         const atorId = await atorDaRequisicao(tx, req)
         await tx`
@@ -218,7 +283,8 @@ export async function rotasRoteamento(app: FastifyInstance): Promise<void> {
       })
       if (r) return reply.code(r.status).send(r.corpo)
     } catch (e) {
-      if (ehDuplicada(e)) return reply.code(DUPLICADA.status).send(DUPLICADA.corpo)
+      // Corrida com outra gravação (a pré-checagem não viu): genérico, sem revelar de quem é.
+      if (ehDuplicada(e)) return reply.code(INDISPONIVEL.status).send(INDISPONIVEL.corpo)
       throw e
     }
     return reply.send({ ok: true })
@@ -247,16 +313,18 @@ export async function rotasRoteamento(app: FastifyInstance): Promise<void> {
 
   // ── a chave por número ─────────────────────────────────────────────────
   /** Os números do tenant com a chave. Conjunto pequeno (a frota), com teto visível. */
+  // Gestor de filial: só os números da filial dele (os outros não aparecem).
   app.get('/v1/roteamento/numeros', GESTAO, async (req, reply) => {
-    const linhas = await req.comTenant((tx) => tx<{
-      id: string; nome: string; tipo: string; filial_id: string | null; rodizio: boolean | null
-    }[]>`
-      SELECT cc.id, cc.nome_amigavel AS nome, cc.tipo, cc.filial_id, cfg.rodizio_na_entrada AS rodizio
-        FROM canal_conectado cc
-        LEFT JOIN canal_configuracao cfg ON cfg.tenant_id = cc.tenant_id AND cfg.canal_id = cc.id
-       WHERE cc.tenant_id = tenant_atual()
-       ORDER BY cc.nome_amigavel, cc.id
-       LIMIT ${TETO_OPCOES + 1}`)
+    const linhas = await req.comTenant(async (tx) => {
+      const escopo = await escopoDaRequisicao(tx, req)
+      return tx<{ id: string; nome: string; tipo: string; filial_id: string | null; rodizio: boolean | null }[]>`
+        SELECT cc.id, cc.nome_amigavel AS nome, cc.tipo, cc.filial_id, cfg.rodizio_na_entrada AS rodizio
+          FROM canal_conectado cc
+          LEFT JOIN canal_configuracao cfg ON cfg.tenant_id = cc.tenant_id AND cfg.canal_id = cc.id
+         WHERE cc.tenant_id = tenant_atual() AND ${numeroNoEscopo(tx, escopo)}
+         ORDER BY cc.nome_amigavel, cc.id
+         LIMIT ${TETO_OPCOES + 1}`
+    })
     const itens: NumeroRoteamento[] = linhas.slice(0, TETO_OPCOES).map((l) => ({
       id: l.id, nome: l.nome, tipo: l.tipo, filialId: l.filial_id, rodizioNaEntrada: l.rodizio ?? false,
     }))
@@ -287,11 +355,11 @@ export async function rotasRoteamento(app: FastifyInstance): Promise<void> {
         atorId: await atorDaRequisicao(tx, req), atorStaff: req.atorStaff === true, acao: 'roteamento.rodizio_entrada_alterado',
         entidade: 'canal_conectado', entidadeId: canalId, dados: { antes: c.antes ?? false, depois: ligar },
       })
-      return 'ok' as const
+      return { aviso: ligar ? await avisoDoRodizio(tx, canalId) : null }
     })
     if (r === 'nao_encontrado') return reply.code(404).send({ erro: 'canal.nao_encontrado' })
     // Vale para os PRÓXIMOS contatos novos; ninguém que já existe muda de dono.
-    return reply.send({ ok: true })
+    return reply.send({ ok: true, aviso: r.aviso })
   })
 
   // ── apoio da tela ──────────────────────────────────────────────────────
@@ -322,12 +390,14 @@ export async function rotasRoteamento(app: FastifyInstance): Promise<void> {
         return reply.code(422).send({ erro: 'roteamento.simulacao_vazia', mensagem: 'Informe o telefone ou a origem.', campos: ['telefone'] })
       }
       const r = await req.comTenant(async (tx): Promise<SimulacaoRoteamento | Falha> => {
+        const escopo = await escopoDaRequisicao(tx, req)
         let rodizioNaEntrada: boolean | null = null
         if (canalId) {
+          // Gestor de filial só simula nos números da filial dele.
           const [c] = await tx<{ rodizio: boolean | null }[]>`
             SELECT cfg.rodizio_na_entrada AS rodizio FROM canal_conectado cc
               LEFT JOIN canal_configuracao cfg ON cfg.tenant_id = cc.tenant_id AND cfg.canal_id = cc.id
-             WHERE cc.tenant_id = tenant_atual() AND cc.id = ${canalId}`
+             WHERE cc.tenant_id = tenant_atual() AND cc.id = ${canalId} AND ${numeroNoEscopo(tx, escopo)}`
           if (!c) return falha(422, 'roteamento.numero_invalido', 'Número não encontrado.', ['canalId'])
           rodizioNaEntrada = c.rodizio ?? false
         }
@@ -336,6 +406,13 @@ export async function rotasRoteamento(app: FastifyInstance): Promise<void> {
           if (!o) return falha(422, 'roteamento.origem_invalida', 'Origem não encontrada.', ['origemId'])
         }
         const filial = await filialPorFatos(tx, { origemId, telefone, canalId })
+        // Filial de fora do escopo: só "outra filial" — sem nome, vendedor nem regra.
+        if (filial.filialId && !filialNoEscopo(escopo, filial.filialId)) {
+          return {
+            ddd: filial.ddd, filial: null, motivo: filial.motivo, regraId: null, vendedor: null, elegiveis: 0,
+            rodizioNaEntrada, foraDoEscopo: true,
+          }
+        }
         let nomeFilial: string | null = null
         let vendedor: SimulacaoRoteamento['vendedor'] = null
         let elegiveis = 0
@@ -353,7 +430,7 @@ export async function rotasRoteamento(app: FastifyInstance): Promise<void> {
         return {
           ddd: filial.ddd,
           filial: filial.filialId && nomeFilial !== null ? { id: filial.filialId, nome: nomeFilial } : null,
-          motivo: filial.motivo, regraId: filial.regraId, vendedor, elegiveis, rodizioNaEntrada,
+          motivo: filial.motivo, regraId: filial.regraId, vendedor, elegiveis, rodizioNaEntrada, foraDoEscopo: false,
         }
       })
       if (ehFalha(r)) return reply.code(r.status).send(r.corpo)

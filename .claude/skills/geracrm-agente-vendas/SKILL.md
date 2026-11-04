@@ -200,6 +200,21 @@ sombra × humano (sinal a calibrar). Métricas: `GET /v1/agente/sugestoes/metric
 ## SLA do handoff (ADR-034)
 
 Todo handoff arma o SLA (`sla-handoff.ts`: `armarSlaDoHandoff`, `rotearHandoff` dono → filial roteada em rodízio → pool → gestor da filial → gestor; a filial sai de `roteamento.ts` `filialDoContato` — G4).
+
+**Roteamento por filial (G4)** — `roteamento.ts`, `rodizio-entrada.ts`, `rotas-roteamento.ts`, shared
+`roteamento-filial.ts`, migration 0136.
+- Filial do contato: gravada no contato → regra por origem → por DDD → padrão do número → filial do número
+  → padrão geral. A regra do número vence a geral; `prioridade` é só ordem de exibição/desempate no
+  mesmo alcance.
+- **Opt-in**: no handoff, a filial só entra se o tenant tiver ≥ 1 regra ativa OU algum número com
+  `rodizio_na_entrada`. Sem isso é o P18 puro, mesmo com `canal_conectado.filial_id`/`contato.filial_id`.
+- Rodízio por filial com ponteiro travado por linha (`rodizio_filial`, finalidade entrada|handoff); a vez
+  do POOL ignora atendimentos roteados por filial.
+- Rodízio na entrada (chave por número, padrão desligado): só lead novo, com telefone principal próprio e
+  sem dono; carteira `automatica`, auditada, `contato.filial_id` carimbado, aviso `carteira.novo_cliente`.
+  ⚠️ O carimbo FICA se a carteira for transferida para outra filial (o contato vale para as duas no
+  escopo até alguém editar a filial no cadastro) — decisão registrada, não bug.
+- Gestor de filial: regras só em números da filial dele; regra geral é do escopo `tudo`.
 Config por número (`GET/PUT /v1/canais/:id/sla`, padrão 30/60 min úteis, aviso de espera ligado);
 `workers/sla.ts` estoura (alerta `sla_handoff_estourado`), libera a reatribuição e manda UMA mensagem de
 espera pelo gateway, filtro e rede de R$. Fila única via `fragmentoNaFila`. Em modo fundador o

@@ -35,7 +35,31 @@ const PAPEIS_DO_RODIZIO: Record<FinalidadeRodizio, readonly string[]> = {
   handoff: ['vendedor', 'atendente'],
 }
 const PAPEIS_GESTAO_FILIAL = ['gestor', 'supervisor', 'admin'] as const
+/**
+ * Teto de elegíveis lidos por filial e número. Uma filial com mais de 100
+ * vendedores ativos que atendem o MESMO número não existe hoje; se existir, o
+ * rodízio passa a girar só entre os 100 primeiros por id (os demais nunca têm a
+ * vez) — por isso o corte é LOGADO (`roteamento.elegiveis_cortados`), não silencioso.
+ */
 const TETO_ELEGIVEIS = 100
+
+function logRoteamento(evento: string, dados: Readonly<Record<string, unknown>>): void {
+  console.warn(JSON.stringify({ nivel: 'warn', contexto: 'roteamento', evento, ...dados }))
+}
+
+/**
+ * O tenant LIGOU o roteamento por filial? (decisão do orquestrador, revisão G4)
+ * Só com opt-in explícito: pelo menos uma regra ATIVA ou algum número com
+ * `rodizio_na_entrada`. Sem isso o handoff segue o P18 (dono → pool → gestor),
+ * mesmo com `canal_conectado.filial_id` / `contato.filial_id` preenchidos —
+ * dados que já existiam antes da G4 não mudam o roteamento de ninguém sozinhos.
+ */
+export async function roteamentoPorFilialLigado(tx: Sql): Promise<boolean> {
+  const [l] = await tx<{ ligado: boolean }[]>`
+    SELECT EXISTS (SELECT 1 FROM regra_roteamento WHERE tenant_id = tenant_atual() AND ativa)
+        OR EXISTS (SELECT 1 FROM canal_configuracao WHERE tenant_id = tenant_atual() AND rodizio_na_entrada) AS ligado`
+  return l?.ligado ?? false
+}
 
 /** As regras que PODEM casar com estes fatos (ativas, do número ou gerais). Teto de 50. */
 async function regrasCandidatas(
@@ -121,7 +145,7 @@ export async function elegiveisDaFilial(
     ? tx`(EXISTS (SELECT 1 FROM usuario_canal uc WHERE uc.tenant_id = u.tenant_id AND uc.canal_id = ${canalId}::uuid AND uc.usuario_id = u.id)
               OR NOT EXISTS (SELECT 1 FROM usuario_canal uc WHERE uc.tenant_id = u.tenant_id AND uc.canal_id = ${canalId}::uuid))`
     : tx`true`
-  return tx<PessoaRoteavel[]>`
+  const linhas = await tx<PessoaRoteavel[]>`
     SELECT u.id, u.ativo, u.ausente
       FROM usuario u
      WHERE u.tenant_id = tenant_atual() AND u.ativo AND NOT u.ausente
@@ -132,7 +156,12 @@ export async function elegiveisDaFilial(
                      AND uf.filial_id = ${filialId}::uuid AND uf.papel = ANY(${papeis}::text[]))
        AND ${atendeONumero}
      ORDER BY u.id
-     LIMIT ${TETO_ELEGIVEIS}`
+     LIMIT ${TETO_ELEGIVEIS + 1}`
+  if (linhas.length > TETO_ELEGIVEIS) {
+    logRoteamento('roteamento.elegiveis_cortados', { filialId, canalId, finalidade, teto: TETO_ELEGIVEIS })
+    return linhas.slice(0, TETO_ELEGIVEIS)
+  }
+  return linhas
 }
 
 /** Admin/gestor/supervisor ATIVOS com papel NA filial, gestor primeiro. Teto de 20. */

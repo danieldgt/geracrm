@@ -8,6 +8,7 @@ import { pluginTenant } from '../../plugins/tenant.js'
 import { entregarParaHumano } from './agente/handoff.js'
 import { ingerirMensagemEntrante } from './ingestao-mensagem.js'
 import { escolherVendedorDaFilial, filialDoContato } from './roteamento.js'
+import { atribuirCarteiraNaEntrada } from './rodizio-entrada.js'
 import { rotasRoteamento } from './rotas-roteamento.js'
 
 /**
@@ -342,6 +343,18 @@ describe('rodízio na entrada (RN-04) — contato novo pela ingestão', () => {
     expect((await dono`SELECT 1 FROM notificacao WHERE conversa_id = ${semVendedor.conversaId} AND tipo = 'fila.nova'`).length).toBeGreaterThan(0)
   })
 
+  it('dado contato sem telefone principal (fantasma de webhooks paralelos), então o rodízio não lhe dá dono', async () => {
+    await regra('ddd', '85', FN)
+    await ligarRodizio()
+    const fantasma = randomUUID()
+    await dono`INSERT INTO contato (tenant_id, id, nome, ativo) VALUES (${A}, ${fantasma}, 'Fantasma', true)`
+    const conv = await conversa(fantasma)
+    const r = await comTenantServico(A, (tx) => atribuirCarteiraNaEntrada(tx, { contatoId: fantasma, conversaId: conv, canalId: C1 }))
+    expect(r).toEqual({ tipo: 'sem_telefone' })
+    expect(await donoDe(fantasma)).toBeNull()
+    expect(await ponteiro(FN)).toBeNull()
+  })
+
   it('dado a chave ligada só em OUTRO número, então este não distribui', async () => {
     await regra('ddd', '85', FN)
     await ligarRodizio(C2)
@@ -433,6 +446,44 @@ describe('handoff — dono → filial em rodízio → pool → gestor da filial 
     expect(await rotaDe(conv)).toMatchObject({ responsavel_id: U.vs, responsavel_origem: 'pool' })
   })
 
+  it('dado número COM filial e contato com filial gravada, mas SEM regras nem rodízio ligado, então o comportamento antigo (opt-in)', async () => {
+    await dono`UPDATE canal_conectado SET filial_id = ${FN} WHERE id = ${C1}`
+    await atende(C1, 'v2', 'vs') // pool por id: v2, vs
+    const conv = await conversa(await contato({ ddd: '85', filial: FN }))
+    await transfere(conv)
+    // Sem opt-in: P18 puro — o pool do número, origem 'pool', sem filial nem ponteiro de filial.
+    expect(await rotaDe(conv)).toEqual({ responsavel_id: U.v2, responsavel_origem: 'pool', responsavel_filial_id: null })
+    expect(await dono`SELECT 1 FROM rodizio_filial WHERE tenant_id = ${A}`).toHaveLength(0)
+
+    // Basta ligar o rodízio na entrada em ALGUM número (ou ter uma regra ativa) para a filial passar a valer.
+    await ligarRodizio(C2)
+    const conv2 = await conversa(await contato({ ddd: '85', filial: FN }))
+    await transfere(conv2)
+    expect(await rotaDe(conv2)).toEqual({ responsavel_id: U.v2, responsavel_origem: 'filial', responsavel_filial_id: FN })
+  })
+
+  it('dado regra INATIVA apenas, então ainda é o comportamento antigo', async () => {
+    await dono`INSERT INTO regra_roteamento (tenant_id, id, tipo, valor, filial_id, ativa) VALUES (${A}, ${randomUUID()}, 'ddd', '85', ${FN}, false)`
+    await atende(C1, 'vs')
+    const conv = await conversa(await contato({ ddd: '85', filial: FN }))
+    await transfere(conv)
+    expect(await rotaDe(conv)).toMatchObject({ responsavel_id: U.vs, responsavel_origem: 'pool' })
+  })
+
+  it('dado handoffs roteados pela filial, então a vez do POOL não os conta', async () => {
+    await regra('ddd', '85', FN)
+    await atende(C1, 'v1', 'vs') // pool por id: v1, vs
+    const t0 = Date.now()
+    const c1 = await conversa(await contato({ ddd: '11' })) // sem filial → pool: v1
+    await transfere(c1, C1, new Date(t0))
+    const c2 = await conversa(await contato({ ddd: '85' })) // FN → filial: v1 (único de FN no número)
+    await transfere(c2, C1, new Date(t0 + 1000))
+    const c3 = await conversa(await contato({ ddd: '11' })) // o pool segue do v1 (o 2º não conta) → vs
+    await transfere(c3, C1, new Date(t0 + 2000))
+    expect([(await rotaDe(c1)).responsavel_id, (await rotaDe(c2)).responsavel_origem, (await rotaDe(c3)).responsavel_id])
+      .toEqual([U.v1, 'filial', U.vs])
+  })
+
   it('dado handoff repetido (SLA já armado), então a vez da filial não é gasta', async () => {
     await regra('ddd', '85', FN)
     const conv = await conversa(await contato({ ddd: '85' }))
@@ -484,11 +535,17 @@ describe('rotas /v1/roteamento', () => {
     expect((await pedir('sn', 'PUT', `/v1/roteamento/numeros/${C1}`, { rodizioNaEntrada: true })).status).toBe(403)
   })
 
-  it('escopo: gestor de filial só vê e mexe nas regras da filial dele', async () => {
+  it('escopo: gestor de filial só vê e mexe nas regras da filial dele, sempre num número da filial dele', async () => {
+    await dono`UPDATE canal_conectado SET filial_id = ${FN} WHERE id = ${C2}`
     await regra('ddd', '21', FS)
     const [fs] = await dono<{ id: string }[]>`SELECT id FROM regra_roteamento WHERE tenant_id = ${A} AND filial_id = ${FS}`
-    expect((await pedir('gn', 'POST', '/v1/roteamento/regras', { tipo: 'ddd', valor: '85', filialId: FN })).status).toBe(201)
-    expect((await pedir('gn', 'POST', '/v1/roteamento/regras', { tipo: 'ddd', valor: '86', filialId: FS })).corpo)
+    // Regra para TODOS os números é do escopo `tudo`; número sem filial ou de outra filial, também não.
+    expect((await pedir('gn', 'POST', '/v1/roteamento/regras', { tipo: 'ddd', valor: '85', filialId: FN })).corpo)
+      .toMatchObject({ erro: 'roteamento.numero_obrigatorio', campos: ['canalId'] })
+    expect((await pedir('gn', 'POST', '/v1/roteamento/regras', { tipo: 'ddd', valor: '85', filialId: FN, canalId: C1 })).corpo)
+      .toMatchObject({ erro: 'roteamento.numero_invalido', campos: ['canalId'] })
+    expect((await pedir('gn', 'POST', '/v1/roteamento/regras', { tipo: 'ddd', valor: '85', filialId: FN, canalId: C2 })).status).toBe(201)
+    expect((await pedir('gn', 'POST', '/v1/roteamento/regras', { tipo: 'ddd', valor: '86', filialId: FS, canalId: C2 })).corpo)
       .toMatchObject({ erro: 'roteamento.filial_invalida' })
     const lista = await pedir('gn', 'GET', '/v1/roteamento/regras')
     expect((lista.corpo.itens ?? []).map((i) => i.filialId)).toEqual([FN])
@@ -497,9 +554,37 @@ describe('rotas /v1/roteamento', () => {
     // Mover a própria regra para a filial de outro também não.
     const [mn] = await dono<{ id: string }[]>`SELECT id FROM regra_roteamento WHERE tenant_id = ${A} AND filial_id = ${FN}`
     expect((await pedir('gn', 'PATCH', `/v1/roteamento/regras/${mn!.id}`, { filialId: FS })).status).toBe(422)
+    // Nem para um número de fora, nem para "todos os números"; o resto edita normalmente.
+    expect((await pedir('gn', 'PATCH', `/v1/roteamento/regras/${mn!.id}`, { canalId: C1 })).corpo).toMatchObject({ erro: 'roteamento.numero_invalido' })
+    expect((await pedir('gn', 'PATCH', `/v1/roteamento/regras/${mn!.id}`, { canalId: null })).corpo).toMatchObject({ erro: 'roteamento.numero_obrigatorio' })
+    expect((await pedir('gn', 'PATCH', `/v1/roteamento/regras/${mn!.id}`, { prioridade: 7 })).status).toBe(200)
+    // Números: só os da filial dele.
+    expect(((await pedir('gn', 'GET', '/v1/roteamento/numeros')).corpo.itens ?? []).map((n) => n.id)).toEqual([C2])
     // As filiais do select: só as do escopo; admin vê as ativas todas.
     expect(((await pedir('gn', 'GET', '/v1/roteamento/filiais')).corpo.itens ?? []).map((f) => f.id)).toEqual([FN])
     expect(((await pedir('adm', 'GET', '/v1/roteamento/filiais')).corpo.itens ?? []).map((f) => f.id).sort()).toEqual([FN, FS].sort())
+  })
+
+  it('duplicada: 409 quando a regra existente é visível; de OUTRA filial, 422 genérico (não revela)', async () => {
+    await dono`UPDATE canal_conectado SET filial_id = ${FN} WHERE id = ${C2}`
+    await regra('ddd', '85', FS, C2) // criada pelo admin, para outra filial, num número de FN
+    await regra('ddd', '86', FN, C2)
+    const fora = await pedir('gn', 'POST', '/v1/roteamento/regras', { tipo: 'ddd', valor: '85', filialId: FN, canalId: C2 })
+    expect(fora.status).toBe(422)
+    expect(fora.corpo).toEqual({ erro: 'roteamento.valor_indisponivel', mensagem: 'Este valor não pode ser usado neste número.', campos: ['valor'] })
+    expect((await pedir('gn', 'POST', '/v1/roteamento/regras', { tipo: 'ddd', valor: '86', filialId: FN, canalId: C2 })).status).toBe(409)
+    expect((await pedir('adm', 'POST', '/v1/roteamento/regras', { tipo: 'ddd', valor: '85', filialId: FN, canalId: C2 })).status).toBe(409)
+  })
+
+  it('ligar a chave avisa quando o número não roteia para ninguém ou a filial está sem vendedor', async () => {
+    expect((await pedir('adm', 'PUT', `/v1/roteamento/numeros/${C1}`, { rodizioNaEntrada: true })).corpo.aviso).toMatch(/Nenhuma regra/)
+    await regra('ddd', '21', FS)
+    await regra('ddd', '85', FN)
+    await dono`UPDATE usuario SET ausente = true WHERE id = ${U.vs}`
+    expect((await pedir('adm', 'PUT', `/v1/roteamento/numeros/${C1}`, { rodizioNaEntrada: true })).corpo.aviso).toMatch(/Sul/)
+    await dono`UPDATE usuario SET ausente = false WHERE id = ${U.vs}`
+    expect((await pedir('adm', 'PUT', `/v1/roteamento/numeros/${C1}`, { rodizioNaEntrada: true })).corpo.aviso).toBeNull()
+    expect((await pedir('adm', 'PUT', `/v1/roteamento/numeros/${C1}`, { rodizioNaEntrada: false })).corpo.aviso).toBeNull()
   })
 
   it('a chave por número: admin liga (auditado); gestor de filial só no número da filial dele', async () => {
@@ -522,10 +607,10 @@ describe('rotas /v1/roteamento', () => {
     await ligarRodizio()
     await escolher(FN, C1) // v1 já levou
     const antes = await dono`SELECT count(*)::int AS n FROM auditoria WHERE tenant_id = ${A}`
-    const s1 = await pedir('gs', 'GET', `/v1/roteamento/simular?telefone=${encodeURIComponent('(85) 99999-0000')}&canalId=${C1}`)
+    const s1 = await pedir('adm', 'GET', `/v1/roteamento/simular?telefone=${encodeURIComponent('(85) 99999-0000')}&canalId=${C1}`)
     expect(s1.status).toBe(200)
-    expect(s1.corpo).toMatchObject({ ddd: '85', filial: { id: FN, nome: 'Norte' }, motivo: 'ddd', vendedor: { id: U.v2, nome: 'V2' }, elegiveis: 3, rodizioNaEntrada: true })
-    const s2 = await pedir('gs', 'GET', `/v1/roteamento/simular?telefone=85999990000&canalId=${C1}`)
+    expect(s1.corpo).toMatchObject({ ddd: '85', filial: { id: FN, nome: 'Norte' }, motivo: 'ddd', vendedor: { id: U.v2, nome: 'V2' }, elegiveis: 3, rodizioNaEntrada: true, foraDoEscopo: false })
+    const s2 = await pedir('sn', 'GET', '/v1/roteamento/simular?telefone=85999990000')
     expect((s2.corpo.vendedor as { id: string }).id).toBe(U.v2)
     expect(await ponteiro(FN)).toBe(U.v1)
     expect(await dono`SELECT count(*)::int AS n FROM auditoria WHERE tenant_id = ${A}`).toEqual(antes)
@@ -538,6 +623,18 @@ describe('rotas /v1/roteamento', () => {
     expect((await pedir('adm', 'GET', '/v1/roteamento/simular')).status).toBe(422)
     expect((await pedir('adm', 'GET', `/v1/roteamento/simular?telefone=85999990000&origemId=${ORIGEM_B}`)).status).toBe(422)
     expect((await pedir('adm', 'GET', `/v1/roteamento/simular?telefone=85999990000&canalId=${CB}`)).status).toBe(422)
+  })
+
+  it('simular no escopo de filial: só números da filial dele; filial de fora = "outra filial", sem vendedor nem regra', async () => {
+    await regra('ddd', '85', FN)
+    await dono`UPDATE canal_conectado SET filial_id = ${FS} WHERE id = ${C2}`
+    expect((await pedir('gs', 'GET', `/v1/roteamento/simular?telefone=85999990000&canalId=${C1}`)).corpo)
+      .toMatchObject({ erro: 'roteamento.numero_invalido' })
+    const fora = await pedir('gs', 'GET', `/v1/roteamento/simular?telefone=85999990000&canalId=${C2}`)
+    expect(fora.corpo).toEqual({ ddd: '85', filial: null, motivo: 'ddd', regraId: null, vendedor: null, elegiveis: 0, rodizioNaEntrada: false, foraDoEscopo: true })
+    // A própria filial (número de FS, DDD sem regra → filial do número) aparece inteira.
+    expect((await pedir('gs', 'GET', `/v1/roteamento/simular?telefone=11999990000&canalId=${C2}`)).corpo)
+      .toMatchObject({ filial: { id: FS }, motivo: 'filial_numero', vendedor: { id: U.vs }, foraDoEscopo: false })
   })
 
   it('dois tenants: B não vê nem mexe nas regras de A', async () => {

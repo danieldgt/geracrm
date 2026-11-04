@@ -41,9 +41,14 @@ import { fragmentoNaFila, respostaHumanaDoAtendimento } from '../atendimento/sla
  *                tem papel numa das filiais (`usuario_filial`); OU (c) o dono
  *                vigente é o próprio gestor; OU (d) o contato está SEM DONO e
  *                SEM filial.
- *       ⚠️ DECISÃO DE BORDA (d) — "sem dono": o contato não tem `filial_id`
- *          gravado hoje (nenhum caminho do produto o preenche; a coluna existe
- *          desde a 0008), então a filial vem do DONO. O órfão não tem dono e
+ *       ⚠️ DECISÃO DE BORDA (d) — "sem dono": `contato.filial_id` (0008) é
+ *          preenchido pelo cadastro do contato (A1) e pelo RODÍZIO NA ENTRADA
+ *          (G4, `rodizio-entrada.ts`), que o carimba com a filial roteada ao dar
+ *          dono ao lead novo. O carimbo FICA quando a carteira é transferida
+ *          para um vendedor de outra filial: o contato passa a valer para as
+ *          duas filiais — a carimbada por (a), a do novo dono por (b) — até
+ *          alguém editar a filial no cadastro. Sem filial gravada, a filial
+ *          vem do DONO. O órfão não tem dono e
  *          portanto não tem filial: escondê-lo trancaria o gestor fora da fila
  *          de distribuição (é ele quem atribui o órfão). A opção mais restritiva
  *          que NÃO tranca o gestor: gestor de qualquer filial vê os órfãos SEM

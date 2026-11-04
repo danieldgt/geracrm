@@ -45,6 +45,8 @@ export type ResultadoIngestaoMensagem =
       midiaExterna?: MidiaExterna
       /** Erro ao agendar a pós-ingestão (ausência/mídia não sairão) — quem chama loga. */
       posIngestaoFalhou?: string
+      /** Erro no rodízio na entrada (o lead ficou órfão) — já logado aqui, com o tenant. */
+      rodizioFalhou?: string
     }
   | { ok: false; motivo: string }
 
@@ -237,11 +239,20 @@ export async function ingerirMensagemEntrante(
   //      escolhido recebe UM aviso ("novo cliente na sua carteira") e a fila não
   //      é acordada de novo no passo 7. Savepoint: a mensagem nunca se perde por ele.
   let avisadoPeloRodizio = false
+  let rodizioFalhou: string | undefined
   if (leadNovo) {
     try {
       const r = await emSavepoint(tx, (sp) => atribuirCarteiraNaEntrada(sp, { contatoId, conversaId, canalId }))
       avisadoPeloRodizio = r.tipo === 'atribuido'
-    } catch { /* rodízio é acessório; o contato fica órfão, como sem a chave */ }
+    } catch (erro) {
+      // Rodízio é acessório: o contato fica órfão (e a fila é avisada no passo 7), mas não em silêncio.
+      rodizioFalhou = erro instanceof Error ? erro.message : String(erro)
+      const [t] = await tx<{ tenant: string | null }[]>`SELECT tenant_atual()::text AS tenant`
+      console.warn(JSON.stringify({
+        nivel: 'warn', contexto: 'roteamento', evento: 'rodizio_entrada_falhou',
+        tenantId: t?.tenant ?? null, canalId, conversaId, erro: rodizioFalhou.slice(0, 200),
+      }))
+    }
   }
 
   // 6.7 ⚠️ AGENDA o turno do agente no MESMO commit (ADR-024, INV-40): se a
@@ -317,6 +328,7 @@ export async function ingerirMensagemEntrante(
     ok: true, conversaId, contatoId, duplicada: false, leadNovo,
     ...(midiaExterna ? { midiaExterna } : {}),
     ...(posIngestaoFalhou ? { posIngestaoFalhou } : {}),
+    ...(rodizioFalhou ? { rodizioFalhou } : {}),
   }
 }
 
