@@ -12,7 +12,7 @@ import {
   sha256Hex, textoFaltando, type ArquivoLido, type PassoId,
 } from './importacao.regras.js'
 import {
-  ImportacaoServico, type Conferencia, type ImportacaoResumo, type OpcoesImportacao, type ResultadoSimulacao,
+  ImportacaoServico, type Conferencia, type ImportacaoResumo, type ItemImportacao, type OpcoesImportacao, type ResultadoSimulacao,
 } from './importacao.servico.js'
 
 type EstadoHistorico = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
@@ -149,14 +149,14 @@ const ABAS: readonly Aba[] = [{ id: 'nova', rotulo: 'Nova importação' }, { id:
                   </div>
                   <p class="txt-denso suave">Cadastro que já existe é só completado onde estava em branco: nada que já está lá, nem dado vindo do ERP, é sobrescrito.</p>
                 </ui-secao-form>
-                @if (s.amostraRejeicoes.length > 0) {
-                  <ui-secao-form titulo="Linhas rejeitadas (amostra)">
-                    <ui-tabela [colunas]="colunasRejeicao" [linhas]="linhasRejeicao()">
+                @if (s.contagens.rejeitados > 0) {
+                  <ui-secao-form titulo="Linhas rejeitadas">
+                    @if (erroRejeicoes()) { <p class="aviso aviso--erro txt-denso" role="alert">{{ erroRejeicoes() }}</p> }
+                    <ui-tabela [colunas]="colunasRejeicao" [linhas]="linhasRejeicao()" [carregando]="carregandoRejeicoes() && rejeicoes().length === 0">
                       <ng-template uiCelula="motivo" let-r>{{ rotuloMotivo(r.motivo) }}</ng-template>
                     </ui-tabela>
-                    @if (s.contagens.rejeitados > s.amostraRejeicoes.length) {
-                      <p class="txt-denso suave">Mostrando {{ s.amostraRejeicoes.length }} de {{ s.contagens.rejeitados }}. O relatório traz todas.</p>
-                    }
+                    <ui-paginacao [mostrados]="rejeicoes().length" [total]="s.contagens.rejeitados" [temMais]="cursorRejeicoes() !== null"
+                      [carregando]="carregandoRejeicoes()" (mais)="carregarRejeicoes()" />
                   </ui-secao-form>
                 }
                 @if (erroExecucao()) { <p class="aviso aviso--erro txt-denso" role="alert">{{ erroExecucao() }}</p> }
@@ -383,8 +383,12 @@ export class ImportacaoPagina implements OnInit {
   protected readonly simulando = signal(false)
   protected readonly erroSimulacao = signal('')
   protected readonly simulacao = signal<ResultadoSimulacao | null>(null)
+  protected readonly rejeicoes = signal<readonly ItemImportacao[]>([])
+  protected readonly cursorRejeicoes = signal<string | null>(null)
+  protected readonly carregandoRejeicoes = signal(false)
+  protected readonly erroRejeicoes = signal('')
   protected readonly linhasRejeicao = computed<readonly LinhaTabela[]>(() =>
-    (this.simulacao()?.amostraRejeicoes ?? []).map((r) => ({ id: String(r.linha), linha: r.linha, motivo: r.motivo })))
+    this.rejeicoes().map((r) => ({ id: String(r.linha), linha: r.linha, motivo: r.motivo })))
   protected readonly colunasRejeicao: ColunaTabela[] = [
     { chave: 'linha', rotulo: 'Linha do arquivo', mono: true, largura: '160px' },
     { chave: 'motivo', rotulo: 'Motivo' },
@@ -505,8 +509,11 @@ export class ImportacaoPagina implements OnInit {
     if (!t || !f || this.simulando()) return
     this.simulando.set(true); this.erroSimulacao.set(''); this.erroExecucao.set('')
     try {
-      this.simulacao.set(await this.api.simular(t, f, this.dePara(), this.opcoes()))
+      const r = await this.api.simular(t, f, this.dePara(), this.opcoes())
+      this.simulacao.set(r)
+      this.rejeicoes.set([]); this.cursorRejeicoes.set(null)
       this.passo.set(4)
+      if (r.contagens.rejeitados > 0) void this.carregarRejeicoes()
     } catch (e) {
       if (codigoDoErro(e) === 'importacao.colunas_obrigatorias') {
         const c = corpoDoErro(e) as { deParaSugerido?: DePara } | null
@@ -514,6 +521,21 @@ export class ImportacaoPagina implements OnInit {
       }
       this.erroSimulacao.set(mensagemDeErro(e, 'Não foi possível simular. Verifique o arquivo e tente de novo.'))
     } finally { this.simulando.set(false) }
+  }
+
+  /** Rejeições da simulação, por cursor ("carregar mais"): todas as linhas, não só uma amostra. */
+  protected async carregarRejeicoes(): Promise<void> {
+    const s = this.simulacao()
+    if (!s || this.carregandoRejeicoes()) return
+    const cursor = this.cursorRejeicoes()
+    if (this.rejeicoes().length > 0 && cursor === null) return
+    this.carregandoRejeicoes.set(true); this.erroRejeicoes.set('')
+    try {
+      const r = await this.api.itens(s.importacaoId, 'rejeitado', cursor)
+      this.rejeicoes.update((a) => [...a, ...r.itens])
+      this.cursorRejeicoes.set(r.proximoCursor)
+    } catch (e) { this.erroRejeicoes.set(mensagemDeErro(e, 'Não foi possível carregar as linhas rejeitadas.')) }
+    finally { this.carregandoRejeicoes.set(false) }
   }
 
   protected async baixarRelatorio(id: string): Promise<void> {
