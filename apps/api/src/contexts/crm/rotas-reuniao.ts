@@ -7,9 +7,10 @@ import type { Sql } from '../../db/index.js'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { atorDaRequisicao } from '../atendimento/rotas-fila.js'
 import { exigirModulo } from '../plataforma/modulos.js'
+import { temPapel } from '../plataforma/papel.js'
 import { conversaNoEscopo, escopoDaRequisicao, responsavelNoEscopo, type Escopo } from '../plataforma/escopo.js'
 import {
-  agendarReuniao, diaLocal, donoDoContato, horariosLivresDoDia, lerExpedienteReuniao, vendedoresParaReuniao,
+  agendarReuniao, cabeNoPeriodoUtil, diaLocal, donoDoContato, horariosLivresDoDia, lerExpedienteReuniao, vendedoresParaReuniao,
 } from './reuniao.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -76,6 +77,10 @@ interface CorpoReuniao {
  *
  * Escopo: a conversa precisa estar no escopo de quem pede (senão 404, como inexistente); a pessoa
  * da reunião, em `podeMarcarCom` (senão 403 `agenda.responsavel_proibido`, o mesmo código da C2).
+ * Carteira (M2): marcar com quem NÃO é o dono vigente transfere o cliente — só para quem tem papel
+ * de gestão; os demais recebem 403 `agenda.transferencia_proibida`. Contato sem dono: quem recebe
+ * a reunião vira dono (atendente sem papel de venda, nunca). Horário fora do período útil do
+ * número (expediente ∩ 08–20) → 422 `agenda.fora_do_expediente`.
  */
 export async function rotasReuniao(app: FastifyInstance): Promise<void> {
   const pre = [exigirTenant, exigirModulo('agenda')]
@@ -145,6 +150,8 @@ export async function rotasReuniao(app: FastifyInstance): Promise<void> {
     }
     if (link && !/^https?:\/\/\S+$/i.test(link)) return reply.code(422).send({ erro: 'agenda.link_invalido', mensagem: 'O link precisa começar com http:// ou https://.' })
     const fim = new Date(inicio.getTime() + duracaoMin * 60_000)
+    // M2: só a gestão transfere carteira pela reunião (ou o contato sem dono vigente).
+    const gestao = await temPapel(req, 'gestor', 'supervisor')
 
     const r = await req.comTenant(async (tx) => {
       const escopo = await escopoDaRequisicao(tx, req)
@@ -152,12 +159,25 @@ export async function rotasReuniao(app: FastifyInstance): Promise<void> {
       if (!cv) return { tipo: 'conversa' as const }
       const eu = await atorDaRequisicao(tx, req)
       if (!(await podeMarcarCom(tx, escopo, eu, usuarioId, cv.contatoId))) return { tipo: 'proibido' as const }
+      if (inicio.getTime() < Date.now()) return { tipo: 'passado' as const }
+      // M4/M6: a reunião cabe no período útil do número (expediente ∩ 08–20, sem feriado).
+      if (!cabeNoPeriodoUtil(await lerExpedienteReuniao(tx, cv.canalId), inicio, fim)) return { tipo: 'fora_da_grade' as const }
+      const dono = await donoDoContato(tx, cv.contatoId)
+      if (dono && dono.id !== usuarioId && !gestao) return { tipo: 'transferencia' as const }
       return agendarReuniao(tx, {
         conversaId, usuarioId, inicio, fim, titulo: titulo ?? `Reunião com ${cv.contato}`.slice(0, 120),
         modalidade: modalidade as ModalidadeEvento, local, link, descricao, criadoPor: eu, origem: 'conversa', agora: new Date(),
+        transferirCarteira: gestao || !dono,
       })
     })
     switch (r.tipo) {
+      case 'fora_da_grade': return reply.code(422).send({
+        erro: ERROS_REUNIAO.foraDoExpediente, mensagem: 'Esse horário está fora do expediente do número. Escolha um horário livre da grade.',
+      })
+      case 'transferencia': return reply.code(403).send({
+        erro: ERROS_REUNIAO.transferenciaProibida,
+        mensagem: 'Marcar com outra pessoa passa o cliente para ela, e só a gestão transfere carteira. Marque com o responsável do cliente.',
+      })
       case 'conversa': case 'sem_conversa': return reply.code(404).send(CONVERSA_NAO_ENCONTRADA)
       case 'proibido': return reply.code(403).send(RESPONSAVEL_PROIBIDO)
       case 'responsavel_invalido': return reply.code(422).send({ erro: ERROS_REUNIAO.responsavelInvalido, mensagem: 'Pessoa não encontrada ou inativa.' })

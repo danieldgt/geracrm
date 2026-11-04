@@ -80,6 +80,8 @@ export function corpoReuniao(conversaId: string, f: FormReuniao):
 export function mensagemDaFalha(status: number, codigo: string | null): string {
   if (codigo === ERROS_REUNIAO.horarioOcupado || status === 409) return 'Esse horário acabou de ser ocupado. Escolha outro horário.'
   if (codigo === ERROS_REUNIAO.horarioPassado) return 'Esse horário já passou. Escolha outro.'
+  if (codigo === ERROS_REUNIAO.transferenciaProibida) return 'Marcar com outra pessoa passaria o cliente para ela, e só a gestão transfere carteira. Marque com o responsável do cliente.'
+  if (codigo === ERROS_REUNIAO.foraDoExpediente) return 'Esse horário está fora do expediente do número. Escolha um horário livre da grade.'
   if (codigo === ERROS_REUNIAO.responsavelProibido || status === 403) return 'Você não pode marcar com essa pessoa. Escolha o responsável do cliente ou você.'
   if (codigo === 'modulo.desligado') return 'A Agenda foi desligada para a sua empresa.'
   if (status === 404) return 'Esta conversa não está mais disponível para você.'
@@ -89,7 +91,7 @@ export function mensagemDaFalha(status: number, codigo: string | null): string {
 
 /** Depois destas falhas a grade está velha: recarrega os horários e limpa a escolha. */
 export const recarregaHorarios = (status: number, codigo: string | null): boolean =>
-  status === 409 || codigo === ERROS_REUNIAO.horarioOcupado || codigo === ERROS_REUNIAO.horarioPassado
+  status === 409 || codigo === ERROS_REUNIAO.horarioOcupado || codigo === ERROS_REUNIAO.horarioPassado || codigo === ERROS_REUNIAO.foraDoExpediente
 
 /** Texto do aviso de sucesso — diz quando, com quem e se o responsável mudou. */
 export function textoDeSucesso(p: { inicio: string; vendedor: VendedorParaReuniao | undefined; responsavelAlterado: boolean }): string {

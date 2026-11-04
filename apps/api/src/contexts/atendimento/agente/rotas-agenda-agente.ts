@@ -7,6 +7,7 @@ import { exigirModulo } from '../../plataforma/modulos.js'
 import { auditar } from '../../plataforma/auditoria.js'
 import { atorDaRequisicao, garantirUsuarioId } from '../rotas-fila.js'
 import { travarPlaybookDoTenant } from './playbook/repositorio.js'
+import { lerTemplate } from './ativas.js'
 
 /**
  * "O AGENTE PODE MARCAR REUNIÕES" — a chave POR NÚMERO da raia C3 (0137), mais os templates
@@ -72,8 +73,12 @@ export async function rotasAgendaAgente(app: FastifyInstance): Promise<void> {
         if (!canal) return 'canal' as const
         for (const [campo, id] of [['templateLembreteId', novo.templateLembreteId], ['templateReagendarId', novo.templateReagendarId]] as const) {
           if (!id) continue
-          const [t] = await tx`SELECT 1 FROM template WHERE tenant_id = tenant_atual() AND id = ${id}`
-          if (!t) return { campo }
+          // B4: só template APROVADO e compatível (no máximo {{1}} = primeiro nome) — o mesmo que o envio aceita.
+          const [existe] = await tx`SELECT 1 FROM template WHERE tenant_id = tenant_atual() AND id = ${id}`
+          const t = existe ? await lerTemplate(tx, id) : null
+          if (!t) return { campo, mensagem: 'Template não encontrado.' }
+          if (t.status !== 'APPROVED') return { campo, mensagem: 'Este template ainda não está aprovado pela Meta.' }
+          if (!t.compativel) return { campo, mensagem: 'O template usa variável além do primeiro nome ({{1}}); o aviso não tem como preenchê-la.' }
         }
         const [antes] = await tx<Linha[]>`
           SELECT agenda_reunioes AS reunioes, agenda_template_lembrete AS lembrete, agenda_template_reagendar AS reagendar, modo
@@ -93,7 +98,7 @@ export async function rotasAgendaAgente(app: FastifyInstance): Promise<void> {
         return 'ok' as const
       })
       if (r === 'canal') return reply.code(404).send({ erro: 'canal.nao_encontrado' })
-      if (r !== 'ok') return reply.code(422).send({ erro: 'agenda.template_invalido', mensagem: 'Template não encontrado.', campos: [r.campo] })
+      if (r !== 'ok') return reply.code(422).send({ erro: 'agenda.template_invalido', mensagem: r.mensagem, campos: { [r.campo]: r.mensagem } })
       return reply.send({ ok: true, ...novo })
     },
   )

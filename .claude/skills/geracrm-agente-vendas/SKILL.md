@@ -140,14 +140,18 @@ número/depoimento, consentimento (obrigatório no depoimento) e **aprovação d
 A busca comum NUNCA devolve prova social; só `consultar_prova_social` (aprovado, publicado, apurado há
 ≤ 365 dias), e o número citado conta como fonte só se a ferramenta rodou no mesmo turno.
 
-**Reunião** (C3, 0137): `agendar_reuniao` (`ferramentas/agenda.ts`, porta `AgendaPorta`, real em
+**Reunião** (C3, 0137/0147): `agendar_reuniao` (`ferramentas/agenda.ts`, porta `AgendaPorta`, real em
 `agenda-ligacao.ts` sobre `crm/reuniao.ts` — o MESMO caso de uso do botão "Agendar reunião" do inbox).
 Só entra no menu com módulo Agenda + chave do número `agente_config.agenda_reunioes` (padrão desligada) +
-número em assistido/autônomo (`agendaNoTurno`, decidido em `ligacoesPadrao`). Propor e confirmar:
-`ofertar` grava `reuniao_oferta` (só no autônomo); `confirmar` só cria se o cliente escolheu a opção numa
-mensagem DEPOIS da oferta (`interpretarEscolhaDeHorario`, conservador). Efeito real só no modo efetivo
-autônomo (`efeitoDaAgenda`); o resto responde seco. Lembretes H-24/H-2 e no-show (1 convite → handoff
-`reuniao_nao_compareceu`) no worker `workers/reuniao-avisos.ts`, idempotentes por `evento_agenda_aviso`.
+número em assistido/autônomo (`agendaNoTurno`, decidido em `ligacoesPadrao`). Propor e confirmar: `ofertar`
+devolve o `texto` das opções montado pelo código (uma oferta por turno) e grava `reuniao_oferta` (só no
+autônomo), que só vira confirmável no pós-envio, se as linhas chegaram ao gateway; `confirmar` só cria se a
+mensagem MAIS RECENTE do cliente escolheu aquela opção (`interpretarEscolhaDeHorario`, conservador: hora
+decide, ordinal só como frase inteira). Etapa `pipeline/reuniao.ts`: hora/data/dia e "marcado" só com fonte
+no turno (registro `ferramentas/agenda-turno.ts`), senão barra. O agente NUNCA transfere carteira. Efeito
+real só no autônomo (`efeitoDaAgenda`). Worker `workers/reuniao-avisos.ts`: H-24/H-2 no período útil
+(expediente ∩ 08–20), desfecho pendente avisa o VENDEDOR, convite para remarcar só com "não compareceu"
+marcado → handoff `reuniao_nao_compareceu`; idempotente por `evento_agenda_aviso`.
 
 ## Playground e auditoria
 

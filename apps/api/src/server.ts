@@ -278,7 +278,7 @@ if (process.env.DATABASE_ADMIN_URL) {
     // C3: lembretes H-24/H-2 e no-show ao CLIENTE das reuniões marcadas pela conversa.
     ['reuniaoAvisos', INTERVALO_AVISOS_REUNIAO_MS, async () => {
       const r = await processarAvisosDeReuniao(donoAquisicao as never, new Date())
-      return { processadas: r.lembretes + r.noShows + r.handoffs + r.reagendados, ...r }
+      return { processadas: r.lembretes + r.desfechos + r.noShows + r.handoffs + r.reagendados, ...r }
     }],
   ] as const) {
     let rodando = false

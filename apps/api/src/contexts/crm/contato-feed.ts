@@ -76,7 +76,9 @@ export function textoDoItem(l: Pick<LinhaFeed, 'tipo' | 'a' | 'b' | 'c'>): strin
     case 'arquivo': return l.a === 'contato.arquivo_removido' ? `Arquivo removido: ${l.b ?? ''}` : `Arquivo anexado: ${l.b ?? ''}`
     // C3: reunião marcada pela conversa/agente; se outra pessoa assumiu, ela virou a responsável.
     case 'reuniao':
-      return `Reunião agendada com ${l.a ?? '—'}${l.b ? ` para ${l.b}` : ''}${l.c ? `. ${l.a ?? 'Ela'} passou a ser responsável pelo contato` : ''}`
+      return `Reunião agendada com ${l.a ?? '—'}${l.b ? ` para ${l.b}` : ''}${
+        l.c === 'assumiu' ? `. ${l.a ?? 'Ela'} passou a ser responsável pelo contato`
+          : l.c?.startsWith('mantido:') ? `. O responsável pelo contato continua ${l.c.slice(8)}` : ''}`
     // ⚠️ Pendente = telefone já cadastrado preenchido por um anônimo: nada foi aplicado à ficha.
     case 'formulario':
       if (l.b === 'pendente') return `Resposta não verificada do formulário "${l.a ?? ''}" — confirme antes de usar`
@@ -199,7 +201,8 @@ export async function lerFeedDoContato(
         ORDER BY a.criado_em DESC, a.id DESC LIMIT ${n})
       UNION ALL
       (SELECT 'reuniao:' || a.id, 'reuniao', a.criado_em, a.ator_id, u.nome, 'evento_agenda', a.dados->>'eventoId',
-              a.dados->>'responsavel', a.dados->>'quando', CASE WHEN (a.dados->>'assumiu')::boolean THEN 'assumiu' END
+              a.dados->>'responsavel', a.dados->>'quando',
+              CASE WHEN (a.dados->>'assumiu')::boolean THEN 'assumiu' WHEN a.dados->>'mantido' IS NOT NULL THEN 'mantido:' || (a.dados->>'mantido') END
          FROM auditoria a LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.ator_id
         WHERE a.tenant_id = tenant_atual() AND a.entidade = 'contato' AND a.entidade_id = ${contatoId}
           AND a.acao = 'agenda.reuniao_agendada'

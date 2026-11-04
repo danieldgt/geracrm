@@ -27,6 +27,7 @@ const U = {
   vb: 'c3e00000-0005-4000-8000-000000000004',
   vy: 'c3e00000-0005-4000-8000-000000000005',
   bx: 'c3e00000-0005-4000-8000-000000000006',
+  at: 'c3e00000-0005-4000-8000-000000000007',
 }
 const CA = 'c3e00000-0006-4000-8000-000000000001'
 const CB = 'c3e00000-0006-4000-8000-000000000002'
@@ -89,7 +90,7 @@ beforeAll(async () => {
   }
   const vinc = (u: string, f: string | null, p: string) => dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${u}, ${f}, ${p})`
   await vinc(U.adm, null, 'admin'); await vinc(U.gx, FX, 'gestor')
-  await vinc(U.va, FX, 'vendedor'); await vinc(U.vb, FX, 'vendedor'); await vinc(U.vy, FY, 'vendedor')
+  await vinc(U.va, FX, 'vendedor'); await vinc(U.vb, FX, 'vendedor'); await vinc(U.vy, FY, 'vendedor'); await vinc(U.at, FX, 'atendente')
 
   await dono`INSERT INTO contato (tenant_id, id, nome) VALUES (${A}, ${CA}, 'Cliente Alfa'), (${A}, ${CB}, 'Cliente Beta'), (${B}, ${CT2}, 'Cliente de B')`
   await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado) VALUES
@@ -121,6 +122,7 @@ beforeEach(async () => {
   await dono`DELETE FROM auditoria WHERE tenant_id IN (${A}, ${B})`
   await dono`DELETE FROM notificacao WHERE tenant_id IN (${A}, ${B})`
   await dono`DELETE FROM carteira_atribuicao WHERE tenant_id IN (${A}, ${B})`
+  await dono`UPDATE usuario SET ausente = false WHERE tenant_id = ${A}`
   await dono`INSERT INTO carteira_atribuicao (tenant_id, id, contato_id, usuario_id) VALUES
     (${A}, gen_random_uuid(), ${CA}, ${U.va}), (${A}, gen_random_uuid(), ${CB}, ${U.vb})`
 })
@@ -187,6 +189,14 @@ describe('Reunião — vendedores na ordem', () => {
   it('vendedor atendendo cliente de outro: o dono do cliente primeiro, depois ele', async () => {
     const r = await pedir('va', 'GET', `/v1/agenda/reuniao/vendedores?conversaId=${CVB}`)
     expect((r.corpo['itens'] as { usuarioId: string }[]).map((i) => i.usuarioId)).toEqual([U.vb, U.va])
+  })
+
+  it('M3: dono AUSENTE sai da lista — cai para a filial', async () => {
+    await dono`UPDATE usuario SET ausente = true WHERE tenant_id = ${A} AND id = ${U.va}`
+    const r = await pedir('gx', 'GET', `/v1/agenda/reuniao/vendedores?conversaId=${CVA}`)
+    const itens = r.corpo['itens'] as { usuarioId: string; responsavelDoContato: boolean }[]
+    expect(itens.map((i) => i.usuarioId)).toEqual([U.gx, U.vb])
+    expect(itens.some((i) => i.responsavelDoContato)).toBe(false)
   })
 
   it('⚠️ conversa de outro tenant responde como inexistente', async () => {
@@ -276,6 +286,42 @@ describe('Reunião — marcar pela conversa', () => {
     expect(r.corpo).toMatchObject({ erro: 'agenda.responsavel_proibido' })
     expect((await marcar('vy', { usuarioId: U.vy, inicio: as('10:00') })).status).toBe(404)
     expect((await marcar('adm', { usuarioId: U.va, inicio: as('10:00'), conversaId: CV_T2 })).status).toBe(404)
+  })
+
+  it('⚠️ M2: quem não é gestão não transfere carteira marcando com outra pessoa; com o dono pode', async () => {
+    // VA atende Beta (dono VB): marcar consigo mesma tiraria o cliente de VB.
+    const r = await marcar('va', { usuarioId: U.va, inicio: as('10:00'), conversaId: CVB })
+    expect(r.status).toBe(403)
+    expect(r.corpo).toMatchObject({ erro: 'agenda.transferencia_proibida' })
+    const ok = await marcar('va', { usuarioId: U.vb, inicio: as('10:00'), conversaId: CVB })
+    expect(ok.status).toBe(201)
+    expect(ok.corpo).toMatchObject({ responsavelAlterado: false })
+    expect(await donoAtual(CB)).toBe(U.vb)
+  })
+
+  it('M2: contato sem dono — quem recebe a reunião vira o dono', async () => {
+    await dono`DELETE FROM carteira_atribuicao WHERE tenant_id = ${A} AND contato_id = ${CB}`
+    const r = await marcar('va', { usuarioId: U.va, inicio: as('10:00'), conversaId: CVB })
+    expect(r.status).toBe(201)
+    expect(r.corpo).toMatchObject({ responsavelAlterado: true })
+    expect(await donoAtual(CB)).toBe(U.va)
+  })
+
+  it('M2: atendente nunca vira dono — a reunião fica com ele e o feed diz que o responsável continua', async () => {
+    const r = await marcar('adm', { usuarioId: U.at, inicio: as('10:00') })
+    expect(r.status).toBe(201)
+    expect(r.corpo).toMatchObject({ responsavelAlterado: false })
+    expect(await donoAtual(CA)).toBe(U.va)
+    const feed = await pedir('adm', 'GET', `/v1/contatos/${CA}/feed`)
+    const item = (feed.corpo['itens'] as { tipo: string; texto: string }[]).find((i) => i.tipo === 'reuniao')
+    expect(item?.texto).toMatch(/O responsável pelo contato continua Pessoa va$/)
+  })
+
+  it('M4: horário fora do período útil do número (expediente ∩ 08–20) é 422', async () => {
+    const r = await marcar('adm', { usuarioId: U.va, inicio: as('12:00') })
+    expect(r.status).toBe(422)
+    expect(r.corpo).toMatchObject({ erro: 'agenda.fora_do_expediente' })
+    expect((await marcar('adm', { usuarioId: U.va, inicio: as('10:45'), duracaoMin: 30 })).status).toBe(422) // termina 11:15
   })
 
   it('horário que já passou e corpo inválido são 422', async () => {

@@ -53,13 +53,14 @@ export async function posVendaEnviadasHoje(sql: Sql, canalId: string, desde: Dat
 
 /**
  * Avisos de reunião (C3: lembrete e convite para remarcar) enviados hoje como TEXTO por este
- * número: mensagem proativa no não-oficial, consome a mesma cota do aquecimento.
+ * número: mensagem proativa no não-oficial, consome a mesma cota do aquecimento. ⚠️ Conta também o
+ * 'pendente' (reservado, envio em curso): duas passadas não estouram a cota juntas (B7).
  */
 export async function avisosReuniaoEnviadosHoje(sql: Sql, canalId: string, desde: Date): Promise<number> {
   const [r] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM evento_agenda_aviso
      WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}
-       AND via = 'texto' AND estado IN ('enviado', 'aguardando', 'reagendado', 'handoff') AND concluido_em >= ${desde}`
+       AND via = 'texto' AND estado <> 'recusado' AND coalesce(concluido_em, criado_em) >= ${desde}`
   return r?.n ?? 0
 }
 

@@ -44,6 +44,50 @@ export async function lerExpedienteReuniao(tx: Sql, canalId: string | null): Pro
 /** O dia local de hoje no fuso do tenant ("AAAA-MM-DD"). */
 export const diaLocal = (instante: Date, fuso: string): string => partesLocais(instante, fuso).data
 
+function somarDias(dia: string, n: number): string {
+  const [y, m, d] = dia.split('-').map(Number) as [number, number, number]
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10)
+}
+
+/**
+ * O PERÍODO ÚTIL de um dia local: expediente do número ∩ 08–20 (`faixaDeReuniao`), sem feriado.
+ * É a mesma régua da grade de horários (M6) e da hora em que se fala com o cliente (M4).
+ */
+export function periodoUtil(exp: ExpedienteReuniao, dia: string): { ini: Date; fim: Date } | null {
+  if (ehFeriado(exp.feriados, dia)) return null
+  const diaIso = partesLocais(instanteLocal(dia, '12:00', exp.fuso), exp.fuso).diaIso
+  const f = faixaDeReuniao(exp.horario, diaIso)
+  return f ? { ini: instanteLocal(dia, f.de, exp.fuso), fim: instanteLocal(dia, f.ate, exp.fuso) } : null
+}
+
+/** O instante cai no período útil do seu dia local? */
+export function noPeriodoUtil(exp: ExpedienteReuniao, instante: Date): boolean {
+  const p = periodoUtil(exp, diaLocal(instante, exp.fuso))
+  return !!p && instante.getTime() >= p.ini.getTime() && instante.getTime() < p.fim.getTime()
+}
+
+/** [inicio, fim) cabe inteiro no período útil do dia do início? (o POST do botão recusa fora da grade) */
+export function cabeNoPeriodoUtil(exp: ExpedienteReuniao, inicio: Date, fim: Date): boolean {
+  const p = periodoUtil(exp, diaLocal(inicio, exp.fuso))
+  return !!p && inicio.getTime() >= p.ini.getTime() && fim.getTime() <= p.fim.getTime()
+}
+
+/**
+ * O ÚLTIMO momento útil até `instante` (inclusive), procurando até 7 dias para trás: o próprio
+ * instante se for útil; senão o último minuto do período útil anterior. É o ponto do H-24 — o de
+ * segunda 10h, com domingo fechado, adianta para o fim do expediente de sexta (ou sábado).
+ */
+export function ultimoMomentoUtilAte(exp: ExpedienteReuniao, instante: Date): Date | null {
+  const hoje = diaLocal(instante, exp.fuso)
+  for (let n = 0; n <= 7; n++) {
+    const p = periodoUtil(exp, somarDias(hoje, -n))
+    if (!p) continue
+    if (instante.getTime() >= p.fim.getTime()) return new Date(p.fim.getTime() - 60_000)
+    if (instante.getTime() >= p.ini.getTime()) return instante
+  }
+  return null
+}
+
 /**
  * Horários LIVRES de uma pessoa num dia: a grade do expediente menos os eventos AGENDADOS dela,
  * sem o que já passou (nem o que começa em menos de `ANTECEDENCIA_MIN_REUNIAO`).
@@ -73,10 +117,14 @@ export async function horariosLivresDoDia(
   return { ...base, fechado: false, horarios }
 }
 
-/** O dono VIGENTE (ativo) da carteira do contato, ou null. */
-export async function donoDoContato(tx: Sql, contatoId: string): Promise<{ id: string; nome: string } | null> {
-  const [d] = await tx<{ id: string; nome: string }[]>`
-    SELECT u.id, u.nome FROM carteira_atribuicao ca
+/**
+ * O dono VIGENTE (ativo) da carteira do contato, ou null. `ausente` diz se ele está fora agora:
+ * quem OFERTA horário pula o ausente (M3, cai para a filial); quem decide CARTEIRA não pula —
+ * ausência não solta o cliente.
+ */
+export async function donoDoContato(tx: Sql, contatoId: string): Promise<{ id: string; nome: string; ausente: boolean } | null> {
+  const [d] = await tx<{ id: string; nome: string; ausente: boolean }[]>`
+    SELECT u.id, u.nome, coalesce(u.ausente, false) AS ausente FROM carteira_atribuicao ca
       JOIN usuario u ON u.tenant_id = ca.tenant_id AND u.id = ca.usuario_id
      WHERE ca.tenant_id = tenant_atual() AND ca.contato_id = ${contatoId} AND ca.ate IS NULL AND u.ativo`
   return d ?? null
@@ -96,20 +144,22 @@ const VENDEDORES_MAX = 20
 export async function vendedoresParaReuniao(
   tx: Sql, p: { contatoId: string; canalId: string | null; eu?: { id: string; nome: string } | null },
 ): Promise<{ itens: VendedorParaReuniao[]; truncado: boolean }> {
-  const dono = await donoDoContato(tx, p.contatoId)
+  const donoReal = await donoDoContato(tx, p.contatoId)
+  // M3: dono ausente não recebe reunião agora — a lista cai para a filial dele.
+  const dono = donoReal && !donoReal.ausente ? donoReal : null
   const [f] = await tx<{ filiais: string[] }[]>`
     SELECT coalesce(array_agg(DISTINCT x) FILTER (WHERE x IS NOT NULL), '{}') AS filiais FROM (
       SELECT c.filial_id AS x FROM contato c WHERE c.tenant_id = tenant_atual() AND c.id = ${p.contatoId}
       UNION ALL
-      SELECT uf.filial_id FROM usuario_filial uf WHERE uf.tenant_id = tenant_atual() AND uf.usuario_id = ${dono?.id ?? null}::uuid
+      SELECT uf.filial_id FROM usuario_filial uf WHERE uf.tenant_id = tenant_atual() AND uf.usuario_id = ${donoReal?.id ?? null}::uuid
       UNION ALL
       SELECT cc.filial_id FROM canal_conectado cc WHERE cc.tenant_id = tenant_atual() AND cc.id = ${p.canalId}::uuid
     ) s`
   const filiais = f?.filiais ?? []
   const outros = await tx<{ id: string; nome: string }[]>`
     SELECT u.id, u.nome FROM usuario u
-     WHERE u.tenant_id = tenant_atual() AND u.ativo AND ${naoEhLinhaDeStaff(tx, 'u')}
-       AND u.id IS DISTINCT FROM ${dono?.id ?? null}::uuid
+     WHERE u.tenant_id = tenant_atual() AND u.ativo AND NOT coalesce(u.ausente, false) AND ${naoEhLinhaDeStaff(tx, 'u')}
+       AND u.id IS DISTINCT FROM ${donoReal?.id ?? null}::uuid
        AND EXISTS (SELECT 1 FROM usuario_filial uf
                     WHERE uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id AND uf.papel = 'vendedor'
                       AND ${filiais.length > 0 ? tx`uf.filial_id = ANY(${filiais}::uuid[])` : tx`uf.filial_id IS NULL`})
@@ -136,15 +186,18 @@ export type ResultadoAgendar =
  *   2. ⚠️ confere conflito SOB TRAVA por responsável (`acharConflito`): duas marcações
  *      simultâneas no mesmo horário não passam as duas — a segunda recebe `conflito` (409);
  *   3. grava o evento com a conversa de origem (é por ela que o cliente recebe os avisos);
- *   4. se quem recebe NÃO é o dono atual, ele vira o responsável do contato
- *      (`transferir_carteira`, histórico sem instante sem dono);
+ *   4. se quem recebe NÃO é o dono atual E quem chama permitiu (`transferirCarteira`: só o botão,
+ *      com papel de gestão ou contato sem dono — M2), ele vira o responsável do contato
+ *      (`transferir_carteira`). ⚠️ O AGENTE NUNCA transfere carteira (decisão do orquestrador): a
+ *      reunião fica com quem a recebe e o feed diz que o responsável continua o mesmo. Atendente
+ *      sem papel de venda também nunca vira dono;
  *   5. registra no feed do contato (auditoria `agenda.reuniao_agendada`) e avisa o vendedor
  *      pelo sino (outbox sem conteúdo, ADR-007).
  */
 export async function agendarReuniao(tx: Sql, p: {
   conversaId: string; usuarioId: string; inicio: Date; fim: Date; titulo: string
   modalidade: ModalidadeEvento; local: string | null; link: string | null; descricao: string | null
-  criadoPor: string | null; origem: 'conversa' | 'agente'; agora: Date
+  criadoPor: string | null; origem: 'conversa' | 'agente'; agora: Date; transferirCarteira: boolean
 }): Promise<ResultadoAgendar> {
   if (p.inicio.getTime() < p.agora.getTime()) return { tipo: 'passado' }
   const [cv] = await tx<{ contato_id: string; canal_id: string; contato: string }[]>`
@@ -171,7 +224,11 @@ export async function agendarReuniao(tx: Sql, p: {
   const quando = `${local.data.slice(8, 10)}/${local.data.slice(5, 7)} às ${local.hora}`
 
   const dono = await donoDoContato(tx, cv.contato_id)
-  const assumiu = dono?.id !== p.usuarioId
+  const [vende] = await tx`
+    SELECT 1 FROM usuario_filial WHERE tenant_id = tenant_atual() AND usuario_id = ${p.usuarioId}
+       AND papel IN ('vendedor', 'gestor', 'supervisor', 'admin') LIMIT 1`
+  const assumiu = p.transferirCarteira && p.origem !== 'agente' && !!vende && dono?.id !== p.usuarioId
+  const mantido = !assumiu && dono && dono.id !== p.usuarioId ? dono.nome : null
   if (assumiu) {
     await tx`SELECT transferir_carteira(tenant_atual(), ${cv.contato_id}, ${p.usuarioId}, ${p.criadoPor}::uuid,
                                         ${p.origem === 'agente' ? 'automatica' : 'manual'}, 'Reunião agendada')`
@@ -180,24 +237,30 @@ export async function agendarReuniao(tx: Sql, p: {
     atorId: p.criadoPor, acao: 'agenda.reuniao_agendada', entidade: 'contato', entidadeId: cv.contato_id,
     dados: {
       eventoId, inicio: p.inicio.toISOString(), quando, responsavelId: p.usuarioId, responsavel: u.nome,
-      assumiu, anterior: dono?.nome ?? null, origem: p.origem,
+      assumiu, anterior: dono?.nome ?? null, mantido, origem: p.origem,
     },
   })
 
   if (p.usuarioId !== p.criadoPor) {
-    // Preferência do usuário (D4): sem canal ligado, nem grava; app desligado = só push, sem evento no outbox.
-    const c = (await canaisDosUsuarios(tx, [p.usuarioId], 'agenda.reuniao')).get(p.usuarioId)
-    if (c && algumCanal(c)) {
-      await tx`
-        INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, no_app, email_pendente)
-        VALUES (tenant_atual(), ${randomUUID()}, ${p.usuarioId}, 'agenda.reuniao', ${`Reunião marcada com ${cv.contato} — ${quando}`}, ${c.app}, ${c.email})`
-      if (c.app) {
-        await tx`
-          INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
-          VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${p.usuarioId},
-                  ${JSON.stringify({ usuarioId: p.usuarioId })}::text::jsonb)`
-      }
-    }
+    await avisarUsuario(tx, p.usuarioId, 'agenda.reuniao', `Reunião marcada com ${cv.contato} — ${quando}`)
   }
   return { tipo: 'ok', eventoId, responsavelAlterado: assumiu }
+}
+
+/**
+ * Sino de UMA pessoa, respeitando a preferência dela (D4/B3): sem canal ligado nem grava; app
+ * desligado = só push, sem evento no outbox. O evento de tempo real não carrega conteúdo (ADR-007).
+ */
+export async function avisarUsuario(tx: Sql, usuarioId: string, tipo: string, titulo: string): Promise<boolean> {
+  const c = (await canaisDosUsuarios(tx, [usuarioId], tipo)).get(usuarioId)
+  if (!c || !algumCanal(c)) return false
+  await tx`
+    INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, no_app, email_pendente)
+    VALUES (tenant_atual(), ${randomUUID()}, ${usuarioId}, ${tipo}, ${titulo.slice(0, 200)}, ${c.app}, ${c.email})`
+  if (c.app) {
+    await tx`
+      INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+      VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${usuarioId}, ${JSON.stringify({ usuarioId })}::text::jsonb)`
+  }
+  return true
 }

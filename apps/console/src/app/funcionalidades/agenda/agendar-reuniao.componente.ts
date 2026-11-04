@@ -40,7 +40,7 @@ import {
           <ui-grade-form>
             <ui-select rotulo="Com quem" [largo]="true" [obrigatorio]="true" [opcoes]="vendedores()" placeholder="Escolha a pessoa"
               [valor]="usuarioId()" (valorChange)="mudarPessoa($event)" [erro]="erros().usuarioId ?? null"
-              dica="Quem não é o responsável passa a ser, se a reunião for com ele." />
+              dica="Marcar com outra pessoa passa o cliente para ela — só a gestão pode." />
             <ui-campo rotulo="Dia" tipo="date" [obrigatorio]="true" [valor]="dia()" (valorChange)="mudarDia($event)" />
             <ui-select rotulo="Duração" [opcoes]="duracoes" [valor]="duracao()" (valorChange)="mudarDuracao($event)" />
           </ui-grade-form>

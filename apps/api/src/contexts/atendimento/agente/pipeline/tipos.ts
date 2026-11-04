@@ -262,7 +262,11 @@ export interface PipelineDoTurno {
   readonly devolucao: EtapaPreLlm
   /** Roteiro do pós-venda aberto na sessão (G3): depois da devolução, só acrescenta instrução. */
   readonly posVenda: EtapaPreLlm
+  /** C3: só registra o efeito pós-envio da agenda (oferta enviada, evento sem confirmação). Última pré-modelo. */
+  readonly reuniaoPosEnvio: EtapaPreLlm
   readonly numeros: EtapaPosResposta
+  /** C3: horário/marcação de reunião só com fonte no turno (depois dos números). */
+  readonly reuniao: EtapaPosResposta
   readonly filtro: EtapaPosResposta
   readonly pergunta: EtapaPosResposta
   readonly qualidade: EtapaPosResposta
