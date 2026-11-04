@@ -282,7 +282,7 @@ export async function rotasDevolucao(app: FastifyInstance): Promise<void> {
                  SET atendente_id = NULL, estado = 'na_fila', assumido_em = NULL, versao = versao + 1,
                      sla_inicio_em = NULL, sla_vence_em = NULL, reatribuicao_vence_em = NULL, aviso_espera_previsto_em = NULL,
                      sla_estourado_em = NULL, reatribuicao_liberada_em = NULL, aviso_espera_em = NULL,
-                     aviso_espera_resultado = NULL, sla_respondido_em = NULL, responsavel_id = NULL, responsavel_origem = NULL
+                     aviso_espera_resultado = NULL, sla_respondido_em = NULL, responsavel_id = NULL, responsavel_origem = NULL, responsavel_filial_id = NULL
                WHERE tenant_id = tenant_atual() AND id = ${aberto.id} AND estado <> 'encerrado'
                  AND atendente_id IS NOT DISTINCT FROM ${aberto.atendente_id}::uuid
               RETURNING id`
