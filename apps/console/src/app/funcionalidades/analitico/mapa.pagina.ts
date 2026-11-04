@@ -1,6 +1,10 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import {
+  CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, IconeComponente, TabelaComponente,
+  type ColunaTabela, type LinhaTabela,
+} from '../../compartilhado/ui/index.js'
 
 interface Mapa {
   readonly total: number; readonly semEndereco: number
@@ -12,101 +16,115 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 /**
  * Mapa de Clientes — distribuição geográfica pelo ENDEREÇO DECLARADO (sem
  * geocoding). ⚠️ Honesto: não finge um mapa com pino; mostra a base por UF e
- * cidade e nomeia o "sem endereço". Segue geracrm-layout-ui.
+ * cidade e nomeia o "sem endereço". Padrão Lista de leitura: duas tabelas com
+ * barra de proporção na célula.
  */
 @Component({
   selector: 'app-mapa',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, IconeComponente, TabelaComponente],
   template: `
-    <header class="cabecalho">
-      <h1 class="txt-titulo">Mapa de Clientes</h1>
-      <p class="sub">Onde sua base está, pelo endereço declarado.</p>
-    </header>
+    <ui-cabecalho-tela titulo="Mapa de Clientes" subtitulo="Onde sua base está, pelo endereço declarado." />
 
-    @switch (estado()) {
-      @case ('carregando') { <div class="grade"><div class="bloco esq"></div></div> }
-      @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
-      @case ('pronto') {
-        @if (d(); as m) {
-          @if (m.total === 0) {
-            <div class="bloco"><h2 class="txt-secao">Base vazia</h2><p>Cadastre clientes com endereço para ver a distribuição.</p></div>
-          } @else {
-            <p class="nota">📍 Distribuição por <strong>endereço declarado</strong> — ainda sem mapa geográfico (geocoding). Quando o endereço virar coordenada, isto vira o mapa com pinos.</p>
+    <div class="corpo">
+      @switch (estado()) {
+        @case ('carregando') {
+          <div class="grade" aria-busy="true"><ui-esqueleto altura="200px" /></div>
+        }
+        @case ('sem_permissao') {
+          <ui-estado tipo="sem-permissao" titulo="Sem acesso ao mapa de clientes" descricao="Peça a um administrador da sua empresa para liberar este acesso." />
+        }
+        @case ('erro') {
+          <ui-estado tipo="erro" titulo="Não foi possível carregar o mapa" descricao="Verifique a conexão e tente de novo.">
+            <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+          </ui-estado>
+        }
+        @case ('pronto') {
+          @if (d(); as m) {
+            @if (m.total === 0) {
+              <ui-estado titulo="Base sem endereços ainda" descricao="Cadastre clientes com endereço para ver a distribuição." />
+            } @else {
+              <p class="nota">
+                <ui-icone nome="map-pin" />
+                <span>Distribuição por <strong>endereço declarado</strong> — ainda sem mapa geográfico (geocoding). Quando o endereço virar coordenada, isto vira o mapa com pinos.</span>
+              </p>
 
-            <div class="grade">
-              <section class="painel">
-                <h2 class="txt-secao">Por estado (UF)</h2>
-                @if (m.porEstado.length === 0) { <p class="vazio">Nenhum contato com UF.</p> }
-                @else {
-                  <ul class="lista">
-                    @for (e of m.porEstado; track e.uf) {
-                      <li>
-                        <span class="uf">{{ e.uf }}</span>
-                        <span class="barra"><span class="fill" [style.width.%]="pct(e.contatos, maxEstado())"></span></span>
+              <div class="grade">
+                <section class="painel" aria-labelledby="titulo-uf">
+                  <h2 class="txt-secao" id="titulo-uf">Por estado (UF)</h2>
+                  <ui-tabela [colunas]="colunasUf" [linhas]="linhasUf()" [chaveLinha]="chaveUf">
+                    <ng-template uiCelula="contatos" let-e>
+                      <span class="barra-val">
+                        <span class="barra" aria-hidden="true"><span class="fill" [style.width.%]="pct(e.contatos, maxEstado())"></span></span>
                         <span class="val txt-dados">{{ e.contatos }}</span>
-                      </li>
-                    }
-                  </ul>
-                }
-              </section>
+                      </span>
+                    </ng-template>
+                    <div uiVazio><ui-estado titulo="Nenhum contato com UF" descricao="O endereço declarado ainda não tem estado." /></div>
+                  </ui-tabela>
+                </section>
 
-              <section class="painel">
-                <h2 class="txt-secao">Top cidades</h2>
-                @if (m.porCidade.length === 0) { <p class="vazio">Nenhum contato com cidade.</p> }
-                @else {
-                  <ul class="lista">
-                    @for (c of m.porCidade; track c.cidade; let i = $index) {
-                      <li>
-                        <span class="pos">{{ i + 1 }}</span>
-                        <span class="cid encolhe">{{ c.cidade }}@if (c.uf) { <span class="cuf">/{{ c.uf }}</span> }</span>
-                        <span class="barra"><span class="fill" [style.width.%]="pct(c.contatos, maxCidade())"></span></span>
+                <section class="painel" aria-labelledby="titulo-cidades">
+                  <h2 class="txt-secao" id="titulo-cidades">Top cidades</h2>
+                  <ui-tabela [colunas]="colunasCidade" [linhas]="linhasCidade()" [chaveLinha]="chaveCidade">
+                    <ng-template uiCelula="contatos" let-c>
+                      <span class="barra-val">
+                        <span class="barra" aria-hidden="true"><span class="fill" [style.width.%]="pct(c.contatos, maxCidade())"></span></span>
                         <span class="val txt-dados">{{ c.contatos }}</span>
-                      </li>
-                    }
-                  </ul>
-                }
-              </section>
-            </div>
+                      </span>
+                    </ng-template>
+                    <div uiVazio><ui-estado titulo="Nenhum contato com cidade" descricao="O endereço declarado ainda não tem cidade." /></div>
+                  </ui-tabela>
+                </section>
+              </div>
 
-            @if (m.semEndereco > 0) {
-              <p class="sem">⚠️ {{ m.semEndereco }} de {{ m.total }} contatos estão <strong>sem endereço</strong> — não entram na distribuição. Complete o cadastro para o mapa ficar fiel.</p>
+              @if (m.semEndereco > 0) {
+                <p class="sem">
+                  <ui-icone nome="alert-triangle" />
+                  <span>{{ m.semEndereco }} de {{ m.total }} contatos estão <strong>sem endereço</strong> — não entram na distribuição. Complete o cadastro para o mapa ficar fiel.</span>
+                </p>
+              }
             }
           }
         }
       }
-    }
+    </div>
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { margin-bottom: var(--espacamento-4); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .nota { padding: var(--espacamento-3) var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie); color: var(--texto-secundario); font-size: 13px; margin: 0 0 var(--espacamento-4); line-height: 1.5; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
-    .esq { height: 200px; }
-    .grade { display: grid; grid-template-columns: 1fr 1fr; gap: var(--espacamento-4); align-items: start; }
-    @media (max-width: 640px) { .grade { grid-template-columns: 1fr; } }
+    .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-3); min-width: 0; }
+    .nota, .sem { display: flex; align-items: flex-start; gap: var(--espacamento-2); margin: 0; padding: var(--espacamento-3) var(--espacamento-4);
+      border: 1px solid var(--borda); border-radius: var(--raio-painel); font-size: 13px; line-height: 1.5; }
+    .nota { background: var(--superficie); color: var(--texto-secundario); }
+    .sem { background: var(--atencao-suave); color: var(--texto); }
+    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: var(--espacamento-4); align-items: start; min-width: 0; }
     .painel { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); min-width: 0; }
     .painel h2 { margin: 0 0 var(--espacamento-3); }
-    .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }
-    .lista li { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--espacamento-2); }
-    .painel:last-child .lista li { grid-template-columns: 18px 1fr 2fr auto; }
-    .uf { font-weight: 600; color: var(--texto); font-size: 13px; min-width: 28px; }
-    .pos { color: var(--texto-suave); font-size: 12px; text-align: center; }
-    .cid { color: var(--texto); font-size: 13px; }
-    .cuf { color: var(--texto-suave); }
-    .barra { height: 6px; border-radius: var(--raio-completo); background: var(--superficie); overflow: hidden; }
+    .barra-val { display: flex; align-items: center; gap: var(--espacamento-2); min-width: 120px; }
+    .barra { flex: 1; height: 6px; border-radius: var(--raio-completo); background: var(--superficie); overflow: hidden; }
     .fill { display: block; height: 100%; background: var(--acao); }
-    .val { color: var(--texto-secundario); font-size: 12px; }
-    .vazio { color: var(--texto-suave); font-size: 13px; margin: 0; }
-    .sem { margin-top: var(--espacamento-4); padding: var(--espacamento-3) var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--atencao-suave); color: var(--texto); font-size: 13px; line-height: 1.5; }
+    .val { color: var(--texto-secundario); font-size: 12px; min-width: 32px; text-align: right; }
   `,
 })
 export class MapaPagina implements OnInit {
   private readonly http = inject(HttpClient)
   readonly estado = signal<Estado>('carregando')
   readonly d = signal<Mapa | null>(null)
+
+  protected readonly colunasUf: readonly ColunaTabela[] = [
+    { chave: 'uf', rotulo: 'UF', mono: true, largura: '72px' },
+    { chave: 'contatos', rotulo: 'Contatos' },
+  ]
+  protected readonly colunasCidade: readonly ColunaTabela[] = [
+    { chave: 'posicao', rotulo: '#', mono: true, largura: '44px' },
+    { chave: 'cidade', rotulo: 'Cidade' },
+    { chave: 'contatos', rotulo: 'Contatos' },
+  ]
+  protected readonly linhasUf = computed<LinhaTabela[]>(() => (this.d()?.porEstado ?? []) as unknown as LinhaTabela[])
+  protected readonly linhasCidade = computed<LinhaTabela[]>(() => (this.d()?.porCidade ?? []).map((c, i) => ({
+    posicao: i + 1, cidade: c.uf ? `${c.cidade}/${c.uf}` : c.cidade, chaveCidade: `${c.cidade}|${c.uf ?? ''}`, contatos: c.contatos,
+  })))
+  protected readonly chaveUf = (l: LinhaTabela): string => String(l['uf'])
+  protected readonly chaveCidade = (l: LinhaTabela): string => String(l['chaveCidade'])
 
   ngOnInit(): void { void this.carregar() }
   pct(n: number, max: number): number { return max > 0 ? Math.round((n / max) * 100) : 0 }
