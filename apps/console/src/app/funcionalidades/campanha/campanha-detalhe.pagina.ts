@@ -3,7 +3,7 @@ import { Router, RouterLink } from '@angular/router'
 import { ESTADOS_DESTINATARIO, ROTULO_ESTADO_DESTINATARIO, ROTULO_MOTIVO_EXCLUSAO, MOTIVOS_EXCLUSAO, rotuloSegmento, type AcaoCampanha } from '@geracrm/shared'
 import {
   AbasComponente, BadgeComponente, BreadcrumbComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva,
-  ConfirmacaoServico, EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, ModalComponente, PaginacaoComponente,
+  ConfirmacaoServico, EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, ModalComponente, ModalRodapeDiretiva, PaginacaoComponente,
   SelectComponente, StatCardComponente, TabelaComponente, ToastServico, codigoDoErro, corpoDoErro, ehStatus, formatarReais, mensagemDeErro,
   mesclarPagina,
   type Aba, type ColunaTabela, type ItemDefinicao, type ItemTrilha, type LinhaTabela, type OpcaoSelect,
@@ -35,7 +35,7 @@ const OPCOES_ESTADO_DEST: OpcaoSelect[] = [
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterLink, AbasComponente, BadgeComponente, BreadcrumbComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva,
-    EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, ModalComponente, PaginacaoComponente, SelectComponente,
+    EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, ModalComponente, ModalRodapeDiretiva, PaginacaoComponente, SelectComponente,
     StatCardComponente, TabelaComponente,
   ],
   template: `
@@ -240,12 +240,12 @@ const OPCOES_ESTADO_DEST: OpcaoSelect[] = [
           }
         </ul>
       }
-      <div rodape class="contem">
+      <ng-template uiModalRodape>
         <button type="button" class="btn btn--secundario" (click)="fecharTeste()">Fechar</button>
         <button type="button" class="btn btn--primario" [disabled]="enviandoTeste()" (click)="enviarTeste()">
           {{ enviandoTeste() ? 'Enviando…' : 'Enviar teste' }}
         </button>
-      </div>
+      </ng-template>
     </ui-modal>
 
     <ui-modal [aberto]="modalIniciar()" titulo="Iniciar campanha" largura="m" (fechar)="fecharIniciar()">
@@ -254,12 +254,12 @@ const OPCOES_ESTADO_DEST: OpcaoSelect[] = [
         <ui-campo [obrigatorio]="true" [rotulo]="'Digite o nome da campanha para confirmar: ' + (c()?.nome ?? '')" [valor]="digitado()"
           (valorChange)="digitado.set($event)" [erro]="erroIniciarCampo()" autocomplete="off" />
         @if (erroIniciar(); as e) { <p class="erro" role="alert">{{ e }}</p> }
-      <div rodape class="contem">
+      <ng-template uiModalRodape>
           <button type="button" class="btn btn--secundario" (click)="fecharIniciar()">Voltar</button>
           <button type="button" class="btn btn--primario" [disabled]="!confereNome() || iniciando()" (click)="iniciar()">
             {{ iniciando() ? 'Iniciando…' : 'Iniciar campanha' }}
           </button>
-      </div>
+      </ng-template>
     </ui-modal>
   `,
   styles: `
@@ -285,7 +285,6 @@ const OPCOES_ESTADO_DEST: OpcaoSelect[] = [
     @media (max-width: 640px) { .degrau { grid-template-columns: 90px minmax(0, 1fr) 56px; } .degrau-taxa { grid-column: 1 / -1; } }
     .linhas { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--espacamento-2); font-size: 14px; }
     .linhas li { display: flex; justify-content: space-between; align-items: center; gap: var(--espacamento-3); }
-    .contem { display: contents; }
     .filtro { max-width: 260px; }
     .nome { color: var(--texto); font-weight: 500; text-decoration: none; }
     .nome:hover { color: var(--acao); text-decoration: underline; }

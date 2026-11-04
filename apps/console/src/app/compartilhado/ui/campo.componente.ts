@@ -29,7 +29,7 @@ import { aplicarMascaraNoElemento, digitosDaMascara, formatarMascara, type TipoM
                     [attr.aria-required]="aria().ariaRequired" [attr.aria-describedby]="aria().ariaDescribedBy"
                     (input)="digitou($any($event.target).value)" (blur)="aoTocar()"></textarea>
         } @else {
-          <input class="controle" [id]="id" [type]="tipoNativo()" [attr.inputmode]="tipo() === 'dinheiro' ? 'decimal' : null"
+          <input class="controle" [id]="id" [type]="tipoNativo()" [attr.inputmode]="inputmode() ?? (tipo() === 'dinheiro' ? 'decimal' : null)"
                  [placeholder]="placeholder()" [value]="valor()"
                  [disabled]="desabilitadoEfetivo()" [attr.autocomplete]="autocomplete()"
                  [attr.maxlength]="maxlength()" [attr.min]="min()" [attr.max]="max()" [attr.step]="step()"
@@ -64,6 +64,8 @@ export class CampoComponente implements ControlValueAccessor {
   readonly largo = input(false)
   readonly desabilitado = input(false)
   readonly autocomplete = input<string | null>(null)
+  /** Teclado do celular (`numeric`, `decimal`, `tel`, `email`...), repassado ao `<input>`. Em `dinheiro` o padrão é `decimal`. */
+  readonly inputmode = input<string | null>(null)
   /** Máscara opcional (cpf, cnpj, ...): exibe formatado; o CVA recebe só dígitos. */
   readonly mascara = input<TipoMascara | null>(null)
   /** Limites nativos, repassados ao controle. Em `textarea`, `maxlength` também mostra o contador "n/max". */

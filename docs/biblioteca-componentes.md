@@ -1199,6 +1199,7 @@ Forms (ControlValueAccessor). Cobre texto, e-mail, telefone, número, senha, bus
 - `tipo` — `'text' | 'email' | 'tel' | 'number' | 'password' | 'search' | 'date' | 'time' | 'datetime-local' | 'textarea' | 'dinheiro'`. **Não existe `tipo="select"`**: para lista use `ui-select`.
 - `mascara` — `'cpf' | 'cnpj' | 'cpfCnpj' | 'telefone' | 'cep' | null`.
 - `erro` — `string | null`; `dica` — string; `obrigatorio`, `largo`, `desabilitado` — boolean; `autocomplete` — string | null.
+- `inputmode` — `string | null` (`numeric`, `decimal`, `tel`, `email`...): repassado ao `<input>`; em `dinheiro` o padrão é `decimal`.
 - Slot `[acao]` — botão ao lado do controle (ex.: consultar CNPJ).
 - `maxlength` — `number | null`; `min`, `max`, `step` — `string | number | null`. Opcionais, repassados ao controle (`<input>` ou `<textarea>`). Em `tipo="textarea"` com `maxlength`, aparece o contador discreto "n/max" abaixo do campo.
 - Valor no CVA: texto; `tipo="number"` → número; `tipo="dinheiro"` → **centavos inteiros**; com `mascara` → **só dígitos**.
@@ -1341,7 +1342,12 @@ largura útil e a grade reage a ela, não ao viewport.
 - `titulo` — string.
 - `largura` — `'p' | 'm' | 'g'` (420, 640 e 960 px; padrão `'m'`).
 - Output `fechar` — disparado por Esc, clique no véu e no ×. **Quem fecha é o pai**: o modal só some quando `aberto` vira `false`.
-- Conteúdo (default) = corpo. Slot `[rodape]` = botões.
+- Conteúdo (default) = corpo. Slot `[rodape]` = botões (só quando é filho DIRETO do `<ui-modal>`).
+- `<ng-template uiModalRodape>botões</ng-template>` = rodapé por template: funciona em qualquer profundidade, inclusive dentro de `@if`/`@for`.
+
+> ⚠️ **Armadilha: `[rodape]` dentro de `@if` com mais de um nó raiz não projeta no rodapé.** O Angular projeta o
+> bloco inteiro no slot padrão (o corpo), levando o rodapé junto. Antes se contornava com `display: contents`;
+> agora use `<ng-template uiModalRodape>`. O slot `[rodape]` segue valendo para o caso simples.
 
 **Estados:** fechado (não renderiza nada) · aberto · tela inteira abaixo de 720 px (rodapé continua fixo).
 
@@ -1434,7 +1440,7 @@ indeterminado quando a seleção é parcial. Checkbox de linha com `aria-label="
 **O que é:** cartão com busca (lupa), controles projetados e os botões Filtrar e Limpar.
 
 **API:**
-- `placeholder` (`'Buscar'`), `rotuloBusca` (`'Busca'`).
+- `placeholder` (`'Buscar'`), `rotuloBusca` (`'Busca'`), `compacto` (boolean): para colunas estreitas (~300 px), sem Filtrar/Limpar e com o rótulo visualmente oculto (continua lido por leitor de tela).
 - Saídas: `buscar` (string, com debounce de 300 ms; `''` ao limpar), `aplicar` (sem payload; Enter e o botão Filtrar), `limpar`.
 - Controles: conteúdo projetado, sem seletor (`ui-select`, `ui-filtro-periodo` etc.).
 
@@ -1559,8 +1565,8 @@ placeholder, dentro de um `<label>` com o texto "Busca".
 **O que é:** ícone SVG do Lucide, a partir de um mapa local (`icones-lucide.ts`). Substitui emoji na casca e nas ações.
 
 **API:**
-- `nome` — `input.required<string>`, kebab-case: `house`, `bar-chart-3`. Os nomes válidos são as chaves de `ICONES`. Desenhos adicionados nesta rodada (conferidos no `lucide-static` 1.67.0): `pause`, `play`, `flame`, `zap`, `mail`, `bell-off`, `calendar-clock`, `route`, `shuffle`.
-- `tamanho` — `14 | 18` (padrão `18`). Só essas duas medidas da casca.
+- `nome` — `input.required<string>`, kebab-case: `house`, `bar-chart-3`. Os nomes válidos são as chaves de `ICONES`. Desenhos adicionados nesta rodada (conferidos no `lucide-static` 1.67.0): `pause`, `play`, `flame`, `zap`, `mail`, `bell-off`, `calendar-clock`, `route`, `shuffle`; na R2: `inbox`, `lock`, `arrow-up`, `arrow-down`, `smile`, `mic`, `square`.
+- `tamanho` — `14 | 16 | 18 | 24 | 40` (padrão `18`). 40 é a ilustração do `ui-estado`.
 - `rotulo` — string opcional.
 
 **Estados:** nome conhecido → desenho do ícone · nome desconhecido → círculo de reserva (nunca texto cru).
@@ -1571,6 +1577,37 @@ placeholder, dentro de um `<label>` com o texto "Busca".
 > `bypassSecurityTrustHtml`, seguro porque o markup vem só das constantes de `ICONES`. Se algum dia o markup
 > vier de API ou de tenant, esse bypass vira XSS; nesse caso, sanitize antes. Para ícone novo, adicione o
 > miolo ao mapa local (licença ISC citada no arquivo), sem pacote novo.
+
+### 5B.22 `ui-select-multi` — seleção múltipla com chips
+
+**O que é:** o `ui-select-paginado` com chips removíveis. Busca no servidor, por cursor; nunca carrega tudo.
+
+**API:**
+- `carregar` — `input.required<CarregarOpcoes>` (mesmo contrato do select paginado: `(cursor, termo) => { itens, proximoCursor }`).
+- `valor` — `model<readonly string[]>` (ids). CVA: o valor do controle é `string[]`.
+- `opcoesInjetadas` — `OpcaoPaginada[]`: rótulos dos ids já salvos (edição). Sem elas o chip mostra o id.
+- `max` — `number | null`: ao atingir, a busca desabilita e a dica avisa o limite.
+- `rotulo` (obrigatório), `placeholder`, `dica`, `erro`, `obrigatorio`, `largo`, `desabilitado`.
+- Output `escolhidas` — `OpcaoPaginada[]` (id + rótulo) a cada mudança do usuário; útil a quem guarda o rótulo junto (wizard de campanha).
+
+**Estados:** vazio · com chips · limite atingido · desabilitado (chips sem o ×) · erro.
+
+**Acessibilidade:** a do select paginado; a lista de chips tem `aria-label` "Selecionados: …" e cada × tem `aria-label` "Remover …".
+
+> ⚠️ **Armadilha: rótulo vem de duas fontes.** Cache do carregador (páginas já vistas) e `opcoesInjetadas`.
+> Na edição, passe sempre as opções salvas, senão o chip aparece com o id até o usuário rolar a lista.
+
+### 5B.23 `ui-botao-icone` — botão quadrado só com ícone
+
+**O que é:** botão sem texto para subir/descer, remover, menu ⋯.
+
+**API:** `icone` (nome do `ui-icone`, obrigatório) · `rotulo` (obrigatório: vira `aria-label` e `title`) · `tamanho` `'p' | 'm'` (28 px / alvo de clique do console; padrão `m`) · `variante` `'neutro' | 'perigo'` · `desabilitado`. O clique sai pelo host: `(click)` no `<ui-botao-icone>`.
+
+**Estados:** repouso · hover · foco (`--borda-foco`) · desabilitado (não dispara clique) · perigo.
+
+**Acessibilidade:** `<button type="button">` nativo com nome acessível; o ícone é decorativo.
+
+> ⚠️ **Armadilha: sem texto, o rótulo é tudo.** "Remover" sozinho não diz o quê: use "Remover telefone 2".
 
 ---
 
@@ -1664,3 +1701,8 @@ que em oito componentes já escritos duas vezes.
 | 4 | **Card de atribuição** e **donut de categorias** (Home, §6 das telas) | Onda 2. ⚠️ O card de atribuição carrega a regra mais delicada do produto — receita **exata** e **estimada** exibidas separadas, jamais somadas — e merece ficha própria quando a tela for detalhada |
 | 5 | **Gráfico de barras + linha** (vendas no período) | Onda 2; depende da escolha da biblioteca de gráficos, que precisa consumir tokens |
 | 6 | **Indicador de presença** ("Eduarda está nesta conversa") | Onda 1, comportamento já definido em `geracrm-tempo-real`; a ficha visual sai com o protótipo do inbox |
+
+### Adendo R2 — `ui-estado` com ícone Lucide
+
+`icone` aceita o **nome de um `ui-icone`** (`users`, `message-circle`). Padrões sem emoji: vazio `inbox`, erro
+`alert-triangle`, sem permissão `lock`. Valor que não é nome conhecido (emoji legado) renderiza como texto.

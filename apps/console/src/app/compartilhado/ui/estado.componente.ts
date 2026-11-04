@@ -1,16 +1,25 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core'
+import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core'
+import { IconeComponente } from './icone.componente.js'
+import { iconeDoEstado } from './estado.regras.js'
 
 /**
  * Estado de tela do bloco 1 (R-12): vazio / erro / sem-permissão.
+ * `icone`: nome do `ui-icone` (Lucide). Padrões sem emoji: inbox, alert-triangle, lock. Valor que não é
+ * nome de ícone conhecido (emoji legado) renderiza como texto.
  * ⚠️ Vazio EXPLICA o porquê e oferece a ação seguinte (slot). Erro NOMEIA o que
  * falhou (integração nomeia o sistema). Nunca uma tela em branco.
  */
 @Component({
   selector: 'ui-estado',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [IconeComponente],
   template: `
     <div class="estado" [attr.data-tipo]="tipo()">
-      <span class="icone" aria-hidden="true">{{ icone() || padraoIcone() }}</span>
+      @if (vista().ehIcone) {
+        <span class="icone" aria-hidden="true"><ui-icone [nome]="vista().valor" [tamanho]="40" /></span>
+      } @else {
+        <span class="icone icone--texto" aria-hidden="true">{{ vista().valor }}</span>
+      }
       <h2>{{ titulo() }}</h2>
       @if (descricao()) { <p>{{ descricao() }}</p> }
       <div class="acao"><ng-content /></div>
@@ -19,7 +28,8 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core'
   styles: `
     .estado { display: grid; justify-items: center; text-align: center; gap: var(--espacamento-2);
       padding: var(--espacamento-8); color: var(--texto-secundario); }
-    .icone { font-size: 40px; }
+    .icone { color: var(--texto-secundario); line-height: 1; }
+    .icone--texto { font-size: 40px; }
     h2 { margin: 0; font-size: 16px; color: var(--texto); }
     p { margin: 0; max-width: 46ch; }
     .acao { margin-top: var(--espacamento-3); }
@@ -30,7 +40,5 @@ export class EstadoComponente {
   readonly titulo = input('')
   readonly descricao = input('')
   readonly icone = input('')
-  padraoIcone(): string {
-    return this.tipo() === 'erro' ? '⚠️' : this.tipo() === 'sem-permissao' ? '🔒' : '📭'
-  }
+  protected readonly vista = computed(() => iconeDoEstado(this.tipo(), this.icone()))
 }

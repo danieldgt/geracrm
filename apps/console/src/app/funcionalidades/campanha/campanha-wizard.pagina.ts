@@ -6,25 +6,23 @@ import {
 } from '@geracrm/shared'
 import {
   BreadcrumbComponente, CabecalhoTelaComponente, CampoComponente, ChipsEtiquetaComponente, EsqueletoComponente,
-  EstadoComponente, HorarioAtendimentoComponente, IconeComponente, ListaDefinicaoComponente, SelectComponente,
+  EstadoComponente, HorarioAtendimentoComponente, IconeComponente, ListaDefinicaoComponente, SelectComponente, SelectMultiComponente,
   SelectPaginadoComponente, StatCardComponente, ToastServico, corpoDoErro, ehStatus, mensagemDeErro,
   type CarregarOpcoes, type ItemDefinicao, type ItemTrilha, type OpcaoChip, type OpcaoPaginada, type OpcaoSelect, type PaginaOpcoes,
 } from '../../compartilhado/ui/index.js'
 import { EtiquetasServico } from '../crm/etiquetas.servico.js'
 import {
-  FORM_VAZIO, PASSOS, ROTULO_ORIGEM_JANELA, ROTULO_PASSO, TIPO_NAO_OFICIAL, TIPO_OFICIAL, casaComTermo, errosDoPasso, excluidosOrdenados,
+  FORM_VAZIO, PASSOS, ROTULO_ORIGEM_JANELA, ROTULO_PASSO, TIPO_NAO_OFICIAL, TIPO_OFICIAL, errosDoPasso, excluidosOrdenados,
   formDaCampanha, formatarCusto, loteEfetivo, mapearErro, montarCorpo, montarCorpoPrevia, passosComErro, resumoJanela, resumoPublico,
-  templateServeParaCampanha, textoAquecimento, textoDuracao, textoPrecoUnitario, textoVariaveisFaltando, variaveisSemMapeamento,
+  textoAquecimento, textoDuracao, textoPrecoUnitario, textoVariaveisFaltando, variaveisSemMapeamento,
   type ErrosCampo, type FormCampanha, type OpcaoEscolhida, type PassoWizard, type PreviaApi, type PublicoForm,
 } from './campanhas.regras.js'
 import { CampanhasServico, type CanalCampanha, type CampanhaDetalhe, type EtapaFunil, type TemplateCampanha } from './campanhas.servico.js'
-import { SeletorMultiComponente } from './seletor-multi.componente.js'
 
 type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao' | 'nao_editavel'
 type EstadoPrevia = 'ocioso' | 'carregando' | 'pronto' | 'erro'
 
 const ATRASO_PREVIA_MS = 600
-const MAX_PAGINAS_TEMPLATE = 5
 const MAX_PAGINAS_ROTULO = 5
 
 const OPCOES_SEGMENTO: OpcaoChip[] = CODIGOS_SEGMENTO_RFV.map((c) => ({ valor: c, rotulo: rotuloSegmento(c) }))
@@ -43,8 +41,8 @@ const OPCOES_QUALIFICACAO: OpcaoChip[] = QUALIFICACOES_CONTATO.map((q) => ({ val
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ReactiveFormsModule, BreadcrumbComponente, CabecalhoTelaComponente, CampoComponente, ChipsEtiquetaComponente,
-    EsqueletoComponente, EstadoComponente, HorarioAtendimentoComponente, IconeComponente, ListaDefinicaoComponente, SelectComponente,
-    SelectPaginadoComponente, StatCardComponente, SeletorMultiComponente,
+    EsqueletoComponente, EstadoComponente, HorarioAtendimentoComponente, IconeComponente, ListaDefinicaoComponente, SelectComponente, SelectMultiComponente,
+    SelectPaginadoComponente, StatCardComponente, SelectMultiComponente,
   ],
   template: `
     <ui-cabecalho-tela [titulo]="editando() ? 'Editar campanha' : 'Nova campanha'"
@@ -181,14 +179,14 @@ const OPCOES_QUALIFICACAO: OpcaoChip[] = QUALIFICACOES_CONTATO.map((q) => ({ val
                   }
 
                   <div class="grade">
-                    <app-seletor-multi rotulo="Listas" placeholder="Buscar lista" [carregar]="carregarListas"
-                      [selecionadas]="form().publico.listas" (selecionadasChange)="atualizarPublico({ listas: $event })"
+                    <ui-select-multi rotulo="Listas" placeholder="Buscar lista" [carregar]="carregarListas"
+                      [valor]="valoresDe(form().publico.listas)" [opcoesInjetadas]="form().publico.listas" (escolhidas)="atualizarPublico({ listas: $event })"
                       [erro]="erro('publico.listas')" />
-                    <app-seletor-multi rotulo="Etiquetas" placeholder="Buscar etiqueta" [carregar]="carregarEtiquetas"
-                      [selecionadas]="form().publico.etiquetas" (selecionadasChange)="atualizarPublico({ etiquetas: $event })"
+                    <ui-select-multi rotulo="Etiquetas" placeholder="Buscar etiqueta" [carregar]="carregarEtiquetas"
+                      [valor]="valoresDe(form().publico.etiquetas)" [opcoesInjetadas]="form().publico.etiquetas" (escolhidas)="atualizarPublico({ etiquetas: $event })"
                       [erro]="erro('publico.etiquetas')" />
-                    <app-seletor-multi rotulo="Origens" placeholder="Buscar origem" [carregar]="carregarOrigens"
-                      [selecionadas]="form().publico.origens" (selecionadasChange)="atualizarPublico({ origens: $event })"
+                    <ui-select-multi rotulo="Origens" placeholder="Buscar origem" [carregar]="carregarOrigens"
+                      [valor]="valoresDe(form().publico.origens)" [opcoesInjetadas]="form().publico.origens" (escolhidas)="atualizarPublico({ origens: $event })"
                       [erro]="erro('publico.origens')" />
                     <ui-campo tipo="number" rotulo="Sem interação há (dias)" [valor]="form().publico.semInteracaoDias"
                       (valorChange)="atualizarPublico({ semInteracaoDias: $event })" [erro]="erro('publico.semInteracaoDias')"
@@ -601,36 +599,32 @@ export class CampanhaWizardPagina implements OnInit {
     if (t) this.templateInjetado.set({ valor: t.id, rotulo: t.nome })
   }
 
-  // ── carregadores dos selects paginados (cursor; a busca é local nas listas sem busca no servidor) ──
+  // ── carregadores dos selects paginados (cursor; busca e filtros no servidor) ──
   protected readonly carregarTemplates: CarregarOpcoes = async (cursor, termo): Promise<PaginaOpcoes> => {
-    let atual = cursor
-    for (let i = 0; i < MAX_PAGINAS_TEMPLATE; i++) {
-      const r = await this.api.templates(atual)
-      const itens: OpcaoPaginada[] = []
-      for (const t of r.itens) {
-        if (!templateServeParaCampanha(t) || (termo && !casaComTermo(t.nome, termo))) continue
-        this.templatesVistos.set(t.id, t)
-        itens.push({ valor: t.id, rotulo: t.nome, dica: t.corpo.body.texto.slice(0, 70) })
-      }
-      if (itens.length > 0 || !r.proximoCursor) return { itens, proximoCursor: r.proximoCursor }
-      atual = r.proximoCursor
+    const r = await this.api.templates(cursor, {
+      status: 'APPROVED', categoria: 'MARKETING', canalId: this.form().canalId || null, q: termo || null,
+    })
+    const itens: OpcaoPaginada[] = []
+    for (const t of r.itens) {
+      this.templatesVistos.set(t.id, t)
+      itens.push({ valor: t.id, rotulo: t.nome, dica: t.corpo.body.texto.slice(0, 70) })
     }
-    return { itens: [], proximoCursor: atual }
+    return { itens, proximoCursor: r.proximoCursor }
   }
 
   protected readonly carregarListas: CarregarOpcoes = async (cursor, termo) => {
-    const r = await this.api.listas(cursor)
-    return { itens: r.itens.filter((l) => !termo || casaComTermo(l.nome, termo)).map((l) => ({ valor: l.id, rotulo: l.nome })), proximoCursor: r.proximoCursor }
+    const r = await this.api.listas(cursor, termo || null)
+    return { itens: r.itens.map((l) => ({ valor: l.id, rotulo: l.nome })), proximoCursor: r.proximoCursor }
   }
 
   protected readonly carregarEtiquetas: CarregarOpcoes = async (cursor, termo) => {
-    const r = await this.catalogos.etiquetas(cursor, true)
-    return { itens: r.itens.filter((e) => !termo || casaComTermo(e.nome, termo)).map((e) => ({ valor: e.id, rotulo: e.nome })), proximoCursor: r.proximoCursor }
+    const r = await this.catalogos.etiquetas(cursor, true, termo || null)
+    return { itens: r.itens.map((e) => ({ valor: e.id, rotulo: e.nome })), proximoCursor: r.proximoCursor }
   }
 
   protected readonly carregarOrigens: CarregarOpcoes = async (cursor, termo) => {
-    const r = await this.catalogos.origens(cursor, true)
-    return { itens: r.itens.filter((o) => !termo || casaComTermo(o.nome, termo)).map((o) => ({ valor: o.id, rotulo: o.nome })), proximoCursor: r.proximoCursor }
+    const r = await this.catalogos.origens(cursor, true, termo || null)
+    return { itens: r.itens.map((o) => ({ valor: o.id, rotulo: o.nome })), proximoCursor: r.proximoCursor }
   }
 
   // ── prévia ──

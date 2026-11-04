@@ -40,8 +40,8 @@ export class IconeComponente {
 
   /** Nome Lucide (kebab-case), ex.: `house`, `bar-chart-3`. */
   readonly nome = input.required<string>()
-  /** Tamanho em px da caixa do ícone. Só a escala da casca (14 e 18). */
-  readonly tamanho = input<14 | 18>(18)
+  /** Tamanho em px da caixa do ícone. Escala da casca (14, 16, 18, 24) mais 40 para ilustração de estado vazio. */
+  readonly tamanho = input<14 | 16 | 18 | 24 | 40>(18)
   /** Sem rótulo, o ícone é decorativo. Com rótulo, vira `role="img"` nomeado. */
   readonly rotulo = input<string>()
 
