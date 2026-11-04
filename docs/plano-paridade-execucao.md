@@ -40,7 +40,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | F1 campanhas v2 | 3 | 🔄 | F1a API+despachante (Opus, migration 0134) em curso; F1b wizard (Sonnet) depois |
 | F3 formulários públicos | 3 | ✅ | integrada com as correções de segurança (upload fora da transação, IP real via `TRUST_PROXY_HOPS`, contato existente só com "Aplicar ao contato", assinatura de arquivo, clickjacking, hash do texto LGPD); 0127 editada no lugar; **dono: `TRUST_PROXY_HOPS=2` na API do Railway**; re-revisão curta pendente |
 | G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
-| G3 pós-venda, NPS, indicações, prova social | 3 | 🔍 | integrada (0130); revisão Opus em curso |
+| G3 pós-venda, NPS, indicações, prova social | 3 | 🔍 | integrada (0130); revisão Opus: aprovado com correções (alto: indicações viram oráculo de "já é cliente" e não têm portão/teto; resposta do NPS barrada pelo portão com equipe disponível). Decisão: `indicacoes` padrão desligado. Correção em curso pelo agente da raia (migration 0141) — **não ligar pós-venda em cliente antes** |
 | G4 roteamento e rodízio | 3 | 🔄 | Opus; migration 0136 |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
 | H1 importador | 3 | ✅ | integrada com as 13 correções da revisão (LGPD: titular bloqueado e contato anonimizado ignorados; arrendamento pelo relógio do banco e contagens dos itens; simulação fiel; venda sem referência idempotente por conteúdo; `simulada_em` obrigatória — migration 0140; windows-1252 e UTF-16 recusado; conferência só criados/atualizados) |
