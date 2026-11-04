@@ -134,7 +134,7 @@ describe('imprimíveis', () => {
   })
   it('resumo do WhatsApp para o papel', () => {
     const r = resumoWhatsappImprimivel({
-      cartoes: { recebidas: 1200, enviadas: 30, enviadasHumanas: 10, enviadasAutomaticas: 20, conversasIniciadas: 4, atendimentos: 6, respondidasNoLimite: 3, pctNoLimite: 0.5 },
+      cartoes: { recebidas: 1200, enviadas: 30, enviadasHumanas: 10, enviadasAutomaticas: 20, falhas: 0, conversasIniciadas: 4, atendimentos: 6, respondidasNoLimite: 3, pctNoLimite: 0.5 },
       primeiraResposta: [], porDia: [{ dia: '2026-09-01', recebidas: 1, enviadas: 2 }],
     })
     expect(r.cartoes[0]).toEqual({ rotulo: 'Mensagens recebidas', valor: '1.200' })
