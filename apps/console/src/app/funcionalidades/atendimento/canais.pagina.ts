@@ -1,22 +1,30 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit, OnDestroy } from '@angular/core'
-
-/** ⚠️ O QR do fornecedor expira em segundos; 20s renova ANTES de morrer. */
-const SEGUNDOS_QR = 20
-/** Teto (~3 min). Aba esquecida não bate no fornecedor a noite toda. */
-const MAX_RENOVACOES = 9
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { RouterLink } from '@angular/router'
 import { CanaisServico, type Canal } from './canais.servico.js'
 import { rotuloSuspensao } from './agente/ativas.regras.js'
-import { RouterLink } from '@angular/router'
 import { FormularioCredencialComponente } from '../integracao/formulario-credencial.componente.js'
+import {
+  BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, EsqueletoComponente,
+  IconeComponente, ModalComponente, SelectComponente, StatCardComponente, TabelaComponente,
+  type ColunaTabela, type LinhaTabela, type OpcaoSelect, type TomStat,
+} from '../../compartilhado/ui/index.js'
 import {
   abrirAvancado, avisoDeRemocao, corpoDaApi, idadeVerificacao, intervaloDePolling, mensagemFalhaQr, mudancasDaEdicao,
   POLL_RAPIDO_MS, rotuloModoAgente, seloRestricaoModo, verificacaoAtrasada,
 } from './canais.regras.js'
 
+/** ⚠️ O QR do fornecedor expira em segundos; 20s renova ANTES de morrer. */
+const SEGUNDOS_QR = 20
+/** Teto (~3 min). Aba esquecida não bate no fornecedor a noite toda. */
+const MAX_RENOVACOES = 9
+
 /**
  * Cadastro de celular / canal — Meta (oficial) e não-oficiais (PlugZapi + futuros).
+ *
+ * Padrão Lista (L) com cadastro em modal (M): a frota é uma tabela; o QR de
+ * reconexão e o cadastro abrem em `ui-modal`; a confirmação de remoção também.
  *
  * ⚠️ O formulário é DESENHADO do catálogo de provedores (`/v1/canais/provedores`),
  * como a tela de ERP. Provedor novo entra no catálogo e aparece aqui sem tocar
@@ -25,259 +33,242 @@ import {
 @Component({
   selector: 'app-canais',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormularioCredencialComponente, RouterLink],
+  imports: [
+    BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, EsqueletoComponente,
+    FormularioCredencialComponente, IconeComponente, ModalComponente, RouterLink, SelectComponente, StatCardComponente,
+    TabelaComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1>Números de WhatsApp</h1>
-        <p class="sub">Conecte números oficiais (Meta) e não-oficiais. O cliente escolhe por qual caminho falar.</p>
-      </div>
+    <ui-cabecalho-tela titulo="Números de WhatsApp"
+      subtitulo="Conecte números oficiais (Meta) e não-oficiais. O cliente escolhe por qual caminho falar.">
       @if (servico.estado() === 'pronto' && !servico.vazio()) {
-        <button class="btn btn--primario" (click)="abrir()">Conectar número</button>
+        <button type="button" class="btn btn--primario" (click)="abrir()"><ui-icone nome="plus" />Conectar número</button>
       }
-    </header>
+    </ui-cabecalho-tela>
 
-    @switch (servico.estado()) {
-      @case ('carregando') { <div class="bloco" aria-busy="true"><div class="esqueleto"></div></div> }
-      @case ('sem_permissao') { <div class="bloco aviso"><h2>Sem acesso aos canais</h2></div> }
-      <!-- ⚠️ Estado PRÓPRIO: quem caiu foi o servidor do GeraCRM, não o número.
-           "Erro ao carregar" faria a pessoa ir mexer no celular. -->
-      @case ('servidor_indisponivel') {
-        <div class="bloco aviso" role="status">
-          <h2>Servidor do GeraCRM indisponível</h2>
-          <p>Não conseguimos falar com o servidor agora. Isso não quer dizer que seus números caíram:
-             o estado deles aparece assim que o servidor voltar. A tela tenta de novo sozinha.</p>
-          <button class="btn btn--secundario" (click)="servico.carregar()">Tentar agora</button>
-        </div>
-      }
-      @case ('erro') { <div class="bloco aviso"><h2>Não foi possível carregar</h2>
-        <p>{{ servico.erro() }}</p><button class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button></div> }
-      @case ('pronto') {
-        <!-- O desfecho da remoção é DIFERENTE por número (apagado × arquivado),
-             e quem clicou precisa saber qual dos dois aconteceu. -->
-        @if (avisoRemocao(); as m) {
-          <p class="aviso-remocao" role="status">{{ m }}</p>
+    <div class="corpo">
+      @switch (servico.estado()) {
+        @case ('carregando') {
+          <ui-tabela [colunas]="colunas" [linhas]="[]" [carregando]="true" />
         }
-        <!-- ⚠️ Servidor fora DURANTE o polling: a lista abaixo é a última
-             leitura. Dizer desde quando evita que o estado velho passe por atual. -->
-        @if (servico.indisponivelDesde(); as desde) {
-          <p class="indisponivel txt-denso" role="status">
-            <strong>Servidor indisponível desde {{ hora(desde) }}.</strong>
-            Os estados abaixo são da última leitura; a tela tenta de novo sozinha.
-          </p>
-        } @else if (servico.erroAtualizacao(); as m) {
-          <p class="indisponivel txt-denso" role="status">{{ m }} A tela tenta de novo sozinha.</p>
+        @case ('sem_permissao') {
+          <ui-estado tipo="sem-permissao" titulo="Você não tem acesso aos números"
+            descricao="Peça a um administrador da sua empresa para liberar este acesso." />
         }
-        @if (servico.vazio()) {
-          <div class="bloco vazio">
-            <h2>Nenhum número conectado</h2>
-            <p>Conecte um número oficial (Meta) ou não-oficial (PlugZapi) para começar a conversar.</p>
-            <button class="btn btn--primario" (click)="abrir()">Conectar meu primeiro número</button>
-          </div>
-        } @else {
-          <!-- Saúde da frota (EP-03): o que exige olho agora. -->
-          @if (servico.saude(); as s) {
-            <div class="saude">
-              <div class="metrica">
-                <span class="rot">Entrega (24h)</span>
-                @if (s.entrega.amostras === 0) {
-                  <span class="val neutro">— sem envios</span>
-                } @else {
-                  <span class="val" [class.ruim]="(s.entrega.taxa ?? 1) < 0.7">
-                    {{ pct(s.entrega.taxa) }} <small>({{ s.entrega.falha }} falhas / {{ s.entrega.amostras }})</small>
-                  </span>
-                }
-              </div>
-              <div class="metrica">
-                <span class="rot">Alertas abertos</span>
-                <span class="val" [class.ruim]="s.alertasAbertos > 0">{{ s.alertasAbertos }}</span>
-              </div>
-            </div>
+        <!-- ⚠️ Estado PRÓPRIO: quem caiu foi o servidor do GeraCRM, não o número.
+             "Erro ao carregar" faria a pessoa ir mexer no celular. -->
+        @case ('servidor_indisponivel') {
+          <ui-estado tipo="erro" titulo="Servidor do GeraCRM indisponível"
+            descricao="Não conseguimos falar com o servidor agora. Isso não quer dizer que seus números caíram: o estado deles aparece assim que o servidor voltar. A tela tenta de novo sozinha.">
+            <button type="button" class="btn btn--secundario" (click)="servico.carregar()">Tentar agora</button>
+          </ui-estado>
+        }
+        @case ('erro') {
+          <ui-estado tipo="erro" titulo="Não foi possível carregar os números" [descricao]="servico.erro() ?? ''">
+            <button type="button" class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button>
+          </ui-estado>
+        }
+        @case ('pronto') {
+          <!-- O desfecho da remoção é DIFERENTE por número (apagado × arquivado),
+               e quem clicou precisa saber qual dos dois aconteceu. -->
+          @if (avisoRemocao(); as m) {
+            <p class="aviso-faixa aviso-faixa--ok" role="status"><ui-icone nome="check" />{{ m }}</p>
           }
-          <ul class="lista">
-            @for (c of servico.canais(); track c.id) {
-              <li class="canal" [class]="'canal--' + c.estado">
-                <div class="linha">
-                  <div>
-                    <h2>{{ c.nomeAmigavel }}</h2>
-                    <!-- ⚠️ Número e id chegam MASCARADOS da API (LGPD): dá para
-                         distinguir os números da frota, não para discá-los. -->
-                    @if (c.telefoneMascarado || c.identificadorMascarado) {
-                      <p class="numero txt-dados">
-                        @if (c.telefoneMascarado; as t) { <span>{{ t }}</span> }
-                        @if (c.identificadorMascarado; as i) { <span class="id">ID {{ i }}</span> }
-                      </p>
-                    }
-                    <!-- Badges em ordem fixa: tipo · provedor · risco · agente. -->
-                    <span class="tags">
-                      <span class="tag" [class.oficial]="ehOficial(c)">{{ ehOficial(c) ? 'Oficial (Meta)' : 'Não-oficial' }}</span>
-                      <span class="tag prov">{{ nomeProvedor(c.provedor) }}</span>
-                      @if (!ehOficial(c)) { <span class="tag risco">⚠️ risco de banimento</span> }
-                      <span class="tag agente" [class.agente--ligado]="c.modoAgente && c.modoAgente !== 'desligado'">
-                        {{ rotuloModo(c.modoAgente) }}
-                      </span>
-                      @if (seloModo(c); as selo) {
-                        <span class="tag restricao" [title]="selo.dica">{{ selo.rotulo }}</span>
-                      }
+          <!-- ⚠️ Servidor fora DURANTE o polling: a lista abaixo é a última
+               leitura. Dizer desde quando evita que o estado velho passe por atual. -->
+          @if (servico.indisponivelDesde(); as desde) {
+            <p class="aviso-faixa" role="status">
+              <ui-icone nome="alert-triangle" /><strong>Servidor indisponível desde {{ hora(desde) }}.</strong>
+              Os estados abaixo são da última leitura; a tela tenta de novo sozinha.
+            </p>
+          } @else if (servico.erroAtualizacao(); as m) {
+            <p class="aviso-faixa" role="status"><ui-icone nome="alert-triangle" />{{ m }} A tela tenta de novo sozinha.</p>
+          }
+          @if (servico.vazio()) {
+            <ui-estado titulo="Nenhum número conectado"
+              descricao="Conecte um número oficial (Meta) ou não-oficial (PlugZapi) para começar a conversar.">
+              <button type="button" class="btn btn--primario" (click)="abrir()">Conectar meu primeiro número</button>
+            </ui-estado>
+          } @else {
+            <!-- Saúde da frota (EP-03): o que exige olho agora. -->
+            @if (servico.saude(); as s) {
+              <div class="saude">
+                <ui-stat-card [valor]="valorEntrega(s.entrega)" [rotulo]="rotuloEntrega(s.entrega)"
+                  [tom]="tomEntrega(s.entrega)" />
+                <ui-stat-card [valor]="s.alertasAbertos" rotulo="Alertas abertos"
+                  [tom]="s.alertasAbertos > 0 ? 'erro' : 'neutro'" />
+              </div>
+            }
+            <ui-tabela [colunas]="colunas" [linhas]="linhas()">
+              <ng-template uiCelula="numero" let-c>
+                <span class="pessoa">
+                  <strong class="nome">{{ c.nomeAmigavel }}</strong>
+                  <!-- ⚠️ Número e id chegam MASCARADOS da API (LGPD): dá para
+                       distinguir os números da frota, não para discá-los. -->
+                  @if (c.telefoneMascarado || c.identificadorMascarado) {
+                    <span class="txt-dados suave">
+                      @if (c.telefoneMascarado; as t) { <span>{{ t }}</span> }
+                      @if (c.identificadorMascarado; as i) { <span>ID {{ i }}</span> }
                     </span>
-                  </div>
-                  <!-- ⚠️ O estado NUNCA aparece sozinho: vem com quando foi
-                       observado. "Conectado" sem prazo de validade foi o que
-                       deixou um número morto passar por saudável em 24/ago, e
-                       em 25/ago a linha em produção dizia "conectado" sem
-                       carimbo nenhum — escrito no cadastro, jamais conferido. -->
-                  <span class="selo">
-                    {{ rotuloEstado(c.estado) }}
-                    <span class="carimbo" [class.suspeito]="carimboSuspeito(c)">{{ carimbo(c) }}</span>
-                  </span>
+                  }
+                </span>
+              </ng-template>
+              <ng-template uiCelula="tipo" let-c>
+                <span class="tags">
+                  <ui-badge [tom]="ehOficial(c) ? 'sucesso' : 'neutro'">{{ ehOficial(c) ? 'Oficial (Meta)' : 'Não-oficial' }}</ui-badge>
+                  <ui-badge>{{ nomeProvedor(c.provedor) }}</ui-badge>
+                  @if (!ehOficial(c)) {
+                    <ui-badge tom="erro"><ui-icone nome="alert-triangle" [tamanho]="14" />risco de banimento</ui-badge>
+                  }
+                </span>
+              </ng-template>
+              <ng-template uiCelula="agente" let-c>
+                <span class="tags">
+                  <ui-badge [tom]="c.modoAgente && c.modoAgente !== 'desligado' ? 'info' : 'neutro'">{{ rotuloModo(c.modoAgente) }}</ui-badge>
+                  @if (seloModo(c); as selo) {
+                    <ui-badge tom="atencao" [title]="selo.dica">{{ selo.rotulo }}</ui-badge>
+                  }
+                </span>
+              </ng-template>
+              <!-- ⚠️ O estado NUNCA aparece sozinho: vem com quando foi
+                   observado. "Conectado" sem prazo de validade foi o que
+                   deixou um número morto passar por saudável em 24/ago. -->
+              <ng-template uiCelula="estado" let-c>
+                <ui-badge [tom]="c.estado === 'conectado' ? 'sucesso' : c.estado === 'desconectado' ? 'erro' : 'neutro'">
+                  {{ rotuloEstado(c.estado) }}
+                </ui-badge>
+                <span class="carimbo" [class.suspeito]="carimboSuspeito(c)">{{ carimbo(c) }}</span>
+              </ng-template>
+              <ng-template uiCelula="situacao" let-c>
+                <div class="situacao">
+                  @if (c.estado === 'desconectado' && c.ultimoErro) {
+                    <p class="err">{{ c.ultimoErro }}</p>
+                  }
+                  <!-- ⚠️ Pausa VISÍVEL na tela da frota. E o texto diz o que
+                       CONTINUA funcionando — senão lê-se "o número parou". -->
+                  @if (c.disparoPausado) {
+                    <p class="pausado">
+                      <ui-icone nome="alert-triangle" [tamanho]="14" /><strong>Disparo pausado</strong>{{ c.pausadoMotivo ? ' — ' + c.pausadoMotivo : '' }}
+                      <span class="pausado-ok">Respostas em conversas abertas continuam saindo normalmente.</span>
+                      <a routerLink="/canal-config">Retomar em Configuração do canal</a>
+                    </p>
+                  }
+                  <!-- Ativas suspensas (qualidade do número caiu, P11): o que para é
+                       o contato ATIVO; responder quem escreveu continua. -->
+                  @if (c.ativasSuspensas; as s) {
+                    <p class="pausado">
+                      <ui-icone nome="alert-triangle" [tamanho]="14" /><strong>Mensagens ativas suspensas</strong> desde {{ dataHora(s.desde) }}.{{ s.motivo ? ' ' + rotuloSuspensao(s.motivo) : '' }}
+                      <span class="pausado-ok">Respostas a quem escreveu continuam saindo normalmente.</span>
+                    </p>
+                  }
+                  @if (!ehOficial(c) && servico.aquecimento()[c.id]?.emAquecimento) {
+                    <span class="aquec">Aquecimento dia {{ servico.aquecimento()[c.id]!.dia }} · hoje {{ servico.aquecimento()[c.id]!.usadoHoje }}/{{ servico.aquecimento()[c.id]!.limiteHoje }}</span>
+                  }
+                  @if (servico.erroAquecimento()[c.id]; as e) {
+                    <span class="aquec-erro" role="alert">{{ e }}</span>
+                  }
+                  @if (resultado()[c.id]; as r) {
+                    <p class="resultado" [class.ok]="r.conectado" role="status">
+                      <ui-icone [nome]="r.conectado ? 'check' : 'alert-triangle'" [tamanho]="14" />
+                      {{ r.conectado ? 'Conectado' : (r.detalhe || 'Desconectado') }}
+                      <!-- ⚠️ "Conectado" sem carimbo de hora é afirmação sem prazo
+                           de validade. -->
+                      <span class="quando">· verificado {{ verificadoEm()[c.id] }}</span>
+                    </p>
+                  }
+                  <!-- ⚠️ SÓ ADMIN (P10): o QR pareia QUALQUER aparelho ao número. -->
+                  @if (!ehOficial(c) && !c.podeParear) {
+                    <p class="so-admin">Parear um aparelho (QR) é com o administrador da conta. Você acompanha o estado por aqui.</p>
+                  }
                 </div>
-                @if (c.estado === 'desconectado' && c.ultimoErro) {
-                  <p class="err">{{ c.ultimoErro }}</p>
-                }
-                <!-- ⚠️ Pausa VISÍVEL na tela da frota. Uma pausa automática que
-                     ninguém enxerga repete o incidente que a originou: o produto
-                     sabendo de algo que o operador não sabe. E o texto diz o que
-                     CONTINUA funcionando — senão lê-se "o número parou". -->
-                @if (c.disparoPausado) {
-                  <p class="pausado">
-                    ⏸️ <strong>Disparo pausado</strong>{{ c.pausadoMotivo ? ' — ' + c.pausadoMotivo : '' }}
-                    <span class="pausado-ok">Respostas em conversas abertas continuam saindo normalmente.</span>
-                    <a class="pausado-link" routerLink="/canal-config">Retomar em Configuração do canal</a>
-                  </p>
-                }
-                <!-- Ativas suspensas (qualidade do número caiu, P11): o que para é
-                     o contato ATIVO; responder quem escreveu continua. -->
-                @if (c.ativasSuspensas; as s) {
-                  <p class="pausado">
-                    ⏸️ <strong>Mensagens ativas suspensas</strong> desde {{ dataHora(s.desde) }}.{{ s.motivo ? ' ' + rotuloSuspensao(s.motivo) : '' }}
-                    <span class="pausado-ok">Respostas a quem escreveu continuam saindo normalmente.</span>
-                  </p>
-                }
-                <div class="acoes">
-                  <button class="btn btn--secundario" (click)="testar(c)" [disabled]="servico.testando().has(c.id)">
+              </ng-template>
+              <ng-template uiCelula="acoes" let-c>
+                <span class="acoes">
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="testar(c)" [disabled]="servico.testando().has(c.id)">
                     {{ servico.testando().has(c.id) ? 'Testando…' : 'Testar conexão' }}
                   </button>
-                  @if (!ehOficial(c)) {
-                    @if (servico.aquecimento()[c.id]?.emAquecimento) {
-                      <span class="aquec">🔥 Aquecimento dia {{ servico.aquecimento()[c.id]!.dia }} · hoje {{ servico.aquecimento()[c.id]!.usadoHoje }}/{{ servico.aquecimento()[c.id]!.limiteHoje }}</span>
-                    } @else {
-                      <button class="btn btn--secundario" (click)="servico.iniciarAquecimento(c.id)">Iniciar aquecimento</button>
-                    }
-                    @if (servico.erroAquecimento()[c.id]; as e) {
-                      <span class="aquec-erro" role="alert">{{ e }}</span>
-                    }
+                  @if (!ehOficial(c) && !servico.aquecimento()[c.id]?.emAquecimento) {
+                    <button type="button" class="btn btn--secundario btn--pequeno" (click)="servico.iniciarAquecimento(c.id)">Iniciar aquecimento</button>
+                  }
+                  <!-- Reconexão por QR: só no não-oficial, e SEMPRE disponível, não só
+                       quando o sistema já sabe que caiu (ação de recuperação não depende
+                       do diagnóstico). -->
+                  @if (!ehOficial(c) && c.podeParear) {
+                    <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrirQr(c.id)" [disabled]="buscandoQr() === c.id">
+                      <ui-icone nome="smartphone" [tamanho]="14" />{{ c.estado === 'desconectado' ? 'Reconectar por QR' : 'Conectar outro aparelho' }}
+                    </button>
                   }
                   <!-- ⚠️ Editar e Remover existem porque cadastro errado era
-                       PERMANENTE: um Client-Token colado errado deixava o número
-                       desconectado para sempre, sem rota nem botão que
-                       corrigisse. Detectar sem oferecer o conserto é meio
-                       caminho — a mesma lição do QR de reconexão. -->
-                  <button class="btn btn--secundario" (click)="abrirEdicao(c)">Editar</button>
-                  <button class="btn btn--perigo" (click)="pedirRemocao(c)">Remover</button>
-                </div>
-                @if (resultado()[c.id]; as r) {
-                  <p class="resultado" [class.ok]="r.conectado" role="status">
-                    {{ r.conectado ? '✅ Conectado' : '⚠️ ' + (r.detalhe || 'Desconectado') }}
-                    <!-- ⚠️ "Conectado" sem carimbo de hora é afirmação sem prazo
-                         de validade: no incidente de 24/ago a tela dizia
-                         "Conectado" com o número fora do ar havia horas. -->
-                    <span class="quando">· verificado {{ verificadoEm()[c.id] }}</span>
-                  </p>
-                }
-
-                <!-- Reconexão por QR: só no não-oficial, que é quem tem sessão
-                     para restabelecer. No oficial, reconectar é trocar o token.
-                     SEMPRE disponível, não só quando o sistema já sabe que caiu:
-                     antes o botão dependia do estado ser desconectado, e isso era
-                     circular — quem está com o WhatsApp fora do ar ficava
-                     esperando o produto descobrir para poder consertar. Ação de
-                     recuperação não depende do diagnóstico.
-                     ⚠️ SÓ ADMIN (P10): o QR pareia QUALQUER aparelho ao número.
-                     Gestor vê o estado, nunca o QR — e a garantia é o 403 da
-                     API; esconder o botão aqui é só para não oferecer o que falha. -->
-                @if (!ehOficial(c) && !c.podeParear) {
-                  <p class="so-admin txt-denso">Parear um aparelho (QR) é com o administrador da conta. Você acompanha o estado por aqui.</p>
-                }
-                @if (!ehOficial(c) && c.podeParear) {
-                  <div class="reconectar">
-                    <button class="btn"
-                            [class.btn--primario]="c.estado === 'desconectado'"
-                            [class.btn--secundario]="c.estado !== 'desconectado'"
-                            (click)="pedirQr(c.id)" [disabled]="buscandoQr() === c.id">
-                      {{ buscandoQr() === c.id ? 'Gerando…'
-                         : c.estado === 'desconectado' ? '📱 Reconectar por QR' : '📱 Conectar outro aparelho' }}
-                    </button>
-                    @if (qr()[c.id]; as q) {
-                      @if (q.imagem) {
-                        <div class="qr">
-                          <img [src]="q.imagem" alt="QR code para parear o WhatsApp" width="240" height="240" />
-                          <p class="passos">
-                            No celular deste número: <strong>WhatsApp → Aparelhos conectados →
-                            Conectar aparelho</strong>, e aponte para o código.
-                          </p>
-                          <!-- ⚠️ O QR expira em segundos e muda a cada leitura;
-                               por isso o botão de gerar outro fica ao lado. -->
-                          <p class="expira">
-                            @if (restante()[c.id]; as seg) {
-                              <span class="relogio" [class.urgente]="seg <= 5">{{ seg }}s</span>
-                              <span> — o código se renova sozinho</span>
-                            } @else {
-                              <span>Aponte a câmera do celular para o código</span>
-                            }
-                          </p>
-                        </div>
-                      } @else {
-                        <p class="resultado" role="status">⚠️ {{ q.erro }}</p>
-                      }
-                    }
-                  </div>
-                }
-              </li>
-            }
-          </ul>
+                       PERMANENTE: detectar sem oferecer o conserto é meio caminho. -->
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrirEdicao(c)">Editar</button>
+                  <button type="button" class="btn btn--perigo btn--pequeno" (click)="pedirRemocao(c)">Remover</button>
+                </span>
+              </ng-template>
+              <div uiVazio>
+                <ui-estado titulo="Nenhum número conectado" descricao="Conecte um número para começar a conversar.">
+                  <button type="button" class="btn btn--primario" (click)="abrir()">Conectar número</button>
+                </ui-estado>
+              </div>
+            </ui-tabela>
+          }
         }
       }
-    }
+    </div>
 
-    @if (editando(); as ed) {
-      <!-- ⚠️ Modal de verdade: com margin-top, o formulário abria no FIM da
-           página e o botão parecia não fazer nada. Ver modal-de-verdade.spec.ts. -->
-      <div class="fundo" (click)="fechar()"></div>
-      <div class="painel" role="dialog" aria-modal="true" aria-labelledby="tp" tabindex="-1">
-        <h2 id="tp">{{ ed.id ? 'Editar número' : 'Conectar número' }}</h2>
+    <!-- QR de reconexão: modal próprio. Fechar encerra a sessão de pareamento. -->
+    <ui-modal [aberto]="qrCanalId() !== null" titulo="Reconectar por QR" largura="p" (fechar)="fecharQr()">
+      @if (qrCanalId(); as id) {
+        @if (qr()[id]?.imagem; as imagem) {
+          <div class="qr">
+            <img [src]="imagem" alt="QR code para parear o WhatsApp" width="240" height="240" />
+            <p class="passos">
+              No celular deste número: <strong>WhatsApp → Aparelhos conectados → Conectar aparelho</strong>, e aponte para o código.
+            </p>
+            <!-- ⚠️ O QR expira em segundos e muda a cada leitura; por isso o botão
+                 de gerar outro fica no rodapé. -->
+            <p class="expira">
+              @if (restante()[id]; as seg) {
+                <span class="relogio" [class.urgente]="seg <= 5">{{ seg }}s</span>
+                <span> — o código se renova sozinho</span>
+              } @else {
+                <span>Aponte a câmera do celular para o código</span>
+              }
+            </p>
+          </div>
+        } @else if (qr()[id]?.erro; as erro) {
+          <p class="erro-geral" role="alert"><ui-icone nome="alert-triangle" />{{ erro }}</p>
+        } @else {
+          <ui-esqueleto altura="240px" />
+        }
+      }
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharQr()">Fechar</button>
+        <button type="button" class="btn btn--primario" (click)="gerarOutroQr()" [disabled]="buscandoQr() !== null">
+          {{ buscandoQr() !== null ? 'Gerando…' : 'Gerar outro QR' }}
+        </button>
+      </div>
+    </ui-modal>
 
+    <!-- Cadastro e edição: modal. ⚠️ O tipo NÃO muda na edição (campos e webhook são outros). -->
+    <ui-modal [aberto]="editando() !== null" [titulo]="tituloEdicao()" largura="m" (fechar)="fechar()">
+      @if (editando(); as ed) {
         @if (ed.id) {
-          <!-- ⚠️ O tipo NÃO muda na edição: trocar de provedor é outro número —
-               campos diferentes, webhook em outro endereço, e o histórico
-               passaria a dizer que a conversa aconteceu por um caminho que nunca
-               existiu. Para trocar, conecte outro número e remova este. -->
           <p class="tipo-fixo">{{ provedorAtual()?.nome }} · o tipo do número não muda na edição.</p>
         } @else {
-          <label class="campo">
-            <span class="rotulo">Tipo de número</span>
-            <select [value]="ed.provedor" (change)="trocarProvedor($event)">
-              @for (p of servico.provedores(); track p.codigo) {
-                <option [value]="p.codigo">{{ p.nome }}</option>
-              }
-            </select>
-            <span class="ajuda">{{ provedorAtual()?.descricao }}</span>
-          </label>
+          <ui-select rotulo="Tipo de número" [opcoes]="opcoesProvedores()" [valor]="ed.provedor"
+            (valorChange)="trocarProvedor($event)" [dica]="provedorAtual()?.descricao ?? ''" />
         }
 
         <!-- ⚠️ Aviso de risco do não-oficial em DESTAQUE (ADR-021). -->
         @if (provedorAtual()?.aviso; as aviso) {
-          <p class="aviso-risco">{{ aviso }}</p>
+          <p class="aviso-risco" role="note"><ui-icone nome="alert-triangle" />{{ aviso }}</p>
         }
 
-        <label class="campo">
-          <span class="rotulo">Como chamar este número</span>
-          <input [value]="ed.nome" (input)="nomeMudou($event)" placeholder="Ex.: WhatsApp da loja" />
-          <span class="ajuda">{{ erros()['nomeAmigavel'] ?? 'Aparece nas telas e mensagens do sistema.' }}</span>
-        </label>
+        <ui-campo rotulo="Como chamar este número" placeholder="Ex.: WhatsApp da loja"
+          dica="Aparece nas telas e mensagens do sistema." [valor]="ed.nome" (valorChange)="nomeMudou($event)"
+          [erro]="erros()['nomeAmigavel'] ?? null" />
 
-        <!-- ⚠️ Em branco NÃO apaga: o servidor mescla com o que já está
-             guardado. É o que permite corrigir só o campo errado — quem chega
-             aqui com o canal quebrado raramente tem os outros valores à mão. -->
+        <!-- ⚠️ Em branco NÃO apaga: o servidor mescla com o que já está guardado. -->
         @if (ed.id) {
           <p class="nota-credencial">
             @if (camposConfigurados().length) {
@@ -289,20 +280,13 @@ import {
 
         @if (provedorAtual(); as p) {
           @if (p.oficial) {
-            <!-- ⚠️ No OFICIAL a credencial é MESMO do cliente: o App e a WABA
-                 são dele (docs/onboarding-meta.md). Pedir os campos aqui é o
-                 certo — e é por isso que os dois modelos não podem ter a mesma
-                 tela. -->
+            <!-- ⚠️ No OFICIAL a credencial é MESMO do cliente: o App e a WABA são dele. -->
             <app-formulario-credencial [esquema]="p.esquemaCredencial" [erros]="erros()"
                                        (mudou)="credencialMudou($event)" />
           } @else {
-            <!-- ⚠️ No NÃO-OFICIAL a instância pertence ao contrato da DREZZ com
-                 o fornecedor. O cliente não tem instância nem token: pedir isso
-                 no fluxo principal trava a ativação, e credencial em formulário
-                 de cliente é credencial que circula por chat, print e e-mail.
-                 O caminho dele é dar um nome e escanear o QR.
-                 Os campos continuam existindo — o provisionamento é manual
-                 hoje (docs/fluxo-conexao-numero.md) — mas como ÁREA DA EQUIPE. -->
+            <!-- ⚠️ No NÃO-OFICIAL a instância pertence ao contrato da DREZZ com o
+                 fornecedor. O cliente não tem instância nem token: o caminho dele é
+                 dar um nome e escanear o QR. Os campos viram ÁREA DA EQUIPE. -->
             <p class="nota-equipe">
               Quem conecta este número é a equipe Drezz: a instância é criada por nós e
               você só escaneia o QR no celular. Se ninguém da equipe estiver com você
@@ -321,144 +305,106 @@ import {
         }
 
         @if (erroGeral(); as m) { <p class="erro-geral" role="alert">{{ m }}</p> }
-
-        <div class="acoes">
-          <button class="btn btn--secundario" (click)="fechar()">Cancelar</button>
-          <button class="btn btn--primario" (click)="salvar()" [disabled]="salvando()">
-            {{ salvando() ? 'Salvando…' : ed.id ? 'Salvar alterações' : 'Salvar e testar' }}
-          </button>
-        </div>
+      }
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fechar()">Cancelar</button>
+        <button type="button" class="btn btn--primario" (click)="salvar()" [disabled]="salvando()">
+          {{ salvando() ? 'Salvando…' : editando()?.id ? 'Salvar alterações' : 'Salvar e testar' }}
+        </button>
       </div>
-    }
+    </ui-modal>
 
-    <!-- ⚠️ Confirmação em modal PRÓPRIO, nunca o confirm() do navegador: é aqui
-         que cabe explicar o desfecho — apagar de vez × arquivar com o histórico
-         de pé. Um confirm() só pergunta "tem certeza?" sobre o quê. -->
-    @if (confirmandoRemocao(); as alvo) {
-      <div class="fundo" (click)="cancelarRemocao()"></div>
-      <div class="painel" role="dialog" aria-modal="true" aria-labelledby="tr" tabindex="-1">
-        <h2 id="tr">Remover {{ alvo.nomeAmigavel }}?</h2>
-        <p class="explica">
-          O número sai da frota: some desta tela, para de ser verificado e não envia mais
-          por nenhum caminho — nem campanha, nem resposta em conversa aberta.
-        </p>
-        <p class="explica">
-          Se ele já conversou, o histórico é preservado: o número fica <strong>arquivado</strong>
-          em vez de apagado. Nenhuma conversa ou mensagem é perdida.
-        </p>
-        @if (erroRemocao(); as m) { <p class="erro-geral" role="alert">{{ m }}</p> }
-        <div class="acoes">
-          <button class="btn btn--secundario" (click)="cancelarRemocao()">Cancelar</button>
-          <button class="btn btn--perigo" (click)="remover(alvo)" [disabled]="removendo()">
-            {{ removendo() ? 'Removendo…' : 'Remover número' }}
-          </button>
-        </div>
+    <!-- Confirmação em modal PRÓPRIO, nunca o confirm() do navegador: é aqui
+         que cabe explicar o desfecho — apagar de vez × arquivar com o histórico de pé. -->
+    <ui-modal [aberto]="confirmandoRemocao() !== null" [titulo]="tituloRemocao()" largura="p" (fechar)="cancelarRemocao()">
+      <p class="explica">
+        O número sai da frota: some desta tela, para de ser verificado e não envia mais
+        por nenhum caminho — nem campanha, nem resposta em conversa aberta.
+      </p>
+      <p class="explica">
+        Se ele já conversou, o histórico é preservado: o número fica <strong>arquivado</strong>
+        em vez de apagado. Nenhuma conversa ou mensagem é perdida.
+      </p>
+      @if (erroRemocao(); as m) { <p class="erro-geral" role="alert">{{ m }}</p> }
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="cancelarRemocao()">Cancelar</button>
+        <button type="button" class="btn btn--perigo" (click)="remover(confirmandoRemocao()!)" [disabled]="removendo()">
+          {{ removendo() ? 'Removendo…' : 'Remover número' }}
+        </button>
       </div>
-    }
+    </ui-modal>
   `,
   styles: `
-    :host { display: block; width: 100%; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
-    .aquec { font-size: 12px; color: var(--texto-secundario); align-self: center; }
-    .aquec-erro { font-size: 12px; color: var(--erro); align-self: center; }
-    .saude { display: flex; gap: var(--espacamento-6); padding: var(--espacamento-3) var(--espacamento-4);
-      margin-bottom: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .saude .metrica { display: flex; flex-direction: column; gap: 2px; }
-    .saude .rot { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--texto-suave); }
-    .saude .val { font-size: 18px; color: var(--texto); font-variant-numeric: tabular-nums; }
-    .saude .val small { font-size: 12px; color: var(--texto-suave); }
-    .saude .val.ruim { color: var(--erro); }
-    .saude .val.neutro { font-size: 14px; color: var(--texto-suave); }
-    .cabecalho { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-6); }
-    h1 { margin: 0; font-size: 20px; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .bloco h2 { margin: 0 0 var(--espacamento-2); font-size: 16px; color: var(--texto); }
-    .vazio, .aviso { text-align: center; } .bloco p { color: var(--texto-secundario); margin: 0 auto var(--espacamento-4); max-width: 44ch; }
-    .esqueleto { height: 60px; background: var(--superficie); border-radius: var(--raio-controle); }
-    .lista { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--espacamento-3); }
-    .canal { padding: var(--espacamento-4); border: 1px solid var(--borda); border-left: 3px solid var(--borda-forte); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .canal--conectado { border-left-color: var(--rfv-cliente-fiel); }
-    .canal--desconectado { border-left-color: var(--erro); }
-    .canal--conectando { border-left-color: var(--atencao); }
-    .linha { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-3); }
-    .canal h2 { margin: 0 0 var(--espacamento-1); font-size: 15px; color: var(--texto); }
-    .tags { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); }
-    .tag { font-size: 11px; padding: 1px 6px; border-radius: var(--raio-controle); border: 1px solid var(--borda); color: var(--texto-secundario); background: var(--superficie); }
-    .tag.oficial { color: var(--sucesso); border-color: var(--sucesso); }
-    .tag.risco { color: var(--erro); border-color: var(--erro); }
-    .selo { font-size: 12px; color: var(--texto-secundario); white-space: nowrap; text-align: right; }
-    .carimbo { display: block; font-size: 11px; color: var(--texto-suave); }
-    /* ⚠️ Carimbo velho é AVISO, não rodapé: o estado pode estar certo, mas
-       ninguém confirmou — e é essa a diferença que a pessoa precisa enxergar. */
+    :host { display: block; width: 100%; min-width: 0; padding: var(--espacamento-6); }
+    .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-3); min-width: 0; }
+    .saude { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--espacamento-3); }
+    .pessoa { display: grid; gap: 2px; min-width: 0; }
+    .nome { color: var(--texto); }
+    .tags { display: flex; flex-wrap: wrap; gap: var(--espacamento-1); }
+    .carimbo { display: block; margin-top: 2px; font-size: 11px; color: var(--texto-suave); }
+    /* ⚠️ Carimbo velho é AVISO, não rodapé: o estado pode estar certo, mas ninguém confirmou. */
     .carimbo.suspeito { color: var(--atencao); }
-    .err { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--erro); }
-    .pausado { margin: var(--espacamento-2) 0 0; padding: var(--espacamento-2) var(--espacamento-3);
-      border-radius: var(--raio-controle); background: var(--atencao-suave); color: var(--texto);
-      font-size: 12px; line-height: 1.5; }
-    .pausado-ok, .pausado-link { display: block; }
-    .pausado-ok { color: var(--texto-secundario); }
-    .pausado-link { color: var(--acao); text-decoration: none; margin-top: 2px; }
-    .pausado-link:hover { text-decoration: underline; }
-    /* flex-wrap: em tela estreita os botões quebram linha em vez de estourar o card. */
-    .acoes { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
-    .reconectar { margin-top: var(--espacamento-3); }
-    /* Tipografia pelas classes .txt-* (escala única); aqui só cor e espaço. */
-    .so-admin { margin: var(--espacamento-3) 0 0; color: var(--texto-suave); }
-    .numero { margin: 0 0 var(--espacamento-1); color: var(--texto-secundario);
-      display: flex; flex-wrap: wrap; gap: var(--espacamento-3); }
-    .numero .id { color: var(--texto-suave); }
-    .tag.agente--ligado { color: var(--acao); border-color: var(--acao); }
-    .tag.restricao { color: var(--atencao); border-color: var(--atencao); background: var(--atencao-suave); }
-    .indisponivel { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3);
-      border: 1px solid var(--atencao); border-radius: var(--raio-controle);
-      background: var(--atencao-suave); color: var(--texto); }
+    .situacao { display: grid; gap: var(--espacamento-2); min-width: 0; max-width: 340px; }
+    .err { margin: 0; font-size: 12px; color: var(--erro); }
+    .pausado { margin: 0; padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle);
+      background: var(--atencao-suave); color: var(--texto); font-size: 12px; line-height: 1.5; }
+    .pausado-ok { display: block; color: var(--texto-secundario); }
+    .pausado a { display: block; margin-top: 2px; color: var(--acao); text-decoration: none; }
+    .pausado a:hover { text-decoration: underline; }
+    .aquec { font-size: 12px; color: var(--texto-secundario); }
+    .aquec-erro { font-size: 12px; color: var(--erro); }
+    .so-admin { margin: 0; font-size: 12px; color: var(--texto-suave); }
     .quando { color: var(--texto-suave); font-size: 12px; }
-    .qr { margin-top: var(--espacamento-3); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
-    .qr img { display: block; margin: 0 auto var(--espacamento-3); border-radius: var(--raio-controle); }
-    .qr .passos { margin: 0; font-size: 13px; color: var(--texto); }
-    .qr .expira { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
-    /* tabular-nums: sem isso o contador "pula" a cada dígito e a tela treme. */
-    .qr .relogio { font-family: var(--tipografia-familia-dados, monospace); font-variant-numeric: tabular-nums; color: var(--texto-secundario); }
-    .qr .relogio.urgente { color: var(--erro); }
-    .resultado { margin: var(--espacamento-3) 0 0; font-size: 13px; color: var(--erro); }
+    .resultado { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--espacamento-1); font-size: 13px; color: var(--erro); }
     .resultado.ok { color: var(--sucesso); }
-    .fundo { position: fixed; inset: 0; background: rgb(0 0 0 / .5); z-index: 40; }
-    .painel { position: fixed; z-index: 41; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      width: min(560px, calc(100vw - var(--espacamento-6) * 2));
-      max-height: min(88dvh, 720px); overflow-y: auto;
-      padding: var(--espacamento-6); border: 1px solid var(--borda);
-      border-radius: var(--raio-painel); background: var(--superficie-elevada);
-      box-shadow: var(--elevacao-modal); }
-    .painel:focus { outline: none; }
-    .painel h2 { margin: 0 0 var(--espacamento-4); font-size: 16px; }
-    .campo { display: grid; gap: var(--espacamento-1); margin-bottom: var(--espacamento-4); }
-    .rotulo { font-weight: 500; font-size: 13px; color: var(--texto); }
-    .ajuda { font-size: 12px; color: var(--texto-suave); }
-    select, .campo input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .aviso-risco { padding: var(--espacamento-3); border: 1px solid var(--erro); border-radius: var(--raio-controle); background: var(--superficie); color: var(--erro); font-size: 13px; margin: 0 0 var(--espacamento-4); }
-    .nota-equipe { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3); border-left: 3px solid var(--acao);
+    /* flex-wrap: em tela estreita os botões quebram linha em vez de estourar a célula. */
+    .acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--espacamento-2); }
+    .aviso-faixa { display: flex; flex-wrap: wrap; align-items: center; gap: var(--espacamento-2); margin: 0;
+      padding: var(--espacamento-3); border: 1px solid var(--atencao); border-radius: var(--raio-controle);
+      background: var(--atencao-suave); color: var(--texto); font-size: 13px; }
+    .aviso-faixa--ok { border-color: var(--borda); border-left: 3px solid var(--sucesso); background: var(--superficie); color: var(--texto-secundario); }
+    .aviso-risco { display: flex; align-items: flex-start; gap: var(--espacamento-2); margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3);
+      border: 1px solid var(--erro); border-radius: var(--raio-controle); background: var(--superficie); color: var(--erro); font-size: 13px; }
+    .nota-equipe { margin: 0; padding: var(--espacamento-3); border-left: 3px solid var(--acao);
       background: var(--superficie); border-radius: var(--raio-controle); color: var(--texto-secundario); font-size: 13px; line-height: 1.5; }
-    .avancado { margin-bottom: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); }
+    .nota-credencial { margin: 0; padding: var(--espacamento-3); border-left: 3px solid var(--acao); background: var(--superficie);
+      border-radius: var(--raio-controle); color: var(--texto-secundario); font-size: 13px; line-height: 1.5; }
+    .avancado { border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); }
     .avancado > summary { padding: var(--espacamento-2) var(--espacamento-3); cursor: pointer; font-size: 13px; color: var(--texto-secundario); }
     .avancado > summary:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .avancado[open] > summary { border-bottom: 1px solid var(--borda); }
     .avancado > :not(summary) { margin-left: var(--espacamento-3); margin-right: var(--espacamento-3); }
     .avancado > app-formulario-credencial { display: block; margin-bottom: var(--espacamento-3); }
     .aviso-credencial { margin: var(--espacamento-3) 0; font-size: 12px; color: var(--texto-suave); line-height: 1.5; }
-    .erro-geral { color: var(--erro); font-size: 13px; }
+    .erro-geral { display: flex; align-items: center; gap: var(--espacamento-2); margin: 0; color: var(--erro); font-size: 13px; }
     .tipo-fixo { margin: 0 0 var(--espacamento-4); font-size: 13px; color: var(--texto-secundario); }
-    .nota-credencial { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3);
-      border-left: 3px solid var(--acao); background: var(--superficie);
-      border-radius: var(--raio-controle); color: var(--texto-secundario); font-size: 13px; line-height: 1.5; }
     .explica { margin: 0 0 var(--espacamento-3); font-size: 13px; color: var(--texto-secundario); line-height: 1.5; }
-    .aviso-remocao { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3);
-      border: 1px solid var(--borda); border-left: 3px solid var(--sucesso);
-      border-radius: var(--raio-controle); background: var(--superficie);
-      color: var(--texto-secundario); font-size: 13px; }
+    .qr { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
+    .qr img { display: block; margin: 0 auto var(--espacamento-3); border-radius: var(--raio-controle); }
+    .qr .passos { margin: 0; font-size: 13px; color: var(--texto); }
+    .qr .expira { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
+    /* tabular-nums: sem isso o contador "pula" a cada dígito e a tela treme. */
+    .qr .relogio { font-family: var(--tipografia-familia-dados); font-variant-numeric: tabular-nums; color: var(--texto-secundario); }
+    .qr .relogio.urgente { color: var(--erro); }
   `,
 })
 export class CanaisPagina implements OnInit, OnDestroy {
   readonly servico = inject(CanaisServico)
+  readonly #http = inject(HttpClient)
+
+  protected readonly colunas: ColunaTabela[] = [
+    { chave: 'numero', rotulo: 'Número' },
+    { chave: 'tipo', rotulo: 'Tipo' },
+    { chave: 'agente', rotulo: 'Agente', largura: '160px' },
+    { chave: 'estado', rotulo: 'Estado', largura: '150px' },
+    { chave: 'situacao', rotulo: 'Situação' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '300px' },
+  ]
+  /** A API de canais devolve a frota inteira (sem cursor): a tabela não tem paginação. */
+  protected readonly linhas = computed(() => this.servico.canais() as unknown as readonly LinhaTabela[])
+  protected readonly opcoesProvedores = computed<OpcaoSelect[]>(() =>
+    this.servico.provedores().map((p) => ({ valor: p.codigo, rotulo: p.nome })))
+
   /** `id` presente = EDITANDO um número que existe; ausente = conectando um novo. */
   readonly editando = signal<{ id?: string; provedor: string; nome: string } | null>(null)
   readonly confirmandoRemocao = signal<Canal | null>(null)
@@ -470,7 +416,6 @@ export class CanaisPagina implements OnInit, OnDestroy {
   readonly erroGeral = signal<string | null>(null)
   readonly salvando = signal(false)
   readonly resultado = signal<Record<string, { conectado: boolean; detalhe?: string }>>({})
-  readonly #http = inject(HttpClient)
   /** Hora da última verificação, por canal — o carimbo ao lado do estado. */
   readonly verificadoEm = signal<Record<string, string>>({})
   /** Segundos até o QR atual expirar, por canal. */
@@ -478,9 +423,7 @@ export class CanaisPagina implements OnInit, OnDestroy {
   readonly #timers = new Map<string, ReturnType<typeof setInterval>>()
   /**
    * ⚠️ Relógio da tela. Sem ele, "verificado há 3 min" ficaria congelado numa
-   * aba aberta 8 horas — o texto viraria a mesma mentira confortável que o
-   * carimbo existe para desfazer. Meio minuto basta: a menor unidade exibida é
-   * o minuto.
+   * aba aberta 8 horas. Meio minuto basta: a menor unidade exibida é o minuto.
    */
   readonly agora = signal(new Date())
   #relogio: ReturnType<typeof setInterval> | null = null
@@ -489,6 +432,31 @@ export class CanaisPagina implements OnInit, OnDestroy {
   #paradoDesde = new Map<string, { chave: string; desde: number }>()
   readonly qr = signal<Record<string, { imagem?: string; erro?: string }>>({})
   readonly buscandoQr = signal<string | null>(null)
+  /** Canal cujo QR está no modal de reconexão; `null` = modal fechado. */
+  readonly qrCanalId = signal<string | null>(null)
+
+  /** Abre o modal de QR e busca o primeiro código. */
+  abrirQr(canalId: string): void {
+    this.qrCanalId.set(canalId)
+    void this.pedirQr(canalId)
+  }
+
+  gerarOutroQr(): void {
+    const id = this.qrCanalId()
+    if (id) void this.pedirQr(id)
+  }
+
+  /**
+   * Fechar o modal encerra a sessão de pareamento: sem a tela aberta ninguém
+   * escaneia, e o relógio não tem por que continuar batendo no fornecedor.
+   */
+  fecharQr(): void {
+    const id = this.qrCanalId()
+    this.qrCanalId.set(null)
+    if (!id) return
+    this.#encerrarSessao(id)
+    this.qr.update((a) => ({ ...a, [id]: {} }))
+  }
 
   /**
    * Busca o QR sob demanda. ⚠️ Nunca guardado: o código expira em segundos e
@@ -569,6 +537,16 @@ export class CanaisPagina implements OnInit, OnDestroy {
   }
 
   pct(taxa: number | null): string { return taxa === null ? '—' : `${Math.round(taxa * 100)}%` }
+  valorEntrega(e: { amostras: number; taxa: number | null }): string {
+    return e.amostras === 0 ? '—' : this.pct(e.taxa)
+  }
+  rotuloEntrega(e: { amostras: number; falha: number }): string {
+    return e.amostras === 0 ? 'Entrega (24h) · sem envios' : `Entrega (24h) · ${e.falha} falhas de ${e.amostras}`
+  }
+  tomEntrega(e: { amostras: number; taxa: number | null }): TomStat {
+    if (e.amostras === 0) return 'neutro'
+    return (e.taxa ?? 1) < 0.7 ? 'erro' : 'sucesso'
+  }
 
   ehOficial(c: Canal): boolean { return c.tipo === 'whatsapp_oficial' }
   nomeProvedor(cod: string | null): string {
@@ -591,12 +569,14 @@ export class CanaisPagina implements OnInit, OnDestroy {
     this.avisoRemocao.set(null)
     this.editando.set({ id: c.id, provedor: c.provedor ?? '', nome: c.nomeAmigavel })
   }
+  tituloEdicao(): string { return this.editando()?.id ? 'Editar número' : 'Conectar número' }
 
   pedirRemocao(c: Canal): void {
     this.erroRemocao.set(null)
     this.avisoRemocao.set(null)
     this.confirmandoRemocao.set(c)
   }
+  tituloRemocao(): string { return `Remover ${this.confirmandoRemocao()?.nomeAmigavel ?? 'número'}?` }
   cancelarRemocao(): void { this.confirmandoRemocao.set(null); this.erroRemocao.set(null) }
 
   async remover(c: Canal): Promise<void> {
@@ -619,13 +599,13 @@ export class CanaisPagina implements OnInit, OnDestroy {
     this.avancadoManual.set(false)
   }
 
-  trocarProvedor(e: Event): void {
+  trocarProvedor(codigo: string): void {
     // ⚠️ Trocar de provedor limpa a credencial: os campos são outros.
     this.credencial.set({}); this.erros.set({}); this.avancadoManual.set(false)
-    this.editando.update((ed) => (ed ? { ...ed, provedor: (e.target as HTMLSelectElement).value } : ed))
+    this.editando.update((ed) => (ed ? { ...ed, provedor: codigo } : ed))
   }
-  nomeMudou(e: Event): void {
-    this.editando.update((ed) => (ed ? { ...ed, nome: (e.target as HTMLInputElement).value } : ed))
+  nomeMudou(nome: string): void {
+    this.editando.update((ed) => (ed ? { ...ed, nome } : ed))
   }
   credencialMudou(v: Record<string, string>): void { this.credencial.set(v) }
 
@@ -675,8 +655,7 @@ export class CanaisPagina implements OnInit, OnDestroy {
    * pareou.
    *
    * ⚠️ **O QR expira em segundos.** Sem renovar sozinho, o usuário escaneia um
-   * código morto e não entende por que não funcionou — o erro fica com cara de
-   * problema no celular dele.
+   * código morto e não entende por que não funcionou.
    *
    * ⚠️ E não renova para sempre: uma aba esquecida bateria no fornecedor a noite
    * inteira. Ao estourar o teto a tela DIZ que parou, em vez de simplesmente
@@ -690,7 +669,7 @@ export class CanaisPagina implements OnInit, OnDestroy {
     const timer = setInterval(() => {
       segundos++
 
-      // QR fechado (pareou, trocou de tela): o relógio morre junto.
+      // QR fechado (pareou, fechou o modal, trocou de tela): o relógio morre junto.
       if (!this.qr()[canalId]?.imagem) { this.#encerrarSessao(canalId); return }
 
       this.restante.update((a) => ({
@@ -706,6 +685,8 @@ export class CanaisPagina implements OnInit, OnDestroy {
           if (r.conectado) {
             this.#encerrarSessao(canalId)
             this.qr.update((a) => ({ ...a, [canalId]: {} }))
+            // Pareou: o modal de QR não tem mais o que mostrar.
+            if (this.qrCanalId() === canalId) this.qrCanalId.set(null)
             void this.servico.atualizar()
           }
         })
