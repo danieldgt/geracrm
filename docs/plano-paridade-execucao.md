@@ -31,14 +31,14 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
 | B1 panorama do funil | 2 | ✅ | integrada (0131) |
 | C2 agenda (módulo) | 2 | ✅ | integrada (0117); escopo comum e aba na ficha entregues pela C2b |
-| C3 reunião pelo CRM e pelo agente (chave) | 2 | 🔍 | integrada (0137); chave por número padrão desligado; lembretes H-24/H-2 e no-show só para reuniões nascidas na conversa; revisão Opus em curso |
+| C3 reunião pelo CRM e pelo agente (chave) | 2 | 🔍 | integrada (0137); revisão Opus: aprovado com correções (alto: guarda de horário/"marcado" no pipeline, leitura conservadora da escolha, oferta = o que o cliente leu, fila de avisos travável). Decisões: sem convite automático de no-show (vendedor é avisado; convite só com "não compareceu" explícito); agente nunca transfere carteira. Correção em curso pelo agente da raia — **não ligar a chave do agente antes**; 0137 sem `lock_timeout`: rodar o deploy fora do horário comercial |
 | D4 notificações, perfil, esqueci a senha | 2 | ✅ | integrada com as correções da revisão (0144/0145: sessão de staff no armazém do token, GlobalSignOut na troca de senha e AdminUserGlobalSignOut na redefinição, limite por e-mail, upsert com tipo novo, worker de e-mail com reserva); **dono: IAM `cognito-idp:AdminUserGlobalSignOut`** |
 | D6 auditoria v2 | 2 | ✅ | integrada; login/logout entregues pela D4; pendente: janela padrão da busca `q` |
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
 | D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
 | F1 campanhas v2 | 3 | 🔄 | F1a ✅ com as correções da revisão (0142: tier 250/24h por contato distinto, 1 envio por passada no não-oficial com intervalo 3–10 s, varredura decide pela mensagem, exclusões reavaliadas no envio, erros da Meta separados e pausa imediata por número em risco, `pedido.campanha_id` herdado, LGPD); F1b ✅ telas; F1c Haiku em curso: telas mostram `bloqueio`, `ajustada`, `numero_em_risco` e os códigos novos (`janela_vazia`, `janela_fora_do_permitido`, `alterada_durante_inicio`, `teste_limite`, `teste_sem_cota`) |
-| F3 formulários públicos | 3 | ✅ | integrada com as correções de segurança; re-revisão conferiu todas; pendência média: IP confiável (`TRUST_PROXY_HOPS` global deixa forjar IP em chamada direta) → F3c Sonnet em curso (segredo nginx→API + limitador global por IP); **dono: não publicar link de formulário antes da F3c** |
+| F3 formulários públicos | 3 | ✅ | integrada com as correções de segurança; re-revisão conferiu todas; IP confiável resolvido pela F3c (link público liberado depois do `PROXY_SEGREDO` no Railway) |
 | G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
 | G3 pós-venda, NPS, indicações, prova social | 3 | ✅ | integrada com as correções da revisão (0141: índice parcial e reagendamento; indicações padrão desligado, com portão e teto; NPS passa o portão com equipe disponível; prova social amarrada à versão; espalhamento e teto no não-oficial); runbook §19 |
 | G4 roteamento e rodízio | 3 | ✅ | integrada com as correções da revisão (gestor de filial só cria regra para número da própria filial; roteamento por filial no handoff só com opt-in; simulador e números no escopo; aviso ao ligar sem elegíveis) |
@@ -60,7 +60,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | X5 busca/filtros no servidor (templates por status/categoria/número; q em listas, etiquetas, origens) | — | ✅ | integrada; troca no wizard feita pela R2 |
 | X6 sobras: pedidos com busca/período/contadores na API (A5), janela padrão da busca `q` da auditoria (D6), SLA estourado avisa primeiro o gestor da filial (G4) | — | 🔄 | Sonnet |
 | X7 top-N com `truncado` no analítico (mapa, mercado, BI, NPS, performance, fidelidade, carteiras) | — | 🔄 | Haiku |
-| F3c IP confiável por segredo nginx→API + limitador global por IP | 3 | 🔄 | Sonnet |
+| F3c IP confiável por segredo nginx→API + limitador global por IP | 3 | ✅ | integrada; `TRUST_PROXY_HOPS` só 0/1; **dono: criar `PROXY_SEGREDO` (mesmo valor) nos serviços console e api do Railway e remover `TRUST_PROXY_HOPS=2` se existir** — sem o segredo, todo tráfego do console divide o IP do nginx |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 > Última suíte completa em `feat` (após F1a corrigida e R2): api 3089, console 926, shared 1100 — verde. `formularios.test.ts` (anexo) oscilou uma vez sob carga 50+; passou isolado.
