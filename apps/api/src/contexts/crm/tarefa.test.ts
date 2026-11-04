@@ -117,9 +117,11 @@ describe('Tarefas v2 — campos e filtros', () => {
     const [resp] = await dono<{ id: string }[]>`SELECT responsavel_id AS id FROM tarefa WHERE tenant_id=${T} LIMIT 1`
     expect((await lista(`responsavelId=${resp!.id}`)).length).toBe(2)
     expect(await lista(`responsavelId=${C1}`)).toEqual([])
-    const depois = new Date(Date.now() + 20 * H).toISOString().slice(0, 10)
-    expect(await lista(`de=${depois}`)).toEqual(['Enviar proposta'])
-    expect(await lista(`ate=${new Date(Date.now() + 3 * H).toISOString().slice(0, 10)}&tipo=ligacao`)).toEqual(['Ligar renovação'])
+    // Dia LOCAL do tenant (America/Sao_Paulo), não o dia UTC: às 21h–24h locais o dia UTC já virou e o
+    // filtro `de` pegava as duas tarefas. +2 h e +30 h estão sempre em dias locais diferentes.
+    const diaLocal = (ms: number) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date(ms))
+    expect(await lista(`de=${diaLocal(Date.now() + 30 * H)}`)).toEqual(['Enviar proposta'])
+    expect(await lista(`ate=${diaLocal(Date.now() + 2 * H)}&tipo=ligacao`)).toEqual(['Ligar renovação'])
     expect((await chamar(T, 'GET', '/v1/tarefas?tipo=fax')).statusCode).toBe(422)
     expect((await chamar(T, 'GET', '/v1/tarefas?de=ontem')).statusCode).toBe(422)
   })

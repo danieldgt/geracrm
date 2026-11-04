@@ -281,8 +281,10 @@ describe('agendar_reuniao — propor e confirmar (autônomo)', () => {
     await turno(A, CV.ok, CANAL, '1', [confirmar(1)], ['Fechado, até sexta às 23:59!'])
     expect(await eventos(A)).toHaveLength(1)
     expect((await guardrails(CV.ok)).map((g) => g.codigo)).toEqual(expect.arrayContaining(['horario_sem_fonte', 'reuniao_sem_confirmacao_ao_cliente']))
-    const [n] = await dono<{ titulo: string }[]>`SELECT titulo FROM notificacao WHERE tenant_id = ${A} AND usuario_id = ${VA} AND tipo = 'agenda.reuniao'`
-    expect(n?.titulo).toMatch(/confirmação não chegou ao cliente/)
+    // Duas notificações do mesmo tipo nascem no turno ("Reunião marcada…" e o aviso do B5), com o mesmo now():
+    // confere que o aviso existe, sem depender da ordem de leitura.
+    const ns = await dono<{ titulo: string }[]>`SELECT titulo FROM notificacao WHERE tenant_id = ${A} AND usuario_id = ${VA} AND tipo = 'agenda.reuniao'`
+    expect(ns.some((n) => /confirmação não chegou ao cliente/.test(n.titulo))).toBe(true)
   })
 
   it('⚠️ M7: já existe reunião futura desta conversa → recusa e passa para uma pessoa', async () => {
