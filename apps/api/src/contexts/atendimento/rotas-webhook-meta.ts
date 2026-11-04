@@ -5,6 +5,7 @@ import { ingerirMensagemEntrante, registrarStatusMensagem } from './ingestao-men
 import { PREFIXO_MIDIA_META } from './canais/meta-oficial.js'
 import { aplicarQualidadeNumero, aplicarStatusTemplate } from './qualidade-numero.js'
 import type { MensagemEntrante } from './canais/porta.js'
+import { registrarFalhaDestinatario } from '../crm/campanha-destinatario.js'
 
 /**
  * Webhook da Meta (WhatsApp Cloud API / Instagram Direct).
@@ -142,9 +143,14 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
               'pós-ingestão NÃO agendada: ausência e mídia desta mensagem não sairão')
           }
         } else if (ev.status === 'enviada' || ev.status === 'entregue' || ev.status === 'lida') {
-          await comTenantServico(canal.tenant_id, (tx) => registrarStatusMensagem(tx, ev.idExterno, ev.status as 'enviada' | 'entregue' | 'lida'))
+          await comTenantServico(canal.tenant_id, (tx) => registrarStatusMensagem(tx, ev.idExterno, ev.status as 'enviada' | 'entregue' | 'lida', agora))
+        } else if (ev.status === 'falhou') {
+          // Campanha v2 (F1): o destinatário do wamid vira `falhou` com o código da Meta e
+          // entra na taxa da pausa automática. A mensagem da thread continua como está
+          // (o tique de falha no inbox é outro passo).
+          const erroCodigo = ev.erroCodigo ?? null
+          await comTenantServico(canal.tenant_id, (tx) => registrarFalhaDestinatario(tx, ev.idExterno, erroCodigo, agora))
         }
-        // status 'falhou' → tratamento (marcar mensagem falhou) entra depois.
       } catch (erro) {
         // ⚠️ Erro NOSSO (transitório, ex.: banco) → 500 para a Meta reenviar.
         req.log.error({ erro, phoneNumberId: ev.phoneNumberId }, 'webhook meta: falha ao processar')

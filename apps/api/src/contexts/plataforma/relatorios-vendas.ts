@@ -144,7 +144,15 @@ export async function vendasPorDimensao(
   const truncado = !fechado && linhas.length > LIMITE_GRUPOS_VENDAS
   const cortadas = truncado ? linhas.slice(0, LIMITE_GRUPOS_VENDAS) : linhas
   // Base do percentual: produto = soma dos itens; demais = total de pedidos.
-  const baseValor = dim === 'produto' ? cortadas.reduce((s, l) => s + Number(l.valor), 0) : totais.valorCentavos
+  let baseValor = totais.valorCentavos
+  if (dim === 'produto') {
+    // Soma de TODOS os itens (sem o corte dos 100), para a fatia não inflar quando há mais produtos.
+    const [b] = await tx<{ valor: string }[]>`
+      SELECT coalesce(sum(round(it.quantidade * it.valor_unitario_centavos)), 0)::text AS valor
+        FROM pedido_item it
+       WHERE it.tenant_id = tenant_atual() AND it.pedido_id IN (SELECT pd.id ${base})`
+    baseValor = Number(b?.valor ?? 0)
+  }
   const montar = (chave: string, rotulo: string, pedidos: number, valor: number): ItemVendas => ({
     chave, rotulo, pedidos, valorCentavos: valor, ticketMedioCentavos: ticketMedio(valor, pedidos), percentual: fatia(valor, baseValor),
   })

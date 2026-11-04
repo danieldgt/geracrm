@@ -37,25 +37,26 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
 | D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
-| F1 campanhas v2 | 3 | 🔄 | F1a API+despachante (Opus, migration 0134) em curso; F1b wizard (Sonnet) depois |
+| F1 campanhas v2 | 3 | 🔄 | F1a API+despachante integrada (0134; legado intacto) — revisão Opus em curso; F1b telas (wizard, lista, detalhe) Sonnet em curso; pendente: `pedido.campanha_id` não é preenchido (atribuição exata 0), limite 250/24h do portfólio não verificado (#117) |
 | F3 formulários públicos | 3 | ✅ | integrada com as correções de segurança (upload fora da transação, IP real via `TRUST_PROXY_HOPS`, contato existente só com "Aplicar ao contato", assinatura de arquivo, clickjacking, hash do texto LGPD); 0127 editada no lugar; **dono: `TRUST_PROXY_HOPS=2` na API do Railway**; re-revisão curta pendente |
 | G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
-| G3 pós-venda, NPS, indicações, prova social | 3 | 🔍 | integrada (0130); revisão Opus em curso |
+| G3 pós-venda, NPS, indicações, prova social | 3 | 🔍 | integrada (0130); revisão Opus: aprovado com correções (alto: indicações viram oráculo de "já é cliente" e não têm portão/teto; resposta do NPS barrada pelo portão com equipe disponível). Decisão: `indicacoes` padrão desligado. Correção em curso pelo agente da raia (migration 0141) — **não ligar pós-venda em cliente antes** |
 | G4 roteamento e rodízio | 3 | 🔄 | Opus; migration 0136 |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
-| H1 importador | 3 | 🔍 | integrada (0133); revisão Sonnet em curso |
+| H1 importador | 3 | ✅ | integrada com as 13 correções da revisão (LGPD: titular bloqueado e contato anonimizado ignorados; arrendamento pelo relógio do banco e contagens dos itens; simulação fiel; venda sem referência idempotente por conteúdo; `simulada_em` obrigatória — migration 0140; windows-1252 e UTF-16 recusado; conferência só criados/atualizados) |
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
-| E2 relatórios 1ª leva | 3 | 🔍 | integrada (sem migration; consultas vivas com período ≤ 366 dias); revisão Sonnet em curso |
+| E2 relatórios 1ª leva | 3 | ✅ | integrada com as correções da revisão (sistema e falhas fora de "enviadas", ranking no escopo, vazio, base do percentual, escopo materializado, 1ª resposta negativa, cliente antigo do ERP fora do tempo de conversão) |
 | E3 relatórios 2ª leva | 3 | 🔄 | Sonnet |
-| L1 retrofit das telas restantes | 4 | 🔄 | L1a ✅ integrada (8 telas); L1b (Haiku) em curso: canais, canal-config, templates, automações, catálogo, conexões, mídia; depois L1c (nps, mapa, mercado, bi, performance, fidelidade, carteiras, leads) e L1d Sonnet (kanban de atendimento, fila do dia, CRM avançado); pendente: cursor em `/v1/listas`, `/v1/metas`, `/v1/segmentos` |
+| L1 retrofit das telas restantes | 4 | 🔄 | L1a ✅ integrada (8 telas); L1b (Haiku) em curso: canais, canal-config, templates, automações, catálogo, conexões, mídia; depois L1c (nps, mapa, mercado, bi, performance, fidelidade, carteiras, leads) e L1d Sonnet (kanban de atendimento, fila do dia, CRM avançado); cursores resolvidos pela X4 |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
 | G1b correções da G1 | 0 | ✅ | Opus (etapa de pipeline + concorrência) |
 | D3.4 telas de usuários e filiais | 0 | ✅ | integrada (console 656); conferir códigos de erro com a API quando D3 entrar |
 | C2b agenda no escopo comum + na ficha | 2 | ✅ | integrada; contato fora do escopo → 422 e nome oculto na leitura |
 | X3 teste do worker de aquisição sem isolamento de tenant | — | ✅ | integrada |
-| D3.4b telas de usuário sem admin atribuído + nomear admin | 0 | ✅ | integrada; API passou a responder `acesso.admin_atribuido` no modo fundador; pendente: `GET /v1/plataforma/clientes/:id/usuarios` para trocar o campo de ID por select |
+| D3.4b telas de usuário sem admin atribuído + nomear admin | 0 | ✅ | integrada; API passou a responder `acesso.admin_atribuido` no modo fundador; select de usuários entregue pela X4 |
 | X2 cursores de pedidos e memória com µs | — | ✅ | integrada |
+| X4 cursor em listas/metas/segmentos + usuários do cliente para o staff | — | ✅ | integrada; listas por cursor; metas e segmentos com teto documentado (limitados por construção); "Nomear admin" com select paginado; agregação RFV movida para SQL |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
 > Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.

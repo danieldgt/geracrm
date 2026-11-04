@@ -41,7 +41,7 @@ import {
 
       <div class="barra-tabela">
         <span class="txt-denso nota">
-          Período {{ c.inicio() }} a {{ c.fim() }}. Dias entre o cadastro do contato e o primeiro pedido efetivado.
+          Período {{ c.inicio() }} a {{ c.fim() }}. Dias entre o cadastro do contato e o primeiro pedido efetivado no CRM; cliente que já comprava no ERP antes não conta como conversão.
           @if (c.dados()?.porVendedorTruncado) { Mostrando só os 100 vendedores com mais contatos. }
         </span>
         <ui-botao-csv [colunas]="csv().colunas" [linhas]="csv().linhas" [arquivo]="arquivoCsv()" />

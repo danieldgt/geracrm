@@ -65,6 +65,10 @@ export class ImportacaoServico {
     return firstValueFrom(this.http.get<Pagina<ImportacaoResumo>>(`/v1/importacoes${queryDeLista({ cursor })}`))
   }
 
+  itens(id: string, resultado: ResultadoItem, cursor?: string | null): Promise<Pagina<ItemImportacao>> {
+    return firstValueFrom(this.http.get<Pagina<ItemImportacao>>(`/v1/importacoes/${id}/itens${queryDeLista({ resultado, cursor })}`))
+  }
+
   conferencia(id: string): Promise<Conferencia> {
     return firstValueFrom(this.http.get<Conferencia>(`/v1/importacoes/${id}/conferencia`))
   }

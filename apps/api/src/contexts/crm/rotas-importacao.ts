@@ -88,11 +88,20 @@ async function lerMultipart(req: FastifyRequest): Promise<
   return { ok: true, bytes, nome: nome || 'importacao.csv', campos }
 }
 
-/** UTF-8 (com ou sem BOM); planilha salva em Windows-1252 cai no latin1 em vez de virar `�`. */
-function decodificar(bytes: Buffer): string {
+/**
+ * UTF-8 (com ou sem BOM); se vier lixo (U+FFFD), a planilha foi salva em Windows-1252 e é lida como tal (o decoder
+ * certo, não latin1: 0x80-0x9F são aspas e travessão). UTF-16 (BOM FF FE / FE FF) e NUL não são CSV de texto: `null`.
+ */
+function decodificar(bytes: Buffer): string | null {
+  if (bytes.length >= 2 && ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))) return null
+  if (bytes.includes(0)) return null
   const t = bytes.toString('utf8')
-  return t.includes('�') ? bytes.toString('latin1') : t
+  return t.includes('\uFFFD') ? new TextDecoder('windows-1252').decode(bytes) : t
 }
+
+const ENCODING_INVALIDO = { erro: 'importacao.encoding', mensagem: 'O arquivo não está em UTF-8 nem em Windows-1252. No Excel, salve como CSV UTF-8.' }
+/** Teto de tempo da simulação síncrona: acima disso o arquivo é pesado demais para esta tela. */
+const SIMULACAO_MAX_MS = 90_000
 
 const csvCelula = (v: string | number | null): string => {
   const s = v === null ? '' : String(v)
@@ -139,7 +148,9 @@ export async function rotasImportacao(app: FastifyInstance): Promise<void> {
     const arq = await lerMultipart(req)
     if (!arq.ok) return reply.code(arq.status).send({ erro: arq.erro, mensagem: arq.mensagem })
 
-    const csv = parseCsv(decodificar(arq.bytes))
+    const texto = decodificar(arq.bytes)
+    if (texto === null) return reply.code(422).send(ENCODING_INVALIDO)
+    const csv = parseCsv(texto)
     if (csv.colunas.length === 0 || csv.linhas.length === 0) return erro422(reply, 'importacao.sem_dados', 'O arquivo não tem linhas de dados.')
     if (csv.linhas.length > IMPORTACAO_MAX_LINHAS) {
       return erro422(reply, 'importacao.linhas_demais', `Máximo ${IMPORTACAO_MAX_LINHAS} linhas por importação.`)
@@ -176,11 +187,18 @@ export async function rotasImportacao(app: FastifyInstance): Promise<void> {
     // Um pedaço por transação (curta); a simulação só lê o domínio e grava itens.
     let contagens: ContagensImportacao = { ...CONTAGENS_ZERADAS, linhas: csv.linhas.length }
     const vistos = new Set<string>()
+    const horizonte = new Map<string, boolean>()
+    const prazo = Date.now() + SIMULACAO_MAX_MS
     const amostra: { linha: number; motivo: string }[] = []
     for (let i = 0; i < csv.linhas.length; i += IMPORTACAO_LOTE) {
+      if (Date.now() > prazo) {
+        // Não deixa simulação pela metade: apaga (os itens vão junto) e pede para dividir o arquivo.
+        await req.comTenant((tx) => tx`DELETE FROM importacao WHERE tenant_id = tenant_atual() AND id = ${importacaoId}`)
+        return erro422(reply, 'importacao.simulacao_demorada', 'O arquivo é pesado demais para simular de uma vez. Divida-o em partes menores.')
+      }
       const pedaco = csv.linhas.slice(i, i + IMPORTACAO_LOTE)
       const itens: ItemParaGravar[] = await req.comTenant(async (tx) => {
-        const r = await simularPedaco(tx, base, pedaco, vistos)
+        const r = await simularPedaco(tx, base, pedaco, vistos, horizonte)
         await gravarItens(tx, importacaoId, r)
         return r
       })
@@ -190,7 +208,7 @@ export async function rotasImportacao(app: FastifyInstance): Promise<void> {
       }
     }
     await req.comTenant((tx) => tx`
-      UPDATE importacao SET contagens = ${JSON.stringify(contagens)}::text::jsonb, atualizado_em = now()
+      UPDATE importacao SET contagens = ${JSON.stringify(contagens)}::text::jsonb, atualizado_em = now(), simulada_em = now()
        WHERE tenant_id = tenant_atual() AND id = ${importacaoId}`)
 
     return reply.code(201).send({
@@ -205,24 +223,26 @@ export async function rotasImportacao(app: FastifyInstance): Promise<void> {
     if (!arq.ok) return reply.code(arq.status).send({ erro: arq.erro, mensagem: arq.mensagem })
     const hash = sha256(arq.bytes)
     const confirmado = jsonDoCampo(arq.campos.deParaConfirmado)
-    const opcoesBruto = jsonDoCampo(arq.campos.opcoes)
     const texto = decodificar(arq.bytes)
+    if (texto === null) return reply.code(422).send(ENCODING_INVALIDO)
 
     const r = await req.comTenant(async (tx) => {
-      const [imp] = await tx<{ tipo: TipoImportacao; arquivo_hash: string; estado: EstadoImportacao; de_para: DePara; opcoes: OpcoesImportacao; linhas: number }[]>`
-        SELECT tipo, arquivo_hash, estado, de_para, opcoes, (contagens->>'linhas')::int AS linhas
+      const [imp] = await tx<{ tipo: TipoImportacao; arquivo_hash: string; estado: EstadoImportacao; de_para: DePara; opcoes: OpcoesImportacao; linhas: number; simulada_em: Date | null }[]>`
+        SELECT tipo, arquivo_hash, estado, de_para, opcoes, (contagens->>'linhas')::int AS linhas, simulada_em
           FROM importacao WHERE tenant_id = tenant_atual() AND id = ${req.params.id} FOR UPDATE`
       if (!imp) return { erro: 'nao_encontrada' as const }
       // ⚠️ O gate: o arquivo reenviado tem de ser o simulado.
       if (imp.arquivo_hash !== hash) return { erro: 'nao_simulada' as const }
       if (imp.estado !== 'simulada') return { erro: 'estado_invalido' as const, estado: imp.estado }
+      if (!imp.simulada_em) return { erro: 'simulacao_incompleta' as const }
       if (confirmado !== undefined) {
         const limpo = confirmado === 'invalido' || typeof confirmado !== 'object' || confirmado === null
           ? null : (confirmado as Record<string, unknown>)
         const mesmo = limpo !== null && JSON.stringify(sortear(limpo)) === JSON.stringify(sortear(imp.de_para))
         if (!mesmo) return { erro: 'de_para_mudou' as const }
       }
-      const opcoes = opcoesBruto === undefined || opcoesBruto === 'invalido' ? imp.opcoes : lerOpcoes(opcoesBruto)
+      // ⚠️ As opções são as da SIMULAÇÃO — o que a pessoa viu é o que roda; opção enviada agora é ignorada.
+      const opcoes = imp.opcoes
       const eu = await garantirUsuarioId(tx, req)
       // Os itens da simulação cedem lugar aos da execução (a retomada do worker lê a maior linha com desfecho).
       await tx`DELETE FROM importacao_item WHERE tenant_id = tenant_atual() AND importacao_id = ${req.params.id}`
@@ -242,6 +262,9 @@ export async function rotasImportacao(app: FastifyInstance): Promise<void> {
       if (r.erro === 'nao_encontrada') return reply.code(404).send({ erro: 'importacao.nao_encontrada', mensagem: 'Importação não encontrada.' })
       if (r.erro === 'nao_simulada') {
         return reply.code(409).send({ erro: 'importacao.nao_simulada', mensagem: 'Este arquivo não foi simulado. Simule o arquivo antes de executar.' })
+      }
+      if (r.erro === 'simulacao_incompleta') {
+        return reply.code(409).send({ erro: 'importacao.simulacao_incompleta', mensagem: 'A simulação desta importação não terminou. Simule o arquivo de novo.' })
       }
       if (r.erro === 'de_para_mudou') {
         return reply.code(409).send({ erro: 'importacao.de_para_mudou', mensagem: 'O de-para mudou depois da simulação. Simule de novo.' })
@@ -372,6 +395,7 @@ export async function rotasImportacao(app: FastifyInstance): Promise<void> {
         SELECT tipo, estado FROM importacao WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
       if (!imp) return { erro: 'nao_encontrada' as const }
       if (imp.tipo !== 'contatos') return { erro: 'so_contatos' as const }
+      if (imp.estado !== 'concluida') return { erro: 'nao_concluida' as const }
       const linhas = await tx<{ filial: string | null; qualificacao: 'novo' | 'qualificado' | 'descartado'; origem: string | null; total: number }[]>`
         SELECT f.nome AS filial,
                CASE WHEN c.qualificado IS NULL THEN 'novo' WHEN c.qualificado THEN 'qualificado' ELSE 'descartado' END AS qualificacao,
@@ -380,13 +404,14 @@ export async function rotasImportacao(app: FastifyInstance): Promise<void> {
           JOIN contato c ON c.tenant_id = ii.tenant_id AND c.id = ii.referencia_id
           LEFT JOIN filial f ON f.tenant_id = c.tenant_id AND f.id = c.filial_id
           LEFT JOIN origem o ON o.tenant_id = c.tenant_id AND o.id = c.origem_id
-         WHERE ii.tenant_id = tenant_atual() AND ii.importacao_id = ${req.params.id} AND ii.resultado <> 'rejeitado'
+         WHERE ii.tenant_id = tenant_atual() AND ii.importacao_id = ${req.params.id} AND ii.resultado IN ('criado', 'atualizado')
          GROUP BY 1, 2, 3
          ORDER BY 1 NULLS LAST, 2, 3 NULLS LAST`
       return { estado: imp.estado, linhas }
     })
     if ('erro' in r) {
       if (r.erro === 'nao_encontrada') return reply.code(404).send({ erro: 'importacao.nao_encontrada', mensagem: 'Importação não encontrada.' })
+      if (r.erro === 'nao_concluida') return reply.code(409).send({ erro: 'importacao.nao_concluida', mensagem: 'A conferência só vale depois que a importação termina.' })
       return erro422(reply, 'importacao.conferencia_so_contatos', 'A conferência por filial, qualificação e origem existe só para contatos.')
     }
     return reply.send({ estado: r.estado, linhas: r.linhas, total: r.linhas.reduce((s, l) => s + l.total, 0) })

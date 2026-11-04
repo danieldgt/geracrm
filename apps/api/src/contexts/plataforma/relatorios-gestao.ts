@@ -47,6 +47,9 @@ interface LinhaVendedorConv { chave: string; rotulo: string; contatos: number; s
  * Conversão = o PRIMEIRO pedido efetivado do contato (de todos os tempos) cair no período; os dias vão do
  * `criado_em` do contato até esse pedido (dias inteiros, mínimo 0). Recompra não conta: só a 1ª compra.
  * Contatos ativos, sem simulação, dentro do escopo.
+ * Cliente que já tinha compra no ERP (`contato.primeira_venda_em` mais de 1 dia ANTES do pedido) não é
+ * conversão rápida — é cliente antigo importado — e fica de fora. (`primeira_venda_em` vem da rotina de
+ * métricas do contato; a folga de 1 dia evita excluir o pedido que o próprio ERP faturou.)
  */
 function conversoes(tx: Sql, p: PeriodoResolvido, escopo: Escopo) {
   return tx`
@@ -66,6 +69,7 @@ function conversoes(tx: Sql, p: PeriodoResolvido, escopo: Escopo) {
       LEFT JOIN carteira_atribuicao ca ON ca.tenant_id = c.tenant_id AND ca.contato_id = c.id AND ca.ate IS NULL
       LEFT JOIN usuario u ON u.tenant_id = ca.tenant_id AND u.id = ca.usuario_id
      WHERE c.ativo AND coalesce(c.origem_carga, '') <> 'simulacao'
+       AND (c.primeira_venda_em IS NULL OR c.primeira_venda_em >= pr.em - interval '1 day')
        AND ${condicaoContato(tx, escopo, 'c')}`
 }
 
@@ -138,6 +142,14 @@ interface LinhaVendedor {
 export async function desempenhoVendedores(
   tx: Sql, p: PeriodoResolvido, escopo: Escopo,
 ): Promise<{ itens: VendedorDesempenho[]; totalVendedores: number }> {
+  // A coorte e as tarefas enxergam mais do que a linha de ranking deve mostrar (contato "em atendimento comigo"
+  // de outro dono; tarefa que EU criei para um colega): o ranking só mostra a própria pessoa (carteira) ou
+  // quem tem papel na filial (filial). O total conta no mesmo recorte.
+  const quemAparece = escopo.tipo === 'tudo' ? tx`true`
+    : escopo.usuarioId === null ? tx`false`
+    : escopo.tipo === 'carteira' ? tx`u.id = ${escopo.usuarioId}::uuid`
+    : tx`(u.id = ${escopo.usuarioId}::uuid OR EXISTS (SELECT 1 FROM usuario_filial rk_uf
+           WHERE rk_uf.tenant_id = u.tenant_id AND rk_uf.usuario_id = u.id AND rk_uf.filial_id = ANY(${[...escopo.filialIds]}::uuid[])))`
   const linhas = await tx<LinhaVendedor[]>`
     WITH coorte AS (
       SELECT c.id, ca.usuario_id
@@ -174,6 +186,7 @@ export async function desempenhoVendedores(
       LEFT JOIN por_contato pc ON pc.usuario_id = u.id
       LEFT JOIN por_tarefa pt ON pt.usuario_id = u.id
      WHERE u.tenant_id = tenant_atual() AND (pc.usuario_id IS NOT NULL OR pt.usuario_id IS NOT NULL)
+       AND ${quemAparece}
      ORDER BY coalesce(pc.valor, 0) DESC, coalesce(pc.conv, 0) DESC, u.nome, u.id`
   const todos = linhas.map((l): VendedorDesempenho => ({
     usuarioId: l.id, nome: l.nome, contatosNovos: l.contatos, tarefasConcluidas: l.tarefas, conversoes: l.conv,

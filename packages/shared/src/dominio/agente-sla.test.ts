@@ -25,6 +25,40 @@ describe('rotearHandoff — dono da carteira → pool em rodízio → gestor', (
   })
 })
 
+describe('rotearHandoff com filial (G4) — dono → filial em rodízio → pool → gestor da filial → gestor', () => {
+  const fil = (extra: Partial<NonNullable<Parameters<typeof rotearHandoff>[0]['filial']>> = {}) =>
+    ({ id: 'F', vendedores: [], ultimoDoRodizio: null, gestores: [], ...extra })
+  const casos: Array<[string, Parameters<typeof rotearHandoff>[0], ReturnType<typeof rotearHandoff>]> = [
+    ['dono ativo ainda vence a filial',
+      { donoCarteira: p('d'), filial: fil({ vendedores: [p('v1')] }), pool: [p('a')], ultimoDoRodizio: null, gestores: [] },
+      { destino: 'dono_carteira', usuarioId: 'd' }],
+    ['dono ausente → vendedor da filial (antes do pool)',
+      { donoCarteira: p('d', { ausente: true }), filial: fil({ vendedores: [p('v2'), p('v1')] }), pool: [p('a')], ultimoDoRodizio: null, gestores: [] },
+      { destino: 'filial', usuarioId: 'v1', filialId: 'F' }],
+    ['rodízio da filial: o próximo depois do último da FILIAL (não do pool)',
+      { donoCarteira: null, filial: fil({ vendedores: [p('v1'), p('v2'), p('v3')], ultimoDoRodizio: 'v2' }), pool: [], ultimoDoRodizio: 'v3', gestores: [] },
+      { destino: 'filial', usuarioId: 'v3', filialId: 'F' }],
+    ['rodízio da filial volta ao primeiro e pula inativo',
+      { donoCarteira: null, filial: fil({ vendedores: [p('v1', { ativo: false }), p('v2'), p('v3')], ultimoDoRodizio: 'v3' }), pool: [], ultimoDoRodizio: null, gestores: [] },
+      { destino: 'filial', usuarioId: 'v2', filialId: 'F' }],
+    ['filial sem ninguém disponível → pool em rodízio',
+      { donoCarteira: null, filial: fil({ vendedores: [p('v1', { ausente: true })], gestores: [p('gf')] }), pool: [p('a'), p('b')], ultimoDoRodizio: 'a', gestores: [p('g')] },
+      { destino: 'pool', usuarioId: 'b' }],
+    ['sem filial nem pool → gestor da filial',
+      { donoCarteira: null, filial: fil({ gestores: [p('gf1', { ausente: true }), p('gf2')] }), pool: [], ultimoDoRodizio: null, gestores: [p('g')] },
+      { destino: 'gestor_filial', usuarioId: 'gf2', filialId: 'F' }],
+    ['gestor da filial fora → gestor geral',
+      { donoCarteira: null, filial: fil({ gestores: [p('gf', { ativo: false })] }), pool: [], ultimoDoRodizio: null, gestores: [p('g')] },
+      { destino: 'gestor', usuarioId: 'g' }],
+    ['filial null = o roteamento de antes',
+      { donoCarteira: null, filial: null, pool: [p('a')], ultimoDoRodizio: null, gestores: [p('g')] },
+      { destino: 'pool', usuarioId: 'a' }],
+  ]
+  it.each(casos)('%s', (_n, entrada, esperado) => {
+    expect(rotearHandoff(entrada)).toEqual(esperado)
+  })
+})
+
 describe('faixaDoCronometro — verde → amarelo → vermelho', () => {
   const base = { inicioEm: '2026-10-19T12:00:00Z', venceEm: '2026-10-19T12:30:00Z', respondidoEm: null, estouradoEm: null }
   it.each([

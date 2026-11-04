@@ -100,4 +100,22 @@ describe('Listas (públicos salvos)', () => {
     const r = (await chamar(T, 'GET', '/v1/listas')).json() as { itens: unknown[] }
     expect(r.itens.length).toBe(0)
   })
+
+  it('GET /v1/listas pagina por cursor (nome, id): sem repetir nem pular, e isolado por tenant', async () => {
+    for (let i = 1; i <= 55; i++) await criarLista(T, `Lista ${String(i).padStart(2, '0')}`)
+    await criarLista(OUTRO, 'Lista de B')
+    const vistos: string[] = []
+    let cursor: string | null = null
+    let paginas = 0
+    do {
+      const r = await chamar(T, 'GET', `/v1/listas${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`)
+      const j: { itens: { nome: string }[]; proximoCursor: string | null } = r.json()
+      vistos.push(...j.itens.map((l) => l.nome))
+      cursor = j.proximoCursor
+      paginas++
+    } while (cursor)
+    expect(paginas).toBe(2)
+    expect(vistos).toEqual(Array.from({ length: 55 }, (_, i) => `Lista ${String(i + 1).padStart(2, '0')}`))
+    expect((await chamar(T, 'GET', '/v1/listas?cursor=lixo')).statusCode).toBe(422)
+  })
 })

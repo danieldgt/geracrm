@@ -197,7 +197,7 @@ sombra × humano (sinal a calibrar). Métricas: `GET /v1/agente/sugestoes/metric
 
 ## SLA do handoff (ADR-034)
 
-Todo handoff arma o SLA (`sla-handoff.ts`: `armarSlaDoHandoff`, `rotearHandoff` dono → pool → gestor).
+Todo handoff arma o SLA (`sla-handoff.ts`: `armarSlaDoHandoff`, `rotearHandoff` dono → filial roteada em rodízio → pool → gestor da filial → gestor; a filial sai de `roteamento.ts` `filialDoContato` — G4).
 Config por número (`GET/PUT /v1/canais/:id/sla`, padrão 30/60 min úteis, aviso de espera ligado);
 `workers/sla.ts` estoura (alerta `sla_handoff_estourado`), libera a reatribuição e manda UMA mensagem de
 espera pelo gateway, filtro e rede de R$. Fila única via `fragmentoNaFila`. Em modo fundador o

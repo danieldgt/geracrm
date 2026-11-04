@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { faixasDoSegmento, ehCodigoSegmentoRfv, ehQualificacaoContato, MAX_ETIQUETAS_NO_FILTRO, VENDEDOR_SEM_DONO, type CodigoSegmentoRfv, type QualificacaoContato } from '@geracrm/shared'
+import { faixasDoSegmento, ehCodigoSegmentoRfv, ehQualificacaoContato, MAX_ETIQUETAS_NO_FILTRO, VENDEDOR_SEM_DONO, type CodigoSegmentoRfv, type FaixaRfv, type QualificacaoContato } from '@geracrm/shared'
 import type { Sql } from '../../db/index.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import { moduloAtivo } from '../plataforma/modulos.js'
@@ -18,7 +18,8 @@ import { moduloAtivo } from '../plataforma/modulos.js'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DIA = /^\d{4}-\d{2}-\d{2}$/
 
-function diaReal(v: string): boolean {
+/** 'AAAA-MM-DD' que existe no calendário (2026-02-30 não). */
+export function diaReal(v: string): boolean {
   if (!DIA.test(v)) return false
   const [a, m, d] = v.split('-').map(Number) as [number, number, number]
   const dt = new Date(Date.UTC(a, m - 1, d))
@@ -55,6 +56,12 @@ export interface FiltrosContato {
   readonly carteiraAtiva: boolean
   readonly criadoDe: string | null
   readonly criadoAte: string | null
+}
+
+/** Nenhum filtro: base para compor um filtro de cada vez (público de campanha, F1). */
+export const FILTROS_VAZIOS: FiltrosContato = {
+  q: null, qualificacao: null, segmento: null, vendedorId: null, filialId: null, origemId: null,
+  etiquetaIds: [], semProximoPasso: false, carteiraAtiva: false, criadoDe: null, criadoAte: null,
 }
 
 export type ResultadoFiltros =
@@ -108,19 +115,22 @@ export function condicaoCarteiraAtiva(tx: Sql, aliasContato = 'c') {
 
 const escaparLike = (s: string): string => s.replace(/[\\%_]/g, (c) => `\\${c}`)
 
+/** Uma faixa de segmento como condição sobre `m` (métricas). */
+export function condicaoSegmentoDaFaixa(tx: Sql, f: FaixaRfv) {
+  if (f.tipo === 'sem_ritmo_recente') {
+    return tx`(m.atraso_relativo IS NULL AND m.dias_sem_comprar IS NOT NULL AND m.dias_sem_comprar <= ${f.diasAte})`
+  }
+  if (f.tipo === 'sem_ritmo_parado') {
+    return tx`(m.atraso_relativo IS NULL AND (m.dias_sem_comprar IS NULL OR m.dias_sem_comprar > ${f.diasApos}))`
+  }
+  return tx`(m.atraso_relativo IS NOT NULL
+             AND ${f.apos === null ? tx`true` : tx`m.atraso_relativo > ${f.apos}`}
+             AND ${f.ate === null ? tx`true` : tx`m.atraso_relativo <= ${f.ate}`})`
+}
+
 /** Segmento como condição sobre `m` (métricas): as fronteiras saem de `faixasDoSegmento`. */
 function condicaoSegmento(tx: Sql, codigo: CodigoSegmentoRfv) {
-  const partes = faixasDoSegmento(codigo).map((f) => {
-    if (f.tipo === 'sem_ritmo_recente') {
-      return tx`(m.atraso_relativo IS NULL AND m.dias_sem_comprar IS NOT NULL AND m.dias_sem_comprar <= ${f.diasAte})`
-    }
-    if (f.tipo === 'sem_ritmo_parado') {
-      return tx`(m.atraso_relativo IS NULL AND (m.dias_sem_comprar IS NULL OR m.dias_sem_comprar > ${f.diasApos}))`
-    }
-    return tx`(m.atraso_relativo IS NOT NULL
-               AND ${f.apos === null ? tx`true` : tx`m.atraso_relativo > ${f.apos}`}
-               AND ${f.ate === null ? tx`true` : tx`m.atraso_relativo <= ${f.ate}`})`
-  })
+  const partes = faixasDoSegmento(codigo).map((f) => condicaoSegmentoDaFaixa(tx, f))
   return partes.reduce((acc, p, i) => (i === 0 ? p : tx`${acc} OR ${p}`), tx`false`)
 }
 

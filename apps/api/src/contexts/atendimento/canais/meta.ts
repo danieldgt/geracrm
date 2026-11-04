@@ -38,7 +38,9 @@ export type ConteudoMeta =
 export type EventoMeta =
   | { tipo: 'mensagem'; phoneNumberId: string; de: string; idExterno: string; timestamp: number
       conteudo: ConteudoMeta; nomePerfil: string | null }
-  | { tipo: 'status'; phoneNumberId: string; idExterno: string; status: string; timestamp: number }
+  | { tipo: 'status'; phoneNumberId: string; idExterno: string; status: string; timestamp: number
+      /** Só em `failed`: o código do primeiro erro da Meta (`errors[0].code`), ex.: "131026". */
+      erroCodigo?: string | null }
   | { tipo: 'template_status'; wabaId: string; nome: string; idioma: string | null; status: string; motivo: string | null
       /** `message_template_id` — casa com `template_versao.id_externo` quando já submetido. */
       templateIdExterno: string | null
@@ -129,11 +131,13 @@ export function parseWebhookMeta(corpo: unknown): EventoMeta[] {
           })
         }
         for (const sRaw of (v.statuses as unknown[] | undefined) ?? []) {
-          const s = sRaw as { id?: string; status?: string; timestamp?: string }
+          const s = sRaw as { id?: string; status?: string; timestamp?: string; errors?: { code?: unknown }[] }
           if (!s.id || !s.status || !phoneNumberId) { eventos.push({ tipo: 'ignorado', motivo: 'status_incompleto' }); continue }
+          const codigo = s.errors?.[0]?.code
           eventos.push({
             tipo: 'status', phoneNumberId, idExterno: s.id,
             status: STATUS_META[s.status] ?? s.status, timestamp: Number(s.timestamp ?? 0),
+            ...(s.status === 'failed' ? { erroCodigo: typeof codigo === 'number' || typeof codigo === 'string' ? String(codigo) : null } : {}),
           })
         }
         if (!(v.messages as unknown[] | undefined)?.length && !(v.statuses as unknown[] | undefined)?.length) {

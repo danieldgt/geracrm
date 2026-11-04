@@ -41,7 +41,7 @@ const DIMENSOES: readonly ConfigVendas[] = [
   template: `
     <ui-abas [abas]="abas" [ativa]="dimensao()" (ativaChange)="trocar($event)" />
     <app-relatorio-moldura [(inicio)]="c.inicio" [(fim)]="c.fim" [estado]="c.estado()" [erroTexto]="c.erroTexto()"
-      [vazio]="itens().length === 0" tituloVazio="Nenhuma venda no período"
+      [vazio]="totais().pedidos === 0" tituloVazio="Nenhuma venda no período"
       descricaoVazio="Só contam pedidos efetivados no período. Rascunhos e pedidos cancelados ficam de fora."
       (aplicar)="carregar()" (tentar)="carregar()">
       <div class="cartoes">

@@ -3,6 +3,7 @@ import type { Sql } from '../../db/index.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import type { HorarioAtendimento } from './expediente.js'
 import { somarMinutosUteis } from './minutos-uteis.js'
+import { elegiveisDaFilial, filialDoContato, gestoresDaFilial, gravarRodizio, travarRodizio } from './roteamento.js'
 
 /**
  * SLA DO HANDOFF — o lado com banco (raia P18, ADR-034). As decisões são puras
@@ -90,15 +91,41 @@ export async function poolDoNumero(tx: Sql, canalId: string): Promise<PessoaRote
      LIMIT 50`
 }
 
-/** Monta a entrada de `rotearHandoff` e decide. */
+/**
+ * Monta a entrada de `rotearHandoff` e decide (P18 + G4):
+ *   dono da carteira → vendedores da FILIAL roteada do contato em rodízio (que
+ *   atendem o número) → pool do número em rodízio → gestor da filial → gestor.
+ *
+ * ⚠️ Com filial e vendedores, o ponteiro do rodízio da filial fica TRAVADO até o
+ *    fim da transação (`travarRodizio`); quem grava o escolhido é
+ *    `armarSlaDoHandoff`, SÓ se o SLA armou — handoff repetido não gasta a vez.
+ */
 export async function rotearHandoffDaConversa(tx: Sql, conversaId: string, canalId: string): Promise<Roteamento> {
+  const [conv] = await tx<{ contato_id: string }[]>`
+    SELECT contato_id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
   const [dono] = await tx<PessoaRoteavel[]>`
     SELECT u.id, u.ativo, u.ausente
-      FROM conversa c
-      JOIN carteira_atribuicao ca ON ca.tenant_id = c.tenant_id AND ca.contato_id = c.contato_id AND ca.ate IS NULL
+      FROM carteira_atribuicao ca
       JOIN usuario u ON u.tenant_id = ca.tenant_id AND u.id = ca.usuario_id
-     WHERE c.tenant_id = tenant_atual() AND c.id = ${conversaId}
+     WHERE ca.tenant_id = tenant_atual() AND ca.contato_id = ${conv?.contato_id ?? null}::uuid AND ca.ate IS NULL
      LIMIT 1`
+  // Dono disponível decide sozinho: nada de filial, pool ou trava.
+  if (dono && dono.ativo && !dono.ausente) {
+    return rotearHandoff({ donoCarteira: dono, pool: [], ultimoDoRodizio: null, gestores: [] })
+  }
+
+  const filial = conv ? await filialDoContato(tx, conv.contato_id, canalId) : null
+  let daFilial: NonNullable<EntradaFilial> | null = null
+  if (filial?.filialId) {
+    const vendedores = await elegiveisDaFilial(tx, filial.filialId, canalId, 'handoff')
+    daFilial = {
+      id: filial.filialId,
+      vendedores,
+      ultimoDoRodizio: vendedores.length > 0 ? await travarRodizio(tx, filial.filialId, 'handoff') : null,
+      gestores: await gestoresDaFilial(tx, filial.filialId),
+    }
+  }
+
   const pool = await poolDoNumero(tx, canalId)
   const ids = pool.map((p) => p.id)
   const [ultimo] = ids.length === 0 ? [] : await tx<{ responsavel_id: string }[]>`
@@ -107,8 +134,11 @@ export async function rotearHandoffDaConversa(tx: Sql, conversaId: string, canal
        AND responsavel_id IN ${tx(ids)}
      ORDER BY sla_inicio_em DESC NULLS LAST LIMIT 1`
   const gestores = await gestoresDoTenant(tx)
-  return rotearHandoff({ donoCarteira: dono ?? null, pool, ultimoDoRodizio: ultimo?.responsavel_id ?? null, gestores })
+  return rotearHandoff({
+    donoCarteira: dono ?? null, filial: daFilial, pool, ultimoDoRodizio: ultimo?.responsavel_id ?? null, gestores,
+  })
 }
+type EntradaFilial = Parameters<typeof rotearHandoff>[0]['filial']
 
 /**
  * ARMA o SLA de um atendimento recém-transferido: prazos em minutos úteis e o
@@ -128,10 +158,15 @@ export async function armarSlaDoHandoff(
        SET sla_inicio_em = ${p.agora}, sla_vence_em = ${prazos.venceEm},
            reatribuicao_vence_em = ${prazos.reatribuicaoVenceEm}, aviso_espera_previsto_em = ${prazos.avisoPrevistoEm},
            responsavel_id = ${rota.usuarioId},
-           responsavel_origem = ${rota.destino === 'ninguem' ? null : rota.destino}
+           responsavel_origem = ${rota.destino === 'ninguem' ? null : rota.destino},
+           responsavel_filial_id = ${rota.filialId ?? null}
      WHERE tenant_id = tenant_atual() AND id = ${p.atendimentoId}
        AND sla_vence_em IS NULL AND estado <> 'encerrado' AND atendente_id IS NULL
     RETURNING id`
+  // G4: a vez da filial só é gasta quando o handoff de fato armou para ela.
+  if (armado && rota.destino === 'filial' && rota.filialId && rota.usuarioId) {
+    await gravarRodizio(tx, rota.filialId, 'handoff', rota.usuarioId)
+  }
   return armado ? rota : null
 }
 
@@ -189,14 +224,16 @@ export function fragmentoNaFila(sql: Sql) {
 
 /**
  * Quem o handoff ainda esperando deve avisar, pela MESMA regra do roteamento
- * (P18): rota 'gestor' avisa TODOS os gestores; dono da carteira / pool avisam
- * o responsável — se ele ainda estiver ativo e disponível. `null` = sem regra
- * (sem handoff roteado, reatribuição já liberada ou responsável fora): quem
- * chama cai na fila do número, como antes.
+ * (P18): rota 'gestor' avisa TODOS os gestores, 'gestor_filial' os gestores da
+ * filial (G4); dono da carteira / filial / pool avisam o responsável — se ele
+ * ainda estiver ativo e disponível. `null` = sem regra (sem handoff roteado,
+ * reatribuição já liberada ou responsável fora): quem chama cai na fila do
+ * número, como antes.
  */
 export async function alvosDoHandoff(tx: Sql, conversaId: string): Promise<string[] | null> {
-  const [a] = await tx<{ responsavel_id: string; origem: string | null; disponivel: boolean }[]>`
-    SELECT a.responsavel_id, a.responsavel_origem AS origem, (u.ativo AND NOT u.ausente) AS disponivel
+  const [a] = await tx<{ responsavel_id: string; origem: string | null; filial_id: string | null; disponivel: boolean }[]>`
+    SELECT a.responsavel_id, a.responsavel_origem AS origem, a.responsavel_filial_id AS filial_id,
+           (u.ativo AND NOT u.ausente) AS disponivel
       FROM atendimento a
       JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.responsavel_id
      WHERE a.tenant_id = tenant_atual() AND a.conversa_id = ${conversaId} AND a.estado = 'na_fila'
@@ -206,6 +243,11 @@ export async function alvosDoHandoff(tx: Sql, conversaId: string): Promise<strin
   if (a.origem === 'gestor') {
     const gestores = (await gestoresDoTenant(tx)).filter((g) => !g.ausente).map((g) => g.id)
     return gestores.length > 0 ? gestores : null
+  }
+  // G4: rota 'gestor_filial' avisa os gestores DA FILIAL (disponíveis), como a 'gestor' avisa todos.
+  if (a.origem === 'gestor_filial' && a.filial_id) {
+    const daFilial = (await gestoresDaFilial(tx, a.filial_id)).filter((g) => !g.ausente).map((g) => g.id)
+    if (daFilial.length > 0) return daFilial
   }
   return a.disponivel ? [a.responsavel_id] : null
 }

@@ -2,12 +2,14 @@ import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@ang
 import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { ActivatedRoute } from '@angular/router'
 import {
-  BadgeComponente, CabecalhoTelaComponente, CampoComponente, EstadoComponente, EsqueletoComponente, FormPaginaComponente,
+  AbasComponente, type Aba, BadgeComponente, CabecalhoTelaComponente, CampoComponente, EstadoComponente, EsqueletoComponente, FormPaginaComponente,
   GradeFormComponente, IconeComponente, ModalComponente, SecaoFormComponente, ToastServico, mensagemDeErro,
   HorarioAtendimentoComponente, somenteDiasAbertos, type Faixa,
 } from '../../compartilhado/ui/index.js'
 import { SlaConfigComponente } from './sla-config.componente.js'
+import { RoteamentoComponente } from './roteamento.componente.js'
 
 interface Canal { readonly id: string; readonly nomeAmigavel: string; readonly tipo: string; readonly estado: string; readonly riscoBanimento: boolean }
 interface Config {
@@ -32,12 +34,17 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
   imports: [
     BadgeComponente, CabecalhoTelaComponente, CampoComponente, DatePipe, EstadoComponente, EsqueletoComponente,
     FormPaginaComponente, GradeFormComponente, HorarioAtendimentoComponente, IconeComponente, ModalComponente,
-    SecaoFormComponente, SlaConfigComponente,
+    SecaoFormComponente, SlaConfigComponente, AbasComponente, RoteamentoComponente,
   ],
   template: `
     <ui-cabecalho-tela titulo="Configuração do canal"
-      subtitulo="Horário, ausência, assinatura e a pausa de disparo — por número." />
+      subtitulo="Horário, ausência, assinatura e a pausa de disparo — por número. Roteamento por filial e rodízio." />
+    <ui-abas [abas]="abas" [(ativa)]="aba" idPainel="painel-canal-config" />
 
+    <div class="painel-aba" role="tabpanel" id="painel-canal-config" [attr.aria-labelledby]="'painel-canal-config-aba-' + aba()">
+    @if (aba() === 'roteamento') {
+      <app-roteamento />
+    } @else {
     @switch (estado()) {
       @case ('carregando') {
         <div class="grade">
@@ -134,6 +141,8 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         }
       }
     }
+    }
+    </div>
 
     <!-- Pausa é ação com motivo obrigatório: modal de ação (A), não prompt() do navegador. -->
     <ui-modal [aberto]="pausaAberta()" titulo="Pausar disparo deste canal" largura="p" (fechar)="fecharPausa()">
@@ -154,6 +163,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
   `,
   styles: `
     :host { display: block; width: 100%; min-width: 0; padding: var(--espacamento-6); }
+    .painel-aba { margin-top: var(--espacamento-4); min-width: 0; }
     .grade { margin-top: var(--espacamento-4); display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: var(--espacamento-4); align-items: start; }
     @media (max-width: 720px) { .grade { grid-template-columns: minmax(0, 1fr); } }
     @media (max-width: 480px) { :host { padding: var(--espacamento-3); } }
@@ -181,6 +191,9 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 export class CanalConfigPagina implements OnInit {
   private readonly http = inject(HttpClient)
   private readonly toast = inject(ToastServico)
+  /** Aba ROTEAMENTO (G4): regras DDD/origem -> filial valem para varios numeros; `?aba=roteamento` abre nela. */
+  readonly abas: readonly Aba[] = [{ id: 'numero', rotulo: 'Por número' }, { id: 'roteamento', rotulo: 'Roteamento' }]
+  readonly aba = signal(inject(ActivatedRoute).snapshot.queryParamMap.get('aba') === 'roteamento' ? 'roteamento' : 'numero')
   readonly estado = signal<Estado>('carregando')
   readonly canais = signal<readonly Canal[]>([])
   readonly sel = signal<Canal | null>(null)

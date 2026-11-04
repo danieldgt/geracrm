@@ -40,10 +40,11 @@ export interface Roi {
 }
 
 export async function roiCampanha(sql: Sql, campanhaId: string): Promise<Roi | null> {
-  const [c] = await sql<{ disparada_em: Date | null; janela: number }[]>`
-    SELECT disparada_em, janela_atribuicao_dias AS janela
+  const [c] = await sql<{ disparada_em: Date | null; janela: number; modelo: number }[]>`
+    SELECT disparada_em, janela_atribuicao_dias AS janela, modelo_versao AS modelo
       FROM campanha WHERE tenant_id = tenant_atual() AND id = ${campanhaId}`
   if (!c) return null
+  if (c.modelo === 2) return roiV2(sql, campanhaId, c.disparada_em, c.janela)
 
   const [exata] = await sql<{ pedidos: number; receita: string }[]>`
     SELECT count(*)::int AS pedidos, coalesce(sum(total_centavos), 0)::text AS receita
@@ -80,5 +81,32 @@ export async function roiCampanha(sql: Sql, campanhaId: string): Promise<Roi | n
     exata: { pedidos: exata?.pedidos ?? 0, receitaCentavos: Number(exata?.receita ?? 0) },
     estimada,
     enviados: enviados?.n ?? 0,
+  }
+}
+
+/**
+ * ROI da campanha V2 (F1). Mesma separação EXATA × ESTIMADA; a diferença é a janela da
+ * estimada, que conta a partir do envio DE CADA destinatário — a v2 sai em lotes ao longo
+ * de dias, e medir todos a partir do primeiro dia daria ao último lote uma janela menor.
+ */
+async function roiV2(sql: Sql, campanhaId: string, disparadaEm: Date | null, janela: number): Promise<Roi> {
+  const [exata] = await sql<{ pedidos: number; receita: string }[]>`
+    SELECT count(*)::int AS pedidos, coalesce(sum(total_centavos), 0)::text AS receita
+      FROM pedido WHERE tenant_id = tenant_atual() AND campanha_id = ${campanhaId} AND estado = 'efetivado'`
+  const [e] = await sql<{ enviados: number; vendas: number; receita: string }[]>`
+    SELECT (SELECT count(*) FROM campanha_destinatario
+             WHERE tenant_id = tenant_atual() AND campanha_id = ${campanhaId} AND enviado_em IS NOT NULL)::int AS enviados,
+           count(v.id)::int AS vendas, coalesce(sum(v.valor_centavos), 0)::text AS receita
+      FROM campanha_destinatario d
+      JOIN venda v ON v.tenant_id = d.tenant_id AND v.contato_id = d.contato_id
+     WHERE d.tenant_id = tenant_atual() AND d.campanha_id = ${campanhaId} AND d.enviado_em IS NOT NULL
+       AND v.cancelada_em IS NULL
+       AND v.ocorrida_em >= d.enviado_em
+       AND v.ocorrida_em < d.enviado_em + make_interval(days => ${janela})`
+  return {
+    disparadaEm, janelaDias: janela,
+    exata: { pedidos: exata?.pedidos ?? 0, receitaCentavos: Number(exata?.receita ?? 0) },
+    estimada: { vendas: e?.vendas ?? 0, receitaCentavos: Number(e?.receita ?? 0) },
+    enviados: e?.enviados ?? 0,
   }
 }

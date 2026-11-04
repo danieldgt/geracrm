@@ -11,6 +11,8 @@ import {
   cancelarDescarteEReativacaoDoContato, reabrirContatoDescartadoSemResposta, travarConversaEContato,
 } from './agente/descarte-reativacao.js'
 import { midiaHabilitada } from './midia/armazenamento.js'
+import { marcarRespostaDeCampanha, registrarStatusDestinatario } from '../crm/campanha-destinatario.js'
+import { atribuirCarteiraNaEntrada } from './rodizio-entrada.js'
 
 /**
  * Ingestão de mensagem ENTRANTE — o nosso fluxo (INV-12), não o do ERP.
@@ -60,8 +62,13 @@ export async function registrarStatusMensagem(
   tx: Sql,
   idExterno: string,
   status: 'enviada' | 'entregue' | 'lida',
+  em: Date = new Date(),
 ): Promise<{ atualizada: boolean }> {
   const ordem = ORDEM_STATUS[status] ?? 0
+  // Campanha v2 (F1): o destinatário do wamid avança junto (entregue/lida). Antes do
+  // retorno abaixo — o destinatário tem a própria régua de "só avança", e o tique da
+  // mensagem já estar adiante não pode impedir o funil da campanha de contar.
+  await registrarStatusDestinatario(tx, idExterno, status, em)
   const [m] = await tx<{ conversa_id: string }[]>`
     UPDATE mensagem SET status = ${status}, status_ordem = ${ordem}
      WHERE tenant_id = tenant_atual() AND id_externo = ${idExterno} AND direcao = 'saliente'
@@ -224,6 +231,19 @@ export async function ingerirMensagemEntrante(
     } catch { /* atribuição é acessório; a mensagem não pode se perder por ela */ }
   }
 
+  // 6.65 RODÍZIO NA ENTRADA (RN-04, G4): o lead que acabou de nascer, sem dono,
+  //      ganha carteira pelo rodízio da filial roteada — só com a chave do número
+  //      ligada. Depois da origem (6.6), que pode decidir a filial. O vendedor
+  //      escolhido recebe UM aviso ("novo cliente na sua carteira") e a fila não
+  //      é acordada de novo no passo 7. Savepoint: a mensagem nunca se perde por ele.
+  let avisadoPeloRodizio = false
+  if (leadNovo) {
+    try {
+      const r = await emSavepoint(tx, (sp) => atribuirCarteiraNaEntrada(sp, { contatoId, conversaId, canalId }))
+      avisadoPeloRodizio = r.tipo === 'atribuido'
+    } catch { /* rodízio é acessório; o contato fica órfão, como sem a chave */ }
+  }
+
   // 6.7 ⚠️ AGENDA o turno do agente no MESMO commit (ADR-024, INV-40): se a
   //     mensagem reverter, a tarefa some junto. Mensagem nova numa tarefa ainda
   //     pendente REAGENDA (debounce) em vez de criar outra. Só quando o agente
@@ -259,9 +279,17 @@ export async function ingerirMensagemEntrante(
     await emSavepoint(tx, (sp) => reabrirContatoDescartadoSemResposta(sp, conversaId, msg.recebidaEm, msg.texto ?? null))
   } catch { /* reabrir é acessório; a mensagem não pode se perder por ele */ }
 
+  // 6.10 Resposta a uma campanha (F1, #78): o cliente escreveu neste número em até 7
+  //      dias do envio → o destinatário vira `respondeu`. Acessório: a mensagem não
+  //      pode se perder por ele.
+  try {
+    await emSavepoint(tx, (sp) => marcarRespostaDeCampanha(sp, { contatoId, canalId, recebidaEm: msg.recebidaEm }))
+  } catch { /* atribuição é acessória */ }
+
   // 7. Notifica o atendente que assumiu esta conversa (PLT-07), no mesmo commit.
   //    Só entrante NOVA chega aqui — a duplicada já retornou lá em cima.
-  await notificarMensagemEntrante(tx, { conversaId })
+  //    O lead que o rodízio (6.65) acabou de dar a alguém já avisou o dono.
+  if (!avisadoPeloRodizio) await notificarMensagemEntrante(tx, { conversaId })
 
   // 8. Mídia externa a copiar (E5-14): imagem/áudio que ainda aponta para a URL
   //    do provedor. A cópia é rede — vai para o worker, nunca no request.
