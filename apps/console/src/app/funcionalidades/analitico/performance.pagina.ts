@@ -1,7 +1,11 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import type { MetricaSlaHandoff } from '@geracrm/shared'
+import {
+  AbasComponente, CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, StatCardComponente,
+  TabelaComponente, type Aba, type ColunaTabela, type LinhaTabela,
+} from '../../compartilhado/ui/index.js'
 
 interface Perf {
   readonly dias: number
@@ -27,112 +31,110 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
 /**
  * Performance de atendimento — SLA e tempo de 1ª resposta HUMANA (a contra-métrica
  * MC-05: a automática de ausência não conta). Agregado sobre `atendimento`.
- * Segue geracrm-layout-ui (5 estados, tokens, responsivo, sem cor literal).
+ * Padrão Lista de leitura: período em abas, indicadores em ui-stat-card e o
+ * ranking por atendente em ui-tabela.
  */
 @Component({
   selector: 'app-performance',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [AbasComponente, CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, StatCardComponente, TabelaComponente],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1 class="txt-titulo">Performance</h1>
-        <p class="sub">Quão rápido a equipe responde de verdade.</p>
-      </div>
-      <div class="abas">
-        @for (p of periodos; track p.dias) {
-          <button [class.on]="dias() === p.dias" (click)="trocar(p.dias)">{{ p.rotulo }}</button>
+    <ui-cabecalho-tela titulo="Performance" subtitulo="Quão rápido a equipe responde de verdade." />
+
+    <div class="periodo">
+      <ui-abas [abas]="abasPeriodo" [ativa]="periodoAtivo()" (ativaChange)="trocar($event)" />
+    </div>
+
+    <div class="corpo">
+      @switch (estado()) {
+        @case ('carregando') {
+          <div class="kpis" aria-busy="true">
+            <ui-esqueleto altura="96px" />
+            <ui-esqueleto altura="96px" />
+            <ui-esqueleto altura="96px" />
+          </div>
         }
-      </div>
-    </header>
-
-    @switch (estado()) {
-      @case ('carregando') { <div class="kpis"><div class="esq"></div><div class="esq"></div><div class="esq"></div></div> }
-      @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
-      @case ('pronto') {
-        @if (d(); as p) {
-          @if (p.total === 0) {
-            <div class="bloco"><h2 class="txt-secao">Sem atendimentos no período</h2>
-              <p>Os números aparecem quando houver conversas atendidas.</p></div>
-          } @else {
-            <div class="kpis">
-              <div class="kpi">
-                <span class="txt-rotulo">1ª resposta (mediana)</span>
-                <span class="txt-kpi">{{ p.medianaRespostaSeg !== null ? dur(p.medianaRespostaSeg) : '—' }}</span>
-                <span class="kpi-sub">tempo até responder</span>
-              </div>
-              <div class="kpi">
-                <span class="txt-rotulo">{{ p.slaFonte === 'handoff' ? 'SLA cumprido' : 'Dentro do SLA' }}</span>
-                <span class="txt-kpi" [class.bom]="(p.pctDentroSla ?? 0) >= 80">{{ p.pctDentroSla !== null ? p.pctDentroSla + '%' : '—' }}</span>
-                @if (p.slaFonte === 'handoff') {
-                  <span class="kpi-sub">transferidos pelo agente respondidos em até {{ p.slaMinutosVariam ? 'o SLA do número' : p.slaMinutos + ' min úteis' }}
-                    ({{ p.slaHandoff?.cumpridos ?? 0 }} de {{ p.slaHandoff?.medidos ?? 0 }})</span>
-                } @else {
-                  <span class="kpi-sub">respondidos em até {{ p.slaMinutos }} min</span>
-                }
-              </div>
-              <div class="kpi">
-                <span class="txt-rotulo">Atendimentos</span>
-                <span class="txt-kpi">{{ p.total }}</span>
-                <span class="kpi-sub">{{ p.respondidosPorGente ?? p.respondidos }} respondidos por gente</span>
-              </div>
-            </div>
-
-            <section class="painel">
-              <h2 class="txt-secao">Por atendente</h2>
-              @if (p.porAtendente.length === 0) { <p class="vazio">Ninguém respondeu no período.</p> }
-              @else {
-                <ul>
-                  @for (a of p.porAtendente; track a.usuarioId ?? 'sem'; let i = $index) {
-                    <li>
-                      <span class="pos">{{ i + 1 }}</span>
-                      <span class="rot encolhe">{{ a.nome }}</span>
-                      <span class="mid txt-dados">{{ a.medianaRespostaSeg !== null ? dur(a.medianaRespostaSeg) : '—' }}</span>
-                      <span class="val txt-dados">{{ a.respondidos }} resp.</span>
-                    </li>
+        @case ('sem_permissao') {
+          <ui-estado tipo="sem-permissao" titulo="Sem acesso à performance" descricao="Peça a um administrador da sua empresa para liberar este acesso." />
+        }
+        @case ('erro') {
+          <ui-estado tipo="erro" titulo="Não foi possível carregar a performance" descricao="Verifique a conexão e tente de novo.">
+            <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+          </ui-estado>
+        }
+        @case ('pronto') {
+          @if (d(); as p) {
+            @if (p.total === 0) {
+              <ui-estado titulo="Sem atendimentos no período" descricao="Os números aparecem quando houver conversas atendidas." />
+            } @else {
+              <div class="kpis">
+                <div class="kpi-bloco">
+                  <ui-stat-card rotulo="1ª resposta (mediana)" [valor]="p.medianaRespostaSeg !== null ? dur(p.medianaRespostaSeg) : '—'" />
+                  <p class="dica">tempo até responder</p>
+                </div>
+                <div class="kpi-bloco">
+                  <ui-stat-card [rotulo]="p.slaFonte === 'handoff' ? 'SLA cumprido' : 'Dentro do SLA'" tom="sucesso"
+                    [valor]="p.pctDentroSla !== null ? p.pctDentroSla + '%' : '—'" />
+                  @if (p.slaFonte === 'handoff') {
+                    <p class="dica">transferidos pelo agente respondidos em até {{ p.slaMinutosVariam ? 'o SLA do número' : p.slaMinutos + ' min úteis' }}
+                      ({{ p.slaHandoff?.cumpridos ?? 0 }} de {{ p.slaHandoff?.medidos ?? 0 }})</p>
+                  } @else {
+                    <p class="dica">respondidos em até {{ p.slaMinutos }} min</p>
                   }
-                </ul>
-              }
-            </section>
+                </div>
+                <div class="kpi-bloco">
+                  <ui-stat-card rotulo="Atendimentos" [valor]="p.total" />
+                  <p class="dica">{{ p.respondidosPorGente ?? p.respondidos }} respondidos por gente</p>
+                </div>
+              </div>
+
+              <section class="painel" aria-labelledby="titulo-atendentes">
+                <h2 class="txt-secao" id="titulo-atendentes">Por atendente</h2>
+                <ui-tabela [colunas]="colunas" [linhas]="linhas()" [chaveLinha]="chaveAtendente">
+                  <ng-template uiCelula="mediana" let-a>
+                    <span class="txt-dados">{{ a.mediana !== null ? dur(a.mediana) : '—' }}</span>
+                  </ng-template>
+                  <div uiVazio><ui-estado titulo="Ninguém respondeu no período" descricao="As respostas humanas aparecem aqui assim que houver." /></div>
+                </ui-tabela>
+              </section>
+            }
           }
         }
       }
-    }
+    </div>
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-4); flex-wrap: wrap; }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .abas { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }
-    .abas button { padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
-    .abas button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
-    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: var(--espacamento-3); margin-bottom: var(--espacamento-4); }
-    .kpi { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); display: flex; flex-direction: column; gap: var(--espacamento-1); }
-    .kpi-sub { font-size: 12px; color: var(--texto-suave); }
-    .txt-kpi.bom { color: var(--sucesso); }
-    .esq { height: 96px; border-radius: var(--raio-painel); background: var(--superficie); }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
-    .painel { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
+    .periodo { margin-top: var(--espacamento-3); }
+    .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-4); min-width: 0; }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: var(--espacamento-3); }
+    .kpi-bloco { display: grid; gap: var(--espacamento-1); align-content: start; min-width: 0; }
+    .dica { margin: 0; font-size: 12px; color: var(--texto-suave); }
+    .painel { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); min-width: 0; }
     .painel h2 { margin: 0 0 var(--espacamento-3); }
-    ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }
-    li { display: grid; grid-template-columns: 20px 1fr auto auto; align-items: center; gap: var(--espacamento-3); }
-    .pos { color: var(--texto-suave); font-size: 12px; text-align: center; }
-    .rot { color: var(--texto); font-size: 13px; }
-    .mid { color: var(--texto-secundario); font-size: 12px; }
-    .val { color: var(--texto-suave); font-size: 12px; }
-    .vazio { color: var(--texto-suave); font-size: 13px; margin: 0; }
   `,
 })
 export class PerformancePagina implements OnInit {
   private readonly http = inject(HttpClient)
-  readonly periodos = PERIODOS
+  readonly abasPeriodo: readonly Aba[] = PERIODOS.map((p) => ({ id: String(p.dias), rotulo: p.rotulo }))
   readonly estado = signal<Estado>('carregando')
   readonly d = signal<Perf | null>(null)
   readonly dias = signal(30)
+  readonly periodoAtivo = computed(() => String(this.dias()))
+
+  protected readonly colunas: readonly ColunaTabela[] = [
+    { chave: 'posicao', rotulo: '#', mono: true, largura: '40px' },
+    { chave: 'nome', rotulo: 'Atendente' },
+    { chave: 'mediana', rotulo: 'Mediana até responder', alinhamento: 'dir', largura: '180px' },
+    { chave: 'respondidos', rotulo: 'Respondidos', alinhamento: 'dir', mono: true, largura: '120px' },
+  ]
+  protected readonly linhas = computed<LinhaTabela[]>(() => (this.d()?.porAtendente ?? []).map((a, i) => ({
+    posicao: i + 1, nome: a.nome, mediana: a.medianaRespostaSeg, respondidos: a.respondidos, chaveAtendente: a.usuarioId ?? 'sem',
+  })))
+  protected readonly chaveAtendente = (l: LinhaTabela): string => String(l['chaveAtendente'])
 
   ngOnInit(): void { void this.carregar() }
-  trocar(dias: number): void { this.dias.set(dias); void this.carregar() }
+  trocar(dias: string): void { this.dias.set(Number(dias)); void this.carregar() }
 
   // Segundos → "42s" / "3m 20s" / "1h 05m".
   dur(seg: number): string {
