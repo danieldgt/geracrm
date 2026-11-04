@@ -31,7 +31,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | E1 início v2 + base de relatórios | 2 | ✅ | integrada (0123: índices de período); escopo por papel nos agregados entra com D3/E2 |
 | B1 panorama do funil | 2 | ✅ | integrada (0131) |
 | C2 agenda (módulo) | 2 | ✅ | integrada (0117); escopo comum e aba na ficha entregues pela C2b |
-| C3 reunião pelo CRM e pelo agente (chave) | 2 | 🔍 | integrada (0137); revisão Opus: aprovado com correções (alto: guarda de horário/"marcado" no pipeline, leitura conservadora da escolha, oferta = o que o cliente leu, fila de avisos travável). Decisões: sem convite automático de no-show (vendedor é avisado; convite só com "não compareceu" explícito); agente nunca transfere carteira. Correção em curso pelo agente da raia — **não ligar a chave do agente antes**; 0137 sem `lock_timeout`: rodar o deploy fora do horário comercial |
+| C3 reunião pelo CRM e pelo agente (chave) | 2 | ✅ | integrada com as correções da revisão (0137, 0147): etapa `reuniao` no pipeline (horário só da ferramenta, "marcado" só se agendou), escolha conservadora, oferta só vale depois de enviada, avisos no período útil (expediente ∩ 08–20), sem convite automático de no-show, agente nunca transfere carteira; 0137 sem `lock_timeout`: deploy fora do horário comercial |
 | D4 notificações, perfil, esqueci a senha | 2 | ✅ | integrada com as correções da revisão (0144/0145: sessão de staff no armazém do token, GlobalSignOut na troca de senha e AdminUserGlobalSignOut na redefinição, limite por e-mail, upsert com tipo novo, worker de e-mail com reserva); **dono: IAM `cognito-idp:AdminUserGlobalSignOut`** |
 | D6 auditoria v2 | 2 | ✅ | integrada; login/logout pela D4; janela padrão de 30 dias na busca `q` pela X6 |
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
@@ -63,9 +63,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | F3c IP confiável por segredo nginx→API + limitador global por IP | 3 | ✅ | integrada; `TRUST_PROXY_HOPS` só 0/1; **dono: criar `PROXY_SEGREDO` (mesmo valor) nos serviços console e api do Railway e remover `TRUST_PROXY_HOPS=2` se existir** — sem o segredo, todo tráfego do console divide o IP do nginx |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
-> e2e em `feat` (após F3c): 8/8 verde.
-
-> Última suíte completa em `feat` (após F1a corrigida e R2): api 3089, console 926, shared 1100 — verde. `formularios.test.ts` (anexo) oscilou uma vez sob carga 50+; passou isolado.
+> **Fechamento (2026-11-03, 22h)**: todas as raias ✅ em `feat/paridade-am`. Suíte completa: api 3140 (216 arquivos), console 936, shared 1109, conectores 46; lint e typecheck verdes; e2e 8/8. `main` intocada — merge só quando o dono pedir.
 
 > Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.
 
