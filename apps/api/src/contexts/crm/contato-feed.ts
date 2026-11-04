@@ -4,7 +4,7 @@ import type { Sql } from '../../db/index.js'
  * Feed do contato (A3): linha do tempo unificada, mais novo primeiro.
  *
  * ⚠️ NUNCA conteúdo de mensagem do WhatsApp. Só fatos de gestão: observação interna, mudança de
- * etapa/qualificação, tarefa, pedido, handoff, etiqueta, arquivo, resposta de formulário. O texto do item é montado aqui,
+ * etapa/qualificação, tarefa, pedido, handoff, etiqueta, arquivo, resposta de formulário, reunião marcada (C3). O texto do item é montado aqui,
  * a partir de colunas escolhidas uma a uma — não de `mensagem.conteudo` nem de `motivo_saida` do
  * agente (que carrega resumo da conversa).
  *
@@ -19,7 +19,7 @@ import type { Sql } from '../../db/index.js'
 
 export const TIPOS_FEED = [
   'comentario', 'funil', 'qualificacao', 'tarefa_criada', 'tarefa_concluida', 'pedido_criado',
-  'pedido_efetivado', 'handoff', 'etiquetas', 'arquivo', 'formulario',
+  'pedido_efetivado', 'handoff', 'etiquetas', 'arquivo', 'formulario', 'reuniao',
 ] as const
 export type TipoFeed = (typeof TIPOS_FEED)[number]
 
@@ -74,6 +74,9 @@ export function textoDoItem(l: Pick<LinhaFeed, 'tipo' | 'a' | 'b' | 'c'>): strin
       }
     case 'etiquetas': return l.a ?? 'Etiquetas alteradas'
     case 'arquivo': return l.a === 'contato.arquivo_removido' ? `Arquivo removido: ${l.b ?? ''}` : `Arquivo anexado: ${l.b ?? ''}`
+    // C3: reunião marcada pela conversa/agente; se outra pessoa assumiu, ela virou a responsável.
+    case 'reuniao':
+      return `Reunião agendada com ${l.a ?? '—'}${l.b ? ` para ${l.b}` : ''}${l.c ? `. ${l.a ?? 'Ela'} passou a ser responsável pelo contato` : ''}`
     // ⚠️ Pendente = telefone já cadastrado preenchido por um anônimo: nada foi aplicado à ficha.
     case 'formulario':
       if (l.b === 'pendente') return `Resposta não verificada do formulário "${l.a ?? ''}" — confirme antes de usar`
@@ -193,6 +196,14 @@ export async function lerFeedDoContato(
         WHERE a.tenant_id = tenant_atual() AND a.entidade = 'contato' AND a.entidade_id = ${contatoId}
           AND a.acao IN ('contato.arquivo_enviado', 'contato.arquivo_removido')
           AND ${ate(tx`a.criado_em`)} AND ${cur(tx`a.criado_em`, tx`'arquivo:' || a.id`)}
+        ORDER BY a.criado_em DESC, a.id DESC LIMIT ${n})
+      UNION ALL
+      (SELECT 'reuniao:' || a.id, 'reuniao', a.criado_em, a.ator_id, u.nome, 'evento_agenda', a.dados->>'eventoId',
+              a.dados->>'responsavel', a.dados->>'quando', CASE WHEN (a.dados->>'assumiu')::boolean THEN 'assumiu' END
+         FROM auditoria a LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.ator_id
+        WHERE a.tenant_id = tenant_atual() AND a.entidade = 'contato' AND a.entidade_id = ${contatoId}
+          AND a.acao = 'agenda.reuniao_agendada'
+          AND ${ate(tx`a.criado_em`)} AND ${cur(tx`a.criado_em`, tx`'reuniao:' || a.id`)}
         ORDER BY a.criado_em DESC, a.id DESC LIMIT ${n})
       UNION ALL
       (SELECT 'formulario:' || r.id, 'formulario', r.criado_em, NULL, NULL,

@@ -20,6 +20,7 @@ import { rotasSegmentos } from './contexts/crm/rotas-segmentos.js'
 import { rotasTarefa } from './contexts/crm/rotas-tarefa.js'
 import { rotasImportacao } from './contexts/crm/rotas-importacao.js'
 import { rotasAgenda } from './contexts/crm/rotas-agenda.js'
+import { rotasReuniao } from './contexts/crm/rotas-reuniao.js'
 import { rotasCarteira } from './contexts/crm/rotas-carteira.js'
 import { rotasMeta } from './contexts/crm/rotas-meta.js'
 import { rotasLista } from './contexts/crm/rotas-lista.js'
@@ -74,6 +75,7 @@ import type { ProvedorIdentidade } from './contexts/identidade/provedor-identida
 // Raias do plano-port-playbook-am: registradas pela P0, preenchidas cada uma no seu arquivo.
 import { rotasCompliance } from './contexts/atendimento/agente/rotas-compliance.js'
 import { rotasCusto } from './contexts/atendimento/agente/rotas-custo.js'
+import { rotasAgendaAgente } from './contexts/atendimento/agente/rotas-agenda-agente.js'
 import { rotasConsumo } from './contexts/atendimento/rotas-consumo.js'
 import { rotasPrivacidade } from './contexts/atendimento/agente/rotas-privacidade.js'
 import { rotasAtivas } from './contexts/atendimento/agente/rotas-ativas.js'
@@ -178,6 +180,7 @@ export async function criarApp(
   await app.register(rotasTarefa)
   await app.register(rotasImportacao)
   await app.register(rotasAgenda)
+  await app.register(rotasReuniao)
   await app.register(rotasCarteira)
   await app.register(rotasMeta)
   await app.register(rotasLista)
@@ -236,6 +239,7 @@ export async function criarApp(
   //    precisa editar este bloco.
   await app.register(rotasCompliance)
   await app.register(rotasCusto)
+  await app.register(rotasAgendaAgente)
   await app.register(rotasConsumo)
   await app.register(rotasPrivacidade)
   await app.register(rotasAtivas)

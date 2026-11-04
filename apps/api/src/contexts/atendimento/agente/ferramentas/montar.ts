@@ -7,6 +7,7 @@ import { ferramentaClientePerfil, ferramentaConhecimento } from './cliente.js'
 import { ferramentaMemoriaAnotar } from '../memoria/ferramenta-memoria.js'
 import { ferramentaRegistrarObjecao } from './objecao.js'
 import { ferramentaConsultarProvaSocial, ferramentaRegistrarIndicacoes, ferramentaRegistrarNps } from './pos-venda.js'
+import { ferramentaAgendarReuniao } from './agenda.js'
 import type { CapacidadesDoTurno } from '../instrucao-vendedor.js'
 
 /**
@@ -41,5 +42,8 @@ export function montarFerramentas(l: Ligacoes): { ferramentas: Ferramenta<never>
   if (a.nps) ferramentas.push(ferramentaRegistrarNps())
   if (a.indicacoes) ferramentas.push(ferramentaRegistrarIndicacoes())
   if (a.provaSocial) ferramentas.push(ferramentaConsultarProvaSocial())
+  // Agenda (C3): a porta só existe com módulo + chave do número + número assistido/autônomo
+  // (`ligacoesPadrao`). Sem porta, a ferramenta não é registrada — não basta o prompt.
+  if (l.agenda) ferramentas.push(ferramentaAgendarReuniao(l.agenda))
   return { ferramentas, capacidades: { catalogo, pedido, conhecimento: a.conhecimento, proposta } }
 }

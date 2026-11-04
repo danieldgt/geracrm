@@ -52,6 +52,18 @@ export async function posVendaEnviadasHoje(sql: Sql, canalId: string, desde: Dat
 }
 
 /**
+ * Avisos de reunião (C3: lembrete e convite para remarcar) enviados hoje como TEXTO por este
+ * número: mensagem proativa no não-oficial, consome a mesma cota do aquecimento.
+ */
+export async function avisosReuniaoEnviadosHoje(sql: Sql, canalId: string, desde: Date): Promise<number> {
+  const [r] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM evento_agenda_aviso
+     WHERE tenant_id = tenant_atual() AND canal_id = ${canalId}
+       AND via = 'texto' AND estado IN ('enviado', 'aguardando', 'reagendado', 'handoff') AND concluido_em >= ${desde}`
+  return r?.n ?? 0
+}
+
+/**
  * Status de aquecimento de um número: dia, teto de hoje, quanto já disparou hoje
  * (envios de campanha por este canal + reativações do agente, G5) e quanto
  * resta. "Hoje" é o dia no fuso do tenant. Sem registro de aquecimento → sem
@@ -76,5 +88,6 @@ export async function statusAquecimento(sql: Sql, canalId: string, agora: Date):
      WHERE ce.tenant_id = tenant_atual() AND c.canal_id = ${canalId}
        AND ce.estado = 'enviado' AND ce.enviado_em >= ${desde}`
   const usadoHoje = (uso?.n ?? 0) + await reativacoesEnviadasHoje(sql, canalId, desde) + await posVendaEnviadasHoje(sql, canalId, desde)
+    + await avisosReuniaoEnviadosHoje(sql, canalId, desde)
   return { emAquecimento: true, dia, limiteHoje, usadoHoje, restante: Math.max(0, limiteHoje - usadoHoje) }
 }

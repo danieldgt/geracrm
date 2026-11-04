@@ -72,6 +72,32 @@ export interface ConhecimentoPorta {
   buscar(ctx: ContextoFerramenta, pergunta: string): Promise<{ trechos: readonly { texto: string; fonte: string }[] }>
 }
 
+/**
+ * AGENDA (C3) — o que o vendedor precisa para marcar reunião: ofertar horários livres
+ * (responsável do contato primeiro, depois a filial) e confirmar a opção que o CLIENTE
+ * escolheu. `real: false` = modo seco (nada é gravado). Erro de negócio é `situacao`
+ * nomeada, nunca exceção.
+ */
+export interface OpcaoParaLlm {
+  readonly n: number
+  /** "qua, 05/11 às 15:00" — no fuso da loja. */
+  readonly quando: string
+  /** Primeiro nome de quem atende. */
+  readonly com: string
+}
+export type ResultadoOferta =
+  | { readonly situacao: 'ok'; readonly opcoes: readonly OpcaoParaLlm[] }
+  | { readonly situacao: 'sem_horarios' | 'sem_vendedor' | 'dia_invalido' }
+export type ResultadoConfirmacaoReuniao =
+  | { readonly situacao: 'agendado'; readonly quando: string; readonly com: string; readonly responsavelAlterado: boolean }
+  | { readonly situacao: 'sem_oferta' | 'mesmo_turno' | 'oferta_vencida' | 'ja_confirmada' | 'sem_confirmacao' | 'cliente_recusou' | 'opcao_inexistente' | 'ocupado' }
+  | { readonly situacao: 'confirmacao_divergente'; readonly escolhida: number }
+
+export interface AgendaPorta {
+  ofertar(ctx: ContextoFerramenta, p: { dia: string | null; real: boolean }): Promise<ResultadoOferta>
+  confirmar(ctx: ContextoFerramenta, p: { opcao: number }): Promise<ResultadoConfirmacaoReuniao>
+}
+
 export interface Ligacoes {
   readonly catalogo?: CatalogoPorta | undefined
   readonly pedido?: PedidoPorta | undefined
@@ -87,4 +113,10 @@ export interface Ligacoes {
    * `registrar_objecao`. Ausente/vazio = a ferramenta não entra no menu.
    */
   readonly objecoes?: readonly ObjecaoPlaybook[] | undefined
+  /**
+   * Agenda (C3): presente SÓ com o módulo Agenda ligado, a chave "O agente pode marcar
+   * reuniões" do número ligada e o número em assistido/autônomo (`agendaNoTurno`). Ausente =
+   * `agendar_reuniao` não entra no menu (ADR-029: não basta instruir o prompt).
+   */
+  readonly agenda?: AgendaPorta | undefined
 }

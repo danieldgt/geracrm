@@ -13,6 +13,7 @@ import { vigiarTodos } from './contexts/aquisicao/vigia.js'
 import { varrerResumoDiario, HORA_RESUMO_LOCAL } from './contexts/aquisicao/entrega-resumo.js'
 import { despacharPush, configVapid, envioReal } from './contexts/plataforma/push.js'
 import { enviarLembretesAgenda, INTERVALO_LEMBRETE_AGENDA_MS } from './contexts/crm/agenda-lembrete.js'
+import { processarAvisosDeReuniao, INTERVALO_AVISOS_REUNIAO_MS } from './workers/reuniao-avisos.js'
 import { despacharCampanhas } from './contexts/crm/despachante-campanha.js'
 import { vigiarConexaoCanais } from './contexts/atendimento/vigia-canal.js'
 import { processarTarefasDoAgente, INTERVALO_WORKER_MS } from './workers/agente.js'
@@ -271,6 +272,11 @@ if (process.env.DATABASE_ADMIN_URL) {
     ['agendaLembrete', INTERVALO_LEMBRETE_AGENDA_MS, async () => {
       const r = await enviarLembretesAgenda(donoAquisicao as never, new Date())
       return { processadas: r.avisados, ...r }
+    }],
+    // C3: lembretes H-24/H-2 e no-show ao CLIENTE das reuniões marcadas pela conversa.
+    ['reuniaoAvisos', INTERVALO_AVISOS_REUNIAO_MS, async () => {
+      const r = await processarAvisosDeReuniao(donoAquisicao as never, new Date())
+      return { processadas: r.lembretes + r.noShows + r.handoffs + r.reagendados, ...r }
     }],
   ] as const) {
     let rodando = false

@@ -5,6 +5,7 @@ import {
 } from '../../../compartilhado/ui/index.js'
 import { AgenteServico, ehSemPermissao, type CanalResumo } from './agente.servico.js'
 import { AgenteConfigComponente } from './agente-config.componente.js'
+import { AgenteAgendaComponente } from './agente-agenda.componente.js'
 import { AgentePlaygroundComponente } from './agente-playground.componente.js'
 import { AgenteDecisoesComponente } from './agente-decisoes.componente.js'
 import { AgenteSessoesComponente } from './agente-sessoes.componente.js'
@@ -52,7 +53,7 @@ const ABAS = TODAS_AS_ABAS.filter((a) => a.pronta)
   host: { class: 'pagina' },
   imports: [
     RouterLink, BotaoComponente, CabecalhoTelaComponente, PainelComponente, EsqueletoComponente, EstadoComponente,
-    AgenteConfigComponente, AgenteConhecimentoComponente, AgentePlaygroundComponente, AgenteDecisoesComponente,
+    AgenteConfigComponente, AgenteAgendaComponente, AgenteConhecimentoComponente, AgentePlaygroundComponente, AgenteDecisoesComponente,
     AgenteSessoesComponente, AgenteProtecoesComponente, AgenteQualidadeComponente, AgenteRevisaoComponente,
     AgenteMetricasComponente, AgentePlaybookComponente,
   ],
@@ -102,7 +103,10 @@ const ABAS = TODAS_AS_ABAS.filter((a) => a.pronta)
 
           <div role="tabpanel" [id]="'painel-' + aba()" [attr.aria-labelledby]="'aba-' + aba()" class="painel-aba">
             @switch (aba()) {
-              @case ('configuracao') { <app-agente-config [canalId]="canalId()" (abrirConhecimento)="aba.set('conhecimento')" (abrirPlaybook)="aba.set('playbook')" /> }
+              @case ('configuracao') {
+                <app-agente-config [canalId]="canalId()" (abrirConhecimento)="aba.set('conhecimento')" (abrirPlaybook)="aba.set('playbook')" />
+                <app-agente-agenda [canalId]="canalId()" /><!-- C3: só com o módulo Agenda ligado -->
+              }
               @case ('conhecimento') { <app-agente-conhecimento [canalId]="canalId()" /> }
               @case ('playground') { <app-agente-playground [canalId]="canalId()" /> }
               @case ('decisoes') { <app-agente-decisoes [canalId]="canalId()" /> }
