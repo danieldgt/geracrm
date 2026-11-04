@@ -73,7 +73,14 @@ const MENSAGENS_ERRO: Readonly<Record<string, string>> = {
   'periodo.invertido': 'A data inicial é depois da final.',
   'periodo.invalido': 'Datas inválidas. Use o seletor de datas.',
   'periodo.incompleto': 'Informe a data inicial e a final.',
-  'relatorio.limite_invalido': 'O limite de resposta deve ser de 1 a 1440 minutos.',
+  'relatorio.limite_invalido': 'O limite deve ser um número válido (resposta: 1 a 1440 minutos; página: 1 a 100).',
+  'relatorio.vendedores_obrigatorio': 'Escolha ao menos um vendedor.',
+  'relatorio.vendedores_demais': 'O comparativo aceita no máximo 10 vendedores.',
+  'relatorio.vendedor_invalido': 'Um dos vendedores escolhidos é inválido.',
+  'relatorio.filtro_invalido': 'Algum filtro está com valor inválido. Revise e aplique de novo.',
+  'relatorio.cursor_invalido': 'A página pedida não existe mais. Recarregue o relatório.',
+  'relatorio.nao_encontrado': 'Não encontramos esse item (ou você não tem acesso a ele).',
+  'relatorio.chave_invalida': 'Item inválido.',
 }
 
 /** Texto para o código tipificado da API; sem código conhecido, a orientação de conexão. */
