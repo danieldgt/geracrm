@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { fusoSeguro } from '../../plataforma/fuso.js'
 import { sql, comTenantServico, type Sql } from '../../../db/index.js'
 import type { UsoDoLaco } from './porta-llm.js'
+import { algumCanal, canaisDosUsuarios } from '../../plataforma/preferencia-notificacao.js'
 
 /**
  * CUSTO DO AGENTE (ADR-032, raia P6).
@@ -463,13 +464,18 @@ async function notificarAdmins(tx: Sql, titulo: string): Promise<void> {
      LIMIT ${TETO_DESTINATARIOS}`
   const destinatarios = admins.length > 0 ? admins : await tx<{ id: string }[]>`
     SELECT id FROM usuario WHERE tenant_id = tenant_atual() AND ativo LIMIT ${TETO_DESTINATARIOS}`
+  const canais = await canaisDosUsuarios(tx, destinatarios.map((d) => d.id), 'agente.orcamento')
   for (const { id } of destinatarios) {
+    const c = canais.get(id)
+    if (!c || !algumCanal(c)) continue // D4: a pessoa desligou este aviso
     await tx`
-      INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, conversa_id)
-      VALUES (tenant_atual(), ${randomUUID()}, ${id}, 'agente.orcamento', ${titulo}, NULL)`
-    await tx`
-      INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
-      VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${id}, ${JSON.stringify({ usuarioId: id })}::text::jsonb)`
+      INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, conversa_id, no_app, email_pendente)
+      VALUES (tenant_atual(), ${randomUUID()}, ${id}, 'agente.orcamento', ${titulo}, NULL, ${c.app}, ${c.email})`
+    if (c.app) {
+      await tx`
+        INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+        VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${id}, ${JSON.stringify({ usuarioId: id })}::text::jsonb)`
+    }
   }
 }
 

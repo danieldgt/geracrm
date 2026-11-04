@@ -71,6 +71,9 @@ import { rotasUsuarios } from './contexts/identidade/rotas-usuarios.js'
 import { rotasFiliais } from './contexts/identidade/rotas-filiais.js'
 import { provedorIdentidadeCognito } from './contexts/identidade/provedor-identidade-cognito.js'
 import type { ProvedorIdentidade } from './contexts/identidade/provedor-identidade.js'
+import type { ProvedorSenha } from './contexts/identidade/provedor-senha.js'
+import { rotasPerfil } from './contexts/identidade/rotas-perfil.js'
+import { rotasNotificacoesPreferencias } from './contexts/atendimento/rotas-notificacoes-preferencias.js'
 // Raias do plano-port-playbook-am: registradas pela P0, preenchidas cada uma no seu arquivo.
 import { rotasCompliance } from './contexts/atendimento/agente/rotas-compliance.js'
 import { rotasCusto } from './contexts/atendimento/agente/rotas-custo.js'
@@ -116,7 +119,7 @@ export function saltosDeProxy(bruto = process.env.TRUST_PROXY_HOPS): number | fa
  * Cognito; os testes passam o falso — nenhum teste chama a AWS.
  */
 export async function criarApp(
-  opcoes: { provedorIdentidade?: ProvedorIdentidade } = {},
+  opcoes: { provedorIdentidade?: ProvedorIdentidade; provedorSenha?: ProvedorSenha } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
     trustProxy: saltosDeProxy(),
@@ -203,6 +206,7 @@ export async function criarApp(
   await app.register(rotasAtendimentoKanban)
   await app.register(rotasPresenca)
   await app.register(rotasNotificacoes)
+  await app.register(rotasNotificacoesPreferencias)
   await app.register(rotasAuditoria)
   await app.register(rotasMetricas)
   await app.register(rotasPainel)
@@ -227,10 +231,12 @@ export async function criarApp(
   await app.register(rotasFormularios)
   await app.register(rotasFormularioPublico)
   await app.register(rotasPush)
-  await app.register(rotasAuth)
+  await app.register(rotasAuth, opcoes.provedorSenha ? { provedorSenha: opcoes.provedorSenha } : {})
   // Cadastro de usuários e filiais (D3) — admin; o login nasce atrás da porta.
   await app.register(rotasUsuarios, { provedor: opcoes.provedorIdentidade ?? provedorIdentidadeCognito() })
   await app.register(rotasFiliais)
+  // Meu perfil (D4): dados da pessoa, foto no bucket, troca de senha pela porta de senha.
+  await app.register(rotasPerfil, opcoes.provedorSenha ? { provedorSenha: opcoes.provedorSenha } : {})
   // ⚠️ Pontos de extensão das raias P2–P19 (plano-port-playbook-am, P0): cada
   //    plugin começa vazio e a raia dona preenche o seu arquivo — ninguém mais
   //    precisa editar este bloco.

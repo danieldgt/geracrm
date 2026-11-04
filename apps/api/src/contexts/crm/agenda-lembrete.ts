@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { comTenantServico, type Sql } from '../../db/index.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import { moduloAtivo } from '../plataforma/modulos.js'
+import { algumCanal, canaisDosUsuarios } from '../plataforma/preferencia-notificacao.js'
 
 /**
  * LEMBRETE DE EVENTO DA AGENDA (raia C2) — agendado em `server.ts` (a cada 60 s, com guarda).
@@ -53,12 +54,17 @@ async function avisar(tx: Sql, id: string, agora: Date): Promise<boolean> {
   if (!e) return false
   const [t] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
   const hora = new Intl.DateTimeFormat('pt-BR', { timeZone: fusoSeguro(t?.fuso), hour: '2-digit', minute: '2-digit' }).format(e.inicio)
+  // D4: respeita a preferência do responsável (o lembrete já foi marcado como enviado: não reenvia).
+  const c = (await canaisDosUsuarios(tx, [e.responsavel_id], 'agenda.lembrete')).get(e.responsavel_id)
+  if (!c || !algumCanal(c)) return true
   await tx`
-    INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo)
-    VALUES (tenant_atual(), ${randomUUID()}, ${e.responsavel_id}, 'agenda.lembrete', ${`${e.titulo} — às ${hora}`})`
-  await tx`
-    INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
-    VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${e.responsavel_id},
-            ${JSON.stringify({ usuarioId: e.responsavel_id })}::text::jsonb)`
+    INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, no_app, email_pendente)
+    VALUES (tenant_atual(), ${randomUUID()}, ${e.responsavel_id}, 'agenda.lembrete', ${`${e.titulo} — às ${hora}`}, ${c.app}, ${c.email})`
+  if (c.app) {
+    await tx`
+      INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+      VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${e.responsavel_id},
+              ${JSON.stringify({ usuarioId: e.responsavel_id })}::text::jsonb)`
+  }
   return true
 }
