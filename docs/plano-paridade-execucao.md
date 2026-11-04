@@ -32,8 +32,8 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | B1 panorama do funil | 2 | ✅ | integrada (0131) |
 | C2 agenda (módulo) | 2 | ✅ | integrada (0117); pendente: trocar escopo por papéis pelo `escopo.ts` e montar `app-agenda-contato` na ficha |
 | C3 reunião pelo CRM e pelo agente (chave) | 2 | 🔄 | Opus; migration 0137 |
-| D4 notificações, perfil, esqueci a senha | 2 | 🔄 | Sonnet; migration 0138; inclui login/logout na auditoria |
-| D6 auditoria v2 | 2 | ✅ | integrada; cursor com µs corrigido; pendente: login/logout (vai com D4), janela padrão da busca `q` |
+| D4 notificações, perfil, esqueci a senha | 2 | 🔍 | integrada (0138); login/logout auditados; e-mail por porta (log, sem provedor real); revisão Opus em curso; pendente: produtor de menção não existe |
+| D6 auditoria v2 | 2 | ✅ | integrada; login/logout entregues pela D4; pendente: janela padrão da busca `q` |
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
 | D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
@@ -41,12 +41,12 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | F3 formulários públicos | 3 | ✅ | integrada com as correções de segurança (upload fora da transação, IP real via `TRUST_PROXY_HOPS`, contato existente só com "Aplicar ao contato", assinatura de arquivo, clickjacking, hash do texto LGPD); 0127 editada no lugar; **dono: `TRUST_PROXY_HOPS=2` na API do Railway**; re-revisão curta pendente |
 | G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
 | G3 pós-venda, NPS, indicações, prova social | 3 | 🔍 | integrada (0130); revisão Opus: aprovado com correções (alto: indicações viram oráculo de "já é cliente" e não têm portão/teto; resposta do NPS barrada pelo portão com equipe disponível). Decisão: `indicacoes` padrão desligado. Correção em curso pelo agente da raia (migration 0141) — **não ligar pós-venda em cliente antes** |
-| G4 roteamento e rodízio | 3 | 🔄 | Opus; migration 0136 |
+| G4 roteamento e rodízio | 3 | 🔍 | integrada (0136); aba Roteamento em Config. do Canal; revisão Opus em curso; pendente: SLA estourado ainda avisa todos os gestores (não o da filial primeiro) |
 | G5 cadência descarte/reativação | 3 | ✅ | integrada com correções (descarte desligado por padrão, só sem compra; teto de reativação por número; trava conversa+contato) |
 | H1 importador | 3 | ✅ | integrada com as 13 correções da revisão (LGPD: titular bloqueado e contato anonimizado ignorados; arrendamento pelo relógio do banco e contagens dos itens; simulação fiel; venda sem referência idempotente por conteúdo; `simulada_em` obrigatória — migration 0140; windows-1252 e UTF-16 recusado; conferência só criados/atualizados) |
 | H4 e2e no CI | 3 | ✅ | integrada; 8/8 em ~13 s; passo novo no ci.yml (não rodado em runner real) |
 | E2 relatórios 1ª leva | 3 | ✅ | integrada com as correções da revisão (sistema e falhas fora de "enviadas", ranking no escopo, vazio, base do percentual, escopo materializado, 1ª resposta negativa, cliente antigo do ERP fora do tempo de conversão) |
-| E3 relatórios 2ª leva | 3 | 🔄 | Sonnet |
+| E3 relatórios 2ª leva | 3 | 🔍 | integrada (sem migration); revisão Sonnet em curso; faixa etária fora (sem data de nascimento no modelo) |
 | L1 retrofit das telas restantes | 4 | 🔄 | L1a ✅ integrada (8 telas); L1b (Haiku) em curso: canais, canal-config, templates, automações, catálogo, conexões, mídia; depois L1c (nps, mapa, mercado, bi, performance, fidelidade, carteiras, leads) e L1d Sonnet (kanban de atendimento, fila do dia, CRM avançado); cursores resolvidos pela X4 |
 | X1 teste de ativas dependente de hora | — | ✅ | causa: semente com `now()` real, ordenação lia a linha errada; só teste |
 | R0b correções da biblioteca L0 | 0 | ✅ | integrada; select paginado por cursor; console 549 testes |
