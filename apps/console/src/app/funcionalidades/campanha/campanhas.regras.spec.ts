@@ -4,6 +4,7 @@ import {
   formatarCusto, mapearErro, marcoDoDestinatario, montarCorpo, montarCorpoPrevia, montarPublico, passosComErro, podeAvancar,
   podeIniciar, resumoJanela, rotuloMotivoPausa, textoCustoPorVenda, textoTaxa, textoVariaveisFaltando, tomDoEstado,
   validarTelefonesTeste, formDaCampanha, isoParaLocal, resumoPublico, templateServeParaCampanha, variaveisDoCorpo, variaveisSemMapeamento, casaComTermo, type DestinatarioApi, type FormCampanha,
+  avisoDeBloqueio, AVISO_PAUSA_DE_RISCO, avisoJanelaAjustada, ehPausaDeRisco, erroDoTeste, mensagemDeAcao,
 } from './campanhas.regras.js'
 
 const oficial: FormCampanha = { ...FORM_VAZIO, nome: ' Reativação ', canalId: 'c1', canalTipo: 'whatsapp_oficial', templateId: 't1' }
@@ -346,5 +347,79 @@ describe('destinatário', () => {
     }
     expect(marcoDoDestinatario(base)).toBe('2026-11-01T11:00:00Z')
     expect(marcoDoDestinatario({ ...base, lidoEm: null, entregueEm: null })).toBe('2026-11-01T10:00:00Z')
+  })
+})
+
+describe('bloqueio do número (campanha em curso parada pelo número)', () => {
+  it('cada motivo vira título e ação corretiva', () => {
+    expect(avisoDeBloqueio({ motivo: 'numero_desconectado' })?.acao).toMatch(/Reconecte o número em Meus Números/)
+    expect(avisoDeBloqueio({ motivo: 'numero_sem_credencial' })?.acao).toMatch(/Conecte o número/)
+    expect(avisoDeBloqueio({ motivo: 'disparo_pausado' })?.acao).toMatch(/Retomar disparo/)
+    expect(avisoDeBloqueio({ motivo: 'sem_numero' })?.acao).toMatch(/Cancele a campanha/)
+    expect(avisoDeBloqueio({ motivo: 'numero_arquivado' })?.titulo).toMatch(/arquivado/)
+  })
+
+  it('sem bloqueio não há aviso; motivo novo cai num texto genérico, nunca em branco', () => {
+    expect(avisoDeBloqueio(null)).toBeNull()
+    expect(avisoDeBloqueio({ motivo: 'algo_novo' })?.titulo).toMatch(/Envio parado/)
+  })
+})
+
+describe('pausa de risco e janela ajustada', () => {
+  it('só numero_em_risco é pausa de risco', () => {
+    expect(ehPausaDeRisco('numero_em_risco')).toBe(true)
+    expect(ehPausaDeRisco('qualidade_numero')).toBe(false)
+    expect(ehPausaDeRisco(null)).toBe(false)
+  })
+
+  it('a faixa de risco diz que a Meta sinalizou o número e pede cautela', () => {
+    expect(AVISO_PAUSA_DE_RISCO.titulo).toMatch(/Meta sinalizou o número/)
+    expect(AVISO_PAUSA_DE_RISCO.acao).toMatch(/banir/)
+  })
+
+  it('janela ajustada cita 08:00–21:00 e o limite de marketing; sem ajuste, sem aviso', () => {
+    expect(avisoJanelaAjustada(true)).toMatch(/Janela ajustada para 08:00–21:00 \(limite de marketing\)/)
+    expect(avisoJanelaAjustada(false)).toBeNull()
+    expect(avisoJanelaAjustada(undefined)).toBeNull()
+  })
+})
+
+describe('janela da campanha — erros da tela e da API', () => {
+  it('fora de 08:00–21:00 aponta o campo janela, no passo Envio', () => {
+    const fora = { ...oficial, janelaPropria: true, janela: { seg: { de: '07:00', ate: '12:00' } } }
+    expect(errosDoPasso('envio', fora)['janela']).toMatch(/08:00 e 21:00/)
+    expect(errosDoPasso('envio', { ...oficial, janelaPropria: true, janela: { seg: { de: '08:00', ate: '21:00' } } })).toEqual({})
+  })
+
+  it('422 janela_vazia e janela_fora_do_permitido voltam ao campo janela, no passo Envio', () => {
+    for (const erro of ['campanha.janela_vazia', 'campanha.janela_fora_do_permitido']) {
+      const r = mapearErro({ erro, campos: { janela: 'Mensagem do campo.' } }, 'x')
+      expect(r.campos).toEqual({ janela: 'Mensagem do campo.' })
+      expect(r.passo).toBe('envio')
+    }
+  })
+})
+
+describe('erros de ação com texto próprio', () => {
+  it('iniciar: a campanha mudou enquanto iniciava', () => {
+    expect(mensagemDeAcao('campanha.alterada_durante_inicio', null, 'x'))
+      .toBe('A campanha mudou enquanto iniciava; revise e tente de novo.')
+  })
+
+  it('teste com limite: diz os limites que vieram na resposta, sem campo', () => {
+    const r = erroDoTeste('campanha.teste_limite', { limiteUsuarioHora: 20, limiteNumeroHora: 30 }, 'x')
+    expect(r.campo).toBeNull()
+    expect(r.mensagem).toMatch(/até 20 telefones por pessoa e 30 por número/)
+  })
+
+  it('teste sem cota: aquecimento e teto do dia, com a saída', () => {
+    expect(erroDoTeste('campanha.teste_sem_cota', null, 'x').mensagem).toMatch(/aquecimento.*teto de hoje/)
+  })
+
+  it('telefones inválidos apontam o campo telefones; sem código, a mensagem da API ou o padrão', () => {
+    expect(erroDoTeste('campanha.teste_invalido', { campos: { telefones: 'De 1 a 5 telefones.' } }, 'x'))
+      .toEqual({ campo: 'telefones', mensagem: 'De 1 a 5 telefones.' })
+    expect(erroDoTeste(null, { mensagem: 'Oi.' }, 'x').mensagem).toBe('Oi.')
+    expect(erroDoTeste(null, null, 'padrão').mensagem).toBe('padrão')
   })
 })

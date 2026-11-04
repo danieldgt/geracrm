@@ -9,7 +9,8 @@ import {
   type Aba, type ColunaTabela, type ItemDefinicao, type ItemTrilha, type LinhaTabela, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
 import {
-  ROTULO_ORIGEM_JANELA, acoesDaTela, avisoDePausa, confirmacaoDaAcao, degrausDoFunil, ehPausaAutomatica, excluidosOrdenados,
+  AVISO_PAUSA_DE_RISCO, ROTULO_ORIGEM_JANELA, acoesDaTela, avisoDeBloqueio, avisoDePausa, avisoJanelaAjustada, confirmacaoDaAcao,
+  ehPausaDeRisco, erroDoTeste, degrausDoFunil, ehPausaAutomatica, excluidosOrdenados,
   marcoDoDestinatario, mapearErro, mensagemDeAcao, podeIniciar, resumoJanela, rotuloEstado, rotuloFalha,
   rotuloMotivoPausa, rotuloResultadoTeste, textoCustoPorVenda, textoTaxa, tomDoDestinatario, tomDoEstado, validarTelefonesTeste,
   type DestinatarioApi, type RelatorioApi,
@@ -79,7 +80,13 @@ const OPCOES_ESTADO_DEST: OpcaoSelect[] = [
 
           @if (erroAcao(); as e) { <p class="aviso aviso--erro" role="alert">{{ e }}</p> }
 
-          @if (camp.estado === 'pausada' && motivoPausa(); as m) {
+          @if (bloqueio(); as b) {
+            <p class="aviso aviso--erro" role="alert"><strong>{{ b.titulo }}.</strong> {{ b.acao }}</p>
+          }
+          @if (camp.estado === 'pausada' && pausaDeRisco()) {
+            <p class="aviso aviso--erro" role="alert"><strong>{{ avisoRisco.titulo }}.</strong> {{ avisoRisco.acao }}</p>
+          }
+          @if (camp.estado === 'pausada' && !pausaDeRisco() && motivoPausa(); as m) {
             <p class="aviso aviso--atencao" role="status">
               <strong>{{ pausaAutomatica() ? 'Pausa automática.' : 'Pausada.' }}</strong> {{ m }}
               @if (camp.pausadaEm) { Desde {{ dataHora(camp.pausadaEm) }}. }
@@ -127,12 +134,13 @@ const OPCOES_ESTADO_DEST: OpcaoSelect[] = [
 
                   <div class="kpis">
                     <ui-stat-card tom="sucesso" [valor]="reais(r.roi.exata.receitaCentavos)" [rotulo]="'receita atribuída · ' + r.roi.exata.pedidos + ' pedidos'" />
-                    <ui-stat-card tom="neutro" [valor]="reais(r.custo.totalCentavos)" [rotulo]="'custo das ' + r.funil.enviadas + ' enviadas'" />
+                    <ui-stat-card tom="neutro" [valor]="reais(r.custo.totalCentavos)" [rotulo]="'custo de ' + r.custo.mensagensCobradas + ' cobradas'" />
                     <ui-stat-card tom="neutro" [valor]="custoVenda(r.custo.porPedidoCentavos)" rotulo="custo por pedido" />
                     <ui-stat-card tom="neutro" [valor]="custoVenda(r.custo.porVendaEstimadaCentavos)" rotulo="custo por venda estimada" />
                     <ui-stat-card [tom]="optOutAlto() ? 'erro' : 'neutro'" [valor]="r.optOuts" [rotulo]="'pediram para sair · ' + taxa(r.optOuts, r.funil.enviadas) + ' das enviadas'" />
                     <ui-stat-card [tom]="r.falhas > 0 ? 'atencao' : 'neutro'" [valor]="r.falhas" rotulo="falhas de envio" />
                   </div>
+                  <p class="ajuda">Custo conta só as mensagens cobradas: as enviadas sem falha devolvida pela Meta. Falha de envio não paga.</p>
                 } @else if (erroRel(); as e) {
                   <p class="aviso aviso--erro" role="alert">{{ e }}
                     <button type="button" class="btn btn--secundario btn--pequeno" (click)="carregarRelatorio()">Tentar de novo</button></p>
@@ -178,6 +186,7 @@ const OPCOES_ESTADO_DEST: OpcaoSelect[] = [
               <section class="cartao" aria-label="Configuração">
                 <h2 class="txt-secao">Configuração</h2>
                 <ui-lista-definicao [colunas]="2" [itens]="itensConfig()" />
+                @if (avisoJanela(); as a) { <p class="aviso aviso--atencao" role="status">{{ a }}</p> }
               </section>
             }
 
@@ -345,6 +354,10 @@ export class CampanhaDetalhePagina implements OnInit {
   protected readonly acoes = computed(() => { const c = this.c(); return c ? acoesDaTela(c.modeloVersao, c.acoes) : [] })
   protected readonly funil = computed(() => { const r = this.rel(); return r ? degrausDoFunil(r.funil) : [] })
   protected readonly excluidos = computed(() => { const r = this.rel(); return r ? excluidosOrdenados(r.excluidos, MOTIVOS_EXCLUSAO) : [] })
+  protected readonly bloqueio = computed(() => avisoDeBloqueio(this.c()?.bloqueio))
+  protected readonly pausaDeRisco = computed(() => ehPausaDeRisco(this.c()?.pausaMotivo))
+  protected readonly avisoRisco = AVISO_PAUSA_DE_RISCO
+  protected readonly avisoJanela = computed(() => avisoJanelaAjustada(this.c()?.janelaEfetiva.ajustada))
   protected readonly motivoPausa = computed(() => rotuloMotivoPausa(this.c()?.pausaMotivo))
   protected readonly pausaAutomatica = computed(() => ehPausaAutomatica(this.c()?.pausaMotivo))
   protected readonly avisoQualidade = computed(() => avisoDePausa(this.c()?.pausadaPorQualidade))
@@ -538,8 +551,7 @@ export class CampanhaDetalhePagina implements OnInit {
       const falhas = r.resultados.filter((x) => !x.ok).length
       if (falhas === 0) this.toast.sucesso('Teste enviado.')
     } catch (e) {
-      const m = mapearErro(corpoDoErro(e), mensagemDeErro(e, 'Não foi possível enviar o teste.'))
-      this.erroTeste.set(m.campos['telefones'] ?? m.geral ?? mensagemDeAcao(codigoDoErro(e), null, 'Não foi possível enviar o teste.'))
+      this.erroTeste.set(erroDoTeste(codigoDoErro(e), corpoDoErro(e), mensagemDeErro(e, 'Não foi possível enviar o teste.')).mensagem)
     } finally { this.enviandoTeste.set(false) }
   }
 

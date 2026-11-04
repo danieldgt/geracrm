@@ -4,8 +4,9 @@
  * só monta o corpo, formata e mapeia o erro de volta para o campo.
  */
 import {
-  LOTE_DIARIO_MAXIMO, LOTE_DIARIO_PADRAO, MAX_TELEFONES_TESTE, ROTULO_ESTADO_CAMPANHA, ROTULO_MOTIVO_PAUSA,
-  confirmacaoDoNomeConfere, ehEstadoCampanha, type AcaoCampanha, type MotivoPausa,
+  JANELA_MARKETING_LIMITE, LIMITE_TESTE_NUMERO_HORA, LIMITE_TESTE_USUARIO_HORA, LOTE_DIARIO_MAXIMO, LOTE_DIARIO_PADRAO,
+  MAX_TELEFONES_TESTE, ROTULO_ESTADO_CAMPANHA, ROTULO_MOTIVO_PAUSA, confirmacaoDoNomeConfere, ehEstadoCampanha,
+  type AcaoCampanha, type MotivoPausa,
 } from '@geracrm/shared'
 
 /** O número da campanha teve as ativas suspensas pela Meta (P11): o despachante segura a fila. */
@@ -31,6 +32,58 @@ export function avisoDePausa(p: PausaPorQualidade | null | undefined): { titulo:
     titulo: 'Pausada por qualidade do número',
     detalhe: 'A qualidade do número caiu na Meta. Os envios pendentes esperam e a campanha retoma sozinha quando a qualidade normalizar.',
   }
+}
+
+// ── Bloqueio do número e pausa de risco ──────────────────────────────────────
+
+/** Título e ação corretiva de um aviso de campanha (o que aconteceu e o que fazer). */
+export interface AvisoAcao { readonly titulo: string; readonly acao: string }
+
+/** Campanha em curso parada porque o NÚMERO não pode enviar (`bloqueio` da API, só enviando/agendada). */
+const BLOQUEIOS: Readonly<Record<string, AvisoAcao>> = {
+  sem_numero: {
+    titulo: 'Envio parado: o número desta campanha não existe mais',
+    acao: 'Cancele a campanha e crie outra com um número ativo em Meus Números.',
+  },
+  numero_arquivado: {
+    titulo: 'Envio parado: o número foi arquivado',
+    acao: 'Cancele a campanha e crie outra com um número ativo em Meus Números.',
+  },
+  numero_desconectado: {
+    titulo: 'Envio parado: o número está desconectado',
+    acao: 'Reconecte o número em Meus Números para o envio voltar.',
+  },
+  numero_sem_credencial: {
+    titulo: 'Envio parado: o número não tem credencial válida',
+    acao: 'Conecte o número de novo em Meus Números.',
+  },
+  disparo_pausado: {
+    titulo: 'Envio parado: os disparos deste número estão pausados',
+    acao: 'Abra o número em Meus Números e clique em Retomar disparo.',
+  },
+}
+
+/** Aviso do bloqueio. Motivo que a tela não conhece ganha texto genérico: nunca fica em branco. */
+export function avisoDeBloqueio(b: { readonly motivo: string } | null | undefined): AvisoAcao | null {
+  if (!b) return null
+  return BLOQUEIOS[b.motivo] ?? { titulo: 'Envio parado pelo número', acao: 'Confira o número em Meus Números.' }
+}
+
+/** Pausa em que a Meta sinalizou o número: não se retoma no escuro. */
+export function ehPausaDeRisco(motivo: string | null | undefined): boolean {
+  return motivo === 'numero_em_risco'
+}
+
+export const AVISO_PAUSA_DE_RISCO: AvisoAcao = {
+  titulo: 'A Meta sinalizou o número',
+  acao: 'O número recebeu limite, bloqueio temporário ou alerta de spam. Insistir pode banir o número: confira a conta no Gerenciador do WhatsApp e só retome depois de resolver a causa.',
+}
+
+/** Aviso de janela recortada pelo limite de marketing (08:00–21:00). `null` quando não foi ajustada. */
+export function avisoJanelaAjustada(ajustada: boolean | null | undefined): string | null {
+  if (!ajustada) return null
+  const L = JANELA_MARKETING_LIMITE
+  return `Janela ajustada para ${L.de}–${L.ate} (limite de marketing): o expediente do número saía desse horário e foi recortado.`
 }
 
 // ── Wizard: passos e formulário ──────────────────────────────────────────────
@@ -151,6 +204,9 @@ export function errosDoPasso(passo: PassoWizard, f: FormCampanha): ErrosCampo {
       const abertos = Object.values(f.janela).filter((d) => d !== null)
       if (abertos.length === 0) e['janela'] = 'Abra pelo menos um dia da semana.'
       else if (abertos.some((d) => !d || !d.de || !d.ate || d.de >= d.ate)) e['janela'] = 'Em cada dia, a hora final precisa ser depois da inicial.'
+      else if (abertos.some((d) => !!d && (d.de < JANELA_MARKETING_LIMITE.de || d.ate > JANELA_MARKETING_LIMITE.ate))) {
+        e['janela'] = `Campanha de marketing só sai entre ${JANELA_MARKETING_LIMITE.de} e ${JANELA_MARKETING_LIMITE.ate}.`
+      }
     }
     const j = inteiroDoTexto(f.janelaDias)
     if (j === null || j < 1 || j > 90) e['janelaDias'] = 'Informe de 1 a 90 dias.'
@@ -364,7 +420,8 @@ export interface PreviaApi {
   readonly duracaoDias: number
   readonly loteDiario: number
   readonly aquecimento: { dia: number; limiteHoje: number; restanteHoje: number } | null
-  readonly janelaDoNumero: { origem: string; horario: Readonly<Record<string, JanelaDia>> }
+  /** `ajustada`: o expediente do número foi recortado ao limite de marketing (08:00–21:00). */
+  readonly janelaDoNumero: { origem: string; horario: Readonly<Record<string, JanelaDia>>; ajustada: boolean }
 }
 
 /** Reais a partir de centavos inteiros (a conversão só acontece na borda, ao formatar). */
@@ -491,6 +548,7 @@ export function mensagemDeAcao(codigo: string | null, mensagemApi: string | null
   if (codigo === 'campanha.sem_elegiveis') return mensagemApi ?? 'Nenhum contato elegível neste público depois das exclusões. Ajuste o público e tente de novo.'
   if (codigo === 'campanha.ja_iniciada') return 'A campanha já foi iniciada por outra pessoa. Atualize a tela.'
   if (codigo === 'campanha.estado_invalido') return mensagemApi ?? 'O estado da campanha mudou. Atualize a tela.'
+  if (codigo === 'campanha.alterada_durante_inicio') return 'A campanha mudou enquanto iniciava; revise e tente de novo.'
   return mensagemApi ?? padrao
 }
 
@@ -518,6 +576,27 @@ export function rotuloResultadoTeste(r: { ok: boolean; motivo?: string }): strin
   return (r.motivo && ROTULO_MOTIVO_TESTE[r.motivo]) || `Falhou${r.motivo ? `: ${r.motivo}` : ''}`
 }
 
+/** Erro do envio de teste: `campo` só quando a API aponta os telefones; limite e cota dizem os números. */
+export interface ErroTeste { readonly campo: 'telefones' | null; readonly mensagem: string }
+
+export function erroDoTeste(
+  codigo: string | null,
+  corpo: (CorpoDeErro & { readonly limiteUsuarioHora?: number; readonly limiteNumeroHora?: number }) | null | undefined,
+  padrao: string,
+): ErroTeste {
+  if (codigo === 'campanha.teste_limite') {
+    const usuario = corpo?.limiteUsuarioHora ?? LIMITE_TESTE_USUARIO_HORA
+    const numero = corpo?.limiteNumeroHora ?? LIMITE_TESTE_NUMERO_HORA
+    return { campo: null, mensagem: `Limite de testes atingido: até ${usuario} telefones por pessoa e ${numero} por número a cada hora. Tente de novo mais tarde.` }
+  }
+  if (codigo === 'campanha.teste_sem_cota') {
+    return { campo: null, mensagem: 'O número está em aquecimento e o teto de hoje acabou; o teste também conta. Tente amanhã ou use outro número.' }
+  }
+  const telefones = corpo?.campos?.['telefones']
+  if (telefones) return { campo: 'telefones', mensagem: telefones }
+  return { campo: null, mensagem: corpo?.mensagem ?? padrao }
+}
+
 // ── Detalhe: funil, progresso e falhas ───────────────────────────────────────
 
 export interface RelatorioApi {
@@ -534,7 +613,7 @@ export interface RelatorioApi {
   readonly falhas: number
   readonly falhasPorCodigo: readonly { codigo: string; n: number }[]
   readonly custo: {
-    readonly categoria: string | null; readonly precoUnitarioCentavos: number; readonly totalCentavos: number
+    readonly categoria: string | null; readonly mensagensCobradas: number; readonly precoUnitarioCentavos: number; readonly totalCentavos: number
     readonly porPedidoCentavos: number | null; readonly porVendaEstimadaCentavos: number | null
   }
   readonly roi: {

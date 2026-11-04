@@ -27,13 +27,15 @@ export interface CampanhaResumo {
   readonly iniciadaEm: string | null
   readonly concluidaEm: string | null
   readonly pausadaPorQualidade: PausaPorQualidade | null
+  /** Campanha em curso parada porque o número não pode enviar (só enviando/agendada). */
+  readonly bloqueio: { readonly motivo: string } | null
 }
 
 export interface CampanhaDetalhe extends CampanhaResumo {
   readonly mensagem: string | null
   readonly publico: PublicoApi | null
   readonly janela: Readonly<Record<string, JanelaDia>> | null
-  readonly janelaEfetiva: { origem: string; horario: Readonly<Record<string, JanelaDia>> }
+  readonly janelaEfetiva: { origem: string; horario: Readonly<Record<string, JanelaDia>>; ajustada: boolean }
   readonly confirmaRiscoBanimento: boolean
   readonly iniciadaPor: string | null
   readonly atualizadoEm: string | null
