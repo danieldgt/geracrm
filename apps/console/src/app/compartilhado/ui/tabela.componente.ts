@@ -94,6 +94,16 @@ export type LinhaTabela = Record<string, unknown>
             }
           }
         </tbody>
+        @if (totais(); as t) {
+          <tfoot>
+            <tr>
+              @if (selecionavel()) { <td class="sel"></td> }
+              @for (c of colunas(); track c.chave) {
+                <td class="txt-denso" [class.mono]="c.mono" [attr.data-alinhamento]="c.alinhamento ?? 'esq'">{{ t[c.chave] ?? '' }}</td>
+              }
+            </tr>
+          </tfoot>
+        }
       </table>
       @if (!carregando() && linhas().length === 0) {
         <div class="vazio"><ng-content select="[uiVazio]" /></div>
@@ -115,6 +125,7 @@ export type LinhaTabela = Record<string, unknown>
     [data-alinhamento='centro'] { text-align: center; }
     .mono { font-family: var(--tipografia-familia-dados); white-space: nowrap; font-variant-numeric: tabular-nums; }
     .sel { width: 40px; text-align: center; padding: 0 var(--espacamento-2); }
+    tfoot td { font-weight: 600; background: var(--superficie-elevada); border-top: 1px solid var(--borda); border-bottom: 0; }
     .vazio:not(:empty) { border-top: 1px solid var(--borda); }
   `,
 })
@@ -129,9 +140,12 @@ export class TabelaComponente {
   readonly selecionados = model<ReadonlySet<string>>(new Set())
   readonly carregando = input(false)
   readonly linhasEsqueleto = input(5)
+  /** Rodapé de totais opcional: texto já formatado por quem chama, por chave de coluna. Some durante o carregamento. */
+  readonly rodape = input<Readonly<Record<string, string>> | null>(null)
 
   protected readonly celulas = contentChildren(CelulaDiretiva)
   protected readonly modelos = computed(() => new Map(this.celulas().map((c) => [c.chave(), c.modelo])))
+  protected readonly totais = computed(() => (this.carregando() ? null : this.rodape()))
   protected readonly esqueletos = computed(() => Array.from({ length: this.linhasEsqueleto() }, (_, i) => i))
   private readonly chaves = computed(() => this.linhas().map((l) => this.chaveLinha()(l)))
   protected readonly estadoPagina = computed(() => estadoSelecaoPagina(this.selecionados(), this.chaves()))

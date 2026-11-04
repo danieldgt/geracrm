@@ -24,6 +24,7 @@ import { aplicarMascaraNoElemento, digitosDaMascara, formatarMascara, type TipoM
       <div class="linha">
         @if (tipo() === 'textarea') {
           <textarea class="controle" [id]="id" [placeholder]="placeholder()" [value]="valor()" rows="3"
+                    [attr.maxlength]="maxlength()"
                     [disabled]="desabilitadoEfetivo()" [attr.aria-invalid]="aria().ariaInvalid"
                     [attr.aria-required]="aria().ariaRequired" [attr.aria-describedby]="aria().ariaDescribedBy"
                     (input)="digitou($any($event.target).value)" (blur)="aoTocar()"></textarea>
@@ -31,6 +32,7 @@ import { aplicarMascaraNoElemento, digitosDaMascara, formatarMascara, type TipoM
           <input class="controle" [id]="id" [type]="tipoNativo()" [attr.inputmode]="tipo() === 'dinheiro' ? 'decimal' : null"
                  [placeholder]="placeholder()" [value]="valor()"
                  [disabled]="desabilitadoEfetivo()" [attr.autocomplete]="autocomplete()"
+                 [attr.maxlength]="maxlength()" [attr.min]="min()" [attr.max]="max()" [attr.step]="step()"
                  [attr.aria-invalid]="aria().ariaInvalid" [attr.aria-required]="aria().ariaRequired"
                  [attr.aria-describedby]="aria().ariaDescribedBy"
                  (input)="aoInput($any($event.target))" (blur)="sair($any($event.target))" />
@@ -39,9 +41,12 @@ import { aplicarMascaraNoElemento, digitosDaMascara, formatarMascara, type TipoM
       </div>
       @if (dica()) { <span class="dica txt-denso" [id]="idDica">{{ dica() }}</span> }
       @if (erro()) { <span class="msg-erro txt-denso" [id]="idErro" role="alert">{{ erro() }}</span> }
+      @if (tipo() === 'textarea' && maxlength() !== null) {
+        <span class="contador txt-denso">{{ valor().length }}/{{ maxlength() }}</span>
+      }
     </div>
   `,
-  styles: ESTILOS_CONTROLE,
+  styles: [ESTILOS_CONTROLE, '.contador { align-self: flex-end; color: var(--texto-secundario); font-variant-numeric: tabular-nums; }'],
 })
 export class CampoComponente implements ControlValueAccessor {
   readonly id = proximoIdCampo('ui-campo')
@@ -61,6 +66,11 @@ export class CampoComponente implements ControlValueAccessor {
   readonly autocomplete = input<string | null>(null)
   /** Máscara opcional (cpf, cnpj, ...): exibe formatado; o CVA recebe só dígitos. */
   readonly mascara = input<TipoMascara | null>(null)
+  /** Limites nativos, repassados ao controle. Em `textarea`, `maxlength` também mostra o contador "n/max". */
+  readonly maxlength = input<number | null>(null)
+  readonly min = input<string | number | null>(null)
+  readonly max = input<string | number | null>(null)
+  readonly step = input<string | number | null>(null)
 
   private readonly desabilitadoCva = signal(false)
   protected readonly desabilitadoEfetivo = computed(() => this.desabilitado() || this.desabilitadoCva())
