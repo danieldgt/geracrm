@@ -5,8 +5,8 @@ import { ActivatedRoute, Router, RouterLink, type ParamMap } from '@angular/rout
 import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop'
 import { FunilServico, type Card, type Coluna, type EtapaConfig, type MotivoConfig } from './funil.servico.js'
 import {
-  AbasComponente, ConfirmacaoServico, EstadoComponente, FiltrosComponente, IconeComponente, SelectComponente, SelectPaginadoComponente, ToastServico,
-  type Aba, type CarregarOpcoes, type OpcaoPaginada,
+  AbasComponente, CabecalhoTelaComponente, CampoComponente, ConfirmacaoServico, EstadoComponente, FiltrosComponente, IconeComponente, ModalComponente, SelectComponente, SelectPaginadoComponente, ToastServico,
+  type Aba, type CarregarOpcoes, type OpcaoPaginada, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
 import { PresencaServico } from '../../nucleo/presenca.servico.js'
 import { EtiquetasServico } from './etiquetas.servico.js'
@@ -35,23 +35,17 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CdkDropListGroup, CdkDropList, CdkDrag, RouterLink, FormsModule, IconeComponente, AbasComponente, EstadoComponente, FiltrosComponente,
-    SelectComponente, SelectPaginadoComponente, FunilPanoramaComponente, TarefaModalComponente, FunilGanharModalComponente,
+    CabecalhoTelaComponente, CampoComponente, ModalComponente, SelectComponente, SelectPaginadoComponente, FunilPanoramaComponente, TarefaModalComponente, FunilGanharModalComponente,
     FunilPerderModalComponente, FunilTransferirModalComponente, FunilNovaOportunidadeModalComponente,
   ],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1 class="txt-titulo">Funil de vendas</h1>
-        <p class="sub">Arraste o card conforme a relação com o cliente evolui.</p>
-      </div>
-      <div class="acoes">
-        <button class="btn btn--primario" (click)="novaOportunidade.set(true)">Nova oportunidade</button>
-        <button class="btn" [class.btn--primario]="mostrarMetricas()" [class.btn--secundario]="!mostrarMetricas()" (click)="alternarMetricas()">
-          📊 {{ mostrarMetricas() ? 'Ocultar métricas' : 'Métricas' }}
-        </button>
-        <button class="btn btn--secundario" (click)="abrirConfig()">⚙️ Configurar funil</button>
-      </div>
-    </header>
+    <ui-cabecalho-tela titulo="Funil de vendas" subtitulo="Arraste o card conforme a relação com o cliente evolui.">
+      <button class="btn btn--primario" type="button" (click)="novaOportunidade.set(true)">Nova oportunidade</button>
+      <button class="btn" type="button" [class.btn--primario]="mostrarMetricas()" [class.btn--secundario]="!mostrarMetricas()" (click)="alternarMetricas()">
+        <ui-icone nome="line-chart" [tamanho]="14" /> {{ mostrarMetricas() ? 'Ocultar métricas' : 'Métricas' }}
+      </button>
+      <button class="btn btn--secundario" type="button" (click)="abrirConfig()"><ui-icone nome="settings" [tamanho]="14" /> Configurar funil</button>
+    </ui-cabecalho-tela>
 
     <ui-abas class="abas-visao" [abas]="abasVisao" [ativa]="visao()" (ativaChange)="mudarVisao($any($event))" />
 
@@ -140,9 +134,15 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
       @case ('carregando') {
         <div class="board"><div class="col-esq"></div><div class="col-esq"></div><div class="col-esq"></div></div>
       }
-      @case ('sem_permissao') { <div class="bloco aviso"><h2 class="txt-secao">Sem acesso ao funil</h2></div> }
-      @case ('erro') { <div class="bloco aviso"><h2 class="txt-secao">Não foi possível carregar</h2>
-        <button (click)="servico.carregar()">Tentar de novo</button></div> }
+      @case ('sem_permissao') {
+        <ui-estado tipo="sem-permissao" titulo="Você não tem acesso ao funil"
+          descricao="Peça a um administrador da sua empresa para liberar este acesso." />
+      }
+      @case ('erro') {
+        <ui-estado tipo="erro" titulo="Não foi possível carregar o funil" descricao="Nenhuma oportunidade foi alterada; tente de novo.">
+          <button class="btn btn--primario" type="button" (click)="servico.carregar()">Tentar de novo</button>
+        </ui-estado>
+      }
       @case ('pronto') {
         @if (semResultado()) {
           <ui-estado tipo="vazio" titulo="Nenhum card com esses filtros"
@@ -173,13 +173,13 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
                     @if (card.valorCentavos !== null) {
                       <span class="card-valor txt-dados">{{ reais(card.valorCentavos) }}</span>
                     }
-                    @if (card.responsavel) { <span class="card-resp">👤 {{ card.responsavel }}</span> }
+                    @if (card.responsavel) { <span class="card-resp"><ui-icone nome="user" [tamanho]="14" /> {{ card.responsavel }}</span> }
                   </article>
                 }
                 @if (col.cards.length === 0) { <p class="col-vazia">Vazio</p> }
               </div>
               @if (col.proximoCursor) {
-                <button class="mais" (click)="servico.carregarMais(col.etapa.id)" [disabled]="col.carregandoMais">
+                <button type="button" class="mais" (click)="servico.carregarMais(col.etapa.id)" [disabled]="col.carregandoMais">
                   {{ col.carregandoMais ? 'Carregando…' : 'Carregar mais' }}
                 </button>
               }
@@ -211,70 +211,60 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
       (fechar)="novaOportunidade.set(false)" />
 
     <!-- Configuração das raias: a empresa monta o próprio funil. -->
-    @if (configAberta()) {
-      <div class="fora" (click)="fecharConfig()"></div>
-      <div class="cfg-modal" role="dialog" aria-label="Configurar funil">
-        <header class="cfg-topo">
-          <h2 class="txt-secao">Raias do funil</h2>
-          <button class="cfg-x" (click)="fecharConfig()" aria-label="Fechar">✕</button>
-        </header>
-        <p class="cfg-dica">
-          As raias viram as colunas do quadro. <b>Aberto</b> é negociação em andamento;
-          <b>Ganho</b> encerra com sucesso; <b>Perdido</b> encerra e pede o motivo.
-        </p>
+    <ui-modal [aberto]="configAberta()" titulo="Raias do funil" largura="m" (fechar)="fecharConfig()">
+      <p class="cfg-dica">
+        As raias viram as colunas do quadro. <b>Aberto</b> é negociação em andamento;
+        <b>Ganho</b> encerra com sucesso; <b>Perdido</b> encerra e pede o motivo.
+      </p>
 
-        @if (servico.erroConfig(); as e) { <p class="cfg-erro" role="alert">{{ e }}</p> }
+      @if (servico.erroConfig(); as e) { <p class="cfg-erro" role="alert">{{ e }}</p> }
 
-        <ul class="cfg-lista">
-          @for (e of servico.config(); track e.id) {
-            <li class="cfg-item" [class.cfg-item--off]="!e.ativo">
-              <span class="cfg-ordem">
-                <button (click)="reordenar(e, -1)" [disabled]="$first" aria-label="Subir">▲</button>
-                <button (click)="reordenar(e, 1)" [disabled]="$last" aria-label="Descer">▼</button>
-              </span>
-              <input class="cfg-nome" [value]="e.nome" (change)="renomear(e, $event)" aria-label="Nome da raia" />
-              <select class="cfg-select" [value]="e.tipo" (change)="mudarTipo(e, $event)" aria-label="Tipo da raia">
-                <option value="aberto">Aberto</option>
-                <option value="ganho">Ganho</option>
-                <option value="perdido">Perdido</option>
-              </select>
-              <span class="cfg-qtd txt-dados" [title]="e.total + ' oportunidade(s)'">{{ e.total }}</span>
-              <button class="cfg-toggle" (click)="alternarAtivo(e)">{{ e.ativo ? 'Ativa' : 'Inativa' }}</button>
-              <button class="cfg-del" (click)="removerEtapa(e)" aria-label="Remover raia">🗑</button>
-            </li>
-          }
-        </ul>
+      <ul class="cfg-lista">
+        @for (e of servico.config(); track e.id) {
+          <li class="cfg-item" [class.cfg-item--off]="!e.ativo">
+            <span class="cfg-ordem">
+              <button type="button" (click)="reordenar(e, -1)" [disabled]="$first" aria-label="Subir"><ui-icone nome="chevron-down" [tamanho]="14" class="gira" /></button>
+              <button type="button" (click)="reordenar(e, 1)" [disabled]="$last" aria-label="Descer"><ui-icone nome="chevron-down" [tamanho]="14" /></button>
+            </span>
+            <input class="cfg-nome" [value]="e.nome" (change)="renomear(e, $event)" aria-label="Nome da raia" />
+            <select class="cfg-select" [value]="e.tipo" (change)="mudarTipo(e, $event)" aria-label="Tipo da raia">
+              <option value="aberto">Aberto</option>
+              <option value="ganho">Ganho</option>
+              <option value="perdido">Perdido</option>
+            </select>
+            <span class="cfg-qtd txt-dados" [title]="e.total + ' oportunidade(s)'">{{ e.total }}</span>
+            <button type="button" class="cfg-toggle" (click)="alternarAtivo(e)">{{ e.ativo ? 'Ativa' : 'Inativa' }}</button>
+            <button type="button" class="cfg-del" (click)="removerEtapa(e)" aria-label="Remover raia"><ui-icone nome="x" [tamanho]="14" /></button>
+          </li>
+        }
+      </ul>
 
-        <div class="cfg-novo">
-          <input class="cfg-nome" [value]="novoNome()" (input)="novoNome.set(valor($event))"
-                 (keydown.enter)="criarEtapa()" placeholder="Nova raia…" aria-label="Nome da nova raia" />
-          <select class="cfg-select" [value]="novoTipo()" (change)="novoTipo.set(tipoDe($event))" aria-label="Tipo">
-            <option value="aberto">Aberto</option>
-            <option value="ganho">Ganho</option>
-            <option value="perdido">Perdido</option>
-          </select>
-          <button class="cfg-add" (click)="criarEtapa()" [disabled]="!novoNome().trim()">Adicionar</button>
-        </div>
-
-        <h3 class="cfg-sub txt-rotulo">Motivos de perda</h3>
-        <p class="cfg-dica">Quem arrasta um card para uma raia de perda escolhe um destes.</p>
-        <ul class="cfg-lista">
-          @for (m of servico.motivosConfig(); track m.codigo) {
-            <li class="cfg-item cfg-item--motivo" [class.cfg-item--off]="!m.ativo">
-              <span class="cfg-nome-fixo encolhe">{{ m.nome }}</span>
-              <span class="cfg-qtd txt-dados" [title]="m.total + ' perda(s)'">{{ m.total }}</span>
-              <button class="cfg-del" (click)="removerMotivo(m)" aria-label="Remover motivo">🗑</button>
-            </li>
-          }
-          @if (servico.motivosConfig().length === 0) { <li class="cfg-vazio">Nenhum motivo cadastrado.</li> }
-        </ul>
-        <div class="cfg-novo">
-          <input class="cfg-nome" [value]="novoMotivo()" (input)="novoMotivo.set(valor($event))"
-                 (keydown.enter)="criarMotivo()" placeholder="Novo motivo…" aria-label="Nome do novo motivo" />
-          <button class="cfg-add" (click)="criarMotivo()" [disabled]="!novoMotivo().trim()">Adicionar</button>
-        </div>
+      <div class="cfg-novo">
+        <ui-campo rotulo="Nova raia" placeholder="Nome da raia" [valor]="novoNome()" (valorChange)="novoNome.set($event)" />
+        <ui-select rotulo="Tipo" [opcoes]="opcoesTipoRaia" [valor]="novoTipo()" (valorChange)="novoTipo.set(tipoValido($event))" />
+        <button type="button" class="btn btn--primario" (click)="criarEtapa()" [disabled]="!novoNome().trim()">Adicionar raia</button>
       </div>
-    }
+
+      <h3 class="cfg-sub txt-rotulo">Motivos de perda</h3>
+      <p class="cfg-dica">Quem arrasta um card para uma raia de perda escolhe um destes.</p>
+      <ul class="cfg-lista">
+        @for (m of servico.motivosConfig(); track m.codigo) {
+          <li class="cfg-item cfg-item--motivo" [class.cfg-item--off]="!m.ativo">
+            <span class="cfg-nome-fixo encolhe">{{ m.nome }}</span>
+            <span class="cfg-qtd txt-dados" [title]="m.total + ' perda(s)'">{{ m.total }}</span>
+            <button type="button" class="cfg-del" (click)="removerMotivo(m)" aria-label="Remover motivo"><ui-icone nome="x" [tamanho]="14" /></button>
+          </li>
+        }
+        @if (servico.motivosConfig().length === 0) { <li class="cfg-vazio">Nenhum motivo cadastrado.</li> }
+      </ul>
+      <div class="cfg-novo cfg-novo--motivo">
+        <ui-campo rotulo="Novo motivo" placeholder="Nome do motivo" [valor]="novoMotivo()" (valorChange)="novoMotivo.set($event)" />
+        <button type="button" class="btn btn--primario" (click)="criarMotivo()" [disabled]="!novoMotivo().trim()">Adicionar motivo</button>
+      </div>
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharConfig()">Fechar</button>
+      </div>
+    </ui-modal>
   `,
   styles: `
     /* ⚠️ NÃO volte para height 100%. A casca põe a tela numa CÉLULA DE GRID com
@@ -292,7 +282,6 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
        O que sobra é a viewport menos a barra da casca. */
     :host { display: flex; flex-direction: column; height: calc(100dvh - var(--altura-barra-topo));
       padding: var(--espacamento-6); overflow: hidden; }
-    .cabecalho { margin-bottom: var(--espacamento-4); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
     /* Painel de métricas */
     .metricas { margin-bottom: var(--espacamento-4); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
     .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--espacamento-3); margin-bottom: var(--espacamento-4); }
@@ -308,13 +297,10 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
     .mp-rot { font-size: 12px; color: var(--texto-suave); }
     .mp-chip { font-size: 12px; padding: 2px 8px; border-radius: var(--raio-completo); background: var(--erro-suave); color: var(--erro); }
     .dica-m { margin: var(--espacamento-3) 0 0; font-size: 11px; color: var(--texto-suave); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .abas-visao { margin-bottom: var(--espacamento-4); }
     .filtros-board { margin-bottom: var(--espacamento-3); }
     .resumo-filtros { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); }
     .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .board { display: flex; gap: var(--espacamento-3); align-items: stretch; flex: 1; min-height: 0; overflow-x: auto; padding-bottom: var(--espacamento-2); }
     .col-esq { width: 280px; height: 200px; border-radius: var(--raio-painel); background: var(--superficie); flex: none; }
     .coluna { width: 280px; flex: none; display: flex; flex-direction: column; min-height: 0;
@@ -349,7 +335,7 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
     .card-nome:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 1px; border-radius: var(--raio-controle); }
     .erro-m { color: var(--erro); display: flex; gap: var(--espacamento-2); align-items: center; flex-wrap: wrap; }
     .card-valor { font-size: 12px; color: var(--sucesso); }
-    .card-resp { font-size: 11px; color: var(--texto-suave); }
+    .card-resp { display: inline-flex; align-items: center; gap: var(--espacamento-1); font-size: 11px; color: var(--texto-suave); }
     .col-vazia { margin: var(--espacamento-2) 0; color: var(--texto-suave); font-size: 12px; text-align: center; }
     .mais { margin: 0 var(--espacamento-3) var(--espacamento-3); padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
       border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 12px; cursor: pointer; }
@@ -358,18 +344,7 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
     .cdk-drag-preview { box-shadow: var(--elevacao-modal); border-radius: var(--raio-controle); }
     .cdk-drag-placeholder { opacity: .4; }
     .cdk-drop-list-dragging .card:not(.cdk-drag-placeholder) { transition: transform var(--movimento-estado-duracao) var(--movimento-estado-curva); }
-    .fora { position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 40; }
-    .acoes { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }
-    /* Modal de configuração das raias. Rola por dentro: o funil de ERP tem 6
-       raias, mas nada impede uma operação com 12 — a lista não pode empurrar o
-       modal para fora da viewport. */
-    .cfg-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 41;
-      width: min(560px, calc(100vw - var(--espacamento-8))); max-height: calc(100dvh - var(--espacamento-12));
-      overflow-y: auto; background: var(--superficie-elevada); border: 1px solid var(--borda);
-      border-radius: var(--raio-painel); box-shadow: var(--elevacao-modal); padding: var(--espacamento-5); }
-    .cfg-topo { display: flex; align-items: center; justify-content: space-between; }
-    .cfg-topo h2 { margin: 0; color: var(--texto); }
-    .cfg-x { border: 0; background: none; color: var(--texto-suave); font-size: 16px; padding: var(--espacamento-1); }
+    /* Modal de configuração das raias: o ui-modal rola o corpo por dentro. */
     .cfg-dica { margin: var(--espacamento-1) 0 var(--espacamento-4); color: var(--texto-secundario); font-size: 12px; }
     .cfg-erro { margin: 0 0 var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-3);
       border-radius: var(--raio-controle); background: var(--erro-suave); color: var(--erro); font-size: 12px; }
@@ -379,7 +354,7 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
     .cfg-item--off { opacity: .55; }
     .cfg-ordem { display: flex; flex-direction: column; gap: 2px; }
     .cfg-ordem button { border: 1px solid var(--borda); border-radius: 3px; background: var(--superficie-elevada);
-      color: var(--texto-secundario); font-size: 11px; line-height: 1; padding: 3px 5px; }
+      color: var(--texto-secundario); line-height: 0; padding: 2px 4px; }
     .cfg-ordem button:hover:not(:disabled) { background: var(--superficie-hover); color: var(--texto); }
     .cfg-ordem button:disabled { opacity: .25; cursor: default; }
     .cfg-nome { flex: 1; min-width: 0; padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
@@ -390,11 +365,10 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
     .cfg-qtd { min-width: 28px; text-align: right; font-size: 12px; color: var(--texto-suave); }
     .cfg-toggle { padding: 2px 8px; border: 1px solid var(--borda-controle); border-radius: var(--raio-completo);
       background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 11px; }
-    .cfg-del { border: 0; background: none; font-size: 13px; padding: var(--espacamento-1); }
-    .cfg-novo { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
-    .cfg-add { padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid transparent; border-radius: var(--raio-controle);
-      background: var(--acao); color: var(--acao-texto); font: inherit; font-size: 13px; }
-    .cfg-add:disabled { opacity: .5; cursor: default; }
+    .cfg-del { border: 0; background: none; color: var(--texto-secundario); padding: var(--espacamento-1); }
+    .cfg-novo { display: grid; grid-template-columns: 1fr 140px auto; gap: var(--espacamento-3); align-items: end; margin-top: var(--espacamento-3); }
+    .cfg-novo--motivo { grid-template-columns: 1fr auto; }
+    .gira { transform: rotate(180deg); }
     .cfg-sub { display: block; margin: var(--espacamento-6) 0 var(--espacamento-1); color: var(--texto); }
     .cfg-vazio { color: var(--texto-suave); font-size: 12px; padding: var(--espacamento-2); }
     @media (max-width: 640px) { :host { padding: var(--espacamento-3); } .coluna, .col-esq { width: 240px; } }
@@ -420,6 +394,9 @@ export class FunilPagina implements OnInit {
   readonly configAberta = signal(false)
   readonly novoNome = signal('')
   readonly novoTipo = signal<EtapaConfig['tipo']>('aberto')
+  protected readonly opcoesTipoRaia: OpcaoSelect[] = [
+    { valor: 'aberto', rotulo: 'Aberto' }, { valor: 'ganho', rotulo: 'Ganho' }, { valor: 'perdido', rotulo: 'Perdido' },
+  ]
   readonly novoMotivo = signal('')
 
   private readonly route = inject(ActivatedRoute)
@@ -619,6 +596,7 @@ export class FunilPagina implements OnInit {
   // ───────── Configuração das raias ─────────
 
   valor(ev: Event): string { return (ev.target as HTMLInputElement).value }
+  tipoValido(v: string): EtapaConfig['tipo'] { return v === 'ganho' || v === 'perdido' ? v : 'aberto' }
   tipoDe(ev: Event): EtapaConfig['tipo'] { return (ev.target as HTMLSelectElement).value as EtapaConfig['tipo'] }
 
   abrirConfig(): void {
