@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  rotuloDoEstado, tomDoEstado, variacaoDaGrade, indicadoresDaLista, filtrarPorTermo,
+  rotuloDoEstado, tomDoEstado, variacaoDaGrade, indicadoresDosContadores, montarQueryPedidos,
 } from './pedidos.regras.js'
 
 describe('pedidos: rótulo e tom por estado', () => {
@@ -31,41 +31,30 @@ describe('pedidos: variação da grade', () => {
   })
 })
 
-describe('pedidos: cards sobre o carregado', () => {
-  it('conta por estado e soma o valor só dos efetivados, em centavos inteiros', () => {
-    const r = indicadoresDaLista([
-      { estado: 'efetivado', totalCentavos: 10050 },
-      { estado: 'efetivado', totalCentavos: 2000 },
-      { estado: 'rascunho', totalCentavos: 9999 },
-      { estado: 'falhou', totalCentavos: 500 },
-      { estado: 'confirmado', totalCentavos: 700 },
-    ])
+describe('pedidos: cards a partir dos contadores do servidor', () => {
+  it('lê quantidade e valor por estado, em centavos inteiros', () => {
+    const r = indicadoresDosContadores({
+      porEstado: { efetivado: { quantidade: 2, valorCentavos: 12050 }, rascunho: { quantidade: 1, valorCentavos: 9999 }, falhou: { quantidade: 1, valorCentavos: 500 } },
+      total: 4, valorTotalCentavos: 22549,
+    })
     expect(r).toEqual({ efetivados: 2, valorEfetivadoCentavos: 12050, rascunhos: 1, falharam: 1 })
   })
 
-  it('lista vazia zera tudo', () => {
-    expect(indicadoresDaLista([])).toEqual({ efetivados: 0, valorEfetivadoCentavos: 0, rascunhos: 0, falharam: 0 })
+  it('estado ausente conta zero', () => {
+    expect(indicadoresDosContadores({ porEstado: {}, total: 0, valorTotalCentavos: 0 }))
+      .toEqual({ efetivados: 0, valorEfetivadoCentavos: 0, rascunhos: 0, falharam: 0 })
   })
 })
 
-describe('pedidos: busca no carregado', () => {
-  const itens = [
-    { contato: 'Loja Ana', rotulo: 'Inverno', numeroExterno: '4411' },
-    { contato: null, rotulo: null, numeroExterno: null },
-    { contato: 'Mercado Central', rotulo: null, numeroExterno: 'NF-99' },
-  ]
-
-  it('termo vazio devolve tudo', () => {
-    expect(filtrarPorTermo(itens, '   ')).toHaveLength(3)
+describe('pedidos: query do servidor', () => {
+  it('vazio some e a busca é aparada', () => {
+    expect(montarQueryPedidos({ q: '   ' }).toString()).toBe('')
+    expect(montarQueryPedidos({ q: '  ana ', estado: 'efetivado' }).toString()).toBe('estado=efetivado&q=ana')
   })
 
-  it('casa cliente, nome do pedido ou nº ERP, sem diferenciar maiúscula', () => {
-    expect(filtrarPorTermo(itens, 'ANA')).toEqual([itens[0]])
-    expect(filtrarPorTermo(itens, 'inverno')).toEqual([itens[0]])
-    expect(filtrarPorTermo(itens, 'nf-9')).toEqual([itens[2]])
-  })
-
-  it('sem casamento devolve lista vazia', () => {
-    expect(filtrarPorTermo(itens, 'zzz')).toEqual([])
+  it('período só vai com os dois extremos', () => {
+    expect(montarQueryPedidos({ inicio: '2026-11-01' }).has('inicio')).toBe(false)
+    const p = montarQueryPedidos({ inicio: '2026-11-01', fim: '2026-11-03', cursor: 'abc' })
+    expect(p.get('inicio')).toBe('2026-11-01'); expect(p.get('fim')).toBe('2026-11-03'); expect(p.get('cursor')).toBe('abc')
   })
 })

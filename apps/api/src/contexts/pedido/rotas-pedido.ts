@@ -4,7 +4,7 @@ import { exigirTenant } from '../../plugins/tenant.js'
 import { efetivarPedido } from './efetivacao.js'
 import { conectorDoTenant } from '../integracao/conector-do-tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
-import { condicaoPedido, contatoNoEscopo, conversaNoEscopo, escopoDaRequisicao, exigirNoEscopo, pedidoNoEscopo } from '../plataforma/escopo.js'
+import { contatoNoEscopo, conversaNoEscopo, escopoDaRequisicao, exigirNoEscopo, pedidoNoEscopo } from '../plataforma/escopo.js'
 import { ETAPAS_POS_CONFIRMACAO, etapaPos } from './proximas-etapas.js'
 import { fragmentoPrecoDeVenda } from './preco-de-venda.js'
 import {
@@ -12,6 +12,7 @@ import {
 } from './montagem.js'
 import { proporPedido } from './proposta.js'
 import { lerCursor } from '../crm/cursor-criado-em.js'
+import { condicaoListaPedidos, lerFiltroPedidos } from './filtro-lista.js'
 
 /**
  * Pedido assistido — o tira-pedido que nasce na conversa (ADR-005).
@@ -436,16 +437,49 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
 
   // ───────── Lista e gestão do pedido ─────────
 
-  /** Lista pedidos por cursor, filtrando por estado e/ou contato. */
-  app.get<{ Querystring: { estado?: string; contatoId?: string; cursor?: string } }>(
+  /**
+   * Totais por estado (quantidade e valor em centavos) no MESMO escopo e filtro da lista — sem o
+   * filtro de estado, que é o que os cards particionam. `?q`, `?inicio&fim`, `?contatoId`.
+   */
+  app.get<{ Querystring: { contatoId?: string; q?: string; inicio?: string; fim?: string } }>(
+    '/v1/pedidos/contadores', { preHandler: exigirTenant },
+    async (req, reply) => {
+      const r = await req.comTenant(async (tx) => {
+        const filtro = await lerFiltroPedidos(tx, req.query)
+        if (filtro.erro) return { erro: filtro.erro }
+        const escopo = await escopoDaRequisicao(tx, req)
+        return { linhas: await tx<{ estado: string; quantidade: number; valor: string }[]>`
+          SELECT p.estado, count(*)::int AS quantidade, coalesce(sum(p.total_centavos), 0)::text AS valor
+            FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
+           WHERE p.tenant_id = tenant_atual() AND ${condicaoListaPedidos(tx, escopo, filtro)}
+           GROUP BY p.estado` }
+      })
+      if (r.erro) return reply.code(r.erro.status).send(r.erro.corpo)
+      const porEstado: Record<string, { quantidade: number; valorCentavos: number }> = {}
+      let total = 0, valorTotal = 0
+      for (const l of r.linhas) {
+        porEstado[l.estado] = { quantidade: l.quantidade, valorCentavos: Number(l.valor) }
+        total += l.quantidade; valorTotal += Number(l.valor)
+      }
+      return reply.send({ porEstado, total, valorTotalCentavos: valorTotal })
+    },
+  )
+
+  /**
+   * Lista pedidos por cursor, filtrando por estado, contato, busca (`?q=`: nº ERP, nome do pedido,
+   * cliente ou código curto) e período (`?inicio&fim`, 422 `periodo.*`). Escopo por papel sempre.
+   */
+  app.get<{ Querystring: { estado?: string; contatoId?: string; cursor?: string; q?: string; inicio?: string; fim?: string } }>(
     '/v1/pedidos', { preHandler: exigirTenant },
     async (req, reply) => {
       const cur = lerCursor(req.query.cursor)
       if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
-      const { estado, contatoId } = req.query
-      const linhas = await req.comTenant(async (tx) => {
+      const { estado } = req.query
+      const r = await req.comTenant(async (tx) => {
+        const filtro = await lerFiltroPedidos(tx, req.query)
+        if (filtro.erro) return { erro: filtro.erro }
         const escopo = await escopoDaRequisicao(tx, req)
-        return tx<{
+        return { linhas: await tx<{
         id: string; estado: string; total_centavos: string; total_pecas: string
         contato_id: string | null; contato: string | null; rotulo: string | null
         numero_externo: string | null; criado_em: Date; criado_em_txt: string; itens: number; origem: string; desconto_pct: string
@@ -458,12 +492,13 @@ export async function rotasPedido(app: FastifyInstance): Promise<void> {
           FROM pedido p LEFT JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
          WHERE p.tenant_id = tenant_atual()
            AND ${estado ? tx`p.estado = ${estado}` : tx`true`}
-           AND ${contatoId ? tx`p.contato_id = ${contatoId}` : tx`true`}
-           AND ${condicaoPedido(tx, escopo, 'p')}
+           AND ${condicaoListaPedidos(tx, escopo, filtro)}
            -- ⚠️ ::text::timestamptz — um ::timestamptz direto faz o driver virar Date e cortar µs.
            AND ${cur === null ? tx`true` : tx`(p.criado_em, p.id) < (${cur.em}::text::timestamptz, ${cur.id}::uuid)`}
-         ORDER BY p.criado_em DESC, p.id DESC LIMIT 31`
+         ORDER BY p.criado_em DESC, p.id DESC LIMIT 31` }
       })
+      if (r.erro) return reply.code(r.erro.status).send(r.erro.corpo)
+      const linhas = r.linhas
       const temMais = linhas.length > 30
       const pagina = temMais ? linhas.slice(0, 30) : linhas
       const ultimo = pagina[pagina.length - 1]

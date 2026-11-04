@@ -5,6 +5,8 @@ import { exigirPapel } from './papel.js'
 
 const PAGINA = 50
 const BUSCA_MAX = 80
+/** Janela aplicada quando a busca textual vem sem início de período (varrer a tabela inteira não é opção). */
+export const JANELA_PADRAO_BUSCA_DIAS = 30
 const ACOES_MAX = 20
 // ISO 8601 com fuso obrigatório. Aceita até microssegundos: o cursor e a chave do
 // detalhe carregam `criado_em` com a precisão do banco (ver `linhaParaApi`).
@@ -138,6 +140,9 @@ export async function rotasAuditoria(app: FastifyInstance): Promise<void> {
       if (!cursor) return reply.code(422).send({ erro: 'cursor.invalido', mensagem: 'Cursor inválido.' })
     }
     const padraoBusca = f.busca === null ? null : `%${escaparLike(f.busca)}%`
+    // ⚠️ `q` é ILIKE sobre `dados::text`: sem piso de data varre TODAS as partições. Sem `de`, a busca
+    //    ganha a janela padrão (30 dias antes de `ate`, ou de agora) e a resposta diz `janelaPadrao: true`.
+    const janelaPadrao = padraoBusca !== null && f.de === null
 
     // Pede uma linha a mais para saber se há próxima página sem um count separado.
     const linhas = await req.comTenant((tx) => tx<LinhaAuditoria[]>`
@@ -147,7 +152,10 @@ export async function rotasAuditoria(app: FastifyInstance): Promise<void> {
          AND ${f.entidade ? tx`a.entidade = ${f.entidade}` : tx`true`}
          AND ${f.atorId ? tx`a.ator_id = ${f.atorId}::uuid` : tx`true`}
          AND ${f.acoes ? tx`a.acao = ANY(${[...f.acoes]}::text[])` : tx`true`}
-         AND ${f.de ? tx`a.criado_em >= ${f.de}::text::timestamptz` : tx`true`}
+         AND ${f.de ? tx`a.criado_em >= ${f.de}::text::timestamptz`
+               : janelaPadrao
+                 ? tx`a.criado_em >= coalesce(${f.ate ?? null}::text::timestamptz, now()) - make_interval(days => ${JANELA_PADRAO_BUSCA_DIAS})`
+                 : tx`true`}
          AND ${f.ate ? tx`a.criado_em < ${f.ate}::text::timestamptz` : tx`true`}
          AND ${padraoBusca ? tx`(a.acao ILIKE ${padraoBusca} OR a.dados::text ILIKE ${padraoBusca})` : tx`true`}
          AND ${cursor === null ? tx`true` : tx`
@@ -162,7 +170,7 @@ export async function rotasAuditoria(app: FastifyInstance): Promise<void> {
       ? Buffer.from(`${ultimo.criado_em}§${ultimo.id}`).toString('base64url')
       : null
 
-    return reply.send({ itens: pagina.map(linhaParaApi), proximoCursor })
+    return reply.send({ itens: pagina.map(linhaParaApi), proximoCursor, janelaPadrao, janelaDias: janelaPadrao ? JANELA_PADRAO_BUSCA_DIAS : null })
   })
 
   // Detalhe de UM evento, com o JSON completo. A chave é a PK `(tenant_id, criado_em, id)`:

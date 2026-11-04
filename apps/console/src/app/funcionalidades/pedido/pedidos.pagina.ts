@@ -6,13 +6,13 @@ import { firstValueFrom } from 'rxjs'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import {
   ToastServico, mensagemDeErro, mesclarPagina, formatarReais,
-  CabecalhoTelaComponente, StatCardComponente, FiltrosComponente, SelectComponente, TabelaComponente,
+  CabecalhoTelaComponente, StatCardComponente, FiltrosComponente, FiltroPeriodoComponente, SelectComponente, TabelaComponente,
   CelulaDiretiva, PaginacaoComponente, ModalComponente, ListaDefinicaoComponente, BadgeComponente,
   EstadoComponente, EsqueletoComponente, PainelComponente,
   type ColunaTabela, type LinhaTabela, type OpcaoSelect, type TomStat,
 } from '../../compartilhado/ui/index.js'
 import {
-  rotuloDoEstado, tomDoEstado, variacaoDaGrade, formatarDataHora, indicadoresDaLista, filtrarPorTermo,
+  rotuloDoEstado, tomDoEstado, variacaoDaGrade, formatarDataHora, indicadoresDosContadores, montarQueryPedidos, type ContadoresPedidos,
 } from './pedidos.regras.js'
 
 interface PedidoItem {
@@ -55,7 +55,7 @@ const FILTROS = [
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     NgTemplateOutlet, RouterLink,
-    CabecalhoTelaComponente, StatCardComponente, FiltrosComponente, SelectComponente, TabelaComponente,
+    CabecalhoTelaComponente, StatCardComponente, FiltrosComponente, FiltroPeriodoComponente, SelectComponente, TabelaComponente,
     CelulaDiretiva, PaginacaoComponente, ModalComponente, ListaDefinicaoComponente, BadgeComponente,
     EstadoComponente, EsqueletoComponente, PainelComponente,
   ],
@@ -74,8 +74,9 @@ const FILTROS = [
       }
     </div>
 
-    <ui-filtros placeholder="Buscar nos carregados: cliente, nome ou nº ERP" (buscar)="termo.set($event)" (limpar)="limparFiltros()">
+    <ui-filtros placeholder="Buscar: cliente, nome, nº ERP ou código" (buscar)="buscar($event)" (aplicar)="aplicar()" (limpar)="limparFiltros()">
       <ui-select rotulo="Estado" placeholder="Todos os estados" [opcoes]="opcoesEstado" [valor]="filtro()" (valorChange)="trocar($event)" />
+      <ui-filtro-periodo [(inicio)]="inicio" [(fim)]="fim" (aplicar)="carregar()" />
     </ui-filtros>
 
     <div class="corpo">
@@ -130,12 +131,12 @@ const FILTROS = [
           <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrir(p.id)">Ver</button>
         </ng-template>
         <div uiVazio>
-          @if (itens().length === 0) {
+          @if (itens().length === 0 && !temFiltro()) {
             <ui-estado titulo="Nenhum pedido ainda" icone="🧾" descricao="Monte um pedido pela conversa ou pelo Pedido Assistido.">
               <a class="btn btn--primario btn--pequeno" routerLink="/pedido">Abrir o Pedido Assistido</a>
             </ui-estado>
           } @else {
-            <ui-estado titulo="Nenhum pedido bate com a busca" icone="🔍" descricao="A busca vale só para os pedidos já carregados. Carregue mais para procurar nos demais." />
+            <ui-estado titulo="Nenhum pedido bate com a busca" icone="🔍" descricao="Mude a busca ou amplie o período." />
           }
         </div>
       </ui-tabela>
@@ -331,6 +332,10 @@ export class PedidosPagina implements OnInit {
   readonly itens = signal<readonly PedidoItem[]>([])
   readonly filtro = signal('')
   readonly termo = signal('')
+  readonly inicio = signal('')
+  readonly fim = signal('')
+  readonly contadores = signal<ContadoresPedidos | null>(null)
+  readonly temFiltro = computed(() => !!(this.termo().trim() || this.filtro() || (this.inicio() && this.fim())))
   readonly proximoCursor = signal<string | null>(null)
   readonly carregandoMais = signal(false)
   /** Estado PARCIAL: a lista já carregada segue na tela; só a próxima página falhou. */
@@ -342,19 +347,18 @@ export class PedidosPagina implements OnInit {
   readonly acionando = signal<string | null>(null)
   readonly etapaMsg = signal<{ ok: boolean; texto: string } | null>(null)
 
-  /** Linhas da tabela: a busca local filtra o carregado. */
-  readonly linhas = computed<LinhaTabela[]>(() =>
-    filtrarPorTermo(this.itens(), this.termo()).map((p) => ({ ...p })))
+  /** Linhas da tabela: o que o servidor devolveu para a busca, o período e o estado. */
+  readonly linhas = computed<LinhaTabela[]>(() => this.itens().map((p) => ({ ...p })))
 
-  /** Cards: contadores do que está carregado. Fora do estado "pronto" mostram traço, nunca zero. */
+  /** Cards: totais do SERVIDOR (todo o filtro, não só a página). Sem contadores mostram traço, nunca zero. */
   readonly cartoes = computed<{ rotulo: string; valor: string | number; tom: TomStat }[]>(() => {
-    const pronto = this.estado() === 'pronto'
-    const i = indicadoresDaLista(this.itens())
+    const c = this.contadores()
+    const i = c ? indicadoresDosContadores(c) : null
     return [
-      { rotulo: 'Orçamentos no ERP (carregados)', valor: pronto ? i.efetivados : '—', tom: 'sucesso' },
-      { rotulo: 'Valor no ERP (carregados)', valor: pronto ? formatarReais(i.valorEfetivadoCentavos) : '—', tom: 'acao' },
-      { rotulo: 'Rascunhos nos carregados', valor: pronto ? i.rascunhos : '—', tom: 'neutro' },
-      { rotulo: 'Falharam nos carregados', valor: pronto ? i.falharam : '—', tom: pronto && i.falharam > 0 ? 'erro' : 'neutro' },
+      { rotulo: 'Orçamentos no ERP', valor: i ? i.efetivados : '—', tom: 'sucesso' },
+      { rotulo: 'Valor no ERP', valor: i ? formatarReais(i.valorEfetivadoCentavos) : '—', tom: 'acao' },
+      { rotulo: 'Rascunhos', valor: i ? i.rascunhos : '—', tom: 'neutro' },
+      { rotulo: 'Falharam', valor: i ? i.falharam : '—', tom: i && i.falharam > 0 ? 'erro' : 'neutro' },
     ]
   })
 
@@ -385,27 +389,45 @@ export class PedidosPagina implements OnInit {
 
   trocar(f: string): void { this.filtro.set(f); void this.carregar() }
 
-  limparFiltros(): void {
-    this.termo.set('')
-    if (this.filtro()) this.trocar('')
+  buscar(texto: string): void {
+    if (texto.trim() === this.termo().trim()) return
+    this.termo.set(texto); void this.carregar()
   }
 
-  private url(cursor: string | null): string {
-    const p = new URLSearchParams()
-    if (this.filtro()) p.set('estado', this.filtro())
-    if (this.contatoFiltro()) p.set('contatoId', this.contatoFiltro()!)
-    if (cursor) p.set('cursor', cursor)
-    const q = p.toString()
-    return `/v1/pedidos${q ? '?' + q : ''}`
+  /** Enter/Filtrar: só recarrega se algo mudou (a busca e o Enter emitem dois eventos para o mesmo filtro). */
+  aplicar(): void {
+    if (this.query(null, true) !== this.consultaFeita) void this.carregar()
   }
+  private consultaFeita = ''
+
+  limparFiltros(): void {
+    this.termo.set(''); this.inicio.set(''); this.fim.set(''); this.filtro.set('')
+    void this.carregar()
+  }
+
+  /** Filtros da lista; os contadores usam os mesmos, menos o estado (é o que os cards particionam). */
+  private query(cursor: string | null, comEstado: boolean): string {
+    const p = montarQueryPedidos({
+      estado: comEstado ? this.filtro() : '', contatoId: this.contatoFiltro(), q: this.termo(),
+      inicio: this.inicio(), fim: this.fim(), cursor,
+    }).toString()
+    return p ? '?' + p : ''
+  }
+
+  private url(cursor: string | null): string { return `/v1/pedidos${this.query(cursor, true)}` }
 
   async carregar(): Promise<void> {
     this.estado.set('carregando')
     this.avisoMais.set(null)
+    this.consultaFeita = this.query(null, true)
+    // Contadores em paralelo: se falharem, os cards mostram traço e a lista segue.
+    const cont = firstValueFrom(this.http.get<ContadoresPedidos>(`/v1/pedidos/contadores${this.query(null, false)}`))
+      .then((c) => this.contadores.set(c), () => this.contadores.set(null))
     try {
       const r = await firstValueFrom(this.http.get<{ itens: PedidoItem[]; proximoCursor: string | null }>(this.url(null)))
       this.itens.set(r.itens); this.proximoCursor.set(r.proximoCursor); this.estado.set('pronto')
     } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
+    await cont
   }
 
   async carregarMais(): Promise<void> {

@@ -124,7 +124,7 @@ beforeEach(async () => {
   enviados.length = 0; recusaDoGateway = null; explodirEm = null
   for (const t of ['notificacao', 'alerta', 'auditoria', 'atendimento_evento', 'atendimento_etapa_historico', 'mensagem',
     'agente_decisao', 'atendimento', 'carteira_atribuicao', 'conversa', 'contato_telefone', 'contato', 'lista_bloqueio', 'usuario_canal',
-    'usuario_filial', 'atendimento_sla_config', 'canal_configuracao', 'outbox']) {
+    'usuario_filial', 'usuario_preferencia_notificacao', 'atendimento_sla_config', 'canal_configuracao', 'outbox']) {
     await dono.unsafe(`DELETE FROM ${t} WHERE tenant_id IN ('${A}', '${B}')`)
   }
   await dono`UPDATE usuario SET ativo = true, ausente = false WHERE tenant_id = ${A}`
@@ -235,6 +235,68 @@ describe('worker do SLA', () => {
     expect(enviados).toHaveLength(1)
     expect(await vezesDe(conversa, GESTOR)).toBe(vezesGil)
     expect(await vezesDe(conversa, ADM)).toBe(vezesAdm)
+  })
+
+  describe('X6: SLA estourado em atendimento roteado por filial', () => {
+    const TRECHO = 'SLA do atendimento estourado'
+    /** Handoff cujo roteamento passou pela filial; ANA é gestora DA filial (Gil e Adm são do tenant inteiro). */
+    async function handoffDaFilial() {
+      const { conversa } = await novaConversa()
+      const t0 = new Date()
+      await handoff(conversa, t0)
+      await dono`UPDATE atendimento SET responsavel_filial_id = ${FILIAL} WHERE conversa_id = ${conversa}`
+      return { conversa, t0 }
+    }
+
+    it('avisa os gestores da filial primeiro e NÃO os do tenant inteiro', async () => {
+      await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${ANA}, ${FILIAL}, 'gestor')`
+      const { conversa, t0 } = await handoffDaFilial()
+      await passada(min(31, t0))
+      expect((await avisosCom(conversa, TRECHO)).map((n) => n.usuario_id)).toEqual([ANA])
+      const [alerta] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM alerta WHERE tenant_id = ${A} AND tipo = 'sla_handoff_estourado' AND resolvido_em IS NULL`
+      expect(alerta!.n).toBe(1) // o alerta do tenant continua abrindo
+    })
+
+    it('sem gestor da filial presente (ausente ou inativo) cai nos gestores do tenant', async () => {
+      await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${ANA}, ${FILIAL}, 'gestor')`
+      await dono`UPDATE usuario SET ausente = true WHERE tenant_id = ${A} AND id = ${ANA}`
+      const { conversa, t0 } = await handoffDaFilial()
+      await passada(min(31, t0))
+      // O geral é o de sempre (todos os gestores ativos do tenant, ausentes inclusive — ANA é um deles).
+      expect((await avisosCom(conversa, TRECHO)).map((n) => n.usuario_id)).toEqual([ANA, GESTOR, ADM].sort())
+
+      // Inativa também não conta.
+      await dono`UPDATE usuario SET ausente = false, ativo = false WHERE tenant_id = ${A} AND id = ${ANA}`
+      const outra = await handoffDaFilial()
+      await passada(min(31, outra.t0))
+      expect((await avisosCom(outra.conversa, TRECHO)).map((n) => n.usuario_id)).toEqual([GESTOR, ADM].sort())
+    })
+
+    it('filial sem nenhum gestor cadastrado cai nos gestores do tenant; sem filial o comportamento é o de sempre', async () => {
+      const { conversa, t0 } = await handoffDaFilial()
+      await passada(min(31, t0))
+      expect((await avisosCom(conversa, TRECHO)).map((n) => n.usuario_id)).toEqual([GESTOR, ADM].sort())
+
+      await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${ANA}, ${FILIAL}, 'gestor')`
+      const semFilial = await novaConversa()
+      const t1 = new Date()
+      await handoff(semFilial.conversa, t1)
+      await passada(min(31, t1))
+      // Mesmo com ANA gestora de uma filial, o atendimento sem filial avisa só os gestores do tenant.
+      const avisados = (await avisosCom(semFilial.conversa, TRECHO)).map((n) => n.usuario_id)
+      expect(avisados).toContain(GESTOR)
+      expect(avisados).toContain(ADM)
+    })
+
+    it('passa por notificar(): a preferência da pessoa vale', async () => {
+      await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${A}, ${ANA}, ${FILIAL}, 'gestor')`
+      await dono`INSERT INTO usuario_preferencia_notificacao (tenant_id, usuario_id, tipo, canal, ligado)
+                 VALUES (${A}, ${ANA}, 'sla.estourado', 'app', false), (${A}, ${ANA}, 'sla.estourado', 'push', false),
+                        (${A}, ${ANA}, 'sla.estourado', 'email', false)`
+      const { conversa, t0 } = await handoffDaFilial()
+      await passada(min(31, t0))
+      expect(await avisosCom(conversa, TRECHO)).toEqual([])
+    })
   })
 
   it('no 2º limiar libera a reatribuição e avisa o pool do número', async () => {
