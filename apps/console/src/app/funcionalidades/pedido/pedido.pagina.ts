@@ -1,9 +1,12 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, computed, inject, signal, OnInit } from '@angular/core'
 import { SlicePipe } from '@angular/common'
 import { ActivatedRoute, RouterLink } from '@angular/router'
 import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
-import { ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
+import {
+  CabecalhoTelaComponente, CampoComponente, IconeComponente, ModalComponente, SelectComponente,
+  ToastServico, mensagemDeErro, type OpcaoSelect,
+} from '../../compartilhado/ui/index.js'
 import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
 
 /**
@@ -19,17 +22,15 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
 @Component({
   selector: 'app-pedido-assistido',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [SlicePipe, RouterLink],
+  imports: [
+    SlicePipe, RouterLink, CabecalhoTelaComponente, CampoComponente, IconeComponente, ModalComponente, SelectComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1>Pedido Assistido</h1>
-        <p class="sub">Monte o pedido pela grade do catálogo. O rascunho não se perde.</p>
-      </div>
+    <ui-cabecalho-tela titulo="Pedido Assistido" subtitulo="Monte o pedido pela grade do catálogo. O rascunho não se perde.">
       <span class="degradado" title="Saldo ao vivo entra na próxima etapa">
-        ⚠️ saldo ao vivo do ERP: próxima etapa · preço: tabela padrão do ERP
+        <ui-icone nome="alert-triangle" [tamanho]="14" /> saldo ao vivo do ERP: próxima etapa · preço: tabela padrão do ERP
       </span>
-    </header>
+    </ui-cabecalho-tela>
 
     <!-- Vários rascunhos por cliente: troque, crie e renomeie; envia um por um. -->
     @if (contatoId()) {
@@ -42,9 +43,9 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
             </button>
           }
         }
-        <button class="r-novo" (click)="novoRascunho()">+ Novo</button>
-        @if (servico.pedido()) { <button class="r-rename" (click)="renomear()" title="Renomear rascunho">✎</button> }
-        @if (contatoId(); as c) { <a class="r-ficha" [routerLink]="['/contato', c]" title="Abrir a ficha do cliente">👤 Ficha do cliente</a> }
+        <button type="button" class="r-novo" (click)="abrirNome('novo')"><ui-icone nome="plus" [tamanho]="14" /> Novo</button>
+        @if (servico.pedido()) { <button type="button" class="r-rename" (click)="abrirNome('renomear')" title="Renomear rascunho" aria-label="Renomear rascunho"><ui-icone nome="pencil" [tamanho]="14" /></button> }
+        @if (contatoId(); as c) { <a class="r-ficha" [routerLink]="['/contato', c]" title="Abrir a ficha do cliente"><ui-icone nome="user" [tamanho]="14" /> Ficha do cliente</a> }
       </div>
       @if (servico.avisoRascunhos(); as a) { <p class="aviso-parcial" role="alert">{{ a }}</p> }
     }
@@ -63,20 +64,11 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
 
         <!-- Filtros paginados: categoria, cor, tamanho, faixa de preço. -->
         <div class="filtros">
-          <select [value]="fCategoria()" (change)="fCategoria.set($any($event.target).value); aplicarFiltro()" aria-label="Categoria">
-            <option value="">Categoria</option>
-            @for (c of servico.filtros().categorias; track c) { <option [value]="c">{{ c }}</option> }
-          </select>
-          <select [value]="fCor()" (change)="fCor.set($any($event.target).value); aplicarFiltro()" aria-label="Cor">
-            <option value="">Cor</option>
-            @for (c of servico.filtros().cores; track c) { <option [value]="c">{{ c }}</option> }
-          </select>
-          <select [value]="fTamanho()" (change)="fTamanho.set($any($event.target).value); aplicarFiltro()" aria-label="Tamanho">
-            <option value="">Tamanho</option>
-            @for (t of servico.filtros().tamanhos; track t) { <option [value]="t">{{ t }}</option> }
-          </select>
-          <input class="preco-f" inputmode="decimal" placeholder="R$ mín" [value]="fPrecoMin()" (change)="fPrecoMin.set($any($event.target).value); aplicarFiltro()" aria-label="Preço mínimo" />
-          <input class="preco-f" inputmode="decimal" placeholder="R$ máx" [value]="fPrecoMax()" (change)="fPrecoMax.set($any($event.target).value); aplicarFiltro()" aria-label="Preço máximo" />
+          <ui-select rotulo="Categoria" placeholder="Todas" [opcoes]="opcoesCategoria()" [valor]="fCategoria()" (valorChange)="fCategoria.set($event); aplicarFiltro()" />
+          <ui-select rotulo="Cor" placeholder="Todas" [opcoes]="opcoesCor()" [valor]="fCor()" (valorChange)="fCor.set($event); aplicarFiltro()" />
+          <ui-select rotulo="Tamanho" placeholder="Todos" [opcoes]="opcoesTamanho()" [valor]="fTamanho()" (valorChange)="fTamanho.set($event); aplicarFiltro()" />
+          <ui-campo class="preco-f" rotulo="Preço mínimo" placeholder="R$ mín" [valor]="fPrecoMin()" (valorChange)="fPrecoMin.set($event); aplicarFiltro()" />
+          <ui-campo class="preco-f" rotulo="Preço máximo" placeholder="R$ máx" [valor]="fPrecoMax()" (valorChange)="fPrecoMax.set($event); aplicarFiltro()" />
         </div>
         @if (servico.avisoFiltros(); as a) { <p class="aviso-parcial" role="alert">{{ a }}</p> }
         @if (erroBusca(); as e) { <p class="aviso-erro" role="alert">{{ e }} <button class="add" type="button" (click)="aplicarFiltro()">Tentar de novo</button></p> }
@@ -187,7 +179,7 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
                   @if (ped.estado === 'rascunho') {
                     <button class="x" type="button" (click)="removerItem(ped.id, i.seq)"
                             [disabled]="servico.removendoItem() === i.seq"
-                            [attr.aria-label]="'Remover ' + i.descricaoSnapshot" title="Remover do rascunho">×</button>
+                            [attr.aria-label]="'Remover ' + i.descricaoSnapshot" title="Remover do rascunho"><ui-icone nome="x" [tamanho]="14" /></button>
                   }
                 </li>
               }
@@ -196,7 +188,7 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
                  preço ausente, SKU fora do catálogo, regra do perfil, pedido fechado. -->
             @if (servico.erroItem(); as f) {
               <div class="efet efet--aviso" role="alert">
-                ⚠️ {{ f.mensagem }}
+                <ui-icone nome="alert-triangle" [tamanho]="14" /> {{ f.mensagem }}
                 @if (f.codigo === 'pedido.estoque_insuficiente' && f.disponivel !== undefined) {
                   <span class="efet-nota">Disponível agora: {{ f.disponivel }}. Reduza a quantidade e adicione de novo.</span>
                 } @else if (f.codigo === 'pedido.sem_preco') {
@@ -231,10 +223,10 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
             <!-- Confirmar com o cliente: manda o resumo na conversa (só se houver itens). -->
             <button class="btn btn--secundario btn--bloco secundario" (click)="enviarResumo(ped.id)"
                     [disabled]="servico.enviandoResumo() || ped.itens.length === 0">
-              {{ servico.enviandoResumo() ? 'Enviando…' : '📤 Confirmar e enviar resumo ao cliente' }}
+              <ui-icone nome="send" [tamanho]="14" /> {{ servico.enviandoResumo() ? 'Enviando…' : 'Confirmar e enviar resumo ao cliente' }}
             </button>
             @if (servico.resumoMsg(); as rm) {
-              <div class="efet" [class.efet--ok]="rm.ok" [class.efet--aviso]="!rm.ok">{{ rm.ok ? '✅ ' : '⚠️ ' }}{{ rm.texto }}</div>
+              <div class="efet" [class.efet--ok]="rm.ok" [class.efet--aviso]="!rm.ok"><ui-icone [nome]="rm.ok ? 'check' : 'alert-triangle'" [tamanho]="14" /> {{ rm.texto }}</div>
             }
             <button class="btn btn--primario btn--bloco" (click)="servico.efetivar(ped.id)"
                     [disabled]="servico.efetivando() || ped.estado === 'efetivado'">
@@ -242,8 +234,8 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
             </button>
             @if (servico.resultado(); as r) {
               <div class="efet" [class.efet--ok]="r.ok" [class.efet--aviso]="!r.ok">
-                @if (r.ok) { ✅ Efetivado no ERP — nº {{ r.numeroExterno }} }
-                @else { ⚠️ {{ r.mensagem }} }
+                @if (r.ok) { <ui-icone nome="check" [tamanho]="14" /> Efetivado no ERP — nº {{ r.numeroExterno }} }
+                @else { <ui-icone nome="alert-triangle" [tamanho]="14" /> {{ r.mensagem }} }
               </div>
             }
             @if (ped.estado === 'falhou') {
@@ -257,13 +249,23 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
         }
       </aside>
     </div>
+
+    <!-- Nome do rascunho: novo ou renomear (substitui o prompt do navegador). -->
+    <ui-modal [aberto]="modalNome() !== null" [titulo]="modalNome() === 'renomear' ? 'Renomear rascunho' : 'Novo rascunho'"
+              largura="p" (fechar)="fecharNome()">
+      <ui-campo rotulo="Nome do rascunho" placeholder="Ex.: Reposição" [valor]="nomeRascunho()" (valorChange)="nomeRascunho.set($event)" />
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharNome()">Cancelar</button>
+        <button type="button" class="btn btn--primario" (click)="confirmarNome()"
+                [disabled]="modalNome() === 'renomear' && !nomeRascunho().trim()">
+          {{ modalNome() === 'renomear' ? 'Renomear' : 'Criar rascunho' }}
+        </button>
+      </div>
+    </ui-modal>
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-5); flex-wrap: wrap; }
-    h1 { margin: 0; font-size: 20px; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .degradado { font-size: 12px; color: var(--atencao); border: 1px solid var(--atencao); border-radius: var(--raio-controle); padding: 2px var(--espacamento-3); }
+    .degradado { display: inline-flex; align-items: center; gap: var(--espacamento-1); font-size: 12px; color: var(--atencao); border: 1px solid var(--atencao); border-radius: var(--raio-controle); padding: 2px var(--espacamento-3); }
     .grade-tela { display: grid; grid-template-columns: 1.6fr 1fr; gap: var(--espacamento-4); align-items: start; }
     .cat, .rascunho { border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); padding: var(--espacamento-4); }
     .perfil { display: inline-flex; gap: 2px; margin-bottom: var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); overflow: hidden; }
@@ -336,8 +338,8 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
     .r-rename { border: 0; background: transparent; color: var(--texto-suave); cursor: pointer; font-size: 14px; padding: 0 4px; }
     /* Filtros do catálogo. */
     .filtros { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; margin: var(--espacamento-2) 0; }
-    .filtros select, .filtros .preco-f { padding: var(--espacamento-1) var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
-    .filtros .preco-f { width: 84px; }
+    .filtros .preco-f { width: 110px; }
+    .filtros { align-items: end; }
     .mais-cat { margin-top: var(--espacamento-2); }
     @media (max-width: 800px) { .grade-tela { grid-template-columns: 1fr; } }
   `,
@@ -347,6 +349,10 @@ export class PedidoAssistidoPagina implements OnInit {
   private readonly route = inject(ActivatedRoute)
   private readonly inbox = inject(InboxServico)
   readonly resultados = this.servico.resultados
+  private readonly opcoesDe = (l: readonly string[]): OpcaoSelect[] => l.map((v) => ({ valor: v, rotulo: v }))
+  readonly opcoesCategoria = computed(() => this.opcoesDe(this.servico.filtros().categorias))
+  readonly opcoesCor = computed(() => this.opcoesDe(this.servico.filtros().cores))
+  readonly opcoesTamanho = computed(() => this.opcoesDe(this.servico.filtros().tamanhos))
   readonly formasPagamento = ['Pix', 'Dinheiro', 'Cartão de crédito', 'Cartão de débito', 'Boleto', 'A prazo']
 
   readonly aberto = signal<string | null>(null)
@@ -438,9 +444,22 @@ export class PedidoAssistidoPagina implements OnInit {
   }
 
   // Rascunhos do cliente.
-  async novoRascunho(): Promise<void> {
+  readonly modalNome = signal<'novo' | 'renomear' | null>(null)
+  readonly nomeRascunho = signal('')
+  abrirNome(modo: 'novo' | 'renomear'): void {
+    this.nomeRascunho.set(modo === 'renomear' ? (this.servico.pedido()?.nome ?? '') : '')
+    this.modalNome.set(modo)
+  }
+  fecharNome(): void { this.modalNome.set(null) }
+  async confirmarNome(): Promise<void> {
+    const modo = this.modalNome(); if (!modo) return
+    const nome = this.nomeRascunho().trim()
+    this.modalNome.set(null)
+    if (modo === 'novo') await this.novoRascunho(nome)
+    else await this.renomear(nome)
+  }
+  async novoRascunho(nome: string): Promise<void> {
     const c = this.contatoId(); if (!c) return
-    const nome = prompt('Nome do novo rascunho (ex.: Reposição):')?.trim()
     try {
       await this.servico.novoRascunho(c, nome || undefined, this.conversaId ?? undefined)
       this.toast.sucesso('Rascunho criado')
@@ -463,9 +482,8 @@ export class PedidoAssistidoPagina implements OnInit {
     const alvo = conversaId ?? this.conversaId
     if (alvo) void this.inbox.abrir(alvo)
   }
-  async renomear(): Promise<void> {
+  async renomear(nome: string): Promise<void> {
     const ped = this.servico.pedido(); const c = this.contatoId(); if (!ped) return
-    const nome = prompt('Renomear rascunho:', ped.nome ?? '')?.trim()
     if (!nome) return
     try { await this.servico.renomear(ped.id, nome, c ?? undefined); this.toast.sucesso('Rascunho renomeado') }
     catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível renomear.')) }
