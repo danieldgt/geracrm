@@ -9,7 +9,9 @@ import { proximaAbertura, partesLocais, instanteLocal, ehFeriado, type Feriados,
 import { fusoSeguro } from '../../plataforma/fuso.js'
 import { reativacoesEnviadasHoje, statusAquecimento } from '../aquecimento.js'
 import { contatoBloqueado } from '../../crm/opt-out.js'
-import type { RoteiroPosVenda } from '@geracrm/shared'
+import { QUIETUDE_POS_VENDA_MS, TETO_POS_VENDA_DIA_NAO_OFICIAL, type RoteiroPosVenda } from '@geracrm/shared'
+import { emSavepoint } from '../../../db/index.js'
+import { posVendaEnviadasHoje } from '../aquecimento.js'
 import { abrirRoteiroNaSessao } from './pos-venda.js'
 import {
   executarDescarte, instanteDoMarco, lerConfigAtivasDoCanal, motivoParaNaoReativar, motivoTransitorio, prazoDoDescarte,
@@ -126,10 +128,23 @@ export async function agendarRetorno(
  * O cliente escreveu: os pendentes da conversa perdem o motivo. Chamado na
  * MESMA transação da ingestão (savepoint). Devolve quantos cancelou.
  */
-export async function cancelarRetornosDaConversa(tx: Sql, conversaId: string, motivo?: MotivoRetorno): Promise<number> {
+export async function cancelarRetornosDaConversa(
+  tx: Sql, conversaId: string, motivo?: MotivoRetorno, agora: Date = new Date(),
+): Promise<number> {
+  // ⚠️ O PÓS-VENDA não perde o motivo quando o cliente escreve (revisão G3, M1): o
+  //    pedido continua efetivado. Ele ESPERA a conversa assentar (adiado, mesma linha);
+  //    quem responde agora é o turno do agente.
+  if (!motivo || motivo === MOTIVO_POS_VENDA) {
+    await tx`
+      UPDATE agente_retorno
+         SET executar_em = greatest(executar_em, ${new Date(agora.getTime() + QUIETUDE_POS_VENDA_MS)}::timestamptz),
+             detalhe = 'cliente_escreveu: adiado'
+       WHERE tenant_id = tenant_atual() AND conversa_id = ${conversaId} AND estado = 'pendente' AND motivo = 'pos_venda'`
+    if (motivo === MOTIVO_POS_VENDA) return 0
+  }
   const linhas = await tx<{ id: string }[]>`
     UPDATE agente_retorno SET estado = 'cancelado', detalhe = 'cliente_escreveu', concluido_em = now()
-     WHERE tenant_id = tenant_atual() AND conversa_id = ${conversaId} AND estado = 'pendente'
+     WHERE tenant_id = tenant_atual() AND conversa_id = ${conversaId} AND estado = 'pendente' AND motivo <> 'pos_venda'
        ${motivo ? tx`AND motivo = ${motivo}` : tx``}
      RETURNING id`
   return linhas.length
@@ -326,10 +341,20 @@ async function processarUm(v: RetornoVencido, deps: DepsRetorno, agora: Date): P
       // Pós-venda: sem cadência. NPS e indicação abrem o roteiro na sessão do agente —
       // é o que libera `registrar_nps` e orienta o próximo turno (etapa `pos-venda`).
       if (v.motivo === MOTIVO_POS_VENDA) {
+        // ⚠️ B6: em SAVEPOINT — falhar ao abrir o roteiro NUNCA desfaz o `enviado`
+        //    (a mensagem já saiu; desfazer faria a próxima passada reenviar).
         if (v.pedido_id && (v.roteiro === 'nps' || v.roteiro === 'indicacao')) {
-          await abrirRoteiroNaSessao(tx, {
-            conversaId: v.conversa_id, canalId: v.canal_id, modo: 'autonomo', roteiro: v.roteiro, pedidoId: v.pedido_id, agora,
-          })
+          const roteiro = v.roteiro, pedidoId = v.pedido_id
+          try {
+            await emSavepoint(tx, (sp) => abrirRoteiroNaSessao(sp, {
+              conversaId: v.conversa_id, canalId: v.canal_id, modo: 'autonomo', roteiro, pedidoId, agora,
+            }))
+          } catch (erro) {
+            process.stderr.write(`${JSON.stringify({
+              nivel: 'warn', contexto: 'agente.retorno', msg: 'pós-venda enviado, roteiro não aberto na sessão',
+              tenantId: v.tenant_id, retornoId: v.id, roteiro, erro: erro instanceof Error ? erro.message : String(erro),
+            })}\n`)
+          }
         }
         return 'enviado'
       }
@@ -427,8 +452,13 @@ async function decidirPosVenda(tx: Sql, v: RetornoVencido, ctx: ContextoAtiva, a
     return { tipo: 'recusar', motivo: 'sem_texto_pos_venda' }
   }
   if (!oficial) {
+    const amanha = inicioDoProximoDia(agora, ctx.fuso)
+    // M3: teto diário próprio do pós-venda no não-oficial, além do aquecimento.
+    if (await posVendaEnviadasHoje(tx, v.canal_id, inicioDoDia(agora, ctx.fuso)) >= TETO_POS_VENDA_DIA_NAO_OFICIAL) {
+      return { tipo: 'adiar', ate: amanha, motivo: 'limite_pos_venda_dia' }
+    }
     const aq = await statusAquecimento(tx, v.canal_id, agora)
-    if (aq.emAquecimento && aq.restante <= 0) return { tipo: 'adiar', ate: inicioDoProximoDia(agora, ctx.fuso), motivo: 'aquecimento_do_numero' }
+    if (aq.emAquecimento && aq.restante <= 0) return { tipo: 'adiar', ate: amanha, motivo: 'aquecimento_do_numero' }
   }
   return { tipo: 'politica', decisao }
 }
@@ -509,7 +539,12 @@ async function avaliar(tx: Sql, v: RetornoVencido, agora: Date): Promise<'envia'
                     WHERE a.tenant_id = c.tenant_id AND a.conversa_id = c.id AND a.estado <> 'encerrado') AS humano_assumiu
       FROM conversa c WHERE c.tenant_id = tenant_atual() AND c.id = ${v.conversa_id}`
   if (!conv) return 'conversa_inexistente'
-  if (conv.ultima_entrante_em && conv.ultima_entrante_em > v.criado_em) return 'cliente_escreveu'
+  // Pós-venda (M1): o cliente ter escrito não tira o motivo (o pedido segue efetivado) —
+  // espera a conversa assentar e sai depois. Os outros motivos perdem o sentido.
+  if (v.motivo === MOTIVO_POS_VENDA) {
+    const assenta = conv.ultima_entrante_em ? conv.ultima_entrante_em.getTime() + QUIETUDE_POS_VENDA_MS : 0
+    if (assenta > agora.getTime()) return { adiarAte: new Date(assenta), motivo: 'cliente_escreveu: adiado' }
+  } else if (conv.ultima_entrante_em && conv.ultima_entrante_em > v.criado_em) return 'cliente_escreveu'
   // Atendimento humano aberto cala o agente — inclusive a cutucada.
   if (conv.humano_assumiu) return 'humano_atendendo'
 

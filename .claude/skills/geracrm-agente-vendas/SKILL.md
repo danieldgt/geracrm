@@ -167,7 +167,9 @@ resultado, resposta, confiança, números bloqueados, custo, latência, desfecho
 persona, qualificação, mensagens prontas (inclui `avisoEspera` do SLA), compliance extra (só acrescenta)
 e ações habilitáveis (`catalogo`, `pedido`, `proposta`, `memoria`, `conhecimento`, e as do pós-venda G3:
 `nps` → `registrar_nps`, `indicacoes` → `registrar_indicacoes`, `provaSocial` → `consultar_prova_social`;
-as três têm padrão ligado para que versões publicadas antes continuem válidas). Transferir, perfil
+as três têm padrão para que versões publicadas antes continuem válidas — `nps`/`provaSocial` ligadas,
+`indicacoes` DESLIGADA, por ser escrita nova na base; NPS e indicação exigem roteiro aberto na sessão,
+indicação com teto de 5 por roteiro e resposta igual para novo/existente). Transferir, perfil
 do cliente, opt-out, humano, identificação, filtro base, números e `pedido_efetivar` ficam sempre
 ligados (`SEMPRE_LIGADAS_PLAYBOOK`). Rascunho → simular (modo seco, memória não grava) → publicar
 (admin, observação ≥ 10, auditoria) → versão imutável; restaurar cria versão nova. **Fato** vai para o

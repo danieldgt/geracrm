@@ -25,6 +25,11 @@ let app: FastifyInstance
 const chamar = (t: string, m: 'GET' | 'POST' | 'PATCH', url: string, corpo?: Record<string, unknown>) =>
   app.inject({ method: m, url, headers: { 'x-tenant-id': t }, ...(corpo ? { payload: corpo } : {}) })
 const hoje = new Date().toISOString().slice(0, 10)
+/** Aprova a versão que está no banco agora (a "vista" pelo admin — M2). */
+const aprovarVista = async (t: string, id: string) => {
+  const [d] = await dono<{ versao: number }[]>`SELECT versao FROM conhecimento_documento WHERE id = ${id}`
+  return chamar(t, 'POST', `/v1/agente/conhecimento/${id}/aprovar`, { aprovado: true, versao: d?.versao ?? 1 })
+}
 
 beforeAll(async () => {
   process.env.DEV_TENANT_HEADER = 'on'
@@ -128,41 +133,69 @@ describe('Prova social no Conhecimento', () => {
 
   it('aprovar exige fonte, data e tipo; depoimento exige consentimento (422 por campo)', async () => {
     const sem = (await criar({ fonte: null, apuradoEm: null })).json() as Doc
-    const r = await chamar(T, 'POST', `/v1/agente/conhecimento/${sem.id}/aprovar`, { aprovado: true })
+    const r = await aprovarVista(T, sem.id)
     expect(r.statusCode).toBe(422)
     expect(r.json()).toMatchObject({ erro: 'conhecimento.prova_social_incompleta' })
     expect((r.json() as { campos: string[] }).campos).toEqual(expect.arrayContaining(['fonte', 'apuradoEm']))
 
     const dep = (await criar({ provaTipo: 'depoimento', conteudo: 'Atendimento excelente, recomendo.' })).json() as Doc
-    const r2 = await chamar(T, 'POST', `/v1/agente/conhecimento/${dep.id}/aprovar`, { aprovado: true })
+    const r2 = await aprovarVista(T, dep.id)
     expect(r2.json()).toMatchObject({ campos: ['consentimento'] })
     await chamar(T, 'PATCH', `/v1/agente/conhecimento/${dep.id}`, { consentimento: true })
-    const r3 = await chamar(T, 'POST', `/v1/agente/conhecimento/${dep.id}/aprovar`, { aprovado: true })
+    const r3 = await aprovarVista(T, dep.id)
     expect(r3.statusCode).toBe(200)
     expect(r3.json()).toMatchObject({ aprovado: true })
   })
 
   it('⚠️ texto vetado ("sem reclamações", promessa de prazo) não é aprovado', async () => {
     const d = (await criar({ conteudo: 'Somos a loja sem nenhuma reclamação no Reclame Aqui.' })).json() as Doc
-    const r = await chamar(T, 'POST', `/v1/agente/conhecimento/${d.id}/aprovar`, { aprovado: true })
+    const r = await aprovarVista(T, d.id)
     expect(r.statusCode).toBe(422)
     expect(r.json()).toMatchObject({ campos: ['conteudo'] })
   })
 
   it('⚠️ editar texto ou fonte de uma APROVADA volta para pendente; publicar/despublicar não', async () => {
     const d = (await criar()).json() as Doc
-    expect((await chamar(T, 'POST', `/v1/agente/conhecimento/${d.id}/aprovar`, { aprovado: true })).json()).toMatchObject({ aprovado: true })
+    expect((await aprovarVista(T, d.id)).json()).toMatchObject({ aprovado: true })
     expect((await chamar(T, 'PATCH', `/v1/agente/conhecimento/${d.id}`, { publicado: true })).json()).toMatchObject({ aprovado: true })
     expect((await chamar(T, 'PATCH', `/v1/agente/conhecimento/${d.id}`, { fonte: 'Outra pesquisa' })).json()).toMatchObject({ aprovado: false })
-    await chamar(T, 'POST', `/v1/agente/conhecimento/${d.id}/aprovar`, { aprovado: true })
+    await aprovarVista(T, d.id)
     expect((await chamar(T, 'PATCH', `/v1/agente/conhecimento/${d.id}`, { conteudo: '97% dos clientes nos recomendam.' })).json()).toMatchObject({ aprovado: false })
     const aud = await dono<{ acao: string }[]>`SELECT acao FROM auditoria WHERE tenant_id = ${T} AND entidade_id = ${d.id} AND acao LIKE 'conhecimento.prova_social%'`
     expect(aud.map((a) => a.acao)).toEqual(['conhecimento.prova_social_aprovada', 'conhecimento.prova_social_aprovada'])
   })
 
+  it('⚠️ M2: aprovar amarra a versão vista — documento mudou depois → 409; sem versão → 422', async () => {
+    const d = (await criar()).json() as Doc & { versao: number }
+    const semVersao = await chamar(T, 'POST', `/v1/agente/conhecimento/${d.id}/aprovar`, { aprovado: true })
+    expect(semVersao.statusCode).toBe(422)
+    const vista = d.versao
+    // O consentimento/fonte muda depois de o admin abrir: a versão sobe.
+    const editado = (await chamar(T, 'PATCH', `/v1/agente/conhecimento/${d.id}`, { fonte: 'Outra fonte' })).json() as { versao: number }
+    expect(editado.versao).toBe(vista + 1)
+    const r = await chamar(T, 'POST', `/v1/agente/conhecimento/${d.id}/aprovar`, { aprovado: true, versao: vista })
+    expect(r.statusCode).toBe(409)
+    expect(r.json()).toMatchObject({ erro: 'conhecimento.versao_divergente', versaoAtual: vista + 1 })
+  })
+
+  it('⚠️ M2/B2: mudar consentimento ou o número (canal) de uma aprovada sobe a versão e revoga', async () => {
+    const dep = (await criar({ provaTipo: 'depoimento', conteudo: 'Atendimento excelente.', consentimento: true })).json() as Doc & { versao: number }
+    expect((await aprovarVista(T, dep.id)).json()).toMatchObject({ aprovado: true })
+    const semConsent = (await chamar(T, 'PATCH', `/v1/agente/conhecimento/${dep.id}`, { consentimento: false })).json() as Doc & { versao: number }
+    expect(semConsent).toMatchObject({ aprovado: false, versao: dep.versao + 1 })
+    await chamar(T, 'PATCH', `/v1/agente/conhecimento/${dep.id}`, { consentimento: true })
+    expect((await aprovarVista(T, dep.id)).json()).toMatchObject({ aprovado: true })
+    const [canal] = await dono<{ id: string }[]>`
+      INSERT INTO canal_conectado (tenant_id, id, tipo, nome_amigavel, estado) VALUES (${T}, gen_random_uuid(), 'whatsapp_nao_oficial', 'B2', 'conectado') RETURNING id`
+    const movido = (await chamar(T, 'PATCH', `/v1/agente/conhecimento/${dep.id}`, { canalId: canal!.id })).json() as Doc
+    expect(movido).toMatchObject({ aprovado: false })
+    await dono`DELETE FROM conhecimento_documento WHERE canal_id = ${canal!.id}`
+    await dono`DELETE FROM canal_conectado WHERE id = ${canal!.id}`
+  })
+
   it('revogar a aprovação (aprovado: false)', async () => {
     const d = (await criar()).json() as Doc
-    await chamar(T, 'POST', `/v1/agente/conhecimento/${d.id}/aprovar`, { aprovado: true })
+    await aprovarVista(T, d.id)
     const r = await chamar(T, 'POST', `/v1/agente/conhecimento/${d.id}/aprovar`, { aprovado: false })
     expect(r.json()).toMatchObject({ aprovado: false })
   })
@@ -170,7 +203,7 @@ describe('Prova social no Conhecimento', () => {
   it('documento que não é prova social não é aprovado (422)', async () => {
     const d = (await chamar(T, 'POST', '/v1/agente/conhecimento', { titulo: 'FAQ', tipo: 'faq', conteudo: 'Trocas em 7 dias.' })).json() as Doc
     expect(d).toMatchObject({ fonte: null, aprovado: false })
-    const r = await chamar(T, 'POST', `/v1/agente/conhecimento/${d.id}/aprovar`, { aprovado: true })
+    const r = await aprovarVista(T, d.id)
     expect(r.json()).toMatchObject({ erro: 'conhecimento.nao_e_prova_social' })
   })
 
@@ -184,7 +217,7 @@ describe('Prova social no Conhecimento', () => {
 
   it('dois tenants: aprovar documento de outro tenant → 404', async () => {
     const d = (await criar()).json() as Doc
-    expect((await chamar(OUTRO, 'POST', `/v1/agente/conhecimento/${d.id}/aprovar`, { aprovado: true })).statusCode).toBe(404)
+    expect((await aprovarVista(OUTRO, d.id)).statusCode).toBe(404)
   })
 
   it('⚠️ só ADMIN aprova: com um admin no tenant, quem é vendedor recebe 403', async () => {
@@ -199,7 +232,7 @@ describe('Prova social no Conhecimento', () => {
     await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email) VALUES (${T}, ${ADMIN_OUTRO}, 'sub-admin-g3', 'Ada', 'ada@g3.test') ON CONFLICT DO NOTHING`
     await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${T}, ${ADMIN_OUTRO}, NULL, 'admin'), (${T}, ${eu2!.id}, NULL, 'vendedor')
                ON CONFLICT DO NOTHING`
-    const r = await chamar(T, 'POST', `/v1/agente/conhecimento/${d.id}/aprovar`, { aprovado: true })
+    const r = await aprovarVista(T, d.id)
     expect(r.statusCode).toBe(403)
     expect(r.json()).toMatchObject({ erro: 'acesso.papel_insuficiente' })
   })

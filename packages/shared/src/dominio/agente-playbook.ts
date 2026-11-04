@@ -131,8 +131,11 @@ export const ACOES_PLAYBOOK = ['catalogo', 'pedido', 'proposta', 'memoria', 'con
 export type AcaoPlaybook = (typeof ACOES_PLAYBOOK)[number]
 /**
  * ⚠️ `nps`, `indicacoes` e `provaSocial` (G3) nasceram depois das primeiras versões
- *    publicadas: têm PADRÃO (ligadas) para que versão antiga, imutável, continue
- *    válida — sem o padrão, o `.strict()` recusaria o playbook vigente inteiro.
+ *    publicadas: têm PADRÃO para que versão antiga, imutável, continue válida — sem
+ *    o padrão, o `.strict()` recusaria o playbook vigente inteiro. `nps` e
+ *    `provaSocial` nascem ligadas (já têm portão: roteiro aberto / aprovação);
+ *    `indicacoes` nasce DESLIGADA — é escrita nova na base (cria contatos) e só
+ *    vale quando alguém liga (decisão do orquestrador na revisão da G3).
  */
 export const acoesPlaybook = z.object({
   catalogo: z.boolean(), pedido: z.boolean(), proposta: z.boolean(), memoria: z.boolean(), conhecimento: z.boolean(),
@@ -142,11 +145,12 @@ export const acoesPlaybook = z.object({
    * ferramenta nem entra no menu.
    */
   objecoes: z.boolean().default(true),
-  nps: z.boolean().default(true), indicacoes: z.boolean().default(true), provaSocial: z.boolean().default(true),
+  nps: z.boolean().default(true), indicacoes: z.boolean().default(false), provaSocial: z.boolean().default(true),
 }).strict()
 export type AcoesPlaybook = z.output<typeof acoesPlaybook>
+/** O padrão das ações (sem playbook publicado). ⚠️ `indicacoes` fica DESLIGADA: ver acima. */
 export const ACOES_TODAS_LIGADAS: AcoesPlaybook = {
-  catalogo: true, pedido: true, proposta: true, memoria: true, conhecimento: true, objecoes: true, nps: true, indicacoes: true, provaSocial: true,
+  catalogo: true, pedido: true, proposta: true, memoria: true, conhecimento: true, objecoes: true, nps: true, indicacoes: false, provaSocial: true,
 }
 
 export const ROTULO_ACAO: Readonly<Record<AcaoPlaybook, { rotulo: string; descricao: string; ferramentas: readonly string[] }>> = {

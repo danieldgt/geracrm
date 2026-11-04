@@ -10,18 +10,21 @@ import { emSavepoint, type Sql } from '../../db/index.js'
  *                       `indicado_por` = o indicante, telefone principal; SEM DONO —
  *                       entra na distribuição normal (não herda a carteira do indicante:
  *                       é a regra mais simples e a que não tira lead de quem distribui).
- *   telefone já existe → NÃO duplica: só registra a indicação no feed do existente
- *                       (comentário do sistema). Para quem chamou: `ja_cliente`, e nada
- *                       mais — nem id, nem nome, nem se é cliente ou lead de verdade.
+ *   telefone já existe → NÃO duplica; com `comentarExistente` (roteiro de indicação
+ *                       aberto) registra a indicação no feed do existente.
  *
- * ⚠️ Dedup pela CHAVE DE BLOQUEIO (55 + DDD + 8 últimos): com e sem o nono dígito
- *    é o mesmo telefone (INV-50), como no POST de contatos.
+ * ⚠️ NÃO É ORÁCULO (revisão G3, A1): para quem chamou, novo e existente saem com a
+ *    MESMA situação (`registrado`). Diferenciar ("já é cliente") deixaria o modelo —
+ *    e quem conversa com ele — enumerar a base testando telefones. A contagem de
+ *    criados fica só no retorno interno (`criados`), nunca na saída da ferramenta.
+ * ⚠️ Dedup pela CHAVE DE BLOQUEIO (55 + DDD + 8 últimos) em QUALQUER telefone do
+ *    contato, não só no principal (B7): com e sem o nono dígito é o mesmo número.
  * ⚠️ Corrida com outro cadastro do mesmo número: o índice único do principal recusa
- *    e o savepoint desfaz só aquele indicado, que vira `ja_cliente`.
+ *    e o savepoint desfaz só aquele indicado (também `registrado`).
  * Chamar sob tenant (RLS).
  */
 
-export type SituacaoIndicacao = 'criado' | 'ja_cliente' | 'telefone_invalido' | 'proprio_cliente' | 'repetido'
+export type SituacaoIndicacao = 'registrado' | 'telefone_invalido' | 'proprio_cliente' | 'repetido'
 
 export interface IndicacaoEntrada {
   readonly nome: string
@@ -31,6 +34,7 @@ export interface IndicacaoEntrada {
 
 export interface ResultadoIndicacoes {
   readonly itens: readonly { readonly nome: string; readonly situacao: SituacaoIndicacao }[]
+  /** Interno (auditoria/teste) — NUNCA vai para o modelo. */
   readonly criados: number
   readonly origemCriada: boolean
 }
@@ -62,7 +66,7 @@ const ehTelefonePrincipalDuplicado = (err: unknown): boolean =>
   && (err as { constraint_name?: string }).constraint_name === 'contato_telefone_principal_unico'
 
 export async function registrarIndicacoes(
-  tx: Sql, p: { indicanteId: string; indicacoes: readonly IndicacaoEntrada[] },
+  tx: Sql, p: { indicanteId: string; indicacoes: readonly IndicacaoEntrada[]; comentarExistente?: boolean | undefined },
 ): Promise<ResultadoIndicacoes> {
   if (p.indicacoes.length === 0) throw new ErroIndicacoes('vazio')
   if (p.indicacoes.length > MAX_INDICACOES) throw new ErroIndicacoes('limite')
@@ -87,12 +91,14 @@ export async function registrarIndicacoes(
     if (vistas.has(tel.chaveBloqueio)) { itens.push({ nome, situacao: 'repetido' }); continue }
     vistas.add(tel.chaveBloqueio)
 
+    // B7: qualquer telefone do contato (principal ou não) conta como "já existe".
     const [existe] = await tx<{ contato_id: string }[]>`
       SELECT contato_id FROM contato_telefone
-       WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal LIMIT 1`
+       WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio}
+       ORDER BY principal DESC LIMIT 1`
     if (existe) {
-      await comentarIndicacao(tx, existe.contato_id, indicante.nome, null)
-      itens.push({ nome, situacao: 'ja_cliente' })
+      if (p.comentarExistente) await comentarIndicacao(tx, existe.contato_id, indicante.nome, null)
+      itens.push({ nome, situacao: 'registrado' })
       continue
     }
 
@@ -110,11 +116,10 @@ export async function registrarIndicacoes(
         await comentarIndicacao(sp, id, indicante.nome, observacao)
       })
       criados += 1
-      itens.push({ nome, situacao: 'criado' })
     } catch (err) {
       if (!ehTelefonePrincipalDuplicado(err)) throw err
-      itens.push({ nome, situacao: 'ja_cliente' })
     }
+    itens.push({ nome, situacao: 'registrado' })
   }
   return { itens, criados, origemCriada: origem?.criada ?? false }
 }

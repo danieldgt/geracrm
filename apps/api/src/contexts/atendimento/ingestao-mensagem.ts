@@ -267,7 +267,8 @@ export async function ingerirMensagemEntrante(
   try {
     await emSavepoint(tx, async (sp) => {
       await travarConversaEContato(sp, conversaId)
-      await cancelarRetornosDaConversa(sp, conversaId)
+      // O pós-venda (G3) NÃO é cancelado: é adiado até a conversa assentar (ver a função).
+      await cancelarRetornosDaConversa(sp, conversaId, undefined, msg.recebidaEm)
       await cancelarDescarteEReativacaoDoContato(sp, conversaId)
     })
   } catch { /* cancelar retorno é acessório; a mensagem não pode se perder por ele */ }

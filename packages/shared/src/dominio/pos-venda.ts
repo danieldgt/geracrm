@@ -1,4 +1,5 @@
 import { filtrarSaida } from './agente-filtro.js'
+import { extrairNumerosDeNegocio, numerosDoTexto, percentuaisDoTexto } from './agente-numeros.js'
 
 /**
  * PÓS-VENDA PELO AGENTE, NPS, INDICAÇÕES E PROVA SOCIAL (raia G3; paridade AM #100, #104, #106).
@@ -114,8 +115,36 @@ export const DIAS_ROTEIRO_POS_VENDA = 7
 
 // ── indicações ───────────────────────────────────────────────────────────────
 
-/** Máximo de indicações por chamada da ferramenta. */
+/**
+ * Máximo de indicações por PEDIDO DE INDICAÇÃO (roteiro aberto na sessão), somando
+ * todas as chamadas da ferramenta — não só por chamada (revisão G3, A2).
+ */
 export const MAX_INDICACOES = 5
+
+// ── ativas do pós-venda ──────────────────────────────────────────────────────
+
+/** Tentativas de agendar o mesmo pedido + roteiro (impedimento passageiro não vira perda; M1). */
+export const MAX_TENTATIVAS_POS_VENDA = 3
+/** Intervalo mínimo entre uma tentativa encerrada sem envio e a próxima. */
+export const RETENTATIVA_POS_VENDA_MS = 6 * 60 * 60 * 1000
+/** Cliente escreveu: o pós-venda espera a conversa assentar por este tempo (adiar, nunca cancelar). */
+export const QUIETUDE_POS_VENDA_MS = 2 * 60 * 60 * 1000
+/** Espalhamento do horário do envio por contato (nada de rajada às 9h; M3). */
+export const ESPALHAMENTO_POS_VENDA_MS = 2 * 60 * 60 * 1000
+/** Teto diário de pós-venda ENVIADO por número NÃO-OFICIAL (risco de banimento, ADR-021; M3). */
+export const TETO_POS_VENDA_DIA_NAO_OFICIAL = 30
+
+/**
+ * Deslocamento determinístico do envio em [0, ESPALHAMENTO_POS_VENDA_MS), resolução
+ * de minuto, pela chave (contato + pedido + roteiro): a mesma chave cai sempre no
+ * mesmo minuto; um lote efetivado junto se espalha.
+ */
+export function espalhamentoDoPosVenda(chave: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < chave.length; i++) { h ^= chave.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0 }
+  const minutos = ESPALHAMENTO_POS_VENDA_MS / 60_000
+  return (h % minutos) * 60_000
+}
 /** Nome da origem de contato criada (se faltar) para os indicados. */
 export const NOME_ORIGEM_INDICACAO = 'Indicação'
 
@@ -137,6 +166,23 @@ export const VALIDADE_PROVA_SOCIAL_DIAS = 365
 export const LIMITES_PROVA_SOCIAL = { fonte: 200, link: 500 } as const
 
 const DIA_MS = 86_400_000
+
+/**
+ * As FONTES que uma prova social abona no guardrail numérico (revisão G3, B1):
+ * percentuais escritos e CONTAGENS ("1.200 lojas") do texto aprovado — nunca
+ * prazo ("entrega em 48 horas") nem dinheiro: prova social não é fonte de prazo
+ * nem de preço, que só vêm das ferramentas de pedido/catálogo e das políticas.
+ */
+export function fontesDaProvaSocial(textos: readonly string[]): { numeros: number[]; percentuais: number[] } {
+  const numeros = new Set<number>()
+  const percentuais = new Set<number>()
+  for (const t of textos) {
+    const naoContagem = new Set(extrairNumerosDeNegocio(t).filter((n) => n.tipo !== 'quantidade').map((n) => n.valor))
+    for (const n of numerosDoTexto(t)) if (!naoContagem.has(n)) numeros.add(n)
+    percentuaisDoTexto(t, percentuais)
+  }
+  return { numeros: [...numeros], percentuais: [...percentuais] }
+}
 
 /** `apuradoEm` é "AAAA-MM-DD". Vigente = nem no futuro, nem mais velha que a validade. */
 export function provaSocialVigente(apuradoEm: string | null, agora: Date): boolean {

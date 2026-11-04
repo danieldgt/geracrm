@@ -2,7 +2,27 @@ import { describe, it, expect } from 'vitest'
 import {
   DIAS_DEPOIS_MAX, MAX_TEXTO_AUTOMACAO, VALIDADE_PROVA_SOCIAL_DIAS, ehDetratorNps, errosFormatoProvaSocial, errosParaAprovarProvaSocial,
   provaSocialVigente, validarAcaoAgenteEnvia, validarGatilhoPedidoEfetivado, vetosProvaSocial,
+  ESPALHAMENTO_POS_VENDA_MS, espalhamentoDoPosVenda, fontesDaProvaSocial,
 } from './pos-venda.js'
+
+describe('revisão G3 — regras puras', () => {
+  it('B1: prova social abona contagem e %, nunca prazo (nem dinheiro)', () => {
+    const f = fontesDaProvaSocial(['Mais de 1.200 lojas, 98% recomendam, entrega em 48 horas e 3 dias úteis.'])
+    expect(f.numeros).toContain(1200)
+    expect(f.numeros).not.toContain(48)
+    expect(f.numeros).not.toContain(3)
+    expect(f.percentuais).toEqual([98])
+  })
+  it('M3: espalhamento determinístico, em minutos inteiros, dentro de 2 h', () => {
+    const a = espalhamentoDoPosVenda('c1:p1:nps')
+    expect(espalhamentoDoPosVenda('c1:p1:nps')).toBe(a)
+    expect(a % 60_000).toBe(0)
+    expect(a).toBeGreaterThanOrEqual(0)
+    expect(a).toBeLessThan(ESPALHAMENTO_POS_VENDA_MS)
+    const distintos = new Set(Array.from({ length: 50 }, (_, i) => espalhamentoDoPosVenda(`c${i}:p:nps`)))
+    expect(distintos.size).toBeGreaterThan(20)
+  })
+})
 import { ACOES_TODAS_LIGADAS, acoesPlaybook, ROTULO_ACAO } from './agente-playbook.js'
 
 const TPL = '0193a000-0000-7000-8000-000000000001'
@@ -81,7 +101,9 @@ describe('prova social', () => {
 describe('ações do playbook (G3)', () => {
   it('⚠️ versão publicada ANTES da G3 (sem as chaves novas) continua válida — ligadas por padrão', () => {
     const antigo = { catalogo: true, pedido: true, proposta: true, memoria: false, conhecimento: true }
-    expect(acoesPlaybook.parse(antigo)).toEqual({ ...antigo, objecoes: true, nps: true, indicacoes: true, provaSocial: true })
+    // ⚠️ indicações nasce DESLIGADA (escrita nova na base); NPS e prova social ligadas (já têm portão).
+    expect(acoesPlaybook.parse(antigo)).toEqual({ ...antigo, objecoes: true, nps: true, indicacoes: false, provaSocial: true })
+    expect(ACOES_TODAS_LIGADAS.indicacoes).toBe(false)
   })
   it('desligáveis, e cada uma diz qual ferramenta tira do menu', () => {
     expect(acoesPlaybook.parse({ ...ACOES_TODAS_LIGADAS, nps: false })).toMatchObject({ nps: false })

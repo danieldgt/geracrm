@@ -1,14 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import postgres from 'postgres'
-import { normalizarTelefone } from '@geracrm/shared'
+import { ESPALHAMENTO_POS_VENDA_MS, MAX_TENTATIVAS_POS_VENDA, RETENTATIVA_POS_VENDA_MS, TETO_POS_VENDA_DIA_NAO_OFICIAL, normalizarTelefone } from '@geracrm/shared'
 import type { Sql } from '../../db/index.js'
 import { encerrarBanco } from '../../db/index.js'
 import { cifrar } from '../integracao/cofre.js'
 import { executarNoTenant } from './automacao-motor.js'
-import { processarRetornos } from '../atendimento/agente/retorno.js'
-import { ferramentaRegistrarNps } from '../atendimento/agente/ferramentas/pos-venda.js'
+import { comTenantServico } from '../../db/index.js'
+import { cancelarRetornosDaConversa, processarRetornos } from '../atendimento/agente/retorno.js'
+import { ferramentaRegistrarIndicacoes, ferramentaRegistrarNps } from '../atendimento/agente/ferramentas/pos-venda.js'
 import type { ContextoFerramenta } from '../atendimento/agente/ferramentas/porta.js'
+import { conduzirTurnoVendedor } from '../atendimento/agente/vendedor.js'
+import type { PortaLlmFerramentas, ResultadoLaco } from '../atendimento/agente/porta-llm.js'
+import { ingerirMensagemEntrante } from '../atendimento/ingestao-mensagem.js'
 
 /**
  * PÓS-VENDA POR AUTOMAÇÃO (raia G3): gatilho `pedido_efetivado` + ação
@@ -80,14 +84,17 @@ async function pedido(tenant: string, contato: string, conversa: string | null, 
   return id
 }
 const motor = (agora: Date, tenant = T) => executarNoTenant(dono as unknown as Sql, tenant, agora)
-const processar = (agora: Date, tenant = T) => processarRetornos(dono as never, { enviar, enviarTemplate, somenteTenant: tenant }, agora)
+/** O worker roda depois do espalhamento (M3: executar_em = agora + [0, 2 h)) — sempre a 2 h do relógio dado. */
+const processar = (agora: Date, tenant = T) =>
+  processarRetornos(dono as never, { enviar, enviarTemplate, somenteTenant: tenant }, new Date(agora.getTime() + ESPALHAMENTO_POS_VENDA_MS))
 const linhas = (tenant = T) => dono<{ pedido_id: string; roteiro: string; estado: string; detalhe: string | null; texto: string | null; conversa_id: string; executar_em: Date }[]>`
   SELECT pedido_id, roteiro, estado, detalhe, texto, conversa_id, executar_em FROM agente_retorno
    WHERE tenant_id = ${tenant} AND motivo = 'pos_venda' ORDER BY criado_em, roteiro`
 
 const TABELAS = [
   'agente_retorno', 'agente_sessao', 'automacao_execucao', 'automacao', 'nps_resposta', 'tarefa', 'notificacao', 'outbox',
-  'lista_bloqueio', 'consentimento_contato', 'atendimento', 'pedido', 'canal_aquecimento', 'agente_tenant', 'mensagem',
+  'lista_bloqueio', 'consentimento_contato', 'atendimento', 'pedido', 'canal_aquecimento', 'agente_tenant',
+  'agente_decisao', 'agente_tarefa', 'tarefa_pos_ingestao', 'mensagem_id_externo', 'aviso_privacidade', 'comentario', 'mensagem',
 ]
 
 beforeAll(async () => {
@@ -323,7 +330,8 @@ describe('Automação pedido_efetivado → agente_envia', () => {
 describe('Roteiro NPS: o envio abre a sessão e libera registrar_nps', () => {
   const ctx = async (modo: ContextoFerramenta['modo'] = 'autonomo'): Promise<ContextoFerramenta> => {
     const [s] = await dono<{ id: string }[]>`SELECT id FROM agente_sessao WHERE tenant_id = ${T} AND conversa_id = ${CONV} AND estado = 'ativa'`
-    return { tenantId: T, conversaId: CONV, contatoId: CONTATO, canalId: NAO, perfil: 'varejo', sessaoId: s?.id ?? null, modo, agora: AGORA }
+    // O envio acontece no relógio do worker (AGORA + 2 h); o cliente responde depois.
+    return { tenantId: T, conversaId: CONV, contatoId: CONTATO, canalId: NAO, perfil: 'varejo', sessaoId: s?.id ?? null, modo, agora: new Date(AGORA.getTime() + 3 * H) }
   }
   async function npsEnviado(): Promise<void> {
     await regra(T, { roteiro: 'nps', texto: 'De 0 a 10, que nota você dá para a compra?' })
@@ -342,9 +350,9 @@ describe('Roteiro NPS: o envio abre a sessão e libera registrar_nps', () => {
 
   it('pesquisa enviada → a sessão guarda o roteiro; promotor grava origem agente, sem tarefa; a segunda vez é recusada', async () => {
     await npsEnviado()
-    const [s] = await dono<{ estado_agente: { posVenda: { roteiro: string } } }[]>`
+    const [s] = await dono<{ estado_agente: { posVenda: { nps: { pedidoId: string } } } }[]>`
       SELECT estado_agente FROM agente_sessao WHERE tenant_id = ${T} AND conversa_id = ${CONV} AND estado = 'ativa'`
-    expect(s!.estado_agente.posVenda).toMatchObject({ roteiro: 'nps' })
+    expect(s!.estado_agente.posVenda.nps).toMatchObject({ pedidoId: expect.any(String) })
     const r = await ferramentaRegistrarNps().executar(await ctx(), { nota: 10, comentario: 'Adorei' } as never)
     expect(r).toMatchObject({ ok: true, saida: { registrado: true, detrator: false } })
     const nps = await dono<{ nota: number; origem: string; atendente_id: string | null; contato_id: string }[]>`
@@ -388,5 +396,202 @@ describe('Roteiro NPS: o envio abre a sessão e libera registrar_nps', () => {
     const c = await ctx()
     const r = await ferramentaRegistrarNps().executar({ ...c, agora: new Date(AGORA.getTime() + 8 * D) }, { nota: 9, comentario: null } as never)
     expect(r).toMatchObject({ ok: false })
+  })
+})
+
+describe('Revisão G3 — impedimento passageiro, teto, espalhamento e conversa-alvo', () => {
+  const W = ESPALHAMENTO_POS_VENDA_MS
+
+  it('M1: humano atendendo cancela; fechado o atendimento e passado o intervalo, o motor REAGENDA e sai', async () => {
+    await regra(T, {})
+    await pedido(T, CONTATO, CONV, new Date(AGORA.getTime() - H))
+    await motor(AGORA)
+    const at = randomUUID()
+    await dono`INSERT INTO atendimento (tenant_id, id, conversa_id, canal_id, protocolo, atendente_id, estado, assumido_em)
+               VALUES (${T}, ${at}, ${CONV}, ${NAO}, proximo_numero(${T}, 'protocolo'), NULL, 'em_atendimento', now())`
+    expect(await processar(AGORA)).toMatchObject({ cancelados: 1 })
+    await dono`DELETE FROM atendimento WHERE tenant_id = ${T} AND id = ${at}`
+    // Antes do intervalo mínimo: espera.
+    expect(await motor(new Date(AGORA.getTime() + W + H))).toBe(0)
+    const depois = new Date(AGORA.getTime() + W + RETENTATIVA_POS_VENDA_MS + H)
+    await dono`UPDATE conversa SET ultima_entrante_em = ${new Date(depois.getTime() - 3 * H)} WHERE tenant_id = ${T} AND id = ${CONV}`
+    expect(await motor(depois)).toBe(1)
+    expect(await processar(depois)).toMatchObject({ enviados: 1 })
+    expect(textos).toHaveLength(1)
+    // Enviado: nunca mais.
+    expect(await motor(new Date(depois.getTime() + RETENTATIVA_POS_VENDA_MS + 2 * W))).toBe(0)
+  })
+
+  it(`M1: no máximo ${MAX_TENTATIVAS_POS_VENDA} tentativas por pedido + roteiro`, async () => {
+    await regra(T, {})
+    const p = await pedido(T, CONTATO, CONV, new Date(AGORA.getTime() - H))
+    for (let i = 0; i < MAX_TENTATIVAS_POS_VENDA; i++) {
+      await dono`INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, executar_em, estado, tentativa, criado_em, concluido_em, pedido_id, roteiro)
+                 VALUES (${T}, ${randomUUID()}, ${CONV}, ${NAO}, 'pos_venda', ${AGORA}, 'recusado', 1, ${AGORA}, ${new Date(AGORA.getTime() - 2 * RETENTATIVA_POS_VENDA_MS)}, ${p}, 'agradecimento')`
+    }
+    expect(await motor(AGORA)).toBe(0)
+  })
+
+  it('M1: o cliente escreve antes de a ativa sair → ADIADA (não cancelada), sai depois de a conversa assentar', async () => {
+    await regra(T, {})
+    await pedido(T, CONTATO, CONV, new Date(AGORA.getTime() - H))
+    await motor(AGORA)
+    const escreveu = new Date(AGORA.getTime() + 30 * 60_000)
+    await comTenantServico(T, (tx) => cancelarRetornosDaConversa(tx, CONV, undefined, escreveu))
+    await dono`UPDATE conversa SET ultima_entrante_em = ${escreveu} WHERE tenant_id = ${T} AND id = ${CONV}`
+    const [l] = await linhas()
+    expect(l).toMatchObject({ estado: 'pendente', detalhe: 'cliente_escreveu: adiado' })
+    expect(l!.executar_em.getTime()).toBeGreaterThanOrEqual(escreveu.getTime() + 2 * H)
+    // O worker no meio do caminho respeita a quietude; depois dela, envia.
+    expect(await processarRetornos(dono as never, { enviar, enviarTemplate, somenteTenant: T }, new Date(escreveu.getTime() + 2 * H + 60_000)))
+      .toMatchObject({ enviados: 1 })
+  })
+
+  it('M3: o horário é espalhado por contato (determinístico, dentro de 2 h)', async () => {
+    await regra(T, {})
+    await pedido(T, CONTATO, CONV, new Date(AGORA.getTime() - H))
+    await motor(AGORA)
+    const [l] = await linhas()
+    const desloc = l!.executar_em.getTime() - AGORA.getTime()
+    expect(desloc).toBeGreaterThanOrEqual(0)
+    expect(desloc).toBeLessThan(W)
+  })
+
+  it(`M3: não-oficial com ${TETO_POS_VENDA_DIA_NAO_OFICIAL} pós-vendas enviados hoje → adia para amanhã`, async () => {
+    await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao) VALUES (${T}, ${randomUUID()}, ${NAO}, ${CONTATO_OF}, 1)
+               ON CONFLICT DO NOTHING`
+    const [{ id: conv3 }] = await dono<{ id: string }[]>`SELECT id FROM conversa WHERE tenant_id = ${T} AND canal_id = ${NAO} AND contato_id = ${CONTATO_OF}` as unknown as [{ id: string }]
+    for (let i = 0; i < TETO_POS_VENDA_DIA_NAO_OFICIAL; i++) {
+      const ped = await pedido(T, CONTATO_OF, conv3, new Date(AGORA.getTime() - 50 * D))
+      await dono`INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, executar_em, estado, tentativa, concluido_em, criado_em, pedido_id, roteiro)
+                 VALUES (${T}, ${randomUUID()}, ${conv3}, ${NAO}, 'pos_venda', ${AGORA}, 'enviado', 1, ${new Date(AGORA.getTime() - 60_000)}, ${AGORA}, ${ped}, 'agradecimento')`
+    }
+    await regra(T, {})
+    await pedido(T, CONTATO, CONV, new Date(AGORA.getTime() - H))
+    await motor(AGORA)
+    expect(await processar(AGORA)).toMatchObject({ adiados: 1, enviados: 0 })
+    expect((await linhas()).find((l) => l.conversa_id === CONV)).toMatchObject({ detalhe: 'limite_pos_venda_dia' })
+  })
+
+  it('M4: prefere a conversa em número com agente autônomo; arquivada não recebe', async () => {
+    await regra(T, {})
+    await configurar(T, OF, 'sombra')
+    const convOf2 = randomUUID()
+    await dono`INSERT INTO conversa (tenant_id, id, canal_id, contato_id, versao, ultima_mensagem_em) VALUES (${T}, ${convOf2}, ${OF}, ${CONTATO}, 1, now())`
+    try {
+      await pedido(T, CONTATO, null, new Date(AGORA.getTime() - H))
+      await motor(AGORA)
+      expect((await linhas())[0]).toMatchObject({ conversa_id: CONV })
+      await dono`DELETE FROM agente_retorno WHERE tenant_id = ${T}`
+      await dono`UPDATE conversa SET arquivada = true WHERE tenant_id = ${T} AND id = ${CONV}`
+      await motor(AGORA)
+      expect((await linhas())[0]).toMatchObject({ conversa_id: convOf2 })
+      await dono`DELETE FROM agente_retorno WHERE tenant_id = ${T}`
+      await dono`UPDATE conversa SET arquivada = true WHERE tenant_id = ${T} AND id = ${convOf2}`
+      expect(await motor(AGORA)).toBe(0)
+    } finally {
+      await dono`UPDATE conversa SET arquivada = false WHERE tenant_id = ${T}`
+      await dono`DELETE FROM agente_retorno WHERE tenant_id = ${T}`
+      await dono`DELETE FROM conversa WHERE tenant_id = ${T} AND id = ${convOf2}`
+    }
+  })
+})
+
+describe('Pedido de indicação (A1, A2, B3)', () => {
+  const ctx = async (): Promise<ContextoFerramenta> => {
+    const [s] = await dono<{ id: string }[]>`SELECT id FROM agente_sessao WHERE tenant_id = ${T} AND conversa_id = ${CONV} AND estado = 'ativa'`
+    return { tenantId: T, conversaId: CONV, contatoId: CONTATO, canalId: NAO, perfil: 'varejo', sessaoId: s?.id ?? null, modo: 'autonomo', agora: new Date(AGORA.getTime() + 3 * H) }
+  }
+  const indicar = async (lista: { nome: string; telefone: string }[]) =>
+    ferramentaRegistrarIndicacoes().executar(await ctx(), { indicacoes: lista.map((i) => ({ ...i, observacao: null })) } as never)
+  const limpar = async () => {
+    await dono`DELETE FROM contato_telefone WHERE tenant_id = ${T} AND fonte = 'indicacao'`
+    await dono`DELETE FROM contato WHERE tenant_id = ${T} AND origem_carga = 'indicacao'`
+    await dono`DELETE FROM origem WHERE tenant_id = ${T}`
+  }
+
+  it('⚠️ A2: sem pedido de indicação enviado → erro tipificado indicacoes.nao_pedido, nada criado', async () => {
+    await limpar()
+    const r = await indicar([{ nome: 'Carla', telefone: '85999970501' }])
+    expect((r as { erro: string }).erro).toMatch(/^indicacoes\.nao_pedido/)
+  })
+
+  it('⚠️ A1: novo e já cadastrado saem IGUAIS ("registrado"); o existente só ganha o comentário; B3: o NPS pendente continua', async () => {
+    await limpar()
+    await regra(T, { roteiro: 'nps', texto: 'Nota de 0 a 10?' })
+    await regra(T, { roteiro: 'indicacao', texto: 'Indica alguém?' })
+    await pedido(T, CONTATO, CONV, new Date(AGORA.getTime() - H))
+    await motor(AGORA); await processar(AGORA)
+    await motor(AGORA); await processar(AGORA)
+    expect(textos).toHaveLength(2)
+    const r = await indicar([{ nome: 'Nova Pessoa', telefone: '85999970502' }, { nome: 'Fulano', telefone: TEL_OF }])
+    expect(r).toEqual({ ok: true, saida: { itens: [{ nome: 'Nova Pessoa', situacao: 'registrado' }, { nome: 'Fulano', situacao: 'registrado' }] } })
+    const [com] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM comentario WHERE tenant_id = ${T} AND contato_id = ${CONTATO_OF}`
+    expect(com!.n).toBe(1)
+    const nps = await ferramentaRegistrarNps().executar(await ctx(), { nota: 9, comentario: null } as never)
+    expect(nps).toMatchObject({ ok: true, saida: { registrado: true } })
+    await limpar()
+  })
+
+  it('⚠️ A2: teto TOTAL por pedido de indicação (5), somando chamadas', async () => {
+    await limpar()
+    await regra(T, { roteiro: 'indicacao', texto: 'Indica alguém?' })
+    await pedido(T, CONTATO, CONV, new Date(AGORA.getTime() - H))
+    await motor(AGORA); await processar(AGORA)
+    const tres = [1, 2, 3].map((i) => ({ nome: `P${i}`, telefone: `8599997060${i}` }))
+    expect(await indicar(tres)).toMatchObject({ ok: true })
+    const outras = [4, 5, 6].map((i) => ({ nome: `P${i}`, telefone: `8599997060${i}` }))
+    expect((await indicar(outras) as { erro: string }).erro).toMatch(/^indicacoes\.limite.*restam 2/)
+    expect(await indicar(outras.slice(0, 2))).toMatchObject({ ok: true })
+    expect((await indicar([{ nome: 'P9', telefone: '85999970609' }]) as { erro: string }).erro).toMatch(/^indicacoes\.nao_pedido/)
+    const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM contato WHERE tenant_id = ${T} AND origem_carga = 'indicacao'`
+    expect(n!.n).toBe(5)
+    await limpar()
+  })
+})
+
+describe('Ponta a ponta com equipe disponível (A3): ingestão → portão → turno → registrar_nps', () => {
+  const equipe = { vinculados: 1, logados: 1, ativos: 1, foraDoExpediente: false }
+  const ligacoes = () => ({ conhecimento: { async buscar() { return { trechos: [] } } } })
+  function llm(chamadas: { nome: string; entrada: unknown }[]): PortaLlmFerramentas {
+    return { nome: 'falso', capacidades: { ferramentas: true, saidaEstruturada: true, cacheDePrefixo: false },
+      async rodar(p): Promise<ResultadoLaco> {
+        for (const c of chamadas) await p.executar(c.nome, c.entrada)
+        return { ok: true, saida: { mensagens: ['Obrigado pela nota!'], confianca: 0.9 }, rastro: { chamadas: [], rodadas: 1, uso: { entrada: 1, saida: 1, cacheLeitura: 0, cacheEscrita: 0 }, modelo: 'falso', latenciaMs: 1, parouPor: 'fim' } }
+      } }
+  }
+  async function clienteResponde(texto: string, quando: Date): Promise<string> {
+    const r = await comTenantServico(T, (tx) => ingerirMensagemEntrante(tx, NAO, { deE164: TEL, idExterno: randomUUID(), tipo: 'texto', texto, recebidaEm: quando }))
+    expect(r).toMatchObject({ ok: true })
+    const [m] = await dono<{ id: string }[]>`SELECT id FROM mensagem WHERE tenant_id = ${T} AND conversa_id = ${CONV} AND direcao = 'entrante' ORDER BY criado_em DESC LIMIT 1`
+    return m!.id
+  }
+  const tarefa = (id: string) => ({ tenant_id: T, id: randomUUID(), conversa_id: CONV, canal_id: NAO, mensagens_ids: [id], tentativas: 1, executar_em: new Date() })
+
+  it('com "só quando ninguém disponível" LIGADO e equipe na mesa: sem pesquisa o agente fica quieto; com pesquisa pendente, entra e registra', async () => {
+    await dono`UPDATE agente_config SET so_quando_ninguem_disponivel = true, exigir_ausencia_antes = true WHERE tenant_id = ${T} AND canal_id = ${NAO}`
+    try {
+      // Controle: sem pós-venda, equipe disponível → quem atende é gente.
+      const antes = new Date(AGORA.getTime() - 4 * H)
+      const id0 = await clienteResponde('oi', antes)
+      const r0 = await conduzirTurnoVendedor(tarefa(id0), { llm: llm([]), ligacoes, enviar, equipe, agora: antes })
+      expect(r0).toMatchObject({ desfecho: 'silencio', motivo: 'tem_quem_atenda' })
+
+      await regra(T, { roteiro: 'nps', texto: 'De 0 a 10, que nota você dá?' })
+      await pedido(T, CONTATO, CONV, new Date(AGORA.getTime() - H))
+      await motor(AGORA)
+      expect(await processar(AGORA)).toMatchObject({ enviados: 1 }) // sai às AGORA + 2 h
+
+      const responde = new Date(AGORA.getTime() + 3 * H)
+      const id = await clienteResponde('nota 9', responde)
+      const r = await conduzirTurnoVendedor(tarefa(id), {
+        llm: llm([{ nome: 'registrar_nps', entrada: { nota: 9, comentario: null } }]), ligacoes, enviar, equipe, agora: responde,
+      })
+      expect(r.desfecho).not.toBe('silencio')
+      const nps = await dono<{ nota: number; origem: string }[]>`SELECT nota, origem FROM nps_resposta WHERE tenant_id = ${T}`
+      expect(nps).toEqual([{ nota: 9, origem: 'agente' }])
+    } finally {
+      await dono`UPDATE agente_config SET so_quando_ninguem_disponivel = false, exigir_ausencia_antes = false WHERE tenant_id = ${T} AND canal_id = ${NAO}`
+    }
   })
 })

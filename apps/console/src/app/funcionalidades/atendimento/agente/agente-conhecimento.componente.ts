@@ -155,7 +155,7 @@ interface Importado extends TextoExtraido { readonly nome: string }
                   </label>
                   @if (erroDe('consentimento'); as e) { <span class="msg-erro">{{ e }}</span> }
                 }
-                <small>Só chega ao agente depois que um administrador aprova. Mudar o texto, a fonte, a data ou o tipo volta para pendente.
+                <small>Só chega ao agente depois que um administrador aprova. Mudar o texto, a fonte, a data, o tipo, o consentimento ou o número volta para pendente (e cria uma versão nova).
                   O agente cita o texto como está, com a fonte — escreva a frase que ele pode dizer.</small>
               </fieldset>
             }
@@ -636,13 +636,19 @@ export class AgenteConhecimentoComponente {
     if (this.acaoEm()) return
     this.acaoEm.set(d.id)
     try {
-      const r = await this.api.aprovar(d.id, aprovado)
+      const r = await this.api.aprovar(d.id, aprovado, d.versao)
       if (r.ok) {
         this.toast.sucesso(aprovado ? `"${d.titulo}" aprovada — o agente pode citar.` : `Aprovação de "${d.titulo}" revogada — o agente deixa de citar.`)
         this.substituir(r.documento)
         return
       }
       if (r.status === 403) { this.toast.erro('Só um administrador aprova prova social.'); return }
+      if (r.status === 409) {
+        // Mudou desde que a lista carregou: recarrega para a pessoa conferir a versão nova antes de aprovar.
+        this.toast.erro(r.erro.mensagem ?? 'O documento mudou desde que você o abriu. Confira de novo antes de aprovar.')
+        void this.carregar()
+        return
+      }
       this.falhaDeAcao(r.status, r.erro.mensagem, 'Não foi possível mudar a aprovação.')
     } finally { this.acaoEm.set(null) }
   }

@@ -69,7 +69,12 @@ const corpoEditar = z.object({
   ...camposProvaSocial,
 })
 
-const corpoAprovar = z.object({ aprovado: z.boolean() })
+/**
+ * M2: aprovar AMARRA a versão vista. `versao` é obrigatória para aprovar (para
+ * revogar, opcional): se o documento mudou desde que o admin o leu, 409.
+ */
+const corpoAprovar = z.object({ aprovado: z.boolean(), versao: z.number().int().min(1).optional() })
+  .refine((c) => !c.aprovado || c.versao !== undefined, { message: 'Informe a versão que você conferiu.', path: ['versao'] })
 
 /** Os campos de prova social como ficam gravados (nulos fora do tipo). */
 interface ProvaSocialGravada {
@@ -292,20 +297,26 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
         }
         const titulo = c.titulo ?? atual.titulo
         const conteudo = c.conteudo ?? atual.conteudo
-        const sobeVersao = titulo !== atual.titulo || conteudo !== atual.conteudo
-        // ⚠️ Prova social APROVADA que muda o que o agente diria (texto, título, tipo,
-        //    fonte, link, data, número/depoimento, consentimento) volta a pendente:
-        //    o admin aprovou AQUELA versão, não a próxima.
-        const mudouProva = sobeVersao || (c.tipo ?? atual.tipo) !== atual.tipo || ps.fonte !== atual.fonte
+        const textoMudou = titulo !== atual.titulo || conteudo !== atual.conteudo
+        const novoCanal = c.canalId === undefined ? atual.canal_id : c.canalId
+        // ⚠️ Prova social APROVADA que muda o que o agente diria ou a quem (texto, título,
+        //    tipo, fonte, link, data, número/depoimento, consentimento, número/canal — B2)
+        //    volta a pendente: o admin aprovou AQUELA versão, não a próxima.
+        const mudouProva = textoMudou || (c.tipo ?? atual.tipo) !== atual.tipo || ps.fonte !== atual.fonte
           || ps.link !== atual.link || ps.apurado_em !== atual.apurado_em || ps.prova_tipo !== atual.prova_tipo
-          || ps.consentimento !== atual.consentimento
+          || ps.consentimento !== atual.consentimento || novoCanal !== atual.canal_id
+        const ehProva = atual.tipo === 'prova_social' || c.tipo === 'prova_social'
+        // ⚠️ M2: em prova social QUALQUER mudança dessas sobe a versão — é a versão que o
+        //    admin aprova (`POST …/aprovar {versao}`); sem subir, aprovar "a v3" aprovaria
+        //    também o consentimento retirado depois de ela ser vista.
+        const sobeVersao = textoMudou || (ehProva && mudouProva)
         const revogaAprovacao = atual.aprovado && mudouProva
         const [snap] = await tx<SnapshotDocumento[]>`
           UPDATE conhecimento_documento
              SET titulo = ${titulo},
                  conteudo = ${conteudo},
                  tipo = ${c.tipo ?? atual.tipo},
-                 canal_id = ${c.canalId === undefined ? atual.canal_id : c.canalId},
+                 canal_id = ${novoCanal},
                  publicado = ${c.publicado === undefined ? tx`publicado` : c.publicado},
                  versao = ${sobeVersao ? tx`versao + 1` : tx`versao`},
                  fonte = ${ps.fonte}, link = ${ps.link}, apurado_em = ${ps.apurado_em}::date,
@@ -316,10 +327,8 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
            RETURNING id, versao, titulo, tipo, canal_id, conteudo`
         const autor = await autoria(tx, req)
         // ⚠️ Versão nova = linha nova no histórico, nesta mesma transação (P9).
-        if (sobeVersao) {
-          await registrarVersao(tx, snap!, { origem: 'edicao', ...autor, observacao: c.observacao || null })
-          await reindexarDocumento(tx, atual.id)
-        }
+        if (sobeVersao) await registrarVersao(tx, snap!, { origem: 'edicao', ...autor, observacao: c.observacao || null })
+        if (textoMudou) await reindexarDocumento(tx, atual.id)
         // Espelho de volta: a tela do agente lê a coluna, a base lê o documento.
         if (ehPoliticasDoCanal && conteudo !== atual.conteudo) {
           await tx`UPDATE agente_config SET politicas = ${conteudo}, atualizado_em = now()
@@ -331,7 +340,7 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
           ...(snap!.tipo !== atual.tipo ? ['tipo'] : []),
           ...(snap!.canal_id !== atual.canal_id ? ['canalId'] : []),
           ...(c.publicado !== undefined && c.publicado !== atual.publicado ? ['publicado'] : []),
-          ...(mudouProva && !sobeVersao && snap!.tipo === atual.tipo ? ['provaSocial'] : []),
+          ...(mudouProva && !textoMudou && ehProva && snap!.tipo === atual.tipo && snap!.canal_id === atual.canal_id ? ['provaSocial'] : []),
           ...(revogaAprovacao ? ['aprovado'] : []),
         ]
         if (campos.length > 0) {
@@ -387,6 +396,9 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
             FROM conhecimento_documento WHERE tenant_id = tenant_atual() AND id = ${req.params.id} FOR UPDATE`
         if (!atual) return { erro: 'nao_encontrado' as const }
         if (atual.tipo !== 'prova_social') return { erro: 'nao_e_prova_social' as const }
+        if (parse.data.versao !== undefined && parse.data.versao !== atual.versao) {
+          return { erro: 'versao_divergente' as const, versaoAtual: atual.versao }
+        }
         if (aprovar) {
           const erros = errosParaAprovarProvaSocial({
             conteudo: atual.conteudo, fonte: atual.fonte, link: atual.link, apuradoEm: atual.apurado_em,
@@ -414,6 +426,12 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
       if (r.erro === 'nao_encontrado') return reply.code(404).send({ erro: 'conhecimento.nao_encontrado' })
       if (r.erro === 'nao_e_prova_social') {
         return reply.code(422).send({ erro: 'conhecimento.nao_e_prova_social', mensagem: 'Só documentos do tipo prova social são aprovados.', campos: ['tipo'] })
+      }
+      if (r.erro === 'versao_divergente') {
+        return reply.code(409).send({
+          erro: 'conhecimento.versao_divergente', versaoAtual: r.versaoAtual,
+          mensagem: `O documento mudou desde que você o abriu (agora está na v${r.versaoAtual}). Confira de novo antes de aprovar.`,
+        })
       }
       return reply.code(422).send({
         erro: 'conhecimento.prova_social_incompleta', mensagem: r.erros[0]!.mensagem,

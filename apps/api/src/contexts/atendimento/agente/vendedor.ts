@@ -34,6 +34,7 @@ import { resolverAlertaLlm } from './pipeline/falha-llm.js'
 import { fusoSeguro } from '../../plataforma/fuso.js'
 import { efetivarSeDentroDaAlcada } from '../../pedido/alcada.js'
 import { MAX_TENTATIVAS_TRANSCRICAO } from '../../../workers/transcricao.js'
+import { posVendaPendenteNaConversa } from './pos-venda.js'
 
 /**
  * UM TURNO DO VENDEDOR (ADR-023) — roda no worker, nunca no webhook.
@@ -212,6 +213,8 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
       },
       maxTurnos: cfg.regras.maxTurnos,
       regras: cfg.regras,
+      // G3: pergunta do pós-venda pendente na sessão (só lida quando a equipe está disponível).
+      posVendaPendente: reuniao.sessao_id && !ninguemDisponivel(equipe) ? await posVendaPendenteNaConversa(tenantId, conversaId, agora) : false,
     })
     if (!decisao.entra) {
       if (decisao.motivo === 'teto_de_turnos' && reuniao.sessao_id) {
