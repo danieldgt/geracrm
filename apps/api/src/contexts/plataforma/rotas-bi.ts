@@ -11,8 +11,12 @@ import { condicaoContato, escopoDaRequisicao } from './escopo.js'
  * pódio de leitura. Cada ranking é limitado e rotulado como "top 10".
  *
  * O período é fechado (7/30/90 dias) para o range casar com as partições de venda.
+ *
+ * Cada ranking devolve o top 10 com `<lista>Truncado` (havia mais grupos) e `<lista>Total`
+ * (grupos antes do corte, pela janela sobre o próprio GROUP BY).
  */
 const DIAS_VALIDOS = new Set([7, 30, 90])
+const TOP_RANKING = 10
 
 export async function rotasBi(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { dias?: string } }>(
@@ -32,20 +36,24 @@ export async function rotasBi(app: FastifyInstance): Promise<void> {
                    WHERE bi_uf.tenant_id = v.tenant_id AND bi_uf.usuario_id = v.usuario_id
                      AND bi_uf.filial_id = ANY(${[...escopo.filialIds]}::uuid[])))`
 
-        const topClientes = await tx<{ contato_id: string; nome: string; receita: string; qtd: number }[]>`
-          SELECT v.contato_id, c.nome, sum(v.valor_centavos)::text AS receita, count(*)::int AS qtd
+        // Cada ranking pede TOP+1 linhas: a sobra diz se cortou. `total_grupos` é a janela sobre o
+        // próprio GROUP BY (sem varredura extra) — o número de grupos antes do LIMIT.
+        const topClientes = await tx<{ contato_id: string; nome: string; receita: string; qtd: number; total_grupos: number }[]>`
+          SELECT v.contato_id, c.nome, sum(v.valor_centavos)::text AS receita, count(*)::int AS qtd,
+                 (count(*) OVER ())::int AS total_grupos
             FROM venda v
             JOIN contato c ON c.tenant_id = v.tenant_id AND c.id = v.contato_id
            WHERE v.tenant_id = tenant_atual() AND v.cancelada_em IS NULL
              AND v.contato_id IS NOT NULL AND v.ocorrida_em >= ${desde}
              AND ${condicaoContato(tx, escopo, 'c')}
            GROUP BY v.contato_id, c.nome
-           ORDER BY sum(v.valor_centavos) DESC LIMIT 10`
+           ORDER BY sum(v.valor_centavos) DESC, v.contato_id LIMIT ${TOP_RANKING + 1}`
 
-        const topProdutos = await tx<{ rotulo: string; quantidade: string; receita: string }[]>`
+        const topProdutos = await tx<{ rotulo: string; quantidade: string; receita: string; total_grupos: number }[]>`
           SELECT COALESCE(p.descricao, iv.sku_externo, 'Sem descrição') AS rotulo,
                  sum(iv.quantidade)::text AS quantidade,
-                 sum(iv.quantidade * iv.valor_unitario_centavos)::text AS receita
+                 sum(iv.quantidade * iv.valor_unitario_centavos)::text AS receita,
+                 (count(*) OVER ())::int AS total_grupos
             FROM item_venda iv
             JOIN venda v ON v.tenant_id = iv.tenant_id AND v.id = iv.venda_id
                         AND v.ocorrida_em = iv.venda_ocorrida_em
@@ -54,31 +62,43 @@ export async function rotasBi(app: FastifyInstance): Promise<void> {
            WHERE iv.tenant_id = tenant_atual() AND v.cancelada_em IS NULL
              AND iv.venda_ocorrida_em >= ${desde}
            GROUP BY COALESCE(p.descricao, iv.sku_externo, 'Sem descrição')
-           ORDER BY sum(iv.quantidade * iv.valor_unitario_centavos) DESC LIMIT 10`
+           ORDER BY sum(iv.quantidade * iv.valor_unitario_centavos) DESC, 1 LIMIT ${TOP_RANKING + 1}`
 
-        const porVendedor = await tx<{ usuario_id: string | null; nome: string | null; receita: string; qtd: number }[]>`
-          SELECT v.usuario_id, u.nome, sum(v.valor_centavos)::text AS receita, count(*)::int AS qtd
+        const porVendedor = await tx<{ usuario_id: string | null; nome: string | null; receita: string; qtd: number; total_grupos: number }[]>`
+          SELECT v.usuario_id, u.nome, sum(v.valor_centavos)::text AS receita, count(*)::int AS qtd,
+                 (count(*) OVER ())::int AS total_grupos
             FROM venda v
             LEFT JOIN usuario u ON u.tenant_id = v.tenant_id AND u.id = v.usuario_id
            WHERE v.tenant_id = tenant_atual() AND v.cancelada_em IS NULL
              AND v.ocorrida_em >= ${desde} AND ${vendedorVisivel}
            GROUP BY v.usuario_id, u.nome
-           ORDER BY sum(v.valor_centavos) DESC LIMIT 10`
+           ORDER BY sum(v.valor_centavos) DESC, v.usuario_id NULLS LAST LIMIT ${TOP_RANKING + 1}`
 
         return { topClientes, topProdutos, porVendedor }
       })
 
+      const cortaClientes = dados.topClientes.length > TOP_RANKING
+      const cortaProdutos = dados.topProdutos.length > TOP_RANKING
+      const cortaVendedores = dados.porVendedor.length > TOP_RANKING
+      const topo = <T>(linhas: readonly T[]): T[] => linhas.slice(0, TOP_RANKING) as T[]
+
       return reply.send({
         dias,
-        topClientes: dados.topClientes.map((r) => ({
+        topClientes: topo(dados.topClientes).map((r) => ({
           contatoId: r.contato_id, nome: r.nome, receitaCentavos: Number(r.receita), qtdVendas: r.qtd,
         })),
-        topProdutos: dados.topProdutos.map((r) => ({
+        topClientesTruncado: cortaClientes,
+        topClientesTotal: dados.topClientes[0]?.total_grupos ?? 0,
+        topProdutos: topo(dados.topProdutos).map((r) => ({
           rotulo: r.rotulo, quantidade: Number(r.quantidade), receitaCentavos: Number(r.receita),
         })),
-        porVendedor: dados.porVendedor.map((r) => ({
+        topProdutosTruncado: cortaProdutos,
+        topProdutosTotal: dados.topProdutos[0]?.total_grupos ?? 0,
+        porVendedor: topo(dados.porVendedor).map((r) => ({
           usuarioId: r.usuario_id, nome: r.nome ?? 'Sem vendedor', receitaCentavos: Number(r.receita), qtdVendas: r.qtd,
         })),
+        porVendedorTruncado: cortaVendedores,
+        porVendedorTotal: dados.porVendedor[0]?.total_grupos ?? 0,
       })
     },
   )

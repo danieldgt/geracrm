@@ -71,6 +71,9 @@ type Alvo = { tipo: 'vendedor'; id: string; nome: string } | { tipo: 'orfaos' } 
                   <li class="vazio">Nenhuma carteira atribuída ainda.</li>
                 }
               </ul>
+              @if (truncado()) {
+                <p class="corte">Mostrando as 200 maiores carteiras; há mais vendedores fora desta lista.</p>
+              }
             </section>
 
             <!-- Coluna 2: clientes da carteira selecionada -->
@@ -140,6 +143,7 @@ type Alvo = { tipo: 'vendedor'; id: string; nome: string } | { tipo: 'orfaos' } 
     .cart-qtd { color: var(--texto-secundario); font-weight: 600; }
     .cart-qtd.alerta { color: var(--atencao); }
     .vazio { padding: var(--espacamento-6); text-align: center; color: var(--texto-suave); font-size: 13px; }
+    .corte { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
     .det-topo { display: flex; align-items: baseline; justify-content: space-between; gap: var(--espacamento-3); margin-bottom: var(--espacamento-3); }
     .det-topo h2 { margin: 0; }
     .det-qtd { color: var(--texto-suave); }
@@ -159,6 +163,8 @@ export class CarteirasPagina implements OnInit {
   readonly estado = signal<Estado>('carregando')
   readonly vendedores = signal<readonly Vendedor[]>([])
   readonly orfaos = signal(0)
+  /** Teto da equipe (200) atingido: a lista de carteiras mostra só as maiores. */
+  readonly truncado = signal(false)
   readonly equipe = signal<readonly Membro[]>([])
   readonly alvo = signal<Alvo>(null)
   readonly contatos = signal<readonly ContatoCarteira[]>([])
@@ -199,11 +205,12 @@ export class CarteirasPagina implements OnInit {
     this.estado.set('carregando')
     try {
       const [resumo, equipe] = await Promise.all([
-        firstValueFrom(this.http.get<{ itens: Vendedor[]; orfaos: number }>('/v1/carteiras')),
+        firstValueFrom(this.http.get<{ itens: Vendedor[]; orfaos: number; truncado?: boolean }>('/v1/carteiras')),
         firstValueFrom(this.http.get<{ itens: Membro[] }>('/v1/equipe')),
       ])
       this.vendedores.set(resumo.itens)
       this.orfaos.set(resumo.orfaos)
+      this.truncado.set(resumo.truncado ?? false)
       this.equipe.set(equipe.itens)
       this.estado.set('pronto')
       // Reabrir o alvo atual, se ainda existir; senão limpar o painel.

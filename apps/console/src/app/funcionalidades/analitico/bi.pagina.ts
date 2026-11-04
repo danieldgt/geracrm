@@ -12,6 +12,13 @@ interface Bi {
   readonly topClientes: { contatoId: string; nome: string; receitaCentavos: number; qtdVendas: number }[]
   readonly topProdutos: { rotulo: string; quantidade: number; receitaCentavos: number }[]
   readonly porVendedor: { usuarioId: string | null; nome: string; receitaCentavos: number; qtdVendas: number }[]
+  /** Cada ranking: `Truncado` quando há mais grupos que os 10 listados; `Total` = grupos no período. */
+  readonly topClientesTruncado: boolean
+  readonly topClientesTotal: number
+  readonly topProdutosTruncado: boolean
+  readonly topProdutosTotal: number
+  readonly porVendedorTruncado: boolean
+  readonly porVendedorTotal: number
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
@@ -68,6 +75,9 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
                   </ng-template>
                   <div uiVazio><ui-estado titulo="Sem vendas no período" descricao="Nenhum cliente comprou neste intervalo." /></div>
                 </ui-tabela>
+                @if (bi.topClientesTruncado) {
+                  <p class="corte">Mostrando os 10 maiores de {{ bi.topClientesTotal }} clientes.</p>
+                }
               </section>
 
               <section class="painel" aria-labelledby="titulo-produtos">
@@ -81,6 +91,9 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
                   </ng-template>
                   <div uiVazio><ui-estado titulo="Sem itens vendidos" descricao="Nenhum produto saiu neste período." /></div>
                 </ui-tabela>
+                @if (bi.topProdutosTruncado) {
+                  <p class="corte">Mostrando os 10 maiores de {{ bi.topProdutosTotal }} produtos.</p>
+                }
               </section>
 
               <section class="painel" aria-labelledby="titulo-vendedores">
@@ -94,6 +107,9 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
                   </ng-template>
                   <div uiVazio><ui-estado titulo="Sem vendas no período" descricao="Nenhum vendedor fechou venda neste intervalo." /></div>
                 </ui-tabela>
+                @if (bi.porVendedorTruncado) {
+                  <p class="corte">Mostrando os 10 maiores de {{ bi.porVendedorTotal }} vendedores.</p>
+                }
               </section>
             </div>
           }
@@ -114,6 +130,7 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
     .barra { flex: 1; height: 4px; border-radius: var(--raio-completo); background: var(--superficie); overflow: hidden; }
     .fill { display: block; height: 100%; background: var(--acao); }
     .val { color: var(--texto-secundario); font-size: 12px; white-space: nowrap; }
+    .corte { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
   `,
 })
 export class BiPagina implements OnInit {

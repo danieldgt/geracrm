@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { TETO_EQUIPE } from '../plataforma/limites-listas.js'
 
 const DIAS_VALIDOS = new Set([30, 90, 180, 365])
 
@@ -52,12 +53,15 @@ export async function rotasNps(app: FastifyInstance): Promise<void> {
             LEFT JOIN usuario u ON u.tenant_id = n.tenant_id AND u.id = n.atendente_id
            WHERE n.tenant_id = tenant_atual() AND n.respondido_em >= ${desde}
              AND n.atendente_id IS NOT NULL
-           GROUP BY n.atendente_id, u.nome`
+           GROUP BY n.atendente_id, u.nome
+           -- Lista de EQUIPE: o corte (teto) é por volume de respostas; o desempate é o id.
+           ORDER BY count(*) DESC, n.atendente_id LIMIT ${TETO_EQUIPE + 1}`
         return { geral, porAtendente }
       })
 
       const g = dados.geral
-      const atendentes = dados.porAtendente
+      const cortouAtendentes = dados.porAtendente.length > TETO_EQUIPE
+      const atendentes = (cortouAtendentes ? dados.porAtendente.slice(0, TETO_EQUIPE) : dados.porAtendente)
         .map((a) => ({
           usuarioId: a.atendente_id,
           nome: a.nome ?? 'Desconhecido',
@@ -87,6 +91,7 @@ export async function rotasNps(app: FastifyInstance): Promise<void> {
           score: apurar(g?.ag_total ?? 0, g?.ag_promotores ?? 0, g?.ag_detratores ?? 0),
         },
         porAtendente: atendentes,
+        porAtendenteTruncado: cortouAtendentes,
       })
     },
   )

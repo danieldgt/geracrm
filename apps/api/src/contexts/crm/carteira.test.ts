@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
 import { criarApp } from '../../app.js'
@@ -148,4 +149,44 @@ describe('Carteirização', () => {
     // Nenhuma atribuição do tenant OUTRO vaza para T.
     expect(resumo.itens.length).toBe(0)
   })
+
+  it('teto da equipe: itens com truncado na fronteira (200 = não corta; 201 = corta)', async () => {
+    type Resumo = { itens: unknown[]; truncado: boolean; orfaos: number }
+    const ler = async (t: string) => (await chamar(t, 'GET', '/v1/carteiras')).json() as Resumo
+    // beforeEach zera as atribuições: a base é 0 carteiras.
+    const base = (await ler(T)).itens.length
+    try {
+      await vendedoresComCarteira(1, 200 - base)
+      const no = await ler(T)
+      expect(no.itens).toHaveLength(200)
+      expect(no.truncado).toBe(false)
+
+      await vendedoresComCarteira(201 - base, 201 - base)
+      const com = await ler(T)
+      expect(com.itens).toHaveLength(200)
+      expect(com.truncado).toBe(true)
+
+      expect((await ler(OUTRO)).truncado).toBe(false)
+    } finally {
+      await dono`DELETE FROM carteira_atribuicao WHERE tenant_id = ${T} AND usuario_id IN
+                 (SELECT id FROM usuario WHERE tenant_id = ${T} AND nome LIKE 'Extra %')`
+      await dono`DELETE FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Extra %'`
+      await dono`DELETE FROM usuario WHERE tenant_id = ${T} AND nome LIKE 'Extra %'`
+    }
+  }, 120_000)
 })
+
+/**
+ * Vendedores extras de T, cada um com UM cliente na carteira vigente. Grava direto a posse (sem o
+ * `transferir_carteira`): o teste só precisa do estado; a regra de transferência já tem os seus casos acima.
+ */
+async function vendedoresComCarteira(de: number, ate: number) {
+  for (let k = de; k <= ate; k++) {
+    const usuario = randomUUID(), contato = randomUUID()
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
+               VALUES (${T}, ${usuario}, ${'sub-' + usuario}, ${'Extra ' + k}, ${'extra' + k + '-' + usuario.slice(0, 8) + '@ex.com'})`
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${contato}, ${'Extra ' + k}, 'teste', true)`
+    await dono`INSERT INTO carteira_atribuicao (tenant_id, id, contato_id, usuario_id, origem)
+               VALUES (${T}, ${randomUUID()}, ${contato}, ${usuario}, 'manual')`
+  }
+}

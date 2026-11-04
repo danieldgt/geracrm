@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { SLA_PADRAO } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { metricaSlaHandoff } from '../atendimento/sla-metrica.js'
+import { TETO_EQUIPE } from './limites-listas.js'
 
 /**
  * Performance de atendimento — SLA e 1ª resposta, agregados sobre `atendimento`
@@ -72,7 +73,7 @@ export async function rotasPerformance(app: FastifyInstance): Promise<void> {
              AND a.primeira_resposta_humana_em IS NOT NULL AND a.primeira_entrante_em IS NOT NULL
              AND a.primeira_resposta_por_id IS NOT NULL
            GROUP BY a.primeira_resposta_por_id, u.nome
-           ORDER BY count(*) DESC LIMIT 10`
+           ORDER BY count(*) DESC, a.primeira_resposta_por_id LIMIT ${TETO_EQUIPE + 1}`
 
         // A régua do SLA do handoff é UMA, compartilhada com o painel de fase (P19).
         const agora = new Date()
@@ -86,6 +87,8 @@ export async function rotasPerformance(app: FastifyInstance): Promise<void> {
       })
 
       const g = dados.geral
+      const cortouAtendentes = dados.porAtendente.length > TETO_EQUIPE
+      const atendentes = cortouAtendentes ? dados.porAtendente.slice(0, TETO_EQUIPE) : dados.porAtendente
       const slaHandoff = dados.slaHandoff
       const configurados = dados.cfg?.n ?? 0
       const porHandoff = configurados > 0 || slaHandoff.medidos > 0
@@ -111,11 +114,13 @@ export async function rotasPerformance(app: FastifyInstance): Promise<void> {
           : g?.respondidos ? Math.round(((g.dentro_sla) / g.respondidos) * 100) : null,
         slaHandoff,
         medianaRespostaSeg: g?.mediana_seg !== null && g?.mediana_seg !== undefined ? Math.round(g.mediana_seg) : null,
-        porAtendente: dados.porAtendente.map((r) => ({
+        // Lista de EQUIPE: teto TETO_EQUIPE (200); `porAtendenteTruncado` quando há mais atendentes.
+        porAtendente: atendentes.map((r) => ({
           usuarioId: r.usuario_id, nome: r.nome ?? 'Desconhecido',
           respondidos: r.respondidos,
           medianaRespostaSeg: r.mediana_seg !== null ? Math.round(r.mediana_seg) : null,
         })),
+        porAtendenteTruncado: cortouAtendentes,
       })
     },
   )

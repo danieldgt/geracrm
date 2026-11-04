@@ -10,6 +10,8 @@ interface Mapa {
   readonly total: number; readonly semEndereco: number
   readonly porEstado: { uf: string; contatos: number }[]
   readonly porCidade: { cidade: string; uf: string | null; contatos: number }[]
+  /** `true` quando há mais cidades que as 50 listadas. */
+  readonly porCidadeTruncado: boolean
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
@@ -74,6 +76,9 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                     </ng-template>
                     <div uiVazio><ui-estado titulo="Nenhum contato com cidade" descricao="O endereço declarado ainda não tem cidade." /></div>
                   </ui-tabela>
+                  @if (m.porCidadeTruncado) {
+                    <p class="corte">Mostrando as 50 maiores cidades; há mais cidades fora desta lista.</p>
+                  }
                 </section>
               </div>
 
@@ -103,6 +108,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .barra { flex: 1; height: 6px; border-radius: var(--raio-completo); background: var(--superficie); overflow: hidden; }
     .fill { display: block; height: 100%; background: var(--acao); }
     .val { color: var(--texto-secundario); font-size: 12px; min-width: 32px; text-align: right; }
+    .corte { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
   `,
 })
 export class MapaPagina implements OnInit {

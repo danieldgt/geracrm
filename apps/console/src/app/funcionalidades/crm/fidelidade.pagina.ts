@@ -13,6 +13,8 @@ interface Fidelidade {
   readonly motivo?: 'sem_conector' | 'erp_sem_fidelidade'
   readonly resumo?: { clientesComSaldo: number; totalSaldo: number; unidade: string; sincronizadoEm: string | null }
   readonly topSaldos?: { contatoId: string; contato: string; saldo: number; unidade: string }[]
+  /** `true` quando há mais saldos positivos que os 20 listados. */
+  readonly topSaldosTruncado?: boolean
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
@@ -80,6 +82,9 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                     <a class="nome" [routerLink]="['/contato', t.contatoId]">{{ t.contato }}</a>
                   </ng-template>
                 </ui-tabela>
+                @if (d()?.topSaldosTruncado) {
+                  <p class="nota">Mostrando os 20 maiores saldos; há mais clientes com saldo fora desta lista.</p>
+                }
               }
             }
           }

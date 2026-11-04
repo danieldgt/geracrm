@@ -11,6 +11,8 @@ interface Mercado {
   readonly total: number
   readonly cobertura: { comWhatsapp: number; comTelefone: number; comErp: number; optOut: number; jaCompraram: number }
   readonly porOrigem: { origem: string; contatos: number }[]
+  /** `true` quando há mais origens que as 30 listadas. */
+  readonly porOrigemTruncado: boolean
   readonly rfv: { codigo: string; rotulo: string; urgencia: number; contatos: number }[]
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
@@ -70,6 +72,9 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                       </span>
                     </ng-template>
                   </ui-tabela>
+                  @if (m.porOrigemTruncado) {
+                    <p class="corte">Mostrando as 30 maiores origens; há mais origens fora desta lista.</p>
+                  }
                 </section>
 
                 <section class="painel" aria-labelledby="titulo-rfv">
@@ -111,6 +116,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .l-val { color: var(--texto-secundario); font-size: 12px; min-width: 32px; text-align: right; }
     .mais-link { display: inline-block; margin-top: var(--espacamento-3); font-size: 13px; color: var(--acao); text-decoration: none; }
     .mais-link:hover { text-decoration: underline; }
+    .corte { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
   `,
 })
 export class MercadoPagina implements OnInit {

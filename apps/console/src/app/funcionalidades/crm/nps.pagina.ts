@@ -16,6 +16,8 @@ interface Nps {
   readonly dias: number
   readonly geral: { total: number; score: number | null; semAtendente: number }
   readonly porAtendente: Atendente[]
+  /** Teto da equipe (200): `true` quando há mais atendentes que os listados. */
+  readonly porAtendenteTruncado: boolean
   /** G3: notas que o AGENTE registrou no pós-venda — fora do ranking por atendente. */
   readonly agente?: BlocoAgenteNps
 }
@@ -116,6 +118,9 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
                   <span class="a-score txt-dados" [attr.data-sinal]="sinal(a.score)">{{ score(a.score) }}</span>
                 </ng-template>
               </ui-tabela>
+              @if (n.porAtendenteTruncado) {
+                <p class="obs">Mostrando os 200 atendentes com mais respostas; há mais atendentes fora desta lista.</p>
+              }
               @if (n.geral.semAtendente > 0) {
                 <p class="obs">{{ n.geral.semAtendente }} resposta(s) sem atendente associado não aparecem acima.</p>
               }
