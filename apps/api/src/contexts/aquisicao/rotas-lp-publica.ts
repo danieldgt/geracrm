@@ -1,9 +1,11 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { codigoDeBytes, montarTextoWaMe, normalizarTelefone } from '@geracrm/shared'
-import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { FastifyInstance } from 'fastify'
 import { sql, comTenantServico, type Sql } from '../../db/index.js'
 import { renderizarLp, escaparHtml, CAMPO_ARMADILHA, type DadosLp, type ModoLp } from './pagina-lp.js'
 import { criarLimiteTaxa } from './limite-taxa.js'
+import { ipDoCliente } from '../../plugins/ip-cliente.js'
+import { barrarPorIpGlobal } from './limite-publico.js'
 
 /**
  * A SUPERFÍCIE PÚBLICA da landing page (AQ-44).
@@ -30,17 +32,6 @@ const limitePorIp = criarLimiteTaxa({ teto: 20, janelaMs: 60_000 })
  * chave é o que realmente limita quantas linhas entram no banco.
  */
 const limitePorLp = criarLimiteTaxa({ teto: 600, janelaMs: 60_000 })
-
-/**
- * IP de quem chamou, atrás do proxy do Railway.
- *
- * ⚠️ É `req.ip`, resolvido pelo `trustProxy` do Fastify (`saltosDeProxy` em `app.ts`): conta só os saltos
- * de proxy confiáveis a partir da direita do `X-Forwarded-For`. O primeiro valor do cabeçalho é escrito
- * pelo cliente — lê-lo dava a quem quisesse um "IP" novo a cada envio.
- */
-export function ipDoCliente(req: FastifyRequest): string {
-  return req.ip
-}
 
 interface LinhaLp {
   id: string; chave: string; modo: ModoLp; titulo: string; subtitulo: string | null
@@ -142,6 +133,7 @@ export async function rotasLpPublica(app: FastifyInstance): Promise<void> {
 
       const agora = Date.now()
       const ip = ipDoCliente(req)
+      if (!barrarPorIpGlobal(ip, agora).permitido) return reply.code(429).send({ erro: 'limite.excedido' })
       // Teto da LP ANTES da chave por IP: estourado o teto, nem cria entrada nova no mapa por IP.
       if (!limitePorLp.permitir(req.params.chave, agora)
         || !limitePorIp.permitir(`${req.params.chave}:${ip}`, agora)) {
@@ -210,6 +202,7 @@ export async function rotasLpPublica(app: FastifyInstance): Promise<void> {
 
       const agora = Date.now()
       const ip = ipDoCliente(req)
+      if (!barrarPorIpGlobal(ip, agora).permitido) return reply.code(429).send({ erro: 'limite.excedido' })
       // Teto da LP ANTES da chave por IP: estourado o teto, nem cria entrada nova no mapa por IP.
       if (!limitePorLp.permitir(req.params.chave, agora)
         || !limitePorIp.permitir(`${req.params.chave}:${ip}`, agora)) {

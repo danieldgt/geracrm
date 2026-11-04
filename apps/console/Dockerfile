@@ -16,6 +16,12 @@ RUN pnpm --filter @geracrm/console... build
 
 # ---- runtime: nginx servindo o SPA ----
 FROM nginx:alpine AS runtime
-COPY apps/console/nginx.conf /etc/nginx/conf.d/default.conf
+# Template: o entrypoint do nginx:alpine roda envsubst (so nas variaveis definidas no ambiente, entao
+# `$remote_addr` e afins ficam intactos) e grava /etc/nginx/conf.d/default.conf. PROXY_SEGREDO e o
+# segredo compartilhado com a API (ver apps/console/README.md).
+COPY apps/console/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/apps/console/dist/browser /usr/share/nginx/html
 EXPOSE 8080
+# Sem PROXY_SEGREDO no Railway o envsubst deixaria o placeholder literal e o nginx nao subiria; o default
+# vazio faz o nginx omitir o cabecalho (a API entao ignora o IP e usa o do nginx).
+ENV PROXY_SEGREDO=""

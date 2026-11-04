@@ -96,23 +96,23 @@ import { rotasCarteiraHigienizacao } from './contexts/plataforma/rotas-carteira-
 import { rotasCockpit } from './contexts/plataforma/rotas-cockpit.js'
 
 /**
- * Quantos proxies CONFIÁVEIS ficam entre o cliente e a API (`TRUST_PROXY_HOPS`, padrão 1).
+ * Saltos de proxy CONFIÁVEIS (`TRUST_PROXY_HOPS`): sempre 1 — a borda do Railway.
  *
- * ⚠️ É o que faz `req.ip` ser o IP real: o Fastify conta N saltos a partir do socket, da DIREITA para a
- * esquerda do `X-Forwarded-For`, e para ali. Tudo à esquerda disso foi escrito pelo cliente e é
- * ignorado — ler o PRIMEIRO valor do cabeçalho (como se fazia) deixava qualquer um trocar de "IP" a cada
- * envio e furar o limite por IP. Nunca leia o cabeçalho na mão: use `req.ip`.
- *
- * Valor por caminho (documentado em `.env.example`):
- *  - 1 = só a borda do Railway (chamada direta ao domínio da API);
- *  - 2 = rotas públicas que passam pelo nginx do console: o nginx reescreve o XFF com o IP que a borda
- *    dele viu (`real_ip_header`, ver `apps/console/nginx.conf`) e a borda da API acrescenta o do nginx.
- * 0 desliga (o IP é o do socket).
+ * ⚠️ O domínio da API é público e o app Expo chama direto: com 2 saltos, quem chama direto forja o
+ * `X-Forwarded-For` e escolhe o próprio `req.ip`. O IP de quem passa pelo nginx do console vem de cabeçalho
+ * autenticado por segredo compartilhado (`PROXY_SEGREDO`), ver `plugins/ip-cliente.ts`. Valor >1 é recusado
+ * (volta para 1, com aviso no log); 0 desliga (o IP é o do socket).
  */
 export function saltosDeProxy(bruto = process.env.TRUST_PROXY_HOPS): number | false {
   const n = bruto === undefined || bruto.trim() === '' ? 1 : Number(bruto)
-  if (!Number.isInteger(n) || n < 0 || n > 10) return 1
+  if (!Number.isInteger(n) || n < 0 || n > 1) return 1
   return n === 0 ? false : n
+}
+
+/** `true` quando `TRUST_PROXY_HOPS` pede mais de 1 salto (valor ignorado — o chamador avisa no log). */
+export function saltosExcessivos(bruto = process.env.TRUST_PROXY_HOPS): boolean {
+  const n = bruto === undefined || bruto.trim() === '' ? 1 : Number(bruto)
+  return Number.isInteger(n) && n > 1
 }
 
 /**
@@ -165,6 +165,9 @@ export async function criarApp(
     return reply.code(status).send(tipado[status] ?? { erro: 'erro.interno', mensagem: 'Erro interno.' })
   })
 
+  if (saltosExcessivos()) {
+    app.log.warn({ TRUST_PROXY_HOPS: process.env.TRUST_PROXY_HOPS }, 'TRUST_PROXY_HOPS>1 ignorado (usando 1): o IP do nginx do console vem de PROXY_SEGREDO')
+  }
   await app.register(pluginTenant)
   await app.register(pluginTestarConexao)
   await app.register(rotasIntegracao)

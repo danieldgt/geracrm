@@ -9,6 +9,7 @@ import { chamarCognito, secretHash, type RespostaCognito } from './cognito-publi
 import { provedorSenhaCognito } from './provedor-senha-cognito.js'
 import type { ProvedorSenha } from './provedor-senha.js'
 import type { ProvedorIdentidade } from './provedor-identidade.js'
+import { ipDoCliente } from '../../plugins/ip-cliente.js'
 
 /**
  * Login server-side — porque o app client do Cognito é CONFIDENCIAL (tem secret).
@@ -80,7 +81,7 @@ async function registrarLogin(
   }
 }
 
-// D4: limites por IP (`req.ip`, que respeita `trustProxy`) — em memória, por instância: freio contra
+// D4: limites por IP (`ipDoCliente`, que respeita `trustProxy` e o segredo do nginx) — em memória, por instância: freio contra
 // abuso trivial; ataque distribuído é da borda. O pedido de código é mais restrito que a confirmação.
 const limiteEsqueci = criarLimiteTaxa({ teto: 5, janelaMs: 15 * 60_000 })
 const limiteRedefinir = criarLimiteTaxa({ teto: 10, janelaMs: 15 * 60_000 })
@@ -140,7 +141,7 @@ export async function rotasAuth(app: FastifyInstance, opcoes: OpcoesRotasAuth = 
     const usuario = req.body?.usuario?.trim()
     const senha = req.body?.senha
     if (!usuario || !senha) return reply.code(400).send({ tipo: 'erro', mensagem: 'Usuário e senha são obrigatórios.' })
-    if (!limiteLoginIp.permitir(req.ip, Date.now()) || !limiteLoginUsuario.permitir(chaveDoEmail(usuario), Date.now())) {
+    if (!limiteLoginIp.permitir(ipDoCliente(req), Date.now()) || !limiteLoginUsuario.permitir(chaveDoEmail(usuario), Date.now())) {
       return reply.code(429).send({ tipo: 'erro', mensagem: 'Muitas tentativas. Aguarde alguns minutos.' })
     }
 
@@ -152,7 +153,7 @@ export async function rotasAuth(app: FastifyInstance, opcoes: OpcoesRotasAuth = 
 
     const idToken = corpo.AuthenticationResult?.IdToken
     if (idToken) {
-      await registrarLogin(idToken, req.log, req.ip, 'senha')
+      await registrarLogin(idToken, req.log, ipDoCliente(req), 'senha')
       return reply.send(respostaOk(corpo.AuthenticationResult, Date.now()))
     }
     // Usuário criado pelo admin no primeiro acesso.
@@ -179,7 +180,7 @@ export async function rotasAuth(app: FastifyInstance, opcoes: OpcoesRotasAuth = 
 
     const idToken = corpo.AuthenticationResult?.IdToken
     if (idToken) {
-      await registrarLogin(idToken, req.log, req.ip, 'nova_senha')
+      await registrarLogin(idToken, req.log, ipDoCliente(req), 'nova_senha')
       return reply.send(respostaOk(corpo.AuthenticationResult, Date.now()))
     }
     return reply.code(status === 200 ? 400 : status).send({ tipo: 'erro', mensagem: traduzErro(corpo) })
@@ -212,7 +213,7 @@ export async function rotasAuth(app: FastifyInstance, opcoes: OpcoesRotasAuth = 
    * cadastrado (200 com a mesma frase): a tela não serve de oráculo de existência. Limite por IP.
    */
   app.post<{ Body: { usuario?: string } }>('/v1/auth/esqueci-senha', async (req, reply) => {
-    if (!limiteEsqueci.permitir(req.ip, Date.now())) {
+    if (!limiteEsqueci.permitir(ipDoCliente(req), Date.now())) {
       return reply.code(429).send({ erro: 'limite.excedido', mensagem: 'Muitas tentativas. Aguarde alguns minutos.' })
     }
     const email = req.body?.usuario?.trim().toLowerCase()
@@ -231,7 +232,7 @@ export async function rotasAuth(app: FastifyInstance, opcoes: OpcoesRotasAuth = 
 
   /** Confirma o código e define a nova senha. Código errado e e-mail sem pedido são a MESMA resposta. */
   app.post<{ Body: { usuario?: string; codigo?: string; novaSenha?: string } }>('/v1/auth/redefinir-senha', async (req, reply) => {
-    if (!limiteRedefinir.permitir(req.ip, Date.now())) {
+    if (!limiteRedefinir.permitir(ipDoCliente(req), Date.now())) {
       return reply.code(429).send({ erro: 'limite.excedido', mensagem: 'Muitas tentativas. Aguarde alguns minutos.' })
     }
     const email = req.body?.usuario?.trim().toLowerCase()
@@ -246,7 +247,7 @@ export async function rotasAuth(app: FastifyInstance, opcoes: OpcoesRotasAuth = 
     const r = await provedorSenha.confirmarEsqueciSenha(email, codigo, novaSenha)
     switch (r.tipo) {
       case 'ok':
-        await aposRedefinicao(email, req.ip)
+        await aposRedefinicao(email, ipDoCliente(req))
         return reply.send({ tipo: 'ok' })
       case 'limite': // o limite do provedor é a MESMA resposta do código inválido
       case 'codigo_invalido': return reply.code(422).send({ erro: 'auth.codigo_invalido', mensagem: 'Código inválido. Confira o e-mail ou peça outro.' })
@@ -261,7 +262,7 @@ export async function rotasAuth(app: FastifyInstance, opcoes: OpcoesRotasAuth = 
    * Autenticada: o ator vem do token. Melhor esforço do lado do console — a saída local nunca espera.
    */
   app.post<{ Body: { refreshToken?: string } | undefined }>('/v1/auth/logout', { preHandler: exigirTenant }, async (req, reply) => {
-    if (!limiteLogout.permitir(req.ip, Date.now())) {
+    if (!limiteLogout.permitir(ipDoCliente(req), Date.now())) {
       return reply.code(429).send({ erro: 'limite.excedido', mensagem: 'Muitas tentativas. Aguarde um instante.' })
     }
     // Logout de verdade: revoga o refresh token no provedor (melhor esforço, fora de transação).
@@ -271,7 +272,7 @@ export async function rotasAuth(app: FastifyInstance, opcoes: OpcoesRotasAuth = 
       const atorId = await atorDaRequisicao(tx, req)
       await auditar(tx, {
         atorId, atorStaff: req.atorStaff ?? false,
-        acao: 'usuario.logout', entidade: 'usuario', entidadeId: atorId, dados: { ip: req.ip },
+        acao: 'usuario.logout', entidade: 'usuario', entidadeId: atorId, dados: { ip: ipDoCliente(req) },
       })
     })
     return reply.code(204).send()

@@ -311,3 +311,12 @@ para acordar gente de madrugada, recalibrar com 2–4 semanas de histórico.
 - **Retenção hoje**: igual à da própria tabela `auditoria` (sem expurgo próprio). Anonimização de contato (LGPD) não toca nessas linhas — o titular aqui é o usuário do sistema, não o contato.
 - **Pendente (não implementado)**: expurgo do campo `ip` após N meses (sugestão: 12) por job mensal que faz `dados = dados - 'ip'` nas partições antigas, e menção do prazo na política de privacidade do tenant. Decisão do dono do produto sobre N.
 - **Nunca** logar o IP junto do e-mail em log de aplicação; a trilha de auditoria é o único lugar.
+
+## 21. IP do cliente e limite por IP (formulário, LP, login)
+
+Sintoma: 429 em massa em formulário público, LP ou login vindo do console; ou limite por IP "não pega".
+- Variável `PROXY_SEGREDO`: precisa existir com o MESMO valor nos serviços **console** e **api** do Railway.
+  Sem ela na API, todo o tráfego que passa pelo nginx tem o IP do nginx e divide um balde (429 em massa).
+- `TRUST_PROXY_HOPS` fica em 1 (padrão). Valor >1 é ignorado e a API loga `TRUST_PROXY_HOPS>1 ignorado`.
+- Código: `apps/api/src/plugins/ip-cliente.ts` (`ipDoCliente`) e `apps/console/nginx.conf.template`.
+- Rotas públicas de formulário/LP têm também um limitador global por IP (60/min, `limite-publico.ts`).

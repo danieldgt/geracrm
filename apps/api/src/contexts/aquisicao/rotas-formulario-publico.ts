@@ -8,7 +8,8 @@ import { assinaturaConfere, chaveDoAnexoDeResposta, nomeSeguro, tipoPermitido } 
 import { gravarDocumento } from '../crm/contato-gravacao.js'
 import { CAMPO_ARMADILHA } from './pagina-lp.js'
 import { criarLimiteTaxa } from './limite-taxa.js'
-import { ipDoCliente } from './rotas-lp-publica.js'
+import { ipDoCliente } from '../../plugins/ip-cliente.js'
+import { barrarPorIpGlobal } from './limite-publico.js'
 import {
   camposDoFormulario, textoConsentimentoExibido, type LinhaFormulario,
 } from './formulario-dados.js'
@@ -365,9 +366,12 @@ export async function rotasFormularioPublico(app: FastifyInstance): Promise<void
     if (!CHAVE_VALIDA.test(chave)) return reply.code(404).send(nao_encontrado)
 
     // ⚠️ Limite ANTES de qualquer consulta ao banco; o teto do formulário ANTES da chave por IP (estourado
-    //    o teto, nem cria entrada nova no mapa). `req.ip` vem do `trustProxy` — nunca do 1º valor do XFF.
+    //    o teto, nem cria entrada nova no mapa). O IP vem de `ipDoCliente` — nunca do 1º valor do XFF.
     const agora = Date.now()
     const ip = ipDoCliente(req)
+    if (!barrarPorIpGlobal(ip, agora).permitido) {
+      return reply.code(429).send({ erro: 'limite.excedido', mensagem: 'Muitos envios. Tente novamente em instantes.' })
+    }
     if (!limitePorFormulario.permitir(chave, agora) || !limitePorIp.permitir(`${chave}:${ip}`, agora)) {
       return reply.code(429).send({ erro: 'limite.excedido', mensagem: 'Muitos envios. Tente novamente em instantes.' })
     }
