@@ -37,7 +37,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | D1 cockpit | 2 | ✅ | integrada (0129); agenda pelo escopo comum |
 | D2 higienização da carteira | 2 | ✅ | integrada; `filialId` da lista de contatos passou a ser a filial efetiva (contato ou dono) |
 | F2 preços, templates, consumo | 3 | ✅ | integrada (0124) |
-| F1 campanhas v2 | 3 | 🔄 | F1a ✅ com as correções da revisão (0142: tier 250/24h por contato distinto, 1 envio por passada no não-oficial com intervalo 3–10 s, varredura decide pela mensagem, exclusões reavaliadas no envio, erros da Meta separados e pausa imediata por número em risco, `pedido.campanha_id` herdado, LGPD); F1b ✅ telas; F1c Haiku em curso: telas mostram `bloqueio`, `ajustada`, `numero_em_risco` e os códigos novos (`janela_vazia`, `janela_fora_do_permitido`, `alterada_durante_inicio`, `teste_limite`, `teste_sem_cota`) |
+| F1 campanhas v2 | 3 | ✅ | F1a com as correções da revisão (0134, 0142); F1b telas (lista, wizard, detalhe); F1c acabamento (bloqueio do número, janela ajustada, número em risco, erros novos, custo das cobradas) |
 | F3 formulários públicos | 3 | ✅ | integrada com as correções de segurança; re-revisão conferiu todas; IP confiável resolvido pela F3c (link público liberado depois do `PROXY_SEGREDO` no Railway) |
 | G2 objeções | 3 | ✅ | integrada com correções (uma por turno, grava no turno confirmado, teto 20 mil) |
 | G3 pós-venda, NPS, indicações, prova social | 3 | ✅ | integrada com as correções da revisão (0141: índice parcial e reagendamento; indicações padrão desligado, com portão e teto; NPS passa o portão com equipe disponível; prova social amarrada à versão; espalhamento e teto no não-oficial); runbook §19 |
