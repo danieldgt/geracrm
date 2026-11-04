@@ -13,6 +13,7 @@ import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo, seloDaSugesta
 import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.js'
 import { SlaCronometroComponente } from './sla-cronometro.componente.js'
 import { AcoesConversaComponente } from './acoes-conversa.componente.js'
+import { AgendarReuniaoComponente } from '../agenda/agendar-reuniao.componente.js'
 import { CONDUCOES } from '../../nucleo/devolucao.regras.js'
 import { CelularServico } from '../../nucleo/celular.servico.js'
 import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
@@ -26,7 +27,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
  */
 @Component({
   selector: 'app-inbox',
-  imports: [FormsModule, RouterLink, CanalSimboloComponente, SlaCronometroComponente, AcoesConversaComponente],
+  imports: [FormsModule, RouterLink, CanalSimboloComponente, SlaCronometroComponente, AcoesConversaComponente, AgendarReuniaoComponente],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="wa" [class.tem-conversa]="servico.selecionadaId()">
@@ -186,6 +187,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                   <a class="pedido-btn" routerLink="/pedido" [queryParams]="{ conversa: t.id }"
                      title="Montar um pedido para este cliente">🛒 Montar pedido</a>
                   <app-acoes-conversa [conversaId]="t.id" [atendimento]="t.atendimento" /><!-- G1: devolver ao agente / reatribuir -->
+                  <app-agendar-reuniao [conversaId]="t.id" /><!-- C3: só com o módulo Agenda ligado -->
                   <app-sla-cronometro [conversaId]="t.id" /><!-- P18: SLA do handoff (some sem SLA armado) -->
                   @if (t.atendimento && t.atendimento.estado !== 'na_fila') {
                     <span class="atend-badge" [title]="'Atendimento ' + protocoloFmt(t.atendimento.protocolo)">

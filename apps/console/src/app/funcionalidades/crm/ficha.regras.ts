@@ -38,7 +38,7 @@ export interface DadosFicha {
 
 export type TipoFeed =
   | 'comentario' | 'funil' | 'qualificacao' | 'tarefa_criada' | 'tarefa_concluida'
-  | 'pedido_criado' | 'pedido_efetivado' | 'handoff' | 'etiquetas' | 'arquivo' | 'formulario'
+  | 'pedido_criado' | 'pedido_efetivado' | 'handoff' | 'etiquetas' | 'arquivo' | 'formulario' | 'reuniao'
 
 export interface ItemFeed {
   readonly id: string
@@ -132,17 +132,17 @@ export interface ItemFeedVista {
 const ICONE_FEED: Record<TipoFeed, string> = {
   comentario: 'file-text', funil: 'kanban', qualificacao: 'check', tarefa_criada: 'check-square', tarefa_concluida: 'check-square',
   pedido_criado: 'shopping-cart', pedido_efetivado: 'receipt', handoff: 'users', etiquetas: 'tag', arquivo: 'upload',
-  formulario: 'file-text',
+  formulario: 'file-text', reuniao: 'calendar',
 }
 const ROTULO_FEED: Record<TipoFeed, string> = {
   comentario: 'Observação', funil: 'Funil', qualificacao: 'Qualificação', tarefa_criada: 'Tarefa', tarefa_concluida: 'Tarefa concluída',
   pedido_criado: 'Pedido', pedido_efetivado: 'Pedido efetivado', handoff: 'Atendimento', etiquetas: 'Etiquetas', arquivo: 'Arquivo',
-  formulario: 'Formulário',
+  formulario: 'Formulário', reuniao: 'Reunião',
 }
 const TOM_FEED: Record<TipoFeed, TomSelo> = {
   comentario: 'neutro', funil: 'info', qualificacao: 'info', tarefa_criada: 'neutro', tarefa_concluida: 'sucesso',
   pedido_criado: 'neutro', pedido_efetivado: 'sucesso', handoff: 'atencao', etiquetas: 'neutro', arquivo: 'neutro',
-  formulario: 'info',
+  formulario: 'info', reuniao: 'info',
 }
 
 /** Item do feed → o que a tela desenha. Autor ausente = Sistema. */
