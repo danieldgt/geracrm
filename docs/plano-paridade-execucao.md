@@ -59,7 +59,7 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 | X4 cursor em listas/metas/segmentos + usuários do cliente para o staff | — | ✅ | integrada; listas por cursor; metas e segmentos com teto documentado (limitados por construção); "Nomear admin" com select paginado; agregação RFV movida para SQL |
 | X5 busca/filtros no servidor (templates por status/categoria/número; q em listas, etiquetas, origens) | — | ✅ | integrada; troca no wizard feita pela R2 |
 | X6 sobras: pedidos com busca/período/contadores na API (A5), janela padrão da busca `q` da auditoria (D6), SLA estourado avisa primeiro o gestor da filial (G4) | — | ✅ | integrada (0146: índice de pedido por data) |
-| X7 top-N com `truncado` no analítico (mapa, mercado, BI, NPS, performance, fidelidade, carteiras) | — | 🔄 | Haiku |
+| X7 top-N com `truncado` no analítico (mapa, mercado, BI, NPS, performance, fidelidade, carteiras) | — | ✅ | integrada; `TETO_EQUIPE = 200` em `limites-listas.ts` |
 | F3c IP confiável por segredo nginx→API + limitador global por IP | 3 | ✅ | integrada; `TRUST_PROXY_HOPS` só 0/1; **dono: criar `PROXY_SEGREDO` (mesmo valor) nos serviços console e api do Railway e remover `TRUST_PROXY_HOPS=2` se existir** — sem o segredo, todo tráfego do console divide o IP do nginx |
 | R0 revisão adversarial da biblioteca L0 | 0 | ✅ | aprovado com correções; correção Sonnet em curso (Esc, CSV, máscara, select paginado → cursor) |
 
