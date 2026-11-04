@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { exigirPapel } from '../plataforma/papel.js'
 import { exigirNoEscopo } from '../plataforma/escopo.js'
+import { lerBusca, padraoContem } from '../../db/busca.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { atorDaRequisicao } from '../atendimento/rotas-fila.js'
 import { CONTATO_ANONIMIZADO } from './contato-gravacao.js'
@@ -49,16 +50,19 @@ interface LinhaOrigem { id: string; nome: string; ativa: boolean; ordem: number 
  */
 export async function rotasEtiquetas(app: FastifyInstance): Promise<void> {
   // ---------------------------------------------------------------- etiquetas
-  app.get<{ Querystring: { cursor?: string; ativas?: string } }>(
+  app.get<{ Querystring: { cursor?: string; ativas?: string; q?: string } }>(
     '/v1/etiquetas', { preHandler: exigirTenant },
     async (req, reply) => {
       const cur = lerCursor(req.query.cursor)
       if (cur === 'invalido') return invalido(reply, 'cursor.invalido', 'Cursor inválido.')
+      const busca = lerBusca(req.query.q)
+      if (busca === 'invalido') return reply.code(422).send({ erro: 'busca.invalida', campos: { q: 'Use até 100 caracteres.' } })
       const soAtivas = req.query.ativas === 'true'
       const linhas = await req.comTenant((tx) => tx<(LinhaEtiqueta & { chave: string })[]>`
         SELECT id, nome, cor, ativa, lower(nome) AS chave FROM etiqueta
          WHERE tenant_id = tenant_atual()
            AND ${soAtivas ? tx`ativa` : tx`true`}
+           AND ${busca === null ? tx`true` : tx`nome ILIKE ${padraoContem(busca)}`}
            AND ${cur === null ? tx`true` : tx`(lower(nome), id) > (${cur.chave}, ${cur.id}::uuid)`}
          ORDER BY lower(nome), id
          LIMIT ${PAGINA + 1}`)
@@ -113,17 +117,20 @@ export async function rotasEtiquetas(app: FastifyInstance): Promise<void> {
     })
 
   // ------------------------------------------------------------------ origens
-  app.get<{ Querystring: { cursor?: string; ativas?: string } }>(
+  app.get<{ Querystring: { cursor?: string; ativas?: string; q?: string } }>(
     '/v1/origens', { preHandler: exigirTenant },
     async (req, reply) => {
       const cur = lerCursor(req.query.cursor)
       if (cur === 'invalido') return invalido(reply, 'cursor.invalido', 'Cursor inválido.')
+      const busca = lerBusca(req.query.q)
+      if (busca === 'invalido') return reply.code(422).send({ erro: 'busca.invalida', campos: { q: 'Use até 100 caracteres.' } })
       const soAtivas = req.query.ativas === 'true'
       // Chave de ordem textual: ordem com zeros à esquerda + nome sem caixa.
       const linhas = await req.comTenant((tx) => tx<(LinhaOrigem & { chave: string })[]>`
         SELECT id, nome, ativa, ordem, lpad(ordem::text, 4, '0') || lower(nome) AS chave FROM origem
          WHERE tenant_id = tenant_atual()
            AND ${soAtivas ? tx`ativa` : tx`true`}
+           AND ${busca === null ? tx`true` : tx`nome ILIKE ${padraoContem(busca)}`}
            AND ${cur === null ? tx`true` : tx`(lpad(ordem::text, 4, '0') || lower(nome), id) > (${cur.chave}, ${cur.id}::uuid)`}
          ORDER BY lpad(ordem::text, 4, '0') || lower(nome), id
          LIMIT ${PAGINA + 1}`)

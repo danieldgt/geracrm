@@ -224,3 +224,71 @@ describe('etiquetas do contato', () => {
     await expect(dono`INSERT INTO contato_etiqueta (tenant_id, contato_id, etiqueta_id) VALUES (${OUTRO}, ${CONTATO}, ${a.id})`).rejects.toThrow()
   })
 })
+
+describe('etiquetas e origens — busca ?q= no servidor', () => {
+  const nomesEtiquetas = async (qs: string, t = T): Promise<string[]> =>
+    ((await chamar(t, 'GET', `/v1/etiquetas${qs}`)).json() as { itens: { nome: string }[] }).itens.map((i) => i.nome).sort()
+  const nomesOrigens = async (qs: string, t = T): Promise<string[]> =>
+    ((await chamar(t, 'GET', `/v1/origens${qs}`)).json() as { itens: { nome: string }[] }).itens.map((i) => i.nome).sort()
+
+  it('etiquetas: q casa parte do nome sem caixa, espaços não filtram, combina com ativas', async () => {
+    await chamar(T, 'POST', '/v1/etiquetas', { nome: 'Cliente VIP' })
+    await chamar(T, 'POST', '/v1/etiquetas', { nome: 'vip_antigo' })
+    await chamar(T, 'POST', '/v1/etiquetas', { nome: 'Frio 100%' })
+    const inativa = (await chamar(T, 'POST', '/v1/etiquetas', { nome: 'VIP desativada' })).json() as { id: string }
+    await chamar(T, 'PATCH', `/v1/etiquetas/${inativa.id}`, { ativa: false })
+    expect(await nomesEtiquetas('?q=vip')).toEqual(['Cliente VIP', 'VIP desativada', 'vip_antigo'])
+    expect(await nomesEtiquetas('?q=vip&ativas=true')).toEqual(['Cliente VIP', 'vip_antigo'])
+    expect(await nomesEtiquetas('?q=%20')).toEqual(['Cliente VIP', 'Frio 100%', 'VIP desativada', 'vip_antigo'])
+  })
+
+  it('etiquetas: escapa % e _ no q; o isolamento vale com o filtro', async () => {
+    await chamar(T, 'POST', '/v1/etiquetas', { nome: 'vip_antigo' })
+    await chamar(T, 'POST', '/v1/etiquetas', { nome: 'vipxantigo' })
+    await chamar(T, 'POST', '/v1/etiquetas', { nome: 'Frio 100%' })
+    await chamar(OUTRO, 'POST', '/v1/etiquetas', { nome: 'Cliente VIP de outro' })
+    expect(await nomesEtiquetas('?q=_a')).toEqual(['vip_antigo'])
+    expect(await nomesEtiquetas('?q=%25')).toEqual(['Frio 100%'])
+    expect(await nomesEtiquetas('?q=%5C')).toEqual([])
+    expect(await nomesEtiquetas('?q=VIP', OUTRO)).toEqual(['Cliente VIP de outro'])
+  })
+
+  it('origens: q casa parte do nome, escapa %/_, e o isolamento vale com o filtro', async () => {
+    await chamar(T, 'POST', '/v1/origens', { nome: 'Feira_norte', ordem: 1 })
+    await chamar(T, 'POST', '/v1/origens', { nome: 'Feira sul', ordem: 2 })
+    await chamar(T, 'POST', '/v1/origens', { nome: 'Indicação 50%', ordem: 3 })
+    await chamar(OUTRO, 'POST', '/v1/origens', { nome: 'Feira do outro', ordem: 1 })
+    expect(await nomesOrigens('?q=FEIRA')).toEqual(['Feira sul', 'Feira_norte'])
+    expect(await nomesOrigens('?q=_n')).toEqual(['Feira_norte'])
+    expect(await nomesOrigens('?q=%25')).toEqual(['Indicação 50%'])
+    expect(await nomesOrigens('?q=%20%20')).toEqual(['Feira sul', 'Feira_norte', 'Indicação 50%'])
+    expect(await nomesOrigens('?q=feira', OUTRO)).toEqual(['Feira do outro'])
+  })
+
+  it('origens: cursor e q andam juntos em duas páginas, sem repetir nem pular', async () => {
+    for (let i = 1; i <= 55; i++) await chamar(T, 'POST', '/v1/origens', { nome: `Origem ${String(i).padStart(2, '0')}`, ordem: 0 })
+    await chamar(T, 'POST', '/v1/origens', { nome: 'Outra', ordem: 0 })
+    const vistos: string[] = []
+    let cursor: string | null = null
+    let paginas = 0
+    do {
+      const qs = `?q=origem${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+      const j = (await chamar(T, 'GET', `/v1/origens${qs}`)).json() as { itens: { nome: string }[]; proximoCursor: string | null }
+      vistos.push(...j.itens.map((i) => i.nome))
+      cursor = j.proximoCursor
+      paginas++
+    } while (cursor)
+    expect(paginas).toBe(2)
+    expect(new Set(vistos).size).toBe(55)
+    expect(vistos.every((n) => n.startsWith('Origem '))).toBe(true)
+  })
+
+  it('q longo demais → 422 com campos.q, em etiquetas e origens', async () => {
+    const longo = `?q=${'a'.repeat(101)}`
+    for (const rota of ['/v1/etiquetas', '/v1/origens']) {
+      const r = await chamar(T, 'GET', `${rota}${longo}`)
+      expect(r.statusCode, rota).toBe(422)
+      expect(r.json(), rota).toMatchObject({ erro: 'busca.invalida', campos: { q: expect.any(String) } })
+    }
+  })
+})
