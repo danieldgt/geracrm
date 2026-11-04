@@ -1,9 +1,9 @@
 import {
-  ChangeDetectionStrategy, Component, ElementRef, afterRenderEffect, computed, inject, input, signal, viewChild,
+  ChangeDetectionStrategy, Component, computed, inject, input, signal,
 } from '@angular/core'
-import { FormsModule } from '@angular/forms'
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { CampoComponente, GradeFormComponente, ModalComponente, SelectComponente, type OpcaoSelect } from '../../compartilhado/ui/index.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { PresencaServico } from '../../nucleo/presenca.servico.js'
 import {
@@ -26,11 +26,11 @@ type Aberto = 'nenhum' | 'devolver' | 'reatribuir'
  * ⚠️ Estado velho (409 sem atendimento/conflito, 403 não é seu): o erro vem com
  * "Recarregar", que traz a conversa como ela está agora.
  *
- * // L1: trocar por ui-modal (modal simples local enquanto a biblioteca não o tem).
+ * L1e: ui-modal + ui-campo/ui-select da biblioteca.
  */
 @Component({
   selector: 'app-acoes-conversa',
-  imports: [FormsModule],
+  imports: [ModalComponente, GradeFormComponente, CampoComponente, SelectComponente],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (mostrarDevolver()) {
@@ -43,77 +43,62 @@ type Aberto = 'nenhum' | 'devolver' | 'reatribuir'
     }
     @if (aviso(); as a) { <span class="aviso-ok" role="status">{{ a }}</span> }
 
-    @if (aberto() !== 'nenhum') {
-      <div class="overlay" (click)="fechar()">
-        <div #caixa class="modal" role="dialog" aria-modal="true" tabindex="-1"
-             aria-labelledby="acoes-conversa-titulo"
-             (click)="$event.stopPropagation()" (keydown.escape)="fechar()">
-          @if (aberto() === 'devolver') {
-            <h2 id="acoes-conversa-titulo">Devolver ao agente</h2>
-            @if (avisoFila(); as a) {
-              <p class="aviso-fila" role="status">{{ a }}</p>
-            } @else {
-              <p class="ajuda">
-                Se o agente deste número responde sozinho agora, ele retoma a conversa e lê o motivo e a
-                observação na próxima resposta. Se não (sombra, assistido ou fora do horário dele), a
-                conversa volta para a fila da equipe.
-              </p>
-              <fieldset>
-                <legend class="so-leitor">Motivo</legend>
-                @for (m of motivos; track m.id) {
-                  <label class="radio">
-                    <input type="radio" name="motivo-devolucao" [value]="m.id"
-                           [checked]="motivo() === m.id" (change)="motivo.set(m.id)" />
-                    <span>{{ m.rotulo }}</span>
-                  </label>
-                }
-              </fieldset>
-              <label class="campo">
-                <span>{{ motivo() === 'outro' ? 'Descreva o motivo' : 'Observação (opcional)' }}</span>
-                <textarea rows="3" [attr.maxlength]="teto"
-                          [placeholder]="motivo() === 'outro' ? 'Obrigatório em “Outro”' : 'Ex.: já combinei a entrega para sexta'"
-                          [ngModel]="texto()" (ngModelChange)="texto.set($event)"></textarea>
+    <ui-modal [aberto]="aberto() !== 'nenhum'" [titulo]="aberto() === 'devolver' ? 'Devolver ao agente' : 'Reatribuir atendimento'"
+              largura="p" (fechar)="fechar()">
+      @if (aberto() === 'devolver') {
+        @if (avisoFila(); as a) {
+          <p class="aviso-fila" role="status">{{ a }}</p>
+        } @else {
+          <p class="ajuda">
+            Se o agente deste número responde sozinho agora, ele retoma a conversa e lê o motivo e a
+            observação na próxima resposta. Se não (sombra, assistido ou fora do horário dele), a
+            conversa volta para a fila da equipe.
+          </p>
+          <fieldset>
+            <legend class="so-leitor">Motivo</legend>
+            @for (m of motivos; track m.id) {
+              <label class="radio">
+                <input type="radio" name="motivo-devolucao" [value]="m.id"
+                       [checked]="motivo() === m.id" (change)="motivo.set(m.id)" />
+                <span>{{ m.rotulo }}</span>
               </label>
             }
-          } @else {
-            <h2 id="acoes-conversa-titulo">Reatribuir atendimento</h2>
-            <label class="campo">
-              <span>Para quem</span>
-              <select [ngModel]="destino()" (ngModelChange)="destino.set($event)">
-                <option [ngValue]="null">Escolha uma pessoa</option>
-                @for (p of equipe(); track p.id) { <option [ngValue]="p.id">{{ p.nome }}</option> }
-              </select>
-            </label>
-            <label class="campo">
-              <span>Motivo</span>
-              <textarea rows="3" [attr.maxlength]="teto" placeholder="Por que está passando adiante?"
-                        [ngModel]="texto()" (ngModelChange)="texto.set($event)"></textarea>
-            </label>
+          </fieldset>
+          <ui-campo [rotulo]="motivo() === 'outro' ? 'Descreva o motivo' : 'Observação (opcional)'" tipo="textarea"
+                    [maxlength]="teto" [obrigatorio]="motivo() === 'outro'"
+                    [placeholder]="motivo() === 'outro' ? 'Obrigatório em “Outro”' : 'Ex.: já combinei a entrega para sexta'"
+                    [valor]="texto()" (valorChange)="texto.set($event)" />
+        }
+      } @else {
+        <ui-grade-form>
+          <ui-select rotulo="Para quem" [largo]="true" [obrigatorio]="true" [opcoes]="opcoesEquipe()" placeholder="Escolha uma pessoa"
+                     [valor]="destino() ?? ''" (valorChange)="destino.set($event || null)" />
+          <ui-campo rotulo="Motivo" tipo="textarea" [largo]="true" [obrigatorio]="true" [maxlength]="teto"
+                    placeholder="Por que está passando adiante?" [valor]="texto()" (valorChange)="texto.set($event)" />
+        </ui-grade-form>
+      }
+      @if (erroServidor(); as e) {
+        <div class="erro-linha">
+          <p class="erro" role="alert">{{ e }}</p>
+          @if (recarregavel()) {
+            <button type="button" class="btn btn--secundario btn--pequeno" [disabled]="recarregando()" (click)="recarregar()">
+              {{ recarregando() ? 'Recarregando…' : 'Recarregar' }}
+            </button>
           }
-          @if (erroServidor(); as e) {
-            <div class="erro-linha">
-              <p class="erro" role="alert">{{ e }}</p>
-              @if (recarregavel()) {
-                <button type="button" class="btn secundario" [disabled]="recarregando()" (click)="recarregar()">
-                  {{ recarregando() ? 'Recarregando…' : 'Recarregar' }}
-                </button>
-              }
-            </div>
-          }
-          <div class="acoes">
-            @if (avisoFila()) {
-              <button type="button" class="btn primario" (click)="fechar()">Entendi</button>
-            } @else {
-              <button type="button" class="btn secundario" (click)="fechar()">Cancelar</button>
-              <button type="button" class="btn primario" [disabled]="enviando() || !!erroDoFormulario()"
-                      [title]="erroDoFormulario() ?? ''" (click)="confirmar()">
-                {{ enviando() ? 'Enviando…' : (aberto() === 'devolver' ? 'Devolver' : 'Reatribuir') }}
-              </button>
-            }
-          </div>
         </div>
+      }
+      <div rodape>
+        @if (avisoFila()) {
+          <button type="button" class="btn btn--primario" (click)="fechar()">Entendi</button>
+        } @else {
+          <button type="button" class="btn btn--secundario" (click)="fechar()">Cancelar</button>
+          <button type="button" class="btn btn--primario" [disabled]="enviando() || !!erroDoFormulario()"
+                  [title]="erroDoFormulario() ?? ''" (click)="confirmar()">
+            {{ enviando() ? 'Enviando…' : (aberto() === 'devolver' ? 'Devolver' : 'Reatribuir') }}
+          </button>
+        }
       </div>
-    }
+    </ui-modal>
   `,
   styles: `
     :host { display: inline-flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; }
@@ -122,32 +107,13 @@ type Aberto = 'nenhum' | 'devolver' | 'reatribuir'
     .acao-btn:hover { background: var(--superficie-elevada); }
     .acao-btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .aviso-ok { font-size: 12px; color: var(--texto-secundario); max-width: 260px; }
-    .overlay { position: fixed; inset: 0; z-index: 1100; display: grid; place-items: center;
-      padding: var(--espacamento-4); background: var(--fundo-sobreposicao, rgb(0 0 0 / .4)); }
-    .modal { width: 100%; max-width: 440px; padding: var(--espacamento-6); display: grid; gap: var(--espacamento-3);
-      background: var(--superficie-elevada); color: var(--texto); border: 1px solid var(--borda);
-      border-radius: var(--raio-painel); box-shadow: var(--elevacao-modal); outline: none; }
-    h2 { margin: 0; font-size: 1.1rem; }
-    .ajuda { margin: 0; color: var(--texto-secundario); }
-    fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }
+    .ajuda { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); }
+    fieldset { border: 0; margin: 0 0 var(--espacamento-3); padding: 0; display: grid; gap: var(--espacamento-2); }
     .radio { display: flex; gap: var(--espacamento-2); align-items: center; cursor: pointer; }
-    .campo { display: grid; gap: var(--espacamento-1); }
-    .campo span { color: var(--texto-secundario); font-size: 13px; }
-    select, textarea { font: inherit; padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
-      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); width: 100%; box-sizing: border-box; }
-    textarea { resize: vertical; }
-    select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--borda-foco); box-shadow: 0 0 0 2px var(--borda-foco); }
     .erro { margin: 0; color: var(--erro); }
-    .erro-linha { display: flex; gap: var(--espacamento-2); align-items: center; justify-content: space-between; flex-wrap: wrap; }
+    .erro-linha { display: flex; gap: var(--espacamento-2); align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: var(--espacamento-3); }
     .aviso-fila { margin: 0; padding: var(--espacamento-3); border-radius: var(--raio-controle);
       border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); line-height: 1.4; }
-    .acoes { display: flex; justify-content: flex-end; gap: var(--espacamento-2); flex-wrap: wrap; }
-    .btn { min-height: var(--densidade-alvo-clique-console); padding: var(--espacamento-2) var(--espacamento-4);
-      border-radius: var(--raio-controle); border: 1px solid transparent; font: inherit; font-weight: 600; cursor: pointer; }
-    .btn.secundario { background: var(--fundo); color: var(--texto); border-color: var(--borda-controle); }
-    .btn.primario { background: var(--acao); color: var(--acao-texto); }
-    .btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    .btn:disabled { opacity: .5; cursor: not-allowed; }
     .so-leitor { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   `,
 })
@@ -182,15 +148,7 @@ export class AcoesConversaComponente {
     ? erroDevolucao({ motivo: this.motivo(), observacao: this.texto() })
     : erroReatribuicao({ usuarioId: this.destino(), motivo: this.texto() }))
 
-  private readonly caixa = viewChild<ElementRef<HTMLElement>>('caixa')
-
-  constructor() {
-    // Foco entra no diálogo ao abrir (teclado não fica preso atrás).
-    afterRenderEffect(() => {
-      const el = this.caixa()?.nativeElement
-      if (el && !el.contains(document.activeElement)) el.focus()
-    })
-  }
+  protected readonly opcoesEquipe = computed<OpcaoSelect[]>(() => this.equipe().map((p) => ({ valor: p.id, rotulo: p.nome })))
 
   private zerar(aberto: Aberto): void {
     this.motivo.set(null); this.texto.set(''); this.destino.set(null)
