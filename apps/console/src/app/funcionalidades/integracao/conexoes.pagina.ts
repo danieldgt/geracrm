@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, signal, computed, effect, viewChild, ElementRef, HostListener, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { DatePipe } from '@angular/common'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
@@ -6,6 +6,10 @@ import { ConexoesServico } from './conexoes.servico.js'
 import { FormularioCredencialComponente } from './formulario-credencial.componente.js'
 import { CAPACIDADES, MENSAGEM_FALHA, type Conexao, type ResultadoTeste } from './tipos.js'
 import { PERFIS_PRECO } from '@geracrm/shared'
+import {
+  BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, IconeComponente,
+  ModalComponente, SelectComponente, TabelaComponente, type ColunaTabela, type LinhaTabela, type OpcaoSelect,
+} from '../../compartilhado/ui/index.js'
 
 interface TabelaPreco {
   readonly idExterno: string; readonly descricao: string
@@ -13,7 +17,8 @@ interface TabelaPreco {
 }
 
 /**
- * Configurações → ERP.
+ * Configurações → ERP. Lista das conexões em ui-tabela (uma linha por ERP), tabelas de
+ * preço por perfil, sincronizações recentes, e o cadastro/credenciais em ui-modal.
  *
  * ⚠️ A tela nunca nomeia fornecedor por conta própria: mostra `nomeAmigavel`.
  * Um cliente de outro ERP lendo "GeraCloud" na própria tela é bug visível (A-07).
@@ -21,226 +26,165 @@ interface TabelaPreco {
 @Component({
   selector: 'app-conexoes-erp',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormularioCredencialComponente, DatePipe],
+  imports: [
+    BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, DatePipe, EstadoComponente, FormularioCredencialComponente,
+    IconeComponente, ModalComponente, SelectComponente, TabelaComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1>Integração com o ERP</h1>
-        <p class="sub">
-          É daqui que vêm seus clientes, produtos e vendas. Sem ele, o CRM começa vazio.
-        </p>
-      </div>
+    <ui-cabecalho-tela titulo="Integração com o ERP"
+      subtitulo="É daqui que vêm seus clientes, produtos e vendas. Sem ele, o CRM começa vazio.">
       @if (servico.estado() === 'pronto' && !servico.vazio()) {
-        <button class="btn btn--primario" (click)="abrirNovo()">Conectar outro ERP</button>
+        <button type="button" class="btn btn--primario" (click)="abrirNovo()"><ui-icone nome="plus" />Conectar outro ERP</button>
       }
-    </header>
+    </ui-cabecalho-tela>
 
-    <!-- ⚠️ Os cinco estados são ramos explícitos, não derivados do tamanho da
-         lista: vazio-por-falha e vazio-por-não-ter pedem telas opostas. -->
-    @switch (servico.estado()) {
-      @case ('carregando') {
-        <div class="bloco" aria-busy="true">
-          <div class="esqueleto"></div><div class="esqueleto"></div>
-        </div>
-      }
-      @case ('sem_permissao') {
-        <div class="bloco aviso">
-          <h2>Você não tem acesso às integrações</h2>
+    <div class="corpo">
+      <!-- ⚠️ Os cinco estados são ramos explícitos, não derivados do tamanho da
+           lista: vazio-por-falha e vazio-por-não-ter pedem telas opostas. -->
+      @switch (servico.estado()) {
+        @case ('carregando') {
+          <ui-tabela [colunas]="colunas" [linhas]="[]" [carregando]="true" />
+        }
+        @case ('sem_permissao') {
           <!-- Sem "tentar de novo": tentar de novo não vai funcionar nunca. -->
-          <p>Peça a um administrador da sua empresa para liberar este acesso.</p>
-        </div>
-      }
-      @case ('erro') {
-        <div class="bloco aviso">
-          <h2>Não foi possível carregar as integrações</h2>
-          <p>{{ servico.erro() }}</p>
-          <button class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button>
-        </div>
-      }
-      @case ('pronto') {
-        @if (servico.vazio()) {
-          <div class="bloco vazio">
-            <h2>Nenhum ERP conectado</h2>
-            <p>
-              Conecte seu ERP para trazer a base de clientes e o histórico de compras.
-              É o que faz a recompra e o RFV funcionarem desde o primeiro dia.
-            </p>
-            <button class="btn btn--primario" (click)="abrirNovo()">Conectar meu ERP</button>
-          </div>
-        } @else {
-          <ul class="lista">
-            @for (conexao of servico.conexoes(); track conexao.id) {
-              <li class="conexao" [class]="'conexao--' + conexao.estado">
-                <div class="linha">
-                  <div>
-                    <!-- Nunca o código do conector. -->
-                    <h2>{{ conexao.nomeAmigavel }}</h2>
-                    @if (conexao.identificacaoRemota; as remota) {
-                      <!-- ⚠️ Único jeito de a pessoa notar que conectou na loja errada. -->
-                      <p class="remota">Conectado em: <strong>{{ remota }}</strong></p>
-                    }
-                  </div>
-                  <span class="selo">{{ rotuloEstado(conexao) }}</span>
-                </div>
+          <ui-estado tipo="sem-permissao" titulo="Você não tem acesso às integrações"
+            descricao="Peça a um administrador da sua empresa para liberar este acesso." />
+        }
+        @case ('erro') {
+          <ui-estado tipo="erro" titulo="Não foi possível carregar as integrações" [descricao]="servico.erro() ?? ''">
+            <button type="button" class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button>
+          </ui-estado>
+        }
+        @case ('pronto') {
+          @if (servico.vazio()) {
+            <ui-estado titulo="Nenhum ERP conectado"
+              descricao="Conecte seu ERP para trazer a base de clientes e o histórico de compras. É o que faz a recompra e o RFV funcionarem desde o primeiro dia.">
+              <button type="button" class="btn btn--primario" (click)="abrirNovo()">Conectar meu ERP</button>
+            </ui-estado>
+          } @else {
+            <ui-tabela [colunas]="colunas" [linhas]="linhas()">
+              <ng-template uiCelula="conexao" let-conexao>
+                <strong class="nome">{{ conexao.nomeAmigavel }}</strong>
+                <!-- Nunca o código do conector. ⚠️ A identificação remota é o único jeito de notar que conectou na loja errada. -->
+                @if (conexao.identificacaoRemota; as remota) {
+                  <span class="remota">Conectado em: <strong>{{ remota }}</strong></span>
+                }
+              </ng-template>
 
+              <ng-template uiCelula="situacao" let-conexao>
+                <ui-badge [tom]="tomEstado(conexao)">{{ rotuloEstado(conexao) }}</ui-badge>
                 @if (conexao.estado === 'com_erro' && conexao.ultimoErroMotivo; as motivo) {
-                  <div class="falha">
+                  <div class="falha" role="status">
                     <strong>{{ mensagem(motivo).titulo }}</strong>
                     <p>{{ mensagem(motivo).acao }}</p>
                     @if (conexao.ultimoErro) { <p class="detalhe">{{ conexao.ultimoErro }}</p> }
                   </div>
                 }
+                @if (resultado()[conexao.id]; as r) {
+                  <p class="resultado" [class.resultado--ok]="r.ok" role="status">
+                    @if (r.ok) {
+                      <ui-icone nome="check" [tamanho]="14" />Conexão funcionando{{ r.identificacao ? ' — ' + r.identificacao : '' }}.
+                    } @else {
+                      <ui-icone nome="alert-triangle" [tamanho]="14" />{{ mensagem(r.motivo).titulo }}. {{ mensagem(r.motivo).acao }}
+                    }
+                  </p>
+                }
+              </ng-template>
 
-                <dl class="datas">
-                  <div>
-                    <dt>Última validação</dt>
-                    <dd>{{ conexao.ultimaValidacaoEm ? (conexao.ultimaValidacaoEm | date: 'short') : 'nunca' }}</dd>
-                  </div>
-                  @if (tentandoEFalhando(conexao)) {
-                    <!-- ⚠️ A distância entre as duas datas é o sinal: validação
-                         velha com tentativa recente = está tentando e falhando. -->
-                    <div class="alerta">
-                      <dt>Última tentativa</dt>
-                      <dd>{{ conexao.ultimaTentativaEm | date: 'short' }}</dd>
-                    </div>
-                  }
-                </dl>
+              <ng-template uiCelula="validacao" let-conexao>
+                <span class="data">Validada: {{ conexao.ultimaValidacaoEm ? (conexao.ultimaValidacaoEm | date: 'short') : 'nunca' }}</span>
+                <!-- ⚠️ A distância entre as duas datas é o sinal: validação velha com tentativa recente = está tentando e falhando. -->
+                @if (tentandoEFalhando(conexao)) {
+                  <span class="data alerta">Última tentativa: {{ conexao.ultimaTentativaEm | date: 'short' }}</span>
+                }
+              </ng-template>
 
-                <!-- ⚠️ Degradação VISÍVEL (ADR-008): a tela diz o que o produto
-                     deixa de fazer, com a consequência — não a capacidade que falta. -->
+              <ng-template uiCelula="recursos" let-conexao>
+                <!-- ⚠️ Degradação VISÍVEL (ADR-008): a tela diz o que o produto deixa de fazer, com a consequência. -->
                 @if (faltantes(conexao).length > 0) {
                   <details class="degradacao">
-                    <summary>
-                      {{ faltantes(conexao).length }} recurso(s) que este ERP não oferece
-                    </summary>
+                    <summary>{{ faltantes(conexao).length }} recurso(s) que este ERP não oferece</summary>
                     <ul>
                       @for (c of faltantes(conexao); track c.chave) {
                         <li><strong>{{ c.rotulo }}:</strong> {{ c.ausente }}</li>
                       }
                     </ul>
                   </details>
+                } @else {
+                  <span class="suave">Todos os recursos</span>
                 }
+              </ng-template>
 
-                <div class="acoes">
-                  <button class="btn btn--secundario" (click)="testar(conexao)" [disabled]="servico.testando().has(conexao.id)">
+              <ng-template uiCelula="acoes" let-conexao>
+                <span class="acoes">
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="testar(conexao)" [disabled]="servico.testando().has(conexao.id)">
                     {{ servico.testando().has(conexao.id) ? 'Testando…' : 'Testar conexão' }}
                   </button>
-                  <button class="btn btn--secundario" (click)="abrirCredencial(conexao)">
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrirCredencial(conexao)">
                     {{ conexao.credencial.configurada ? 'Trocar credenciais' : 'Preencher credenciais' }}
                   </button>
-                </div>
+                </span>
+              </ng-template>
 
-                @if (resultado()[conexao.id]; as r) {
-                  <p class="resultado" [class.resultado--ok]="r.ok" role="status">
-                    @if (r.ok) {
-                      Conexão funcionando{{ r.identificacao ? ' — ' + r.identificacao : '' }}.
-                    } @else {
-                      {{ mensagem(r.motivo).titulo }}. {{ mensagem(r.motivo).acao }}
-                    }
-                  </p>
-                }
-              </li>
-            }
-          </ul>
+              <div uiVazio>
+                <ui-estado titulo="Nenhum ERP conectado" descricao="Conecte seu ERP para começar.">
+                  <button type="button" class="btn btn--primario" (click)="abrirNovo()">Conectar meu ERP</button>
+                </ui-estado>
+              </div>
+            </ui-tabela>
+          }
         }
       }
-    }
 
-    <!-- INT-08: o que cada sincronização trouxe e rejeitou. Estado PARCIAL da
-         tela — some sozinho se a carga nunca rodou, sem derrubar as conexões. -->
-    @if (servico.operacoes().length) {
-      <!-- ⚠️ Qual tabela pratica varejo e qual pratica atacado. Sem declarar, o
-           produto adivinha pelo NOME da tabela — e renomear no ERP passa a mudar
-           o preço do catálogo, sem erro nenhum. Hoje é assim que o perfil
-           atacado fica sem preço: nenhuma tabela ativa tem "atacado" no nome. -->
-      @if (tabelas().length > 0) {
-        <section class="sync">
-          <h2 class="sync-titulo">Tabelas de preço</h2>
-          <p class="tp-dica">Diga qual tabela do ERP vale para cada perfil. Sem isso, o
-            catálogo tenta adivinhar pelo nome — e erra quando o nome não diz.</p>
+      <!-- INT-08: o que cada sincronização trouxe e rejeitou. Estado PARCIAL da tela — some sozinho se a carga nunca rodou. -->
+      @if (servico.operacoes().length) {
+        <!-- ⚠️ Qual tabela pratica varejo e qual pratica atacado. Sem declarar, o produto adivinha pelo NOME da tabela. -->
+        @if (tabelas().length > 0) {
+          <section class="bloco-secao" aria-labelledby="tp-titulo">
+            <h2 id="tp-titulo" class="txt-secao">Tabelas de preço</h2>
+            <p class="dica">Diga qual tabela do ERP vale para cada perfil. Sem isso, o catálogo tenta adivinhar pelo nome — e erra quando o nome não diz.</p>
+            <div class="tp-linhas">
+              @for (perfil of PERFIS; track perfil) {
+                <ui-select [rotulo]="perfil === 'varejo' ? 'Varejo' : 'Atacado'" placeholder="— adivinhar pelo nome —"
+                  [opcoes]="opcoesTabela()" [valor]="escolha()[perfil] ?? ''" (valorChange)="escolher(perfil, $event)" />
+              }
+            </div>
+            <div class="acoes-linha">
+              <button type="button" class="btn btn--primario btn--pequeno" (click)="salvarPerfis()" [disabled]="salvandoPerfis()">
+                {{ salvandoPerfis() ? 'Salvando…' : 'Salvar tabelas' }}
+              </button>
+              @if (msgPerfis()) {
+                <span [class]="erroPerfis() ? 'tp-err' : 'tp-ok'" role="status">{{ msgPerfis() }}</span>
+              }
+            </div>
+          </section>
+        }
 
-          <div class="tp-linhas">
-            @for (perfil of PERFIS; track perfil) {
-              <label class="tp-linha">
-                <span class="tp-perfil">{{ perfil === 'varejo' ? 'Varejo' : 'Atacado' }}</span>
-                <select [value]="escolha()[perfil] ?? ''"
-                        (change)="escolher(perfil, $any($event.target).value)">
-                  <option value="">— adivinhar pelo nome —</option>
-                  @for (t of tabelas(); track t.idExterno) {
-                    <option [value]="t.idExterno">
-                      {{ t.descricao }} ({{ t.skus }} {{ t.skus === 1 ? 'item' : 'itens' }})
-                    </option>
-                  }
-                </select>
-              </label>
-            }
-          </div>
-
-          <div class="tp-acoes">
-            <button class="btn btn--primario btn--pequeno" (click)="salvarPerfis()"
-                    [disabled]="salvandoPerfis()">
-              {{ salvandoPerfis() ? 'Salvando…' : 'Salvar tabelas' }}</button>
-            @if (msgPerfis()) { <span [class]="erroPerfis() ? 'tp-err' : 'tp-ok'">{{ msgPerfis() }}</span> }
-          </div>
+        <section class="bloco-secao" aria-labelledby="sync-titulo">
+          <h2 id="sync-titulo" class="txt-secao">Últimas sincronizações</h2>
+          <ui-tabela [colunas]="colunasOperacao" [linhas]="linhasOperacao()" [chaveLinha]="chaveOperacao">
+            <ng-template uiCelula="fluxo" let-op>{{ rotuloFluxo(op.fluxo) }}</ng-template>
+            <!-- Rejeição é sinal de conciliação, não erro fatal: destaca só quando há. -->
+            <ng-template uiCelula="rejeitados" let-op>
+              <span class="num" [class.num--alerta]="op.rejeitados > 0">{{ op.rejeitados }}</span>
+            </ng-template>
+            <ng-template uiCelula="quando" let-op>{{ (op.concluidoEm ?? op.iniciadoEm) | date: 'dd/MM HH:mm' }}</ng-template>
+          </ui-tabela>
         </section>
       }
+    </div>
 
-      <section class="sync">
-        <h2 class="sync-titulo">Últimas sincronizações</h2>
-        <table class="sync-tabela">
-          <thead>
-            <tr><th>Fluxo</th><th>Lidos</th><th>Aceitos</th><th>Rejeitados</th><th>Quando</th></tr>
-          </thead>
-          <tbody>
-            @for (op of servico.operacoes(); track op.iniciadoEm + op.fluxo) {
-              <tr>
-                <td>{{ rotuloFluxo(op.fluxo) }}</td>
-                <td class="num">{{ op.total }}</td>
-                <td class="num">{{ op.aceitos }}</td>
-                <!-- Rejeição é sinal de conciliação, não erro fatal: destaca só quando há. -->
-                <td class="num" [class.num--alerta]="op.rejeitados > 0">{{ op.rejeitados }}</td>
-                <td>{{ (op.concluidoEm ?? op.iniciadoEm) | date: 'dd/MM HH:mm' }}</td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      </section>
-    }
-
-    <!-- ⚠️ MODAL de verdade. Antes era um bloco no FIM da página, posicionado
-         por margin-top: clicar em "Preencher credenciais" abria o formulário
-         abaixo da lista, das tabelas de preço e das sincronizações — fora da
-         vista. O botão parecia não fazer nada.
-         E o aria-modal estava mentindo: sem position fixed e sem mover o foco,
-         o leitor de tela anunciava "diálogo" com o foco parado onde estava. -->
-    @if (editando(); as ed) {
-      <div class="fundo" (click)="fechar()"></div>
-      <div class="painel" role="dialog" aria-modal="true" aria-labelledby="titulo-painel"
-           tabindex="-1" #painel>
-        <h2 id="titulo-painel">
-          {{ ed.conexaoId ? 'Trocar credenciais' : 'Conectar ERP' }}
-        </h2>
-
+    <!-- Cadastro e credenciais: modal de cadastro (M). Esc, véu e × passam por fechar(). -->
+    <ui-modal [aberto]="editando() !== null" [titulo]="tituloEdicao()" largura="p" (fechar)="fechar()">
+      @if (editando(); as ed) {
         @if (!ed.conexaoId) {
-          <label class="campo">
-            <span class="rotulo">Qual é o seu ERP?</span>
-            <select [value]="ed.conector" (change)="trocarConector($event)">
-              @for (c of servico.conectores(); track c.codigo) {
-                <option [value]="c.codigo">{{ c.nome }}</option>
-              }
-            </select>
-            <span class="ajuda">{{ conectorAtual()?.descricao }}</span>
-          </label>
+          <ui-select rotulo="Qual é o seu ERP?" [opcoes]="opcoesConectores()" [valor]="ed.conector"
+            (valorChange)="trocarConector($event)" [dica]="conectorAtual()?.descricao ?? ''" />
 
-          <label class="campo">
-            <span class="rotulo">Como chamar esta conexão</span>
-            <input [value]="ed.nome" (input)="nomeMudou($event)" placeholder="ERP da matriz" />
-            <!-- ⚠️ Este nome aparece em toda mensagem de erro do produto. -->
-            <span class="ajuda">
-              {{ erros()['nomeAmigavel']
-                 ?? 'Aparece nas mensagens do sistema — "o ERP da matriz não respondeu".' }}
-            </span>
-          </label>
+          <!-- ⚠️ Este nome aparece em toda mensagem de erro do produto. -->
+          <ui-campo rotulo="Como chamar esta conexão" placeholder="ERP da matriz"
+            dica="Aparece nas mensagens do sistema — &quot;o ERP da matriz não respondeu&quot;."
+            [valor]="ed.nome" (valorChange)="nomeMudou($event)" [erro]="erros()['nomeAmigavel'] ?? null" />
         }
 
         @if (conectorAtual(); as conector) {
@@ -252,84 +196,43 @@ interface TabelaPreco {
         }
 
         @if (erroGeral(); as msg) { <p class="erro-geral" role="alert">{{ msg }}</p> }
-
-        <div class="acoes">
-          <button class="btn btn--secundario" (click)="fechar()">Cancelar</button>
-          <button class="btn btn--primario" (click)="salvar()" [disabled]="salvando()">
-            {{ salvando() ? 'Salvando…' : 'Salvar e testar' }}
-          </button>
-        </div>
+      }
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fechar()">Cancelar</button>
+        <button type="button" class="btn btn--primario" (click)="salvar()" [disabled]="salvando()">
+          {{ salvando() ? 'Salvando…' : 'Salvar e testar' }}
+        </button>
       </div>
-    }
+    </ui-modal>
   `,
   styles: `
-    :host { display: block; width: 100%; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
-    .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-6); }
-    h1 { margin: 0; font-size: 20px; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .bloco h2 { margin: 0 0 var(--espacamento-2); font-size: 16px; color: var(--texto); }
-    .bloco p { margin: 0 0 var(--espacamento-4); color: var(--texto-secundario); }
-    .vazio, .aviso { text-align: center; }
-    .esqueleto { height: 72px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-3); }
-    .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-4); }
-    .conexao { padding: var(--espacamento-4); border: 1px solid var(--borda); border-left: var(--densidade-acento-lateral-card, 3px) solid var(--borda-forte); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .conexao--ativa { border-left-color: var(--ativo); }
-    .conexao--com_erro { border-left-color: var(--erro); }
-    .conexao--configurando { border-left-color: var(--atencao); }
-    .linha { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-3); }
-    .conexao h2 { margin: 0; font-size: 15px; color: var(--texto); }
-    .remota { margin: var(--espacamento-1) 0 0; font-size: 13px; color: var(--texto-secundario); }
-    .selo { font-size: 12px; color: var(--texto-secundario); white-space: nowrap; }
-    .falha { margin-top: var(--espacamento-3); padding: var(--espacamento-3); border-radius: var(--raio-controle); background: var(--superficie); border-left: 3px solid var(--erro); }
-    .falha strong { color: var(--texto); font-size: 14px; }
-    .falha p { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 13px; }
-    .detalhe { font-family: var(--tipografia-familia-dados); font-size: 12px !important; color: var(--texto-suave) !important; }
-    .datas { display: flex; gap: var(--espacamento-6); margin: var(--espacamento-3) 0 0; }
-    .datas div { display: grid; gap: 2px; }
-    dt { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--texto-suave); }
-    dd { margin: 0; font-size: 13px; color: var(--texto-secundario); font-family: var(--tipografia-familia-dados); }
-    .alerta dd { color: var(--atencao); }
-    .degradacao { margin-top: var(--espacamento-3); font-size: 13px; }
+    :host { display: block; width: 100%; min-width: 0; padding: var(--espacamento-6); }
+    .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-6); min-width: 0; }
+    .nome { display: block; color: var(--texto); }
+    .remota { display: block; margin-top: 2px; font-size: 12px; color: var(--texto-secundario); }
+    .suave { color: var(--texto-suave); font-size: 13px; }
+    .data { display: block; font-size: 12px; color: var(--texto-secundario); font-family: var(--tipografia-familia-dados); }
+    .data.alerta { color: var(--atencao); }
+    .falha { margin-top: var(--espacamento-2); padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle);
+      background: var(--superficie); border-left: 3px solid var(--erro); max-width: 46ch; }
+    .falha strong { color: var(--texto); font-size: 13px; }
+    .falha p { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 12px; }
+    .detalhe { font-family: var(--tipografia-familia-dados); color: var(--texto-suave) !important; overflow-wrap: anywhere; }
+    .degradacao { font-size: 13px; }
     .degradacao summary { cursor: pointer; color: var(--texto-secundario); }
     .degradacao ul { margin: var(--espacamento-2) 0 0; padding-left: var(--espacamento-4); color: var(--texto-secundario); line-height: 1.6; }
-    .acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-4); }
-    .resultado { margin: var(--espacamento-3) 0 0; font-size: 13px; color: var(--erro); }
+    .acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--espacamento-2); }
+    .resultado { display: flex; align-items: center; gap: var(--espacamento-1); margin: var(--espacamento-2) 0 0; font-size: 13px; color: var(--erro); }
     .resultado--ok { color: var(--sucesso); }
-    .fundo { position: fixed; inset: 0; background: rgb(0 0 0 / .5); z-index: 40; }
-    .painel { position: fixed; z-index: 41; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      width: min(560px, calc(100vw - var(--espacamento-6) * 2));
-      /* ⚠️ Rola por DENTRO: em tela baixa, um formulário longo empurraria os
-         botões para fora e não haveria como salvar. */
-      max-height: min(88dvh, 720px); overflow-y: auto;
-      padding: var(--espacamento-6); border: 1px solid var(--borda);
-      border-radius: var(--raio-painel); background: var(--superficie-elevada);
-      box-shadow: var(--elevacao-modal); }
-    .painel:focus { outline: none; }
-    .painel h2 { margin: 0 0 var(--espacamento-4); font-size: 16px; }
-    .campo { display: grid; gap: var(--espacamento-1); margin-bottom: var(--espacamento-4); }
-    .rotulo { font-weight: 500; font-size: 13px; color: var(--texto); }
-    .ajuda { font-size: 12px; color: var(--texto-suave); }
-    select, .campo input { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .erro-geral { color: var(--erro); font-size: 13px; }
-    .sync { margin-top: var(--espacamento-6); }
-    .tp-dica { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
-    .tp-linhas { display: grid; gap: var(--espacamento-2); max-width: 560px; }
-    .tp-linha { display: flex; align-items: center; gap: var(--espacamento-3); }
-    .tp-perfil { min-width: 72px; color: var(--texto); font-size: 13px; }
-    .tp-linha select { flex: 1; padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
-      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .tp-acoes { display: flex; align-items: center; gap: var(--espacamento-3); margin-top: var(--espacamento-3); }
+    .bloco-secao { display: grid; gap: var(--espacamento-3); }
+    .dica { margin: 0; color: var(--texto-secundario); font-size: 13px; }
+    .tp-linhas { display: grid; gap: var(--espacamento-3); max-width: 560px; }
+    .acoes-linha { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; }
     .tp-ok { color: var(--sucesso); font-size: 13px; }
     .tp-err { color: var(--erro); font-size: 13px; }
-    .sync-titulo { margin: 0 0 var(--espacamento-3); font-size: 15px; color: var(--texto); }
-    .sync-tabela { width: 100%; border-collapse: collapse; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
-    .sync-tabela th, .sync-tabela td { padding: var(--espacamento-2) var(--espacamento-3); text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); }
-    .sync-tabela th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--texto-suave); font-weight: 500; }
-    .sync-tabela tr:last-child td { border-bottom: none; }
-    .sync-tabela td { color: var(--texto-secundario); }
-    .num { text-align: right; font-family: var(--tipografia-familia-dados); }
+    .num { font-family: var(--tipografia-familia-dados); }
     .num--alerta { color: var(--atencao); }
+    .erro-geral { margin: 0; color: var(--erro); font-size: 13px; }
   `,
 })
 export class ConexoesPagina implements OnInit {
@@ -341,6 +244,28 @@ export class ConexoesPagina implements OnInit {
   readonly salvandoPerfis = signal(false)
   readonly msgPerfis = signal<string | null>(null)
   readonly erroPerfis = signal(false)
+
+  protected readonly colunas: ColunaTabela[] = [
+    { chave: 'conexao', rotulo: 'ERP' },
+    { chave: 'situacao', rotulo: 'Situação' },
+    { chave: 'validacao', rotulo: 'Validação', largura: '200px' },
+    { chave: 'recursos', rotulo: 'Recursos', largura: '260px' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '240px' },
+  ]
+  protected readonly colunasOperacao: ColunaTabela[] = [
+    { chave: 'fluxo', rotulo: 'Fluxo' },
+    { chave: 'total', rotulo: 'Lidos', alinhamento: 'dir', mono: true, largura: '100px' },
+    { chave: 'aceitos', rotulo: 'Aceitos', alinhamento: 'dir', mono: true, largura: '100px' },
+    { chave: 'rejeitados', rotulo: 'Rejeitados', alinhamento: 'dir', largura: '120px' },
+    { chave: 'quando', rotulo: 'Quando', mono: true, largura: '130px' },
+  ]
+  protected readonly linhas = computed(() => this.servico.conexoes() as unknown as readonly LinhaTabela[])
+  protected readonly linhasOperacao = computed(() => this.servico.operacoes() as unknown as readonly LinhaTabela[])
+  protected readonly chaveOperacao = (l: LinhaTabela): string => `${String(l['iniciadoEm'])}|${String(l['fluxo'])}`
+  protected readonly opcoesTabela = computed<OpcaoSelect[]>(() =>
+    this.tabelas().map((t) => ({ valor: t.idExterno, rotulo: `${t.descricao} (${t.skus} ${t.skus === 1 ? 'item' : 'itens'})` })))
+  protected readonly opcoesConectores = computed<OpcaoSelect[]>(() =>
+    this.servico.conectores().map((c) => ({ valor: c.codigo, rotulo: c.nome })))
 
   readonly editando = signal<{ conexaoId?: string; conector: string; nome: string } | null>(null)
   readonly credencial = signal<Record<string, string>>({})
@@ -422,6 +347,15 @@ export class ConexoesPagina implements OnInit {
     }
   }
 
+  tomEstado(c: Conexao): 'sucesso' | 'atencao' | 'erro' | 'neutro' {
+    switch (c.estado) {
+      case 'ativa': return 'sucesso'
+      case 'com_erro': return 'erro'
+      case 'pausada': return 'atencao'
+      default: return 'neutro'
+    }
+  }
+
   /** Validação velha + tentativa recente = está tentando e falhando. */
   tentandoEFalhando(c: Conexao): boolean {
     if (!c.ultimaTentativaEm) return false
@@ -439,30 +373,14 @@ export class ConexoesPagina implements OnInit {
     this.editando.set({ conector: primeiro?.codigo ?? '', nome: '' })
   }
 
-  private readonly painel = viewChild<ElementRef<HTMLElement>>('painel')
-
-  /**
-   * ⚠️ Leva o FOCO para o painel ao abrir. Sem isso, quem usa teclado continua
-   * na lista atrás do modal, e quem usa leitor de tela ouve "diálogo" sem sair
-   * do lugar — o `aria-modal` vira uma promessa que a tela não cumpre.
-   */
-  // ⚠️ Guardado numa propriedade LIDA (readonly comum, não privada): o effect
-  //    precisa existir enquanto o componente viver, mas um membro privado que
-  //    ninguém lê é removido pelo lint — e com ele o foco pararia de funcionar.
-  protected readonly focarAoAbrir = effect(() => {
-    if (this.editando()) queueMicrotask(() => this.painel()?.nativeElement.focus())
-  })
-
-  /** Esc fecha — é o que todo mundo tenta primeiro num diálogo. */
-  @HostListener('document:keydown.escape')
-  aoEscape(): void { if (this.editando()) this.fechar() }
+  tituloEdicao(): string { return this.editando()?.conexaoId ? 'Trocar credenciais' : 'Conectar ERP' }
 
   abrirCredencial(c: Conexao): void {
     this.limpar()
     this.editando.set({ conexaoId: c.id, conector: c.conector, nome: c.nomeAmigavel })
   }
 
-  fechar(): void { this.editando.set(null); this.limpar() }
+  fechar(): void { if (this.salvando()) return; this.editando.set(null); this.limpar() }
 
   private limpar(): void {
     this.credencial.set({})
@@ -470,8 +388,7 @@ export class ConexoesPagina implements OnInit {
     this.erroGeral.set(null)
   }
 
-  trocarConector(evento: Event): void {
-    const conector = (evento.target as HTMLSelectElement).value
+  trocarConector(conector: string): void {
     // ⚠️ Troca de ERP limpa a credencial: os campos são outros, e manter o que
     //    foi digitado enviaria um campo que não pertence a este ERP.
     this.credencial.set({})
@@ -479,8 +396,7 @@ export class ConexoesPagina implements OnInit {
     this.editando.update((ed) => (ed ? { ...ed, conector } : ed))
   }
 
-  nomeMudou(evento: Event): void {
-    const nome = (evento.target as HTMLInputElement).value
+  nomeMudou(nome: string): void {
     this.editando.update((ed) => (ed ? { ...ed, nome } : ed))
   }
 
