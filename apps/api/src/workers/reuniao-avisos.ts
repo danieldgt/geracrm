@@ -102,10 +102,11 @@ async function decidir(tx: Sql, e: EventoLido, templateId: string | null, agora:
 }
 
 /** Reserva o aviso (a idempotência). `null` = já existia — outra passada cuidou. */
-async function reservar(tx: Sql, eventoId: string, tipo: TipoAvisoReuniao, inicio: Date, canalId: string): Promise<string | null> {
+/** `criado_em` = `agora` do worker: o prazo do convite (passo 4) e a cota do dia comparam com o mesmo relógio. */
+async function reservar(tx: Sql, eventoId: string, tipo: TipoAvisoReuniao, inicio: Date, canalId: string, agora: Date): Promise<string | null> {
   const [r] = await tx<{ id: string }[]>`
-    INSERT INTO evento_agenda_aviso (tenant_id, id, evento_id, tipo, inicio_evento, canal_id)
-    VALUES (tenant_atual(), ${randomUUID()}, ${eventoId}, ${tipo}, ${inicio}, ${canalId})
+    INSERT INTO evento_agenda_aviso (tenant_id, id, evento_id, tipo, inicio_evento, canal_id, criado_em)
+    VALUES (tenant_atual(), ${randomUUID()}, ${eventoId}, ${tipo}, ${inicio}, ${canalId}, ${agora})
     ON CONFLICT DO NOTHING RETURNING id`
   return r?.id ?? null
 }
@@ -173,7 +174,7 @@ export async function processarAvisosDeReuniao(
         agoraUtil: noPeriodoUtil(exp, agora),
       })
       if (!tipo) return null
-      const avisoId = await reservar(tx, c.id, tipo, e.inicio, e.canal_id)
+      const avisoId = await reservar(tx, c.id, tipo, e.inicio, e.canal_id, agora)
       if (!avisoId) return null
       const decisao = await decidir(tx, e, e.template_lembrete, agora)
       if (decisao.acao === 'recusar') {
@@ -203,7 +204,7 @@ export async function processarAvisosDeReuniao(
     const ok = await comTenantServico(c.tenant_id, async (tx) => {
       const e = await lerEvento(tx, c.id)
       if (!e || !desfechoPendente({ fim: e.fim, status: e.status }, agora)) return false
-      const avisoId = await reservar(tx, c.id, 'desfecho', e.inicio, e.canal_id)
+      const avisoId = await reservar(tx, c.id, 'desfecho', e.inicio, e.canal_id, agora)
       if (!avisoId) return false
       const exp = await lerExpedienteReuniao(tx, e.canal_id)
       const { dia, hora } = horaLocal(e.inicio, exp)
@@ -229,7 +230,7 @@ export async function processarAvisosDeReuniao(
       const decisao = await decidir(tx, e, e.template_reagendar, agora)
       // M4: fala com o cliente só no período útil — fora dele, espera (sem reservar).
       if (decisao.acao !== 'recusar' && !noPeriodoUtil(exp, agora)) return null
-      const avisoId = await reservar(tx, c.id, 'noshow', e.inicio, e.canal_id)
+      const avisoId = await reservar(tx, c.id, 'noshow', e.inicio, e.canal_id, agora)
       if (!avisoId) return null
       noShows++
       const { dia, hora } = horaLocal(e.inicio, exp)
