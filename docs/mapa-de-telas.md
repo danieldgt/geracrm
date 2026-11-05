@@ -7,6 +7,10 @@
 > **Não é** reprodução do Tailor: adotamos o que serve aos anéis 1, 3 e 4; e-commerce fica de fora
 > (o ERP já resolve, ADR-005/019); o **pedido assistido** e a **Fila do Dia por RFV explicável** são
 > nossos e não têm equivalente à altura na referência.
+>
+> ⚠️ **Reorganizado em 2026-11-05** (`docs/plano-reorganizacao-console.md`): o menu passou de 50 para 21
+> entradas, com telas irmãs como abas e rotas antigas redirecionando. A §1 abaixo descreve o menu ANTERIOR;
+> a fonte da verdade da navegação é `apps/console/src/app/nucleo/menu.ts`.
 
 ## 0. Princípios que TODA tela obedece (não-negociáveis)
 
