@@ -1,5 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, OnInit, OnDestroy, signal } from '@angular/core'
 import { DatePipe } from '@angular/common'
+import { IconeComponente } from '../compartilhado/ui/icone.componente.js'
 import { NotificacoesServico, type Notificacao } from './notificacoes.servico.js'
 import { EventosServico } from './eventos.servico.js'
 import { InboxServico } from './inbox.servico.js'
@@ -17,11 +18,11 @@ import { alvoDaNotificacao, tituloDaNotificacao } from './notificacoes.regras.js
 @Component({
   selector: 'app-sino',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe],
+  imports: [DatePipe, IconeComponente],
   template: `
     <div class="sino-wrap">
       <button class="sino" (click)="alternar()" [attr.aria-label]="rotuloAria()" [class.tem]="servico.naoLidas() > 0">
-        🔔
+        <ui-icone nome="bell" />
         @if (servico.naoLidas() > 0) {
           <span class="bolinha">{{ servico.naoLidas() > 9 ? '9+' : servico.naoLidas() }}</span>
         }
@@ -92,7 +93,7 @@ import { alvoDaNotificacao, tituloDaNotificacao } from './notificacoes.regras.js
   `,
   styles: `
     .sino-wrap { position: relative; }
-    .sino { position: relative; border: none; background: transparent; font-size: 16px; cursor: pointer; padding: 4px 6px; line-height: 1; }
+    .sino { position: relative; border: none; background: transparent; color: var(--texto-secundario); display: inline-flex; align-items: center; font-size: 16px; cursor: pointer; padding: 4px 6px; line-height: 1; }
     .sino:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
     .bolinha { position: absolute; top: -2px; right: -2px; min-width: 15px; height: 15px; padding: 0 3px;
       background: var(--erro); color: var(--texto-invertido); font-size: 9px; font-weight: 700; border-radius: var(--raio-completo);

@@ -114,7 +114,7 @@ import {
                 @if (erroAcao(); as e) { <p class="txt-denso erro" role="alert">{{ e }}</p> }
                 @if (modulos.agendaAtiva()) {
                   <app-agenda-evento-modal [aberto]="modalAgenda()" [contatoId]="f.id" [contatoNome]="f.nome"
-                    [dataInicial]="hoje" (fechar)="modalAgenda.set(false)" />
+                    [dataInicial]="hoje" (fechar)="modalAgenda.set(false)" (criado)="aoCriarEvento()" />
                 }
               </ui-painel>
 
@@ -408,11 +408,16 @@ export class FichaContatoPagina {
     }
   }
 
+  /** The modal shows the toast; the ficha closes it (the modal never closes itself) and refreshes the feed. */
+  aoCriarEvento(): void {
+    this.modalAgenda.set(false)
+    this.avancarFeed()
+  }
+
   aoCriarTarefa(): void {
     this.novaTarefa.set(false)
     this.tarefasVersao.update((v) => v + 1)
-    this.avancarFeed()
-    this.toast.sucesso('Tarefa criada')
+    this.avancarFeed() // the modal already shows the "Tarefa criada" toast
   }
 
   async removerTelefone(t: { seq: number; e164: string }): Promise<void> {

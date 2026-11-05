@@ -1,5 +1,4 @@
 import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } from '@angular/core'
-import { DatePipe } from '@angular/common'
 import { RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
@@ -12,7 +11,7 @@ import { ModulosServico } from '../../nucleo/modulos.servico.js'
 import { AgendaDetalheModalComponente } from './agenda-detalhe-modal.componente.js'
 import { AgendaEventoModalComponente } from './agenda-evento-modal.componente.js'
 import {
-  DIAS_DA_SEMANA, cabeNoDia, diaIso, eventosPorDia, horaLocal, janelaDaGrade, montarGradeMes, mudarMes, rotuloMes,
+  DIAS_DA_SEMANA, cabeNoDia, diaIso, eventosPorDia, horaLocal, janelaDaGrade, montarGradeMes, mudarMes, rotuloDia, rotuloMes,
   rotuloStatusEvento, rotuloTipoEvento, tomDoStatus,
 } from './agenda.regras.js'
 
@@ -27,7 +26,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
   selector: 'app-agenda',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    DatePipe, RouterLink, BadgeComponente, CabecalhoTelaComponente, EsqueletoComponente, EstadoComponente, SelectComponente,
+    RouterLink, BadgeComponente, CabecalhoTelaComponente, EsqueletoComponente, EstadoComponente, SelectComponente,
     AgendaDetalheModalComponente, AgendaEventoModalComponente,
   ],
   template: `
@@ -97,7 +96,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
             <aside class="painel-dia" aria-label="Eventos do dia">
               <h3>Eventos do dia</h3>
-              <p class="data-dia">{{ dataSelecionada() | date: "EEEE, dd 'de' MMMM" }}</p>
+              <p class="data-dia">{{ rotuloDia(diaSelecionado()) }}</p>
               @for (e of eventosDoDia(); track e.id) {
                 <button type="button" class="item" [attr.data-cor]="e.cor" (click)="abrirDetalhe(e)">
                   <span class="item-hora">{{ hora(e.inicio) }}–{{ hora(e.fim) }}</span>
@@ -155,7 +154,8 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .mais { align-self: flex-start; padding: 0 var(--espacamento-1); border: 0; background: transparent; color: var(--acao); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
     .painel-dia { display: flex; flex-direction: column; gap: var(--espacamento-2); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); min-width: 0; }
     .painel-dia h3 { margin: 0; font-size: 14px; color: var(--texto); }
-    .data-dia { margin: 0; color: var(--texto-secundario); font-size: 13px; text-transform: capitalize; }
+    .data-dia { margin: 0; color: var(--texto-secundario); font-size: 13px; }
+    .data-dia::first-letter { text-transform: uppercase; }
     .item { display: flex; flex-direction: column; gap: 2px; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda); border-left: 3px solid var(--acao); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto); font: inherit; text-align: left; cursor: pointer; min-width: 0; }
     .item:hover { background: var(--superficie-hover); }
     .item-hora { font-size: 12px; color: var(--texto-secundario); }
@@ -179,7 +179,7 @@ export class AgendaPagina implements OnInit {
   protected readonly diaSelecionado = signal(this.hojeIso)
   protected readonly grade = computed(() => montarGradeMes(this.ref(), this.hojeIso))
   protected readonly rotuloDoMes = computed(() => rotuloMes(this.ref().ano, this.ref().mes))
-  protected readonly dataSelecionada = computed(() => new Date(`${this.diaSelecionado()}T12:00:00`))
+  protected readonly rotuloDia = rotuloDia
 
   protected readonly estado = signal<Estado>('carregando')
   protected readonly eventos = signal<readonly EventoAgenda[]>([])

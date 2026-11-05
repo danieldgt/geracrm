@@ -117,3 +117,20 @@ describe('formulário', () => {
     expect(acoesDoStatus('realizado')).toEqual([])
   })
 })
+
+describe('rotuloDia', () => {
+  it('dia da semana e mês em português, sem depender do locale do Angular', async () => {
+    const { rotuloDia } = await import('./agenda.regras.js')
+    expect(rotuloDia('2026-11-05')).toBe('quinta-feira, 05 de novembro')
+    expect(rotuloDia('2026-03-01')).toBe('domingo, 01 de março')
+    expect(rotuloDia('')).toBe('')
+  })
+})
+
+describe('diaSemanaCurto', () => {
+  it('abreviação em português pelo horário local', async () => {
+    const { diaSemanaCurto } = await import('./agenda.regras.js')
+    expect(diaSemanaCurto(new Date(2026, 10, 5, 9))).toBe('qui')
+    expect(diaSemanaCurto('inválido')).toBe('')
+  })
+})

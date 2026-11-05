@@ -372,7 +372,10 @@ export class FormularioBuilderPagina implements OnInit {
     try {
       const [origens, filiais, etapas] = await Promise.all([
         this.todasAsPaginas((c) => this.catalogos.origens(c, true).then((r) => ({ itens: r.itens.map((o) => ({ valor: o.id, rotulo: o.nome })), proximoCursor: r.proximoCursor }))),
-        this.todasAsPaginas((c) => this.filiaisApi.listar(c).then((r) => ({ itens: r.itens.filter((f) => f.ativa).map((f) => ({ valor: f.id, rotulo: f.nome })), proximoCursor: r.proximoCursor }))),
+        // Filiais: só admin lista (403 para gestor e enquanto o cliente não tem admin) — o seletor fica vazio,
+        // a filial é opcional; sem isto o 403 virava "sem acesso aos formulários" para quem pode criá-los.
+        this.todasAsPaginas((c) => this.filiaisApi.listar(c).then((r) => ({ itens: r.itens.filter((f) => f.ativa).map((f) => ({ valor: f.id, rotulo: f.nome })), proximoCursor: r.proximoCursor })))
+          .catch((e: unknown) => { if (ehStatus(e, 403)) return []; throw e }),
         this.api.etapasDoFunil().then((r) => r.itens.filter((e) => e.tipo === 'aberto' && e.ativo).map((e) => ({ valor: e.id, rotulo: e.nome }))),
       ])
       this.opcoesOrigem.set(origens); this.opcoesFilial.set(filiais); this.opcoesEtapa.set(etapas)

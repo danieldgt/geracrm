@@ -1,5 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, OnInit, OnDestroy, computed } from '@angular/core'
 import { SlicePipe } from '@angular/common'
+import { IconeComponente } from '../../compartilhado/ui/icone.componente.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { InboxPagina } from './inbox.pagina.js'
@@ -22,7 +23,7 @@ import { rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.
   selector: 'app-chat-rail',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [InboxPagina, SlicePipe],
+  imports: [InboxPagina, SlicePipe, IconeComponente],
   template: `
     <div class="rail" [class.aberto]="servico.railAberto()"
          [class.sobrepor]="servico.railAberto() && servico.railSobrepor()"
@@ -40,7 +41,7 @@ import { rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.
         <!-- No celular (< 720px) este botão é o trilho inteiro: flutua no canto,
              com o contador de não lidas; a faixa de avatares some. -->
         <button class="topo-btn" (click)="servico.abrirRail()" title="Abrir chat" [attr.aria-label]="rotuloBotao()">
-          <span class="ico" aria-hidden="true">💬</span>
+          <span class="ico" aria-hidden="true"><ui-icone nome="message-circle" /></span>
           @if (contador()) { <span class="badge" aria-hidden="true">{{ contador() }}</span> }
         </button>
         <div class="avs">

@@ -9,6 +9,7 @@ import {
   ToastServico, corpoDoErro, mensagemDeErro, type ItemDefinicao,
 } from '../../compartilhado/ui/index.js'
 import {
+  diaSemanaCurto,
   ROTULO_MODALIDADE, acoesDoStatus, payloadEvento, formDoEvento, rotuloStatusEvento, rotuloTipoEvento,
   textoDoConflito, tomDoStatus, validarEvento,
 } from './agenda.regras.js'
@@ -28,7 +29,7 @@ import {
         <p class="linha">
           <span class="ponto" [attr.data-cor]="e.cor" aria-hidden="true"></span>
           <ui-badge [tom]="tom()">{{ rotuloStatus() }}</ui-badge>
-          <span class="quando">{{ e.inicio | date: "EEE, dd/MM/yyyy 'das' HH:mm" }} às {{ e.fim | date: 'HH:mm' }}</span>
+          <span class="quando">{{ diaSemanaCurto(e.inicio) }}, {{ e.inicio | date: "dd/MM/yyyy 'das' HH:mm" }} às {{ e.fim | date: 'HH:mm' }}</span>
         </p>
         <ui-lista-definicao [colunas]="2" [itens]="itens()" />
         @if (e.contatoId) {
@@ -98,6 +99,7 @@ export class AgendaDetalheModalComponente {
 
   /** O evento aberto; `null` = modal fechado. */
   readonly evento = input<EventoAgenda | null>(null)
+  protected readonly diaSemanaCurto = diaSemanaCurto
   readonly alterado = output<void>()
   readonly fechar = output<void>()
 

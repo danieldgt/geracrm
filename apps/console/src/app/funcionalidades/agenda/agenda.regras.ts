@@ -55,6 +55,20 @@ const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julh
 export const DIAS_DA_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'] as const
 export const rotuloMes = (ano: number, mes: number): string => `${MESES[mes]} de ${ano}`
 
+const DIAS_SEMANA = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado']
+/** "qui" — dia da semana abreviado (horário local), sem depender do locale do Angular. */
+export function diaSemanaCurto(instante: string | Date): string {
+  const d = typeof instante === 'string' ? new Date(instante) : instante
+  return Number.isNaN(d.getTime()) ? '' : DIAS_SEMANA[d.getDay()]!.slice(0, 3)
+}
+/** "quinta-feira, 05 de novembro" para um dia YYYY-MM-DD — sem depender do locale registrado no Angular. */
+export function rotuloDia(iso: string): string {
+  const [a, m, d] = iso.split('-').map(Number)
+  if (!a || !m || !d) return ''
+  const data = new Date(a, m - 1, d)
+  return `${DIAS_SEMANA[data.getDay()]}, ${dois(d)} de ${MESES[m - 1]!.toLowerCase()}`
+}
+
 /** Mês de referência (mes: 0-11). */
 export interface MesRef { readonly ano: number; readonly mes: number }
 

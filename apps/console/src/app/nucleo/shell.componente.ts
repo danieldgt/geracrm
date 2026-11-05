@@ -56,9 +56,9 @@ import { AuthServico } from './auth.servico.js'
              (keydown.tab)="prenderFoco($event)" (keydown.shift.tab)="prenderFoco($event)">
         <div class="marca">
           @if (celular()) {
-            <button class="alternar" (click)="mudarGaveta('alternar')" aria-label="Fechar menu">✕</button>
+            <button class="alternar" (click)="mudarGaveta('alternar')" aria-label="Fechar menu"><ui-icone nome="x" /></button>
           } @else {
-            <button class="alternar" (click)="recolhida.set(!recolhida())" aria-label="Recolher menu">☰</button>
+            <button class="alternar" (click)="recolhida.set(!recolhida())" aria-label="Recolher menu"><ui-icone nome="menu" /></button>
           }
           <a routerLink="/inicio" class="logo" aria-label="Drezz Hub — ir para o início" (click)="mudarGaveta('navegou')">
             <app-marca [rotulo]="!recolhidaEfetiva()" />
@@ -138,7 +138,7 @@ import { AuthServico } from './auth.servico.js'
       <header class="topo" [attr.inert]="atrasInerte() ? '' : null">
         @if (celular()) {
           <button #abreMenu class="abre-menu" (click)="mudarGaveta('alternar')" aria-label="Abrir menu"
-                  [attr.aria-expanded]="gavetaAberta()" aria-controls="menu-principal">☰</button>
+                  [attr.aria-expanded]="gavetaAberta()" aria-controls="menu-principal"><ui-icone nome="menu" /></button>
           <a routerLink="/inicio" class="logo-topo" aria-label="Drezz Hub — ir para o início">
             <app-marca [rotulo]="false" />
           </a>
@@ -152,7 +152,7 @@ import { AuthServico } from './auth.servico.js'
           <span class="sse-txt">{{ rotuloSse() }}</span>
         </span>
         <button class="tema" (click)="tema.alternar()" [attr.aria-label]="'Tema: ' + tema.tema()"
-                [title]="'Tema: ' + tema.tema() + ' (clique para trocar)'">{{ iconeTema() }}</button>
+                [title]="'Tema: ' + tema.tema() + ' (clique para trocar)'"><ui-icone [nome]="iconeTema()" /></button>
         <app-sino />
         <app-menu-usuario />
       </header>
@@ -237,7 +237,7 @@ import { AuthServico } from './auth.servico.js'
     .sse[data-estado='offline'] { color: var(--erro); }
     @media (max-width: 640px) { .sse-txt { display: none; } }
     .marca .espaco { flex: 1; }
-    .tema { border: none; background: transparent; color: var(--texto-secundario); font-size: 15px; cursor: pointer; padding: 4px 6px; border-radius: var(--raio-controle); }
+    .tema { border: none; background: transparent; color: var(--texto-secundario); display: inline-flex; align-items: center; font-size: 15px; cursor: pointer; padding: 4px 6px; border-radius: var(--raio-controle); }
     .tema:hover { background: var(--superficie-hover); }
     .tema:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .alternar { border: none; background: transparent; color: var(--texto-secundario); font-size: 16px; cursor: pointer; padding: 4px; }
@@ -467,7 +467,7 @@ export class ShellComponente implements OnInit {
   }
 
   iconeTema(): string {
-    return this.tema.tema() === 'claro' ? '☀️' : this.tema.tema() === 'escuro' ? '🌙' : '🖥️'
+    return this.tema.tema() === 'claro' ? 'sun' : this.tema.tema() === 'escuro' ? 'moon' : 'monitor'
   }
 
   /**

@@ -30,7 +30,7 @@ import { aplicarMascaraNoElemento, digitosDaMascara, formatarMascara, type TipoM
                     (input)="digitou($any($event.target).value)" (blur)="aoTocar()"></textarea>
         } @else {
           <input class="controle" [id]="id" [type]="tipoNativo()" [attr.inputmode]="inputmode() ?? (tipo() === 'dinheiro' ? 'decimal' : null)"
-                 [placeholder]="placeholder()" [value]="valor()"
+                 [placeholder]="placeholder()" [value]="exibido()"
                  [disabled]="desabilitadoEfetivo()" [attr.autocomplete]="autocomplete()"
                  [attr.maxlength]="maxlength()" [attr.min]="min()" [attr.max]="max()" [attr.step]="step()"
                  [attr.aria-invalid]="aria().ariaInvalid" [attr.aria-required]="aria().ariaRequired"
@@ -77,6 +77,12 @@ export class CampoComponente implements ControlValueAccessor {
   private readonly desabilitadoCva = signal(false)
   protected readonly desabilitadoEfetivo = computed(() => this.desabilitado() || this.desabilitadoCva())
   protected readonly tipoNativo = computed(() => (this.tipo() === 'dinheiro' ? 'text' : this.tipo()))
+  /** What the input shows: with a mask, `[valor]` given as raw digits (prefilled forms) is shown formatted too. */
+  protected readonly exibido = computed(() => {
+    const m = this.mascara()
+    return m ? formatarMascara(m, this.valor()) : this.valor()
+  })
+
   protected readonly aria = computed(() =>
     atributosAria({ id: this.id, erro: this.erro(), dica: this.dica(), obrigatorio: this.obrigatorio() }))
 

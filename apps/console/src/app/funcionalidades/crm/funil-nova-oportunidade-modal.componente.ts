@@ -4,7 +4,7 @@ import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import {
   CampoComponente, GradeFormComponente, ModalComponente, SelectComponente, SelectPaginadoComponente, ToastServico,
-  queryDeLista, reaisParaCentavos, type CarregarOpcoes, type OpcaoPaginada, type OpcaoSelect,
+  mensagemDeErro, queryDeLista, reaisParaCentavos, type CarregarOpcoes, type OpcaoPaginada, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
 import { FunilServico, type Etapa } from './funil.servico.js'
 import {
@@ -50,8 +50,10 @@ export class FunilNovaOportunidadeModalComponente {
   readonly criada = output<void>()
   readonly fechar = output<void>()
 
-  protected readonly etapas = computed<OpcaoSelect[]>(() =>
-    this.funil.colunas().map((c) => c.etapa).filter((e: Etapa) => e.tipo === 'aberto').map((e) => ({ valor: e.id, rotulo: e.nome })))
+  // ⚠️ The modal loads its own stages: the board columns (`funil.colunas`) are only loaded on the Board tab,
+  //    and the page opens on Panorama — reading them left "Etapa inicial" empty.
+  private readonly etapasAbertas = signal<readonly Etapa[]>([])
+  protected readonly etapas = computed<OpcaoSelect[]>(() => this.etapasAbertas().map((e) => ({ valor: e.id, rotulo: e.nome })))
   protected readonly contato = signal('')
   protected readonly etapaId = signal('')
   protected readonly valor = signal('')
@@ -64,9 +66,21 @@ export class FunilNovaOportunidadeModalComponente {
       if (!this.aberto()) return
       untracked(() => {
         this.contato.set(''); this.valor.set(''); this.erros.set({}); this.erroGeral.set(null)
-        this.etapaId.set(this.etapas()[0]?.valor ?? '') // padrão: a primeira etapa aberta
+        void this.carregarEtapas()
       })
     })
+  }
+
+  private async carregarEtapas(): Promise<void> {
+    const daColuna = this.funil.colunas().map((c) => c.etapa).filter((e: Etapa) => e.tipo === 'aberto')
+    this.etapasAbertas.set(daColuna)
+    if (daColuna.length === 0) {
+      try {
+        const r = await firstValueFrom(this.http.get<{ itens: Etapa[] }>('/v1/funil/etapas'))
+        this.etapasAbertas.set(r.itens.filter((e) => e.tipo === 'aberto'))
+      } catch (e) { this.erroGeral.set(mensagemDeErro(e, 'Não foi possível carregar as etapas do funil.')) }
+    }
+    this.etapaId.set(this.etapas()[0]?.valor ?? '') // padrão: a primeira etapa aberta
   }
 
   /** Busca de contato (mínimo de 2 letras; a API devolve os 20 melhores, uma página só). */

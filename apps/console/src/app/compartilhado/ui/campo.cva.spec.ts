@@ -1,6 +1,6 @@
 import '@angular/compiler'
 import { describe, it, expect, vi } from 'vitest'
-import { Injector, runInInjectionContext } from '@angular/core'
+import { Injector, runInInjectionContext, ɵSIGNAL as SIGNAL } from '@angular/core'
 import { CampoComponente } from './campo.componente.js'
 import { SelectComponente } from './select.componente.js'
 import { SelectPaginadoComponente } from './select-paginado.componente.js'
@@ -19,6 +19,16 @@ describe('ui-campo como ControlValueAccessor', () => {
     expect(c.valor()).toBe('Ana')
     c.writeValue(null)
     expect(c.valor()).toBe('')
+  })
+
+  it('com máscara, o [valor] em dígitos crus (formulário pré-preenchido) aparece formatado', () => {
+    const c = criar(CampoComponente)
+    const no = (c.mascara as unknown as Record<symbol, { applyValueToInputSignal: (n: unknown, v: unknown) => void }>)[SIGNAL]!
+    no.applyValueToInputSignal(no, 'cnpj')
+    c.valor.set('11222333000181')
+    expect((c as unknown as { exibido: () => string }).exibido()).toBe('11.222.333/0001-81')
+    c.valor.set('11.222.333/0001-81')
+    expect((c as unknown as { exibido: () => string }).exibido()).toBe('11.222.333/0001-81')
   })
 
   it('digitar avisa o controle e atualiza o model (uso [(valor)])', () => {

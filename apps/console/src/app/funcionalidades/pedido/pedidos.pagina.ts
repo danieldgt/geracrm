@@ -9,8 +9,7 @@ import {
   CabecalhoTelaComponente, StatCardComponente, FiltrosComponente, FiltroPeriodoComponente, SelectComponente, TabelaComponente,
   CelulaDiretiva, PaginacaoComponente, ModalComponente, ListaDefinicaoComponente, BadgeComponente,
   EstadoComponente, EsqueletoComponente, PainelComponente,
-  type ColunaTabela, type LinhaTabela, type OpcaoSelect, type TomStat,
-} from '../../compartilhado/ui/index.js'
+  type ColunaTabela, type LinhaTabela, type OpcaoSelect, type TomStat, IconeComponente } from '../../compartilhado/ui/index.js'
 import {
   rotuloDoEstado, tomDoEstado, variacaoDaGrade, formatarDataHora, indicadoresDosContadores, montarQueryPedidos, type ContadoresPedidos,
 } from './pedidos.regras.js'
@@ -57,7 +56,7 @@ const FILTROS = [
     NgTemplateOutlet, RouterLink,
     CabecalhoTelaComponente, StatCardComponente, FiltrosComponente, FiltroPeriodoComponente, SelectComponente, TabelaComponente,
     CelulaDiretiva, PaginacaoComponente, ModalComponente, ListaDefinicaoComponente, BadgeComponente,
-    EstadoComponente, EsqueletoComponente, PainelComponente,
+    EstadoComponente, EsqueletoComponente, PainelComponente, IconeComponente,
   ],
   template: `
     <ui-cabecalho-tela titulo="Pedidos" subtitulo="Todos os pedidos por estado, vinculados ao cliente. Clique em Ver para abrir os detalhes." />
@@ -148,7 +147,7 @@ const FILTROS = [
           <ui-badge [tom]="tomDoEstado(d.estado)">{{ rotuloDoEstado(d.estado) }}</ui-badge>
           <div class="m-meta">
             @if (d.conversaId) {
-              <button type="button" class="m-conversa" (click)="abrirConversa(d.conversaId)" title="Abrir a conversa onde este pedido nasceu">💬 Conversa de origem</button>
+              <button type="button" class="m-conversa" (click)="abrirConversa(d.conversaId)" title="Abrir a conversa onde este pedido nasceu"><ui-icone nome="message-circle" [tamanho]="14" /> Conversa de origem</button>
             }
             @if (d.estado === 'rascunho' && d.contatoId) {
               <a class="m-link" routerLink="/pedido" [queryParams]="{ contato: d.contatoId }">✎ Continuar montando</a>

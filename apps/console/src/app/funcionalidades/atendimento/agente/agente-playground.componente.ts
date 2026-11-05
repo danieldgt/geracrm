@@ -66,7 +66,7 @@ type Estado = 'pronto' | 'sem_permissao'
 
           <div class="mensagens" #lista>
             @if (turnos().length === 0) {
-              <ui-estado titulo="Faça de cliente" icone="💬"
+              <ui-estado titulo="Faça de cliente" icone="message-circle"
                 descricao="Escreva como um cliente escreveria no WhatsApp — “tem camiseta verde G?”, “qual o prazo pra Recife?” — e veja o que o agente responde e por quê." />
             }
             @for (t of turnos(); track t.id) {
