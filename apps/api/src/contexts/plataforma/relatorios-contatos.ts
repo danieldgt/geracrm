@@ -261,6 +261,7 @@ export const TOP_GRUPOS = 20
 /**
  * Agrupa a coorte (opcionalmente já filtrada por `filtro`) por (chave, rótulo) SQL — top N por contatos,
  * `truncado` quando houve corte. `juncao` entra depois de `FROM k` e pode referenciar `k.id`.
+ * Empate desfeito pela chave em `COLLATE "C"`: a ordem não depende da collation do banco.
  */
 export async function agruparCoorte(
   tx: Sql,
@@ -274,7 +275,7 @@ export async function agruparCoorte(
       FROM k ${def.juncao ?? tx``}
      WHERE ${filtro ?? tx`true`}
      GROUP BY 1
-     ORDER BY count(*) DESC, 1
+     ORDER BY count(*) DESC, ${def.chave} COLLATE "C"
      LIMIT ${top + 1}`
   const truncado = linhas.length > top
   return {

@@ -175,10 +175,11 @@ beforeAll(async () => {
   await app.ready()
 }, 60_000)
 
+// 60 s: a limpeza apaga os 20 mil contatos do teste de volume — no runner do CI passa dos 10 s padrão.
 afterAll(async () => {
   await limpar()
   await app?.close(); await encerrarBanco(); await dono.end()
-})
+}, 60_000)
 
 describe('regras puras', () => {
   it('vendedores: 1..10 UUIDs distintos', () => {
