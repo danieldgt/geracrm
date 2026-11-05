@@ -67,6 +67,8 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 
 > **Merge e deploy (2026-11-05, ~07h30)**: `feat/paridade-am` em `main` (merge `--no-ff`), com a correção do relógio do aviso de reunião (teste de no-show só passava às terças). Checks na `main`: lint, typecheck, build, api 3140, console 936, shared 1109, conectores 46, monitor 20, e2e 8/8. Subiu sem `PROXY_SEGREDO` e sem as permissões IAM novas do Cognito — ambas degradam sem quebrar; continuam como ações do dono antes de ligar formulário público ou gestão de usuários em cliente.
 
+> **Teste no navegador (2026-11-05, ~09h)**: produção (48 telas, ficha, configurações — só leitura) sem erro; local com gravação (contato, etiqueta, origem, tarefa, agenda, oportunidade + ganho, formulário público). Corrigido e no ar: editor de formulário bloqueado pelo 403 de `/v1/filiais` (fdd8750), etapas vazias em "Nova oportunidade", modal de evento que não fechava, máscara no `[valor]` pré-preenchido, datas em inglês na Agenda, últimos emojis da casca; cursores µs da paridade perdiam itens na 2ª página (1ee0795). **Pendente (anterior à paridade)**: 7 cursores do contexto atendimento (conversas, kanban, log de mensagens, templates, sessões/decisões do agente, conhecimento) montam o cursor com `toISOString()` + `::timestamptz` — itens no mesmo milissegundo podem sumir entre páginas; trocar por `em_txt` + `::text::timestamptz` como em `cursor-criado-em.ts`.
+
 > Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.
 
 ## 1. Política de modelos
