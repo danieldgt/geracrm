@@ -65,6 +65,8 @@ Legenda: ⬜ a fazer · 🔄 em andamento (agente rodando) · 🔍 em revisão �
 
 > **Fechamento (2026-11-03, 22h)**: todas as raias ✅ em `feat/paridade-am`. Suíte completa: api 3140 (216 arquivos), console 936, shared 1109, conectores 46; lint e typecheck verdes; e2e 8/8. `main` intocada — merge só quando o dono pedir.
 
+> **Merge e deploy (2026-11-05, ~07h30)**: `feat/paridade-am` em `main` (merge `--no-ff`), com a correção do relógio do aviso de reunião (teste de no-show só passava às terças). Checks na `main`: lint, typecheck, build, api 3140, console 936, shared 1109, conectores 46, monitor 20, e2e 8/8. Subiu sem `PROXY_SEGREDO` e sem as permissões IAM novas do Cognito — ambas degradam sem quebrar; continuam como ações do dono antes de ligar formulário público ou gestão de usuários em cliente.
+
 > Migrations 0112 e 0114 corrigidas no lugar (NOT VALID + VALIDATE) antes de qualquer deploy; bancos locais precisam do hash atualizado em `schema_migrations` ou recriação.
 
 ## 1. Política de modelos
