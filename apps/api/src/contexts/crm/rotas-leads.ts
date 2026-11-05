@@ -84,7 +84,7 @@ export async function rotasLeads(app: FastifyInstance): Promise<void> {
                 : chave === 'qualificado' ? tx`c.qualificado IS TRUE`
                 : tx`c.qualificado IS FALSE`}
            AND ${curEm === null ? tx`true`
-                : tx`(c.criado_em, c.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+                : tx`(c.criado_em, c.id) < (${curEm}::text::timestamptz, ${curId}::uuid)`}
          ORDER BY c.criado_em DESC, c.id DESC
          LIMIT ${PAGINA + 1}`
       })

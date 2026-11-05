@@ -95,8 +95,8 @@ export async function lerFeedDoContato(
   // Filtro de cursor por ramo: (em, id) < (cursor.em, cursor.id).
   const cur = (colEm: Fragmento, colId: Fragmento) =>
     cursor === null ? tx`true`
-      : tx`(${colEm}, (${colId}) COLLATE "C") < (${cursor.em}::timestamptz, ${cursor.id}::text COLLATE "C")`
-  const ate = (col: Fragmento) => cursor === null ? tx`true` : tx`${col} <= ${cursor.em}::timestamptz`
+      : tx`(${colEm}, (${colId}) COLLATE "C") < (${cursor.em}::text::timestamptz, ${cursor.id}::text COLLATE "C")`
+  const ate = (col: Fragmento) => cursor === null ? tx`true` : tx`${col} <= ${cursor.em}::text::timestamptz`
 
   const linhas = await tx<LinhaFeed[]>`
     SELECT feed.*, to_char(feed.em AT TIME ZONE 'UTC', ${FORMATO_UTC}) AS em_txt FROM (

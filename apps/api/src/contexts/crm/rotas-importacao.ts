@@ -306,7 +306,7 @@ export async function rotasImportacao(app: FastifyInstance): Promise<void> {
         FROM importacao i LEFT JOIN usuario u ON u.tenant_id = i.tenant_id AND u.id = i.criado_por
        WHERE i.tenant_id = tenant_atual()
          ${tipo ? tx`AND i.tipo = ${tipo}` : tx``}
-         ${c ? tx`AND (i.criado_em, i.id) < (${c.em}::timestamptz, ${c.id}::uuid)` : tx``}
+         ${c ? tx`AND (i.criado_em, i.id) < (${c.em}::text::timestamptz, ${c.id}::uuid)` : tx``}
        ORDER BY i.criado_em DESC, i.id DESC
        LIMIT ${PAGINA + 1}`)
     const temMais = linhas.length > PAGINA

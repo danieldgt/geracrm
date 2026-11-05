@@ -35,7 +35,7 @@ export async function rotasBloqueios(app: FastifyInstance): Promise<void> {
           FROM lista_bloqueio
          WHERE tenant_id = tenant_atual()
            AND ${cursorEm === null ? tx`true` : tx`
-                 (bloqueado_em, chave_bloqueio) < (${cursorEm}::timestamptz, ${cursorChave})`}
+                 (bloqueado_em, chave_bloqueio) < (${cursorEm}::text::timestamptz, ${cursorChave})`}
          ORDER BY bloqueado_em DESC, chave_bloqueio DESC
          LIMIT ${PAGINA + 1}`)
 

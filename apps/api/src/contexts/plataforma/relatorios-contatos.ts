@@ -192,7 +192,7 @@ export async function listarContatos(
     SELECT k.*, to_char(k.criado_em AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS em_txt
       FROM k
      WHERE ${condicoesFiltro(tx, filtros)}
-       AND ${cursor === null ? tx`true` : tx`(k.criado_em, k.id) < (${cursor.em}::timestamptz, ${cursor.id}::uuid)`}
+       AND ${cursor === null ? tx`true` : tx`(k.criado_em, k.id) < (${cursor.em}::text::timestamptz, ${cursor.id}::uuid)`}
      ORDER BY k.criado_em DESC, k.id DESC
      LIMIT ${limite + 1}`
   const temMais = linhas.length > limite

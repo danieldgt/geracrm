@@ -219,7 +219,7 @@ export async function rotasCampanha(app: FastifyInstance, opcoes: OpcoesRotasCam
         ${selecionarCampanhas(tx)}
          WHERE k.tenant_id = tenant_atual()
            AND ${estado === undefined ? tx`true` : tx`k.estado = ${estado}`}
-           AND ${curEm === null ? tx`true` : tx`(k.criado_em, k.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+           AND ${curEm === null ? tx`true` : tx`(k.criado_em, k.id) < (${curEm}::text::timestamptz, ${curId}::uuid)`}
          ORDER BY k.criado_em DESC, k.id DESC LIMIT ${PAGINA + 1}`)
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas

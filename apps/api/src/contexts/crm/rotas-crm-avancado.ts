@@ -104,7 +104,7 @@ export async function rotasCrmAvancado(app: FastifyInstance): Promise<void> {
          WHERE c.tenant_id = tenant_atual() AND c.ativo AND ${predicado(tx, chave)}
            AND ${condicaoContato(tx, await escopoDaRequisicao(tx, req), 'c')}
            AND ${curOrd === null ? tx`true`
-                : tx`(coalesce(c.ultima_venda_em, c.criado_em), c.id) < (${curOrd}::timestamptz, ${curId}::uuid)`}
+                : tx`(coalesce(c.ultima_venda_em, c.criado_em), c.id) < (${curOrd}::text::timestamptz, ${curId}::uuid)`}
          ORDER BY coalesce(c.ultima_venda_em, c.criado_em) DESC, c.id DESC
          LIMIT ${PAGINA + 1}`)
 

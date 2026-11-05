@@ -146,7 +146,7 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
              to_char(f.criado_em AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS em_txt
         FROM formulario f
        WHERE f.tenant_id = tenant_atual()
-         AND ${cur === null ? tx`true` : tx`(f.criado_em, f.id) < (${cur.em}::timestamptz, ${cur.id}::uuid)`}
+         AND ${cur === null ? tx`true` : tx`(f.criado_em, f.id) < (${cur.em}::text::timestamptz, ${cur.id}::uuid)`}
        ORDER BY f.criado_em DESC, f.id DESC LIMIT ${PAGINA + 1}`)
     const temMais = linhas.length > PAGINA
     const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
@@ -335,7 +335,7 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
             FROM formulario_resposta r
             LEFT JOIN contato c ON c.tenant_id = r.tenant_id AND c.id = r.contato_id
            WHERE r.tenant_id = tenant_atual() AND r.formulario_id = ${req.params.id}
-             AND ${cur === null ? tx`true` : tx`(r.criado_em, r.id) < (${cur.em}::timestamptz, ${cur.id}::uuid)`}
+             AND ${cur === null ? tx`true` : tx`(r.criado_em, r.id) < (${cur.em}::text::timestamptz, ${cur.id}::uuid)`}
            ORDER BY r.criado_em DESC, r.id DESC LIMIT ${PAGINA + 1}`
       })
       if (r === null) return reply.code(404).send({ erro: 'formulario.nao_encontrado' })
@@ -383,7 +383,7 @@ export async function rotasFormularios(app: FastifyInstance): Promise<void> {
               FROM formulario_resposta r
               LEFT JOIN contato c ON c.tenant_id = r.tenant_id AND c.id = r.contato_id
              WHERE r.tenant_id = tenant_atual() AND r.formulario_id = ${id}
-               AND ${cur === null ? tx`true` : tx`(r.criado_em, r.id) < (${cur.em}::timestamptz, ${cur.id}::uuid)`}
+               AND ${cur === null ? tx`true` : tx`(r.criado_em, r.id) < (${cur.em}::text::timestamptz, ${cur.id}::uuid)`}
              ORDER BY r.criado_em DESC, r.id DESC LIMIT ${LOTE_CSV}`)
           if (lote.length === 0) return
           yield lote.map((l) => [l.em_txt, l.contato_nome ?? '', l.contato_novo ? 'sim' : 'não', ROTULO_VERIFICACAO[l.verificacao] ?? '',

@@ -49,7 +49,7 @@ export async function rotasContatoArquivo(app: FastifyInstance): Promise<void> {
             FROM contato_arquivo a
             LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.enviado_por
            WHERE a.tenant_id = tenant_atual() AND a.contato_id = ${req.params.id}
-             AND ${cur === null ? tx`true` : tx`(a.criado_em, a.id) < (${cur[0]}::timestamptz, ${cur[1]}::uuid)`}
+             AND ${cur === null ? tx`true` : tx`(a.criado_em, a.id) < (${cur[0]}::text::timestamptz, ${cur[1]}::uuid)`}
            ORDER BY a.criado_em DESC, a.id DESC LIMIT ${PAGINA + 1}`
       })
       if (!linhas) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
