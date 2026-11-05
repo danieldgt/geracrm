@@ -1,12 +1,15 @@
 import { Component, ChangeDetectionStrategy, inject, input, signal, computed, effect, untracked } from '@angular/core'
-import type { EstadoAtivas, TemplateAprovadoResumo } from '@geracrm/shared'
+import {
+  DESCARTE_APOS_HORAS_SUGERIDO, REATIVACAO_LIMITE_DIA_MAX, REATIVACAO_LIMITE_DIA_PADRAO, canalAceitaReativacao,
+  type EstadoAtivas, type TemplateAprovadoResumo,
+} from '@geracrm/shared'
 import {
   BadgeComponente, BotaoComponente, ConfirmacaoServico, EsqueletoComponente, EstadoComponente, PainelComponente, ToastServico,
 } from '../../../compartilhado/ui/index.js'
 import { ehSemPermissao } from './agente.servico.js'
 import { AtivasServico } from './ativas.servico.js'
 import {
-  adicionarFeriado, badgeStatusTemplate, confirmacaoLiberar, erroDaApi, feriadoDeData, removerFeriado, rotuloFeriado, rotuloSuspensao,
+  adicionarFeriado, badgeStatusTemplate, confirmacaoLiberar, confirmacaoRiscoReativacao, erroDaApi, exigeConfirmarRiscoReativacao, feriadoDeData, lerDias, removerFeriado, rotuloFeriado, rotuloSuspensao,
   formatarNoFuso, validarAtivas, type ErrosAtivas, type FormAtivas,
 } from './ativas.regras.js'
 
@@ -117,6 +120,64 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
               </div>
             </section>
 
+            <section class="bloco">
+              <h4 class="txt-rotulo">Fim da sequência sem resposta</h4>
+              <p class="obs">Desligado por padrão. Ligado, o contato que não respondeu ao último retorno vai para Descartado com o motivo
+                “sem resposta”, sem enviar mensagem — só com o agente em modo autônomo, e nunca quem já comprou.
+                Se o cliente escrever em qualquer momento antes ou depois, o descarte é cancelado e ele volta a ser novo.</p>
+              <label class="campo"><span>Descartar após (horas) sem resposta</span>
+                <input type="number" min="0" [max]="maxDescarte" step="1" [value]="form().descarteAposHoras"
+                       (input)="mudar('descarteAposHoras', +$any($event.target).value)" [attr.aria-invalid]="erros().descarteAposHoras ? 'true' : null" />
+                @if (erros().descarteAposHoras; as e) { <span class="msg-erro">{{ e }}</span> }
+                <small>0 = desligado (padrão). Sugestão para ligar: {{ descarteSugerido }} h.</small></label>
+
+              <h4 class="txt-rotulo sub-bloco">Reativação</h4>
+              @if (!aceitaReativacao(d.tipoCanal)) {
+                <p class="obs">A reativação só existe nos números de WhatsApp (oficial e não-oficial).</p>
+              } @else {
+              <p class="obs">Contato descartado por falta de resposta recebe uma mensagem de reativação nos prazos abaixo, contados do descarte
+                (espalhados em até 3 dias para cada lado, para não sair tudo no mesmo dia).
+                Respeita opt-out, preferências do contato, expediente, limites e a qualidade do número.
+                @if (d.exigeTemplateForaDaJanela) { No WhatsApp oficial sai SEMPRE por template aprovado. }
+                @else { Neste número (não-oficial) sai o texto abaixo, respeitando o aquecimento; sem texto, nada é enviado. }</p>
+              @if (d.tipoCanal === 'whatsapp_nao_oficial') {
+                <p class="aviso aviso--erro" role="note"><strong>Risco de banimento.</strong> Número não-oficial: escrever para quem parou de
+                  responder é o tipo de mensagem que mais gera denúncia, e o WhatsApp pode banir o número sem aviso. Ligar pede confirmação.</p>
+              }
+              <label class="chk"><input type="checkbox" [checked]="form().reativacao.ativa"
+                     (change)="mudarReativacao({ ativa: $any($event.target).checked })" />Reativar contatos descartados</label>
+              <div class="grade-2">
+                <label class="campo"><span>Prazos em dias (até 3, crescentes)</span>
+                  <input type="text" inputmode="numeric" [value]="form().reativacao.dias.join(', ')"
+                         (change)="mudarReativacao({ dias: lerDias($any($event.target).value) })"
+                         [attr.aria-invalid]="erros().reativacao ? 'true' : null" />
+                  <small>Padrão: 30, 90.</small></label>
+                <label class="campo"><span>Máximo de reativações por dia neste número</span>
+                  <input type="number" min="1" [max]="maxReativacoesDia" step="1" [value]="form().reativacao.limiteDia"
+                         (input)="mudarReativacao({ limiteDia: +$any($event.target).value })"
+                         [attr.aria-invalid]="erros().reativacao ? 'true' : null" />
+                  <small>Padrão: {{ d.padroes.reativacao.limiteDia }}. Acabou a cota do dia, a próxima espera o dia seguinte.</small></label>
+                @if (d.exigeTemplateForaDaJanela) {
+                  <label class="campo"><span>Template de reativação</span>
+                    <select [value]="form().reativacao.templateId ?? ''" (change)="mudarReativacao({ templateId: $any($event.target).value || null })">
+                      <option value="">Nenhum</option>
+                      @if (form().reativacao.templateId; as id) { @if (!temNaLista(id)) { <option [value]="id">Template escolhido</option> } }
+                      @for (t of templates(); track t.id) {
+                        <option [value]="t.id" [disabled]="!t.compativel">{{ t.nome }} ({{ t.idioma }}){{ t.compativel ? '' : ' — usa variável além do primeiro nome' }}</option>
+                      }
+                    </select>
+                  </label>
+                }
+              </div>
+              @if (!d.exigeTemplateForaDaJanela) {
+                <label class="campo"><span>Texto da reativação</span>
+                  <textarea rows="3" [maxLength]="maxTextoReativacao" [value]="form().reativacao.texto ?? ''"
+                            (input)="mudarReativacao({ texto: $any($event.target).value || null })"></textarea></label>
+              }
+              @if (erros().reativacao; as e) { <span class="msg-erro">{{ e }}</span> }
+              }
+            </section>
+
             @if (d.exigeTemplateForaDaJanela) {
               <section class="bloco">
                 <h4 class="txt-rotulo">Fora da janela de 24 h (WhatsApp oficial)</h4>
@@ -189,6 +250,9 @@ type Estado = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
     .add .campo { flex: 0 1 200px; }
     .campo { display: grid; gap: var(--espacamento-1); grid-template-columns: minmax(0, 1fr); min-width: 0; color: var(--texto); font-size: 13px; }
     .campo small { color: var(--texto-suave); font-size: 12px; }
+    .sub-bloco { margin-top: var(--espacamento-4); }
+    .campo textarea { font: inherit; width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
+      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); resize: vertical; }
     .campo input, .campo select { font: inherit; width: 100%; min-height: var(--densidade-alvo-clique-console);
       padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
       border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); }
@@ -218,7 +282,10 @@ export class AgenteAtivasComponente {
 
   readonly estado = signal<Estado>('carregando')
   readonly dados = signal<EstadoAtivas | null>(null)
-  readonly form = signal<FormAtivas>({ limiteDia: 2, limiteSemana: 4, templateRetorno: null, feriados: [] })
+  readonly form = signal<FormAtivas>({
+    limiteDia: 2, limiteSemana: 4, templateRetorno: null, descarteAposHoras: 0,
+    reativacao: { ativa: false, dias: [30, 90], templateId: null, texto: null, limiteDia: REATIVACAO_LIMITE_DIA_PADRAO }, feriados: [],
+  })
   private readonly original = signal<FormAtivas | null>(null)
   readonly erros = signal<ErrosAtivas>({})
   readonly salvando = signal(false)
@@ -231,6 +298,12 @@ export class AgenteAtivasComponente {
 
   readonly maxDia = 10
   readonly maxSemana = 30
+  readonly maxDescarte = 720
+  readonly maxTextoReativacao = 500
+  readonly maxReativacoesDia = REATIVACAO_LIMITE_DIA_MAX
+  readonly descarteSugerido = DESCARTE_APOS_HORAS_SUGERIDO
+  readonly lerDias = lerDias
+  readonly aceitaReativacao = canalAceitaReativacao
 
   readonly alterado = computed(() => JSON.stringify(this.form()) !== JSON.stringify(this.original()))
   readonly escolhido = computed(() => {
@@ -255,7 +328,7 @@ export class AgenteAtivasComponente {
     this.estado.set('carregando'); this.erros.set({})
     try {
       const d = await this.api.carregar(canalId)
-      const f: FormAtivas = { ...d.config, feriados: [...d.feriados] }
+      const f: FormAtivas = { ...d.config, reativacao: { ...d.config.reativacao, dias: [...d.config.reativacao.dias] }, feriados: [...d.feriados] }
       this.dados.set(d); this.form.set(f); this.original.set(f)
       this.estado.set('pronto')
       if (d.exigeTemplateForaDaJanela) void this.carregarTemplates(null)
@@ -284,6 +357,10 @@ export class AgenteAtivasComponente {
     })
   }
 
+  mudarReativacao(parte: Partial<FormAtivas['reativacao']>): void {
+    this.mudar('reativacao', { ...this.form().reativacao, ...parte })
+  }
+
   incluirFeriado(): void {
     const f = feriadoDeData(this.novaData(), this.todoAno())
     if (!f) { this.erros.update((e) => ({ ...e, feriados: 'Escolha uma data válida.' })); return }
@@ -303,9 +380,14 @@ export class AgenteAtivasComponente {
     const f = this.form()
     const locais = validarAtivas(f)
     if (Object.keys(locais).length > 0) { this.erros.set(locais); this.toast.erro('Corrija os campos destacados antes de salvar.'); return }
+    // ⚠️ ADR-021: ligar a reativação no não-oficial pede confirmação DIGITADA do risco de banimento.
+    const confirmaRisco = exigeConfirmarRiscoReativacao(this.dados()?.tipoCanal ?? '', this.original(), f)
+    if (confirmaRisco && !(await this.confirmacao.confirmar(confirmacaoRiscoReativacao()))) return
     this.salvando.set(true)
     try {
-      const r = await this.api.salvar(this.canalId(), { ...f, feriados: [...f.feriados] })
+      const r = await this.api.salvar(this.canalId(), {
+        ...f, feriados: [...f.feriados], ...(confirmaRisco ? { confirmaRiscoBanimento: true } : {}),
+      })
       if (r.ok) {
         this.toast.sucesso('Mensagens ativas salvas — valem no próximo retorno.')
         await this.carregar()

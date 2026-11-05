@@ -11,7 +11,7 @@ import { cifrar, decifrar, resumir } from '../integracao/cofre.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { atendePapel, exigirPapel, papeisDoUsuario, type Papel } from '../plataforma/papel.js'
 import { registrarMetrica } from '../plataforma/metricas.js'
-import { garantirUsuarioId } from './rotas-fila.js'
+import { atorDaRequisicao, garantirUsuarioId } from './rotas-fila.js'
 import { statusAquecimento } from './aquecimento.js'
 import { CANAIS, provedorPorCodigo } from './canais/catalogo.js'
 import { criarCanal } from './canais/fabrica.js'
@@ -340,7 +340,7 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
                      meta_roteamento_em = NULL, meta_roteamento_erro = NULL
                WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
           }
-          const atorId = await garantirUsuarioId(tx, req)
+          const atorId = await atorDaRequisicao(tx, req)
           // ⚠️ Auditoria SEM valor de credencial — só quais campos mudaram.
           await auditar(tx, {
             atorId, acao: 'canal.editado', entidade: 'canal_conectado', entidadeId: req.params.id,
@@ -389,7 +389,7 @@ export async function rotasCanais(app: FastifyInstance): Promise<void> {
         const conversas = uso?.conversas ?? 0
         const temHistorico = conversas > 0 || (uso?.atendimentos ?? 0) > 0 || (uso?.campanhas ?? 0) > 0
 
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         if (temHistorico) {
           await tx`
             UPDATE canal_conectado SET arquivado_em = now()

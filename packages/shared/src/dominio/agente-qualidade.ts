@@ -21,11 +21,13 @@ import type { GravidadeGuardrail, ModoAgente } from './agente-vendedor.js'
 import { filtrarSaida, PROMESSA_PRAZO_RE, termoNegado } from './agente-filtro.js'
 import { ehPerguntaDePedido, mesmaPergunta, perguntasDe } from './agente-perguntas.js'
 import { numerosSemFonte, type FontesDeNumeros } from './agente-numeros.js'
+import { objecoesQueCasam, segueReferencia, type ObjecaoPlaybook } from './agente-objecoes.js'
 
 // ── vocabulário ─────────────────────────────────────────────────────────────
 
 export const REGRAS_QUALIDADE = [
   'palavra_proibida', 'promessa_prazo', 'numero_sem_fonte', 'pergunta_repetida', 'multiplas_perguntas', 'mensagem_longa',
+  'objecao_fora_do_catalogo',
 ] as const
 export type RegraQualidade = (typeof REGRAS_QUALIDADE)[number]
 
@@ -36,6 +38,7 @@ export const ROTULO_REGRA_QUALIDADE: Readonly<Record<RegraQualidade, string>> = 
   pergunta_repetida: 'Pergunta repetida',
   multiplas_perguntas: 'Várias perguntas',
   mensagem_longa: 'Mensagem longa',
+  objecao_fora_do_catalogo: 'Objeção fora do catálogo',
 }
 
 /** Gravidades de uma violação (INFO não é violação). */
@@ -167,6 +170,36 @@ export interface EntradaRegrasQualidade {
   readonly maxCaracteres?: number | undefined
   /** Houve saldo de estoque de ferramenta no turno — o MESMO critério do filtro P2 (escassez deixa de ser vetada). */
   readonly estoqueComFonte?: boolean | undefined
+  /**
+   * Objeções do playbook publicado (G2). Ausente = a regra `objecao_fora_do_catalogo` não roda.
+   * `registradas` = quantas `registrar_objecao` o turno fez.
+   */
+  readonly objecoes?: {
+    readonly ativas: readonly ObjecaoPlaybook[]
+    /** O que o cliente escreveu neste turno (as entrantes). */
+    readonly textoDoCliente: string
+    readonly registradas: number
+  } | undefined
+}
+
+/**
+ * OBJEÇÃO RESPONDIDA FORA DO CATÁLOGO (G2, MEDIA): a fala do cliente casa com um
+ * gatilho de objeção ATIVA e o turno nem registrou a objeção (`registrar_objecao`)
+ * nem seguiu a resposta de referência. A metade determinística é "gatilho casou e
+ * nenhum registro"; "segue a referência" é a heurística branda de `segueReferencia`
+ * (≥ 40% das palavras de conteúdo da referência na resposta).
+ */
+export function objecaoForaDoCatalogo(
+  mensagens: readonly string[], o: NonNullable<EntradaRegrasQualidade['objecoes']>,
+): ViolacaoQualidade | null {
+  if (mensagens.length === 0 || o.registradas > 0) return null
+  const casadas = objecoesQueCasam(o.textoDoCliente, o.ativas)
+  if (casadas.length === 0) return null
+  if (casadas.some((x) => segueReferencia(mensagens, x.resposta))) return null
+  return {
+    regra: 'objecao_fora_do_catalogo', gravidade: 'MEDIA', trecho: trechoDe(mensagens.join(' ')),
+    detalhe: casadas.map((x) => x.codigo).join(', '),
+  }
 }
 
 /**
@@ -239,7 +272,8 @@ function promessas(texto: string): ViolacaoQualidade[] {
  * - promessa de prazo por data ou de retorno do atendimento (ALTA);
  * - número de negócio sem fonte (bloqueante = CRÍTICA, senão ALTA) — só com `fontes`;
  * - pergunta repetida (MEDIA), mais de uma pergunta no turno (MEDIA), mensagem
- *   acima do limite do número (MEDIA).
+ *   acima do limite do número (MEDIA);
+ * - objeção do playbook respondida fora do catálogo (MEDIA) — só com `objecoes`.
  */
 export function avaliarRegrasQualidade(e: EntradaRegrasQualidade): ViolacaoQualidade[] {
   const isentas = new Set((e.isentas ?? []).map((t) => t.trim()))
@@ -268,6 +302,10 @@ export function avaliarRegrasQualidade(e: EntradaRegrasQualidade): ViolacaoQuali
   }
   if (perguntas.length > 1) {
     out.push({ regra: 'multiplas_perguntas', gravidade: 'MEDIA', trecho: trechoDe(perguntas.join(' | ')), detalhe: `${perguntas.length} perguntas` })
+  }
+  if (e.objecoes) {
+    const v = objecaoForaDoCatalogo(mensagens, e.objecoes)
+    if (v) out.push(v)
   }
   return out
 }

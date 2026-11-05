@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../../../plugins/tenant.js'
+import { exigirNoEscopo } from '../../../plataforma/escopo.js'
 import { listarMemoria, revogarMemoria } from './memoria.js'
+import { lerCursor } from '../../../crm/cursor-criado-em.js'
 
 /**
  * A memória do cliente na tela do contato: o vendedor vê o que o agente
@@ -13,15 +15,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export async function rotasMemoria(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string }; Querystring: { cursor?: string } }>(
-    '/v1/contatos/:id/memoria', { preHandler: exigirTenant },
+    '/v1/contatos/:id/memoria', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
-      let cursor: { criadoEm: string; id: string } | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id || !UUID.test(id)) return reply.code(422).send({ erro: 'cursor.invalido' })
-        cursor = { criadoEm: em, id }
-      }
+      const lido = lerCursor(req.query.cursor)
+      if (lido === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
+      const cursor = lido === null ? null : { criadoEm: lido.em, id: lido.id }
       const r = await req.comTenant(async (tx) => {
         const [contato] = await tx<{ id: string }[]>`SELECT id FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!contato) return null
@@ -36,7 +35,7 @@ export async function rotasMemoria(app: FastifyInstance): Promise<void> {
   )
 
   app.delete<{ Params: { id: string; memoriaId: string } }>(
-    '/v1/contatos/:id/memoria/:memoriaId', { preHandler: exigirTenant },
+    '/v1/contatos/:id/memoria/:memoriaId', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id) || !UUID.test(req.params.memoriaId)) return reply.code(404).send({ erro: 'memoria.nao_encontrada' })
       const revogada = await req.comTenant(async (tx) => {

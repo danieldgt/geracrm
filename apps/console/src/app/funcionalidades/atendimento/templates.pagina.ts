@@ -1,13 +1,24 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
-import { FormsModule } from '@angular/forms'
+import { Component, ChangeDetectionStrategy, computed, inject, signal, OnInit } from '@angular/core'
 import { TemplatesServico, type CorpoTemplate, type ItemTemplate } from './templates.servico.js'
-import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
+import {
+  BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente,
+  IconeComponente, ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente, ToastServico,
+  type ColunaTabela, type LinhaTabela,
+} from '../../compartilhado/ui/index.js'
+import { OPCOES_CAMPO_MAPEAMENTO, mapeamentoParaSalvar, variaveisDoTemplate, variaveisSemCampo } from './templates.regras.js'
 
 interface Rascunho { id: string | null; nome: string; categoria: string; header: string; body: string; footer: string; botoes: string }
 const VAZIO: Rascunho = { id: null, nome: '', categoria: 'MARKETING', header: '', body: '', footer: '', botoes: '' }
 const ROTULO_STATUS: Record<string, string> = {
   PENDING: 'Aguardando Meta', APPROVED: 'Aprovado', REJECTED: 'Rejeitado', PAUSED: 'Pausado', DISABLED: 'Desabilitado',
 }
+const TOM_STATUS: Record<string, 'sucesso' | 'atencao' | 'erro' | 'neutro'> = {
+  APPROVED: 'sucesso', PENDING: 'atencao', REJECTED: 'erro', PAUSED: 'neutro', DISABLED: 'neutro',
+}
+const ROTULO_CATEGORIA: Record<string, string> = {
+  MARKETING: 'Marketing', UTILITY: 'Utilidade', AUTHENTICATION: 'Autenticação',
+}
+const OPCOES_CATEGORIA = Object.entries(ROTULO_CATEGORIA).map(([valor, rotulo]) => ({ valor, rotulo }))
 const ERRO_CRIAR: Record<string, string> = {
   'nome.invalido': 'Nome inválido: use minúsculas, números e _.',
   'categoria.invalida': 'Escolha uma categoria.',
@@ -17,189 +28,236 @@ const ERRO_CRIAR: Record<string, string> = {
 }
 
 /**
- * Templates (HSM) — o que reabre a janela de 24h. Catálogo com status da Meta,
- * criar/editar (nova versão) e apagar rascunho. ⚠️ A aprovação é da Meta: a tela
- * mostra o status e diz claramente que a submissão ainda não está conectada.
+ * Templates (HSM) — o que reabre a janela de 24h. Catálogo paginado por cursor
+ * com status da Meta; criar/editar (nova versão) em modal; mapear variáveis
+ * {{n}} para campos do contato em modal de ação; apagar rascunho.
+ * ⚠️ A aprovação é da Meta: a tela mostra o status e diz que a submissão ainda não está conectada.
  */
 @Component({
   selector: 'app-templates',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule],
+  imports: [
+    BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, IconeComponente,
+    ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1 class="txt-titulo">Templates (HSM)</h1>
-        <p class="sub">Mensagens aprovadas na Meta — o que reabre a janela de 24h.</p>
-      </div>
-      <button class="btn btn--primario" (click)="abrirNovo()">＋ Novo template</button>
-    </header>
+    <ui-cabecalho-tela titulo="Templates (HSM)" subtitulo="Mensagens aprovadas na Meta — o que reabre a janela de 24h.">
+      <button type="button" class="btn btn--primario" (click)="abrirNovo()"><ui-icone nome="plus" />Novo template</button>
+    </ui-cabecalho-tela>
 
-    <p class="nota">ℹ️ A aprovação vem da Meta. Enquanto o canal oficial não está conectado, o template fica <b>Aguardando Meta</b> — o envio só usa os <b>Aprovados</b>.</p>
-    @if (servico.erro(); as e) { <p class="erro" role="alert">{{ e }}</p> }
+    <p class="nota"><ui-icone nome="info" />A aprovação vem da Meta. Enquanto o canal oficial não está conectado, o template fica <b>Aguardando Meta</b> — o envio só usa os <b>Aprovados</b>.</p>
 
     @switch (servico.estado()) {
-      @case ('carregando') { <div class="grade"><div class="esq"></div><div class="esq"></div><div class="esq"></div></div> }
-      @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso aos templates</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button (click)="servico.carregar()">Tentar de novo</button></div> }
+      @case ('carregando') {
+        <ui-tabela [colunas]="colunas" [linhas]="[]" [carregando]="true" />
+      }
+      @case ('sem_permissao') {
+        <ui-estado tipo="sem-permissao" titulo="Você não tem acesso aos templates"
+          descricao="Peça a um administrador da sua empresa para liberar este acesso." />
+      }
+      @case ('erro') {
+        <ui-estado tipo="erro" titulo="Não foi possível carregar os templates" descricao="Verifique a conexão e tente de novo.">
+          <button type="button" class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button>
+        </ui-estado>
+      }
       @case ('pronto') {
-        @if (servico.itens().length === 0) {
-          <div class="bloco"><h2 class="txt-secao">Nenhum template ainda</h2>
-            <p class="vazio-sub">Crie o primeiro — ele nasce como rascunho até a Meta aprovar.</p>
-            <button class="btn btn--primario" (click)="abrirNovo()">＋ Novo template</button></div>
-        } @else {
-          <div class="grade">
-            @for (t of servico.itens(); track t.id) {
-              <article class="tpl">
-                <header class="tpl-topo">
-                  <span class="tpl-nome encolhe">{{ t.nome }}</span>
-                  <span class="status" [class]="'status--' + t.statusMeta.toLowerCase()">{{ rotulo(t.statusMeta) }}</span>
-                </header>
-                <div class="tpl-tags">
-                  <span class="tag">{{ t.categoria }}</span>
-                  <span class="tag">{{ t.idioma }}</span>
-                  <span class="tag">v{{ t.versao }}</span>
-                </div>
-                @if (t.corpo?.header?.texto) { <p class="tpl-header">{{ t.corpo.header!.texto }}</p> }
-                <p class="tpl-body">{{ t.corpo?.body?.texto }}</p>
-                @if (t.corpo?.footer?.texto) { <p class="tpl-footer">{{ t.corpo.footer!.texto }}</p> }
-                @if (t.corpo?.botoes?.length) {
-                  <div class="tpl-botoes">@for (b of t.corpo.botoes!; track $index) { <span class="btn-chip">{{ b.texto }}</span> }</div>
-                }
-                @if (t.statusMeta === 'REJECTED' && t.motivoRejeicao) {
-                  <p class="rejeicao">✕ {{ t.motivoRejeicao }}</p>
-                }
-                <footer class="tpl-acoes">
-                  <button class="btn btn--secundario btn--pequeno" (click)="abrirEdicao(t)">Editar (nova versão)</button>
-                  @if (!t.submetido) { <button class="btn btn--perigo btn--pequeno" (click)="apagar(t)">Apagar</button> }
-                </footer>
-              </article>
+        @if (servico.erro(); as e) { <p class="erro-texto" role="alert">{{ e }}</p> }
+        <ui-tabela [colunas]="colunas" [linhas]="linhas()">
+          <ng-template uiCelula="nome" let-t>
+            <span class="tpl-nome">{{ t.nome }}</span>
+            <span class="suave txt-dados">{{ t.idioma }} · v{{ t.versao }}</span>
+          </ng-template>
+          <ng-template uiCelula="status" let-t>
+            <ui-badge [tom]="tomStatus(t.statusMeta)">{{ rotulo(t.statusMeta) }}</ui-badge>
+            @if (t.statusMeta === 'REJECTED' && t.motivoRejeicao) {
+              <p class="rejeicao"><ui-icone nome="x" [tamanho]="14" />{{ t.motivoRejeicao }}</p>
             }
+          </ng-template>
+          <ng-template uiCelula="categoria" let-t>{{ rotuloCategoria(t.categoria) }}</ng-template>
+          <ng-template uiCelula="corpo" let-t>
+            <p class="corpo-previa">
+              @if (t.corpo.header?.texto) { <strong>{{ t.corpo.header.texto }}</strong> }
+              {{ t.corpo.body.texto }}
+              @if (t.corpo.footer?.texto) { <span class="suave"> · {{ t.corpo.footer.texto }}</span> }
+            </p>
+            @if (t.corpo.botoes?.length) {
+              <span class="botoes">
+                @for (b of t.corpo.botoes; track $index) { <span class="btn-chip">{{ b.texto }}</span> }
+              </span>
+            }
+          </ng-template>
+          <ng-template uiCelula="variaveis" let-t>
+            @if (variaveis(t); as vars) {
+              @if (vars.length > 0) {
+                <span class="tags">
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrirMapa(t)">Mapear ({{ vars.length }})</button>
+                  @if (semCampo(t) > 0) { <ui-badge tom="atencao">{{ semCampo(t) }} sem campo</ui-badge> }
+                </span>
+              } @else {
+                <span class="suave">Sem variáveis</span>
+              }
+            }
+          </ng-template>
+          <ng-template uiCelula="acoes" let-t>
+            <span class="acoes">
+              <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrirEdicao(t)">Editar (nova versão)</button>
+              @if (!t.submetido) {
+                <button type="button" class="btn btn--perigo btn--pequeno" (click)="apagar(t)">Apagar</button>
+              }
+            </span>
+          </ng-template>
+          <div uiVazio>
+            <ui-estado titulo="Nenhum template ainda"
+              descricao="Crie o primeiro — ele nasce como rascunho até a Meta aprovar.">
+              <button type="button" class="btn btn--primario" (click)="abrirNovo()">Novo template</button>
+            </ui-estado>
           </div>
-          @if (servico.proximoCursor()) {
-            <button class="mais" (click)="servico.carregarMais()" [disabled]="servico.carregandoMais()">
-              {{ servico.carregandoMais() ? 'Carregando…' : 'Carregar mais' }}
-            </button>
-          }
-        }
+        </ui-tabela>
+        <ui-paginacao [mostrados]="servico.itens().length" [temMais]="servico.proximoCursor() !== null"
+          [carregando]="servico.carregandoMais()" (mais)="servico.carregarMais()" />
       }
     }
 
-    <!-- Form de criar/editar -->
-    @if (rascunho(); as r) {
-      <div class="fora" (click)="fechar()"></div>
-      <div class="modal" role="dialog" aria-label="Template">
-        <header class="m-topo">
-          <h2 class="txt-secao">{{ r.id ? 'Editar template (nova versão)' : 'Novo template' }}</h2>
-          <button class="m-x" (click)="fechar()" aria-label="Fechar">✕</button>
-        </header>
-        @if (erroForm(); as e) { <p class="erro" role="alert">{{ e }}</p> }
-        <label class="campo">
-          <span>Nome (identificador na Meta)</span>
-          <input [(ngModel)]="r.nome" [disabled]="!!r.id" placeholder="reposicao_mensal" (input)="normalizarNome(r)" />
-          <small>Minúsculas, números e _ . Não muda depois de criado.</small>
-        </label>
-        <label class="campo">
-          <span>Categoria</span>
-          <select [(ngModel)]="r.categoria" [disabled]="!!r.id">
-            <option value="MARKETING">Marketing</option>
-            <option value="UTILITY">Utilidade</option>
-            <option value="AUTHENTICATION">Autenticação</option>
-          </select>
-        </label>
-        <label class="campo"><span>Cabeçalho (opcional)</span><input [(ngModel)]="r.header" maxlength="60" placeholder="Novidades" /></label>
-        <label class="campo">
-          <span>Corpo *</span>
-          <textarea [(ngModel)]="r.body" rows="4" maxlength="1024" placeholder="Olá {{ '{{' }}1{{ '}}' }}, chegou reposição do que você compra."></textarea>
-          <small>Variáveis posicionais: {{ '{{' }}1{{ '}}' }}, {{ '{{' }}2{{ '}}' }}…</small>
-        </label>
-        <label class="campo"><span>Rodapé (opcional)</span><input [(ngModel)]="r.footer" maxlength="60" placeholder="Sua loja" /></label>
-        <label class="campo"><span>Botões (opcional, até 3, separados por vírgula)</span><input [(ngModel)]="r.botoes" placeholder="Ver ofertas, Falar com vendedor" /></label>
-        <div class="form-acoes">
-          <button class="btn btn--fantasma" (click)="fechar()">Cancelar</button>
-          <button class="btn btn--primario" (click)="salvar(r)" [disabled]="salvando() || !r.nome.trim() || !r.body.trim()">
-            {{ salvando() ? 'Salvando…' : r.id ? 'Salvar nova versão' : 'Criar rascunho' }}
-          </button>
+    <!-- Criar e editar (nova versão): modal de cadastro. Nome e categoria travam depois de criado. -->
+    <ui-modal [aberto]="rascunho() !== null" [titulo]="tituloForm()" largura="m" (fechar)="fechar()">
+      @if (rascunho(); as r) {
+        <div class="campos">
+          @if (erroForm(); as e) { <p class="erro-texto" role="alert">{{ e }}</p> }
+          <ui-campo rotulo="Nome (identificador na Meta)" placeholder="reposicao_mensal"
+            dica="Minúsculas, números e _. Não muda depois de criado." [obrigatorio]="true"
+            [desabilitado]="!!r.id" [valor]="r.nome" (valorChange)="setNome($event)" />
+          <ui-select rotulo="Categoria" [opcoes]="opcoesCategoria" [valor]="r.categoria"
+            [desabilitado]="!!r.id" (valorChange)="atualizar({ categoria: $event })" />
+          <ui-campo rotulo="Cabeçalho (opcional)" placeholder="Novidades" [valor]="r.header"
+            (valorChange)="atualizar({ header: $event })" />
+          <!-- Chaves de variável em atributo estático viram interpolação do Angular: por isso o binding. -->
+          <ui-campo tipo="textarea" rotulo="Corpo" [placeholder]="'Olá {{1}}, chegou reposição do que você compra.'"
+            [dica]="'Variáveis posicionais: {{1}}, {{2}}… Até 1024 caracteres.'" [obrigatorio]="true"
+            [valor]="r.body" (valorChange)="atualizar({ body: $event })" />
+          <ui-campo rotulo="Rodapé (opcional)" placeholder="Sua loja" [valor]="r.footer"
+            (valorChange)="atualizar({ footer: $event })" />
+          <ui-campo rotulo="Botões (opcional)" placeholder="Ver ofertas, Falar com vendedor"
+            dica="Até 3, separados por vírgula." [valor]="r.botoes" (valorChange)="atualizar({ botoes: $event })" />
         </div>
+      }
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fechar()" [disabled]="salvando()">Cancelar</button>
+        <button type="button" class="btn btn--primario" (click)="salvar()"
+          [disabled]="salvando() || !(rascunho()?.nome ?? '').trim() || !(rascunho()?.body ?? '').trim()">
+          {{ salvando() ? 'Salvando…' : rascunho()?.id ? 'Salvar nova versão' : 'Criar rascunho' }}
+        </button>
       </div>
-    }
+    </ui-modal>
+
+    <!-- Mapeamento {{n}} → campo do contato. Cada escolha salva na hora (como antes). -->
+    <ui-modal [aberto]="itemMapeando() !== null" [titulo]="tituloMapa()" largura="p" (fechar)="fecharMapa()">
+      @if (itemMapeando(); as t) {
+        <p class="explica">Escolha de qual campo do contato sai cada variável. Cada escolha é salva na hora.</p>
+        @if (erroMapa(); as e) { <p class="erro-texto" role="alert">{{ e }}</p> }
+        <div class="campos">
+          @for (v of variaveis(t); track v) {
+            <ui-select [rotulo]="'Variável {{' + v + '}}'" placeholder="Sem campo" [opcoes]="opcoesCampo"
+              [valor]="campoDe(t, v)" (valorChange)="mapear(t, v, $event)" />
+          }
+        </div>
+      }
+      <div rodape>
+        <button type="button" class="btn btn--primario" (click)="fecharMapa()">Concluir</button>
+      </div>
+    </ui-modal>
   `,
   styles: `
-    /* min-height (não height 100%): a casca é célula de grid e não resolve
-       percentual — ver altura-de-tela.spec.ts. */
-    /* ⚠️ Altura DEFINIDA, e há dois jeitos de errar isto — os dois já
-       aconteceram nesta tela:
-       · height 100% vira ZERO, porque a casca é célula de grid e não resolve
-         percentual do filho (foi o incidente dos 813 leads virando listras);
-       · min-height não LIMITA nada, então o host cresce com o conteúdo, a
-         coluna cresce junto e o overflow-y dela nunca dispara — a página
-         inteira passa a rolar no lugar da coluna.
-       O que sobra é a viewport menos a barra da casca. */
-    :host { display: block; height: calc(100dvh - var(--altura-barra-topo)); padding: var(--espacamento-6); overflow: auto;
-      padding-bottom: calc(var(--espacamento-6) + var(--folga-flutuante, 0px)); }
-    .cabecalho { margin-bottom: var(--espacamento-3); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .nota { margin: 0 0 var(--espacamento-4); padding: var(--espacamento-3); border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto-secundario); font-size: 12px; }
-    .erro { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
-    .vazio-sub { margin: var(--espacamento-2) 0 var(--espacamento-4); color: var(--texto-secundario); font-size: 13px; }
-    .grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--espacamento-3); }
-    .esq { height: 180px; border-radius: var(--raio-painel); background: var(--superficie); }
-    .tpl { display: flex; flex-direction: column; gap: var(--espacamento-2); padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .tpl-topo { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-2); }
-    .tpl-nome { font-weight: 600; color: var(--texto); font-family: var(--fonte-mono, monospace); font-size: 13px; }
-    .status { flex: none; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: var(--raio-completo); }
-    .status--approved { background: var(--sucesso-suave); color: var(--sucesso); }
-    .status--pending { background: var(--atencao-suave); color: var(--atencao); }
-    .status--rejected { background: var(--erro-suave); color: var(--erro); }
-    .status--paused, .status--disabled { background: var(--superficie); color: var(--texto-suave); }
-    .tpl-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-    .tag { font-size: 10px; color: var(--texto-suave); border: 1px solid var(--borda); border-radius: var(--raio-completo); padding: 0 7px; }
-    .tpl-header { margin: 0; font-weight: 600; color: var(--texto); font-size: 13px; }
-    .tpl-body { margin: 0; color: var(--texto-secundario); font-size: 13px; white-space: pre-wrap; }
-    .tpl-footer { margin: 0; color: var(--texto-suave); font-size: 12px; }
-    .tpl-botoes { display: flex; flex-wrap: wrap; gap: 4px; }
+    :host { display: block; width: 100%; min-width: 0; padding: var(--espacamento-6); }
+    ui-cabecalho-tela { display: block; }
+    .nota { display: flex; align-items: flex-start; gap: var(--espacamento-2); margin: var(--espacamento-4) 0; padding: var(--espacamento-3);
+      border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto-secundario); font-size: 12px; }
+    .nota b { color: var(--texto); font-weight: 600; }
+    .erro-texto { margin: 0; color: var(--erro); font-size: 13px; }
+    .campos { display: grid; gap: var(--espacamento-3); min-width: 0; }
+    .tpl-nome { display: block; color: var(--texto); font-family: var(--tipografia-familia-dados); font-size: 13px; overflow-wrap: anywhere; }
+    .suave { color: var(--texto-suave); }
+    .rejeicao { display: flex; align-items: flex-start; gap: var(--espacamento-1); margin: var(--espacamento-1) 0 0; font-size: 12px; color: var(--erro); }
+    .corpo-previa { margin: 0; max-width: 46ch; color: var(--texto-secundario); font-size: 13px; white-space: pre-wrap;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .botoes, .tags, .acoes { display: flex; flex-wrap: wrap; gap: var(--espacamento-1); }
+    .acoes { justify-content: flex-end; gap: var(--espacamento-2); }
     .btn-chip { font-size: 11px; color: var(--acao); border: 1px solid var(--acao-suave); background: var(--acao-suave); border-radius: var(--raio-controle); padding: 1px 8px; }
-    .rejeicao { margin: 0; font-size: 12px; color: var(--erro); }
-    .tpl-acoes { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-1); }
-    .tpl-acoes button { flex: 1; padding: 5px 8px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto-secundario); font: inherit; font-size: 12px; cursor: pointer; }
-    .tpl-acoes .del:hover { background: var(--erro-suave); color: var(--erro); border-color: var(--erro); }
-    .mais { display: block; margin: var(--espacamento-4) auto 0; padding: var(--espacamento-2) var(--espacamento-4); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 12px; cursor: pointer; }
-    button { cursor: pointer; }
-    .fora { position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 40; }
-    .modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 41; width: min(520px, 92vw); max-height: 88vh; overflow: auto;
-      background: var(--superficie-elevada); border: 1px solid var(--borda); border-radius: var(--raio-painel); box-shadow: var(--elevacao-modal); padding: var(--espacamento-5); display: flex; flex-direction: column; gap: var(--espacamento-3); }
-    .m-topo { display: flex; align-items: center; justify-content: space-between; }
-    .m-topo h2 { margin: 0; color: var(--texto); }
-    .m-x { border: 0; background: transparent; color: var(--texto-secundario); font-size: 16px; }
-    @media (max-width: 640px) { :host { padding: var(--espacamento-3); padding-bottom: calc(var(--espacamento-3) + var(--folga-flutuante, 0px)); } }
+    .explica { margin: 0 0 var(--espacamento-3); font-size: 13px; color: var(--texto-secundario); line-height: 1.5; }
+    @media (max-width: 640px) { :host { padding: var(--espacamento-3); } }
   `,
 })
 export class TemplatesPagina implements OnInit {
   readonly servico = inject(TemplatesServico)
   private readonly confirmacao = inject(ConfirmacaoServico)
   private readonly toast = inject(ToastServico)
+
+  protected readonly colunas: ColunaTabela[] = [
+    { chave: 'nome', rotulo: 'Template' },
+    { chave: 'status', rotulo: 'Status', largura: '200px' },
+    { chave: 'categoria', rotulo: 'Categoria', largura: '130px' },
+    { chave: 'corpo', rotulo: 'Mensagem' },
+    { chave: 'variaveis', rotulo: 'Variáveis', largura: '200px' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '230px' },
+  ]
+  protected readonly linhas = computed(() => this.servico.itens() as unknown as readonly LinhaTabela[])
+  protected readonly opcoesCategoria = OPCOES_CATEGORIA
+  readonly opcoesCampo = OPCOES_CAMPO_MAPEAMENTO
+
   readonly rascunho = signal<Rascunho | null>(null)
   readonly erroForm = signal<string | null>(null)
   readonly salvando = signal(false)
+  /** Template cujas variáveis estão sendo mapeadas; `null` = modal fechado. */
+  readonly mapeandoId = signal<string | null>(null)
+  readonly itemMapeando = computed(() => {
+    const id = this.mapeandoId()
+    return id ? (this.servico.itens().find((t) => t.id === id) ?? null) : null
+  })
+  readonly erroMapa = signal<string | null>(null)
 
   ngOnInit(): void { void this.servico.carregar() }
 
+  tituloForm(): string { return this.rascunho()?.id ? 'Editar template (nova versão)' : 'Novo template' }
+  tituloMapa(): string { return `Variáveis de ${this.itemMapeando()?.nome ?? 'template'}` }
+
   rotulo(s: string): string { return ROTULO_STATUS[s] ?? s }
+  tomStatus(s: string): 'sucesso' | 'atencao' | 'erro' | 'neutro' { return TOM_STATUS[s] ?? 'neutro' }
+  rotuloCategoria(c: string): string { return ROTULO_CATEGORIA[c] ?? c }
+
+  /** Variáveis {{n}} do cabeçalho e do corpo (a lista que o editor de mapeamento mostra). */
+  variaveis(t: ItemTemplate): number[] { return variaveisDoTemplate(t.corpo) }
+  semCampo(t: ItemTemplate): number { return variaveisSemCampo(this.variaveis(t), t.mapeamentoVariaveis ?? {}) }
+  campoDe(t: ItemTemplate, v: number): string { return t.mapeamentoVariaveis?.[String(v)] ?? '' }
+
+  abrirMapa(t: ItemTemplate): void { this.erroMapa.set(null); this.mapeandoId.set(t.id) }
+  fecharMapa(): void { this.mapeandoId.set(null); this.erroMapa.set(null) }
+
+  /** Escolher o campo salva na hora; vazio remove a variável do mapeamento. */
+  async mapear(t: ItemTemplate, v: number, campo: string): Promise<void> {
+    if (campo === this.campoDe(t, v)) return
+    const escolhas = { ...t.mapeamentoVariaveis, [String(v)]: campo }
+    const erro = await this.servico.salvarMapeamento(t.id, mapeamentoParaSalvar(this.variaveis(t), escolhas))
+    if (erro) this.erroMapa.set(erro)
+    else { this.erroMapa.set(null); this.toast.sucesso('Mapeamento salvo') }
+  }
 
   abrirNovo(): void { this.erroForm.set(null); this.rascunho.set({ ...VAZIO }) }
   abrirEdicao(t: ItemTemplate): void {
     this.erroForm.set(null)
     this.rascunho.set({
       id: t.id, nome: t.nome, categoria: t.categoria,
-      header: t.corpo?.header?.texto ?? '', body: t.corpo?.body?.texto ?? '',
-      footer: t.corpo?.footer?.texto ?? '', botoes: (t.corpo?.botoes ?? []).map((b) => b.texto).join(', '),
+      header: t.corpo.header?.texto ?? '', body: t.corpo.body.texto,
+      footer: t.corpo.footer?.texto ?? '', botoes: (t.corpo.botoes ?? []).map((b) => b.texto).join(', '),
     })
   }
-  fechar(): void { this.rascunho.set(null); this.erroForm.set(null) }
+  fechar(): void { if (this.salvando()) return; this.rascunho.set(null); this.erroForm.set(null) }
 
-  normalizarNome(r: Rascunho): void {
-    r.nome = r.nome.toLowerCase().replace(/[^a-z0-9_]/g, '_')
+  atualizar(parcial: Partial<Rascunho>): void {
+    this.rascunho.update((r) => (r ? { ...r, ...parcial } : r))
+  }
+
+  /** Nome do template: minúsculas, números e _ (normaliza ao digitar). */
+  setNome(nome: string): void {
+    this.atualizar({ nome: nome.toLowerCase().replace(/[^a-z0-9_]/g, '_') })
   }
 
   private montarCorpo(r: Rascunho): CorpoTemplate {
@@ -211,13 +269,15 @@ export class TemplatesPagina implements OnInit {
     return corpo
   }
 
-  async salvar(r: Rascunho): Promise<void> {
+  async salvar(): Promise<void> {
+    const r = this.rascunho()
+    if (!r || this.salvando()) return
     this.salvando.set(true); this.erroForm.set(null)
     const corpo = this.montarCorpo(r)
     const erro = r.id ? await this.servico.novaVersao(r.id, corpo) : await this.servico.criar(r.nome.trim(), r.categoria, corpo)
     this.salvando.set(false)
     if (erro) { this.erroForm.set(ERRO_CRIAR[erro] ?? 'Não foi possível salvar.'); return }
-    this.fechar()
+    this.rascunho.set(null); this.erroForm.set(null)
   }
 
   async apagar(t: ItemTemplate): Promise<void> {

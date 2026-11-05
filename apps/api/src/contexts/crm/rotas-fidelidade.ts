@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { condicaoContato, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
 
 /**
  * Fidelidade / Cashback — leitura do saldo LIDO do ERP (ADR-020). A alavancagem
@@ -10,6 +11,8 @@ import { exigirTenant } from '../../plugins/tenant.js'
  * com os blocos e explica, em vez de mostrar número inventado. Quando um ERP com
  * a capacidade sincronizar, os saldos aparecem sozinhos.
  */
+const TOP_SALDOS = 20
+
 export async function rotasFidelidade(app: FastifyInstance): Promise<void> {
   app.get('/v1/fidelidade', { preHandler: exigirTenant }, async (req, reply) => {
     const dados = await req.comTenant(async (tx) => {
@@ -31,7 +34,9 @@ export async function rotasFidelidade(app: FastifyInstance): Promise<void> {
           FROM fidelidade_saldo f
           JOIN contato c ON c.tenant_id = f.tenant_id AND c.id = f.contato_id
          WHERE f.tenant_id = tenant_atual() AND f.saldo > 0
-         ORDER BY f.saldo DESC LIMIT 10`
+           -- ⚠️ Escopo (D3): o ranking com nome mostra só os clientes visíveis.
+           AND ${condicaoContato(tx, await escopoDaRequisicao(tx, req), 'c')}
+         ORDER BY f.saldo DESC, f.contato_id LIMIT ${TOP_SALDOS + 1}`
       return { cap, resumo, top }
     })
 
@@ -42,6 +47,9 @@ export async function rotasFidelidade(app: FastifyInstance): Promise<void> {
       })
     }
     const r = dados.resumo
+    // Top 20 saldos; a consulta pede 21 para saber se cortou.
+    const cortou = (dados.top ?? []).length > TOP_SALDOS
+    const topo = (dados.top ?? []).slice(0, TOP_SALDOS)
     return reply.send({
       disponivel: true,
       resumo: {
@@ -50,15 +58,16 @@ export async function rotasFidelidade(app: FastifyInstance): Promise<void> {
         unidade: r?.unidade ?? 'centavos',
         sincronizadoEm: r?.atualizado_em ?? null,
       },
-      topSaldos: (dados.top ?? []).map((t) => ({
+      topSaldos: topo.map((t) => ({
         contatoId: t.contato_id, contato: t.contato, saldo: Number(t.saldo), unidade: t.unidade,
       })),
+      topSaldosTruncado: cortou,
     })
   })
 
   // Saldo de UM contato (para a ficha). null quando não há saldo/indisponível.
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/fidelidade', { preHandler: exigirTenant },
+    '/v1/contatos/:id/fidelidade', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       const dados = await req.comTenant(async (tx) => {
         const [cap] = await tx<{ tem: boolean }[]>`

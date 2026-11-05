@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { TETO_EQUIPE } from '../plataforma/limites-listas.js'
 
 const DIAS_VALIDOS = new Set([30, 90, 180, 365])
 
@@ -10,6 +11,8 @@ const DIAS_VALIDOS = new Set([30, 90, 180, 365])
  * vendedor, então o painel mostra o NPS POR ATENDENTE. ⚠️ Score DERIVADO na
  * leitura (padrão): promotor 9–10, neutro 7–8, detrator 0–6;
  * NPS = %promotores − %detratores. Nada de faixa/score gravado.
+ * Origem `agente` (G3): nota registrada pelo agente no pós-venda (`registrar_nps`),
+ * sem atendente — o painel a mostra num bloco próprio. Não se grava por aqui.
  */
 function apurar(total: number, promotores: number, detratores: number): number | null {
   return total > 0 ? Math.round(((promotores - detratores) / total) * 100) : null
@@ -22,11 +25,18 @@ export async function rotasNps(app: FastifyInstance): Promise<void> {
       const dias = DIAS_VALIDOS.has(Number(req.query.dias)) ? Number(req.query.dias) : 90
       const dados = await req.comTenant(async (tx) => {
         const desde = tx`now() - (${dias} || ' days')::interval`
-        const [geral] = await tx<{ total: number; promotores: number; detratores: number; atribuidas: number }[]>`
+        const [geral] = await tx<{
+          total: number; promotores: number; detratores: number; atribuidas: number
+          ag_total: number; ag_promotores: number; ag_neutros: number; ag_detratores: number
+        }[]>`
           SELECT count(*)::int AS total,
                  count(*) FILTER (WHERE nota >= 9)::int AS promotores,
                  count(*) FILTER (WHERE nota <= 6)::int AS detratores,
-                 count(*) FILTER (WHERE atendente_id IS NOT NULL)::int AS atribuidas
+                 count(*) FILTER (WHERE atendente_id IS NOT NULL)::int AS atribuidas,
+                 count(*) FILTER (WHERE origem = 'agente')::int AS ag_total,
+                 count(*) FILTER (WHERE origem = 'agente' AND nota >= 9)::int AS ag_promotores,
+                 count(*) FILTER (WHERE origem = 'agente' AND nota BETWEEN 7 AND 8)::int AS ag_neutros,
+                 count(*) FILTER (WHERE origem = 'agente' AND nota <= 6)::int AS ag_detratores
             FROM nps_resposta
            WHERE tenant_id = tenant_atual() AND respondido_em >= ${desde}`
 
@@ -43,12 +53,15 @@ export async function rotasNps(app: FastifyInstance): Promise<void> {
             LEFT JOIN usuario u ON u.tenant_id = n.tenant_id AND u.id = n.atendente_id
            WHERE n.tenant_id = tenant_atual() AND n.respondido_em >= ${desde}
              AND n.atendente_id IS NOT NULL
-           GROUP BY n.atendente_id, u.nome`
+           GROUP BY n.atendente_id, u.nome
+           -- Lista de EQUIPE: o corte (teto) é por volume de respostas; o desempate é o id.
+           ORDER BY count(*) DESC, n.atendente_id LIMIT ${TETO_EQUIPE + 1}`
         return { geral, porAtendente }
       })
 
       const g = dados.geral
-      const atendentes = dados.porAtendente
+      const cortouAtendentes = dados.porAtendente.length > TETO_EQUIPE
+      const atendentes = (cortouAtendentes ? dados.porAtendente.slice(0, TETO_EQUIPE) : dados.porAtendente)
         .map((a) => ({
           usuarioId: a.atendente_id,
           nome: a.nome ?? 'Desconhecido',
@@ -66,9 +79,19 @@ export async function rotasNps(app: FastifyInstance): Promise<void> {
         geral: {
           total: g?.total ?? 0,
           score: apurar(g?.total ?? 0, g?.promotores ?? 0, g?.detratores ?? 0),
-          semAtendente: (g?.total ?? 0) - (g?.atribuidas ?? 0),
+          // Sem atendente E sem ser do agente (avulsa, importada…).
+          semAtendente: (g?.total ?? 0) - (g?.atribuidas ?? 0) - (g?.ag_total ?? 0),
+        },
+        // G3: a nota coletada pelo AGENTE no pós-venda, separada dos vendedores.
+        agente: {
+          total: g?.ag_total ?? 0,
+          promotores: g?.ag_promotores ?? 0,
+          neutros: g?.ag_neutros ?? 0,
+          detratores: g?.ag_detratores ?? 0,
+          score: apurar(g?.ag_total ?? 0, g?.ag_promotores ?? 0, g?.ag_detratores ?? 0),
         },
         porAtendente: atendentes,
+        porAtendenteTruncado: cortouAtendentes,
       })
     },
   )

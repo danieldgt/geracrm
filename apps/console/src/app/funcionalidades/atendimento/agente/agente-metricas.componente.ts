@@ -5,6 +5,7 @@ import {
 } from '../../../compartilhado/ui/index.js'
 import { ehSemPermissao } from './agente.servico.js'
 import { MetricasServico } from './metricas.servico.js'
+import { AgenteObjecoesResumoComponente } from './agente-objecoes-resumo.componente.js'
 import {
   JANELAS_METRICAS, ROTULO_SITUACAO, TOM_SITUACAO, corpoDasDouradas, criteriosEmOrdem, indicadores, rotuloCurtoDoModo, rotuloDoMotivo,
   semAtividade, situacaoDoCriterio, tempoNaFase, trilhaDeFases, vereditoDaFase, type JanelaMetricas,
@@ -16,6 +17,7 @@ import {
  *   1. FASE: em que fase o número está (do modo, P14), há quanto tempo, e cada
  *      critério para avançar — verde/vermelho/sem medida, com valor, alvo e FONTE.
  *   2. MÉTRICAS: os agregados de /v1/agente/metricas na janela escolhida.
+ *   3. OBJEÇÕES (G2): tabela por código dos últimos 30 dias (`app-agente-objecoes-resumo`).
  *
  * ⚠️ O painel SÓ INFORMA. Mudar o modo é na aba Configuração (P14), com
  *    confirmação digitada e auditoria — aqui não há botão que mude o modo.
@@ -36,7 +38,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 @Component({
   selector: 'app-agente-metricas',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PainelComponente, EstadoComponente, EsqueletoComponente, BotaoComponente, BadgeComponente],
+  imports: [PainelComponente, EstadoComponente, EsqueletoComponente, BotaoComponente, BadgeComponente, AgenteObjecoesResumoComponente],
   template: `
     @switch (estadoFase()) {
       @case ('carregando') {
@@ -180,6 +182,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
           }
         }
       </ui-painel>
+      <app-agente-objecoes-resumo [canalId]="canalId()" />
     }
   `,
   styles: `

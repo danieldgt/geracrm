@@ -1,107 +1,287 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { ChangeDetectionStrategy, Component, computed, inject, OnInit, signal } from '@angular/core'
 import { RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { AuthServico } from '../../nucleo/auth.servico.js'
+import { PresencaServico } from '../../nucleo/presenca.servico.js'
+import type { RespostaCockpit } from '@geracrm/shared'
+import { CabecalhoTelaComponente } from '../../compartilhado/ui/cabecalho-tela.componente.js'
+import { CelulaDiretiva, TabelaComponente, type ColunaTabela, type LinhaTabela } from '../../compartilhado/ui/tabela.componente.js'
+import { EsqueletoComponente } from '../../compartilhado/ui/esqueleto.componente.js'
+import { EstadoComponente } from '../../compartilhado/ui/estado.componente.js'
+import { FiltroPeriodoComponente } from '../../compartilhado/ui/filtro-periodo.componente.js'
+import { PainelComponente } from '../../compartilhado/ui/painel.componente.js'
+import { StatCardComponente } from '../../compartilhado/ui/stat-card.componente.js'
+import { periodoInvertido } from '../../compartilhado/ui/periodo.js'
+import { codigoDoErro } from '../../compartilhado/ui/erro-http.js'
+import { formatarReais } from '../../compartilhado/ui/dinheiro.js'
+import { BarrasHorizontaisComponente } from '../analitico/barras-horizontais.componente.js'
+import { formatarTaxa, queryDoPeriodo } from '../analitico/relatorio-dimensao.regras.js'
+import { alturasColunas, dataHoraCurta, rotuloMes, textoSaudacao } from './inicio.regras.js'
 
 interface Painel {
-  readonly vendas30d: { quantidade: number; totalCentavos: number; ticketMedioCentavos: number | null }
-  readonly clientesComHistorico: number
-  readonly clientesParaAgirHoje: number
-  readonly pedidos: { rascunhos: number; efetivados: number; falharam: number }
+  readonly periodo: { inicio: string; fim: string; fuso: string }
+  readonly contatosNovos: number
+  readonly pedidos: { quantidade: number; valorCentavos: number }
+  readonly ticketMedioCentavos: number | null
+  readonly conversao: { convertidos: number; contatosNovos: number; taxa: number | null }
+  readonly tarefas: { pendentes: number; atrasadas: number }
+  readonly pedidosPorMes: readonly { mes: string; quantidade: number; valorCentavos: number }[]
+  readonly qualificacao: readonly { chave: string; rotulo: string; contatos: number }[]
+  readonly ranking: readonly { usuarioId: string | null; nome: string; pedidos: number; valorCentavos: number }[]
+  readonly contatosRecentes: readonly { id: string; nome: string; criadoEm: string; qualificacao: string }[]
+  readonly proximasTarefas: readonly { id: string; titulo: string; venceEm: string; tipo: string; contatoNome: string | null }[]
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
+const MENSAGENS_PERIODO: Readonly<Record<string, string>> = {
+  'periodo.longo_demais': 'O período pode ter no máximo 366 dias.',
+  'periodo.invertido': 'A data inicial é depois da final.',
+  'periodo.invalido': 'Datas inválidas. Use o seletor de datas.',
+  'periodo.incompleto': 'Informe a data inicial e a final.',
+}
+
 /**
- * Início — o negócio hoje em 3 segundos. KPIs de leitura sobre venda/RFV/pedido.
- * Segue geracrm-layout-ui (KPI na escala .txt-kpi, tokens, responsivo).
+ * Início v2 — o negócio no período escolhido (padrão: mês atual no fuso do tenant). Saudação, período livre,
+ * quatro cartões que levam à tela de origem, pedidos por mês, qualificação, ranking, contatos recentes e
+ * próximas tarefas. Cada bloco tem o seu vazio; a tela inteira tem carregando, erro e sem permissão.
+ * Segue geracrm-layout-ui (tokens, responsivo, sem cor literal).
  */
 @Component({
   selector: 'app-inicio',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink],
+  imports: [
+    RouterLink, BarrasHorizontaisComponente, CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente,
+    EstadoComponente, FiltroPeriodoComponente, PainelComponente, StatCardComponente, TabelaComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <h1 class="txt-titulo">Início</h1>
-      <p class="sub">Como o negócio está hoje.</p>
-    </header>
+    <ui-cabecalho-tela [titulo]="saudacao()" subtitulo="Como o negócio está no período." />
+
+    <div class="filtros">
+      <ui-filtro-periodo [(inicio)]="inicio" [(fim)]="fim" (aplicar)="carregar()" />
+    </div>
 
     @switch (estado()) {
-      @case ('carregando') { <div class="kpis"><div class="esq"></div><div class="esq"></div><div class="esq"></div><div class="esq"></div></div> }
-      @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso ao painel</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
+      @case ('carregando') {
+        <div class="cartoes"><ui-esqueleto altura="72px" /><ui-esqueleto altura="72px" /><ui-esqueleto altura="72px" /><ui-esqueleto altura="72px" /></div>
+        <div class="grade"><ui-esqueleto altura="200px" /><ui-esqueleto altura="200px" /></div>
+      }
+      @case ('sem_permissao') {
+        <ui-estado tipo="sem-permissao" titulo="Sem acesso ao painel" descricao="Peça a um administrador a permissão de leitura." />
+      }
+      @case ('erro') {
+        <ui-estado tipo="erro" titulo="Não foi possível carregar o Início" [descricao]="erroTexto()">
+          <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+        </ui-estado>
+      }
       @case ('pronto') {
         @if (d(); as p) {
-          <div class="kpis">
-            <a class="kpi" routerLink="/pedidos">
-              <span class="txt-rotulo">Vendas (30 dias)</span>
-              <span class="txt-kpi">{{ reais(p.vendas30d.totalCentavos) }}</span>
-              <span class="kpi-sub">{{ p.vendas30d.quantidade }} vendas</span>
+          @if (cockpit(); as k) {
+            <a class="atalho-cockpit" routerLink="/cockpit" aria-label="Abrir o Cockpit do gestor">
+              <strong class="txt-secao">Cockpit</strong>
+              <span>Aguardando humano: <b>{{ k.aguardandoHumano.total }}</b></span>
+              <span>SLA estourado hoje: <b>{{ k.slaEstouradoHoje }}</b></span>
+              <span>Sem próximo passo: <b>{{ k.semProximoPasso }}</b></span>
             </a>
-            <div class="kpi">
-              <span class="txt-rotulo">Ticket médio (30d)</span>
-              <span class="txt-kpi">{{ p.vendas30d.ticketMedioCentavos !== null ? reais(p.vendas30d.ticketMedioCentavos) : '—' }}</span>
-              <span class="kpi-sub">por venda</span>
-            </div>
-            <a class="kpi" routerLink="/fila-do-dia">
-              <span class="txt-rotulo">Para agir hoje</span>
-              <span class="txt-kpi" [class.alerta]="p.clientesParaAgirHoje > 0">{{ p.clientesParaAgirHoje }}</span>
-              <span class="kpi-sub">clientes atrasados/em risco</span>
+          }
+          <div class="cartoes">
+            <a class="cartao" routerLink="/contatos" aria-label="Contatos novos no período: ver contatos">
+              <ui-stat-card [valor]="p.contatosNovos" rotulo="Contatos novos" tom="acao" />
             </a>
-            <a class="kpi" routerLink="/contatos">
-              <span class="txt-rotulo">Base com histórico</span>
-              <span class="txt-kpi">{{ p.clientesComHistorico }}</span>
-              <span class="kpi-sub">clientes com compra</span>
+            <a class="cartao" routerLink="/pedidos" aria-label="Pedidos efetivados no período: ver pedidos">
+              <ui-stat-card [valor]="p.pedidos.quantidade" [rotulo]="rotuloPedidos()" tom="sucesso" />
+            </a>
+            <a class="cartao" routerLink="/tarefas" aria-label="Tarefas pendentes: ver tarefas">
+              <ui-stat-card [valor]="p.tarefas.pendentes" [rotulo]="rotuloTarefas()" [tom]="p.tarefas.atrasadas > 0 ? 'atencao' : 'neutro'" />
+            </a>
+            <a class="cartao" routerLink="/relatorios" aria-label="Conversão no período: ver relatórios">
+              <ui-stat-card [valor]="taxaTexto()" [rotulo]="rotuloConversao()" tom="ia" />
             </a>
           </div>
 
-          <div class="pedidos">
-            <h2 class="txt-secao">Pedidos</h2>
-            <div class="ped-linha">
-              <a routerLink="/pedidos"><b class="txt-dados">{{ p.pedidos.rascunhos }}</b> rascunhos</a>
-              <a routerLink="/pedidos"><b class="txt-dados ok">{{ p.pedidos.efetivados }}</b> efetivados</a>
-              <a routerLink="/pedidos"><b class="txt-dados ruim">{{ p.pedidos.falharam }}</b> falharam</a>
-            </div>
+          <div class="grade">
+            <ui-painel>
+              <h2 class="txt-secao">Pedidos por mês</h2>
+              <p class="txt-denso suave">Efetivados, últimos 6 meses.</p>
+              @if (semPedidosNosMeses()) {
+                <ui-estado tipo="vazio" titulo="Sem pedidos efetivados" descricao="Os pedidos aparecem aqui quando o ERP efetivar." />
+              } @else {
+                <ol class="colunas" aria-label="Pedidos efetivados por mês">
+                  @for (m of meses(); track m.mes) {
+                    <li class="coluna">
+                      <span class="c-valor txt-dados">{{ m.quantidade }}</span>
+                      <span class="c-trilho" aria-hidden="true"><span class="c-fill" [style.height.%]="m.altura"></span></span>
+                      <span class="c-rotulo txt-denso">{{ m.rotulo }}</span>
+                    </li>
+                  }
+                </ol>
+              }
+            </ui-painel>
+
+            <ui-painel>
+              <h2 class="txt-secao">Contatos novos por qualificação</h2>
+              @if (p.contatosNovos === 0) {
+                <ui-estado tipo="vazio" titulo="Sem contatos novos" descricao="Nenhum contato foi criado no período." />
+              } @else {
+                <app-barras-horizontais [itens]="qualificacao()" descricao="Contatos novos por qualificação" />
+              }
+            </ui-painel>
+          </div>
+
+          <ui-painel>
+            <h2 class="txt-secao">Ranking de vendedores</h2>
+            <p class="txt-denso suave">Top 10 por valor de pedidos efetivados no período.</p>
+            @if (p.ranking.length === 0) {
+              <ui-estado tipo="vazio" titulo="Sem pedidos efetivados no período" descricao="O ranking aparece quando houver pedidos efetivados." />
+            } @else {
+              <ui-tabela [colunas]="colunasRanking" [linhas]="linhasRanking()" [chaveLinha]="chaveLinha">
+                <ng-template uiCelula="valor" let-l>{{ reais(l.valorCentavos) }}</ng-template>
+              </ui-tabela>
+            }
+          </ui-painel>
+
+          <div class="grade">
+            <ui-painel>
+              <h2 class="txt-secao">Contatos recentes</h2>
+              @if (p.contatosRecentes.length === 0) {
+                <ui-estado tipo="vazio" titulo="Nenhum contato ainda" descricao="Cadastre ou importe contatos para vê-los aqui." />
+              } @else {
+                <ul class="lista">
+                  @for (c of p.contatosRecentes; track c.id) {
+                    <li><a [routerLink]="['/contato', c.id]" class="item">
+                      <span class="nome">{{ c.nome }}</span>
+                      <span class="meta txt-denso">{{ quando(c.criadoEm) }}</span>
+                    </a></li>
+                  }
+                </ul>
+              }
+            </ui-painel>
+
+            <ui-painel>
+              <h2 class="txt-secao">Próximas tarefas</h2>
+              @if (p.proximasTarefas.length === 0) {
+                <ui-estado tipo="vazio" titulo="Nenhuma tarefa aberta" descricao="Agende um follow-up em Tarefas." />
+              } @else {
+                <ul class="lista">
+                  @for (t of p.proximasTarefas; track t.id) {
+                    <li><a routerLink="/tarefas" class="item">
+                      <span class="nome">{{ t.titulo }}@if (t.contatoNome) { <span class="suave"> · {{ t.contatoNome }}</span> }</span>
+                      <span class="meta txt-denso" [class.atrasada]="atrasada(t.venceEm)">{{ quando(t.venceEm) }}</span>
+                    </a></li>
+                  }
+                </ul>
+              }
+            </ui-painel>
           </div>
         }
       }
     }
   `,
   styles: `
-    :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { margin-bottom: var(--espacamento-5); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
-    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--espacamento-3); }
-    .esq { height: 96px; border-radius: var(--raio-painel); background: var(--superficie); }
-    .kpi { display: flex; flex-direction: column; gap: 2px; padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-decoration: none; color: inherit; }
-    a.kpi:hover { border-color: var(--acao); }
-    .kpi .txt-kpi { color: var(--texto); }
-    .kpi .txt-kpi.alerta { color: var(--atencao); }
-    .kpi-sub { font-size: 12px; color: var(--texto-suave); }
-    .pedidos { margin-top: var(--espacamento-6); }
-    .pedidos h2 { margin: 0 0 var(--espacamento-2); color: var(--texto); }
-    .ped-linha { display: flex; flex-wrap: wrap; gap: var(--espacamento-6); }
-    .ped-linha a { color: var(--texto-secundario); text-decoration: none; font-size: 14px; }
-    .ped-linha b { font-size: 18px; color: var(--texto); margin-right: var(--espacamento-1); }
-    .ped-linha b.ok { color: var(--sucesso); }
-    .ped-linha b.ruim { color: var(--erro); }
+    :host { display: grid; gap: var(--espacamento-4); width: 100%; padding: var(--espacamento-6); align-content: start; }
+    ui-cabecalho-tela { display: block; }
+    h2 { margin: 0 0 var(--espacamento-1); color: var(--texto); }
+    .suave { color: var(--texto-suave); }
+    p { margin: 0 0 var(--espacamento-3); }
+    .atalho-cockpit { display: flex; flex-wrap: wrap; align-items: center; gap: var(--espacamento-4); padding: var(--espacamento-3) var(--espacamento-4); background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-painel); color: var(--texto); text-decoration: none; }
+    .atalho-cockpit:hover { background: var(--superficie-hover); }
+    .atalho-cockpit b { font-family: var(--tipografia-familia-dados); }
+    .cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--espacamento-3); }
+    .cartao { display: block; min-width: 0; border: 2px solid transparent; border-radius: var(--raio-painel); text-decoration: none; color: inherit; }
+    .cartao:hover, .cartao:focus-visible { border-color: var(--acao); }
+    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--espacamento-4); }
+    .colunas { list-style: none; margin: 0; padding: 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: var(--espacamento-3); align-items: end; }
+    .coluna { display: grid; justify-items: center; gap: var(--espacamento-1); min-width: 0; }
+    .c-trilho { display: flex; align-items: flex-end; width: 100%; max-width: 48px; height: 120px; border-radius: var(--raio-controle); background: var(--superficie); overflow: hidden; }
+    .c-fill { display: block; width: 100%; background: var(--acao); border-radius: var(--raio-controle); }
+    .c-valor { color: var(--texto); }
+    .c-rotulo { color: var(--texto-secundario); white-space: nowrap; }
+    .lista { list-style: none; margin: 0; padding: 0; display: grid; }
+    .item { display: flex; align-items: baseline; justify-content: space-between; gap: var(--espacamento-3); padding: var(--espacamento-2) 0; border-bottom: 1px solid var(--borda); text-decoration: none; color: var(--texto); min-width: 0; }
+    .item:hover .nome { color: var(--acao); }
+    .nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .meta { flex: none; color: var(--texto-suave); }
+    .meta.atrasada { color: var(--erro); }
   `,
 })
 export class InicioPagina implements OnInit {
   private readonly http = inject(HttpClient)
+  private readonly auth = inject(AuthServico)
+  private readonly presenca = inject(PresencaServico)
+  /** Atalho do Cockpit — só para a gestão; falha em silêncio (o Início não depende dele). */
+  protected readonly cockpit = signal<RespostaCockpit['cards'] | null>(null)
+
   readonly estado = signal<Estado>('carregando')
   readonly d = signal<Painel | null>(null)
+  readonly inicio = signal('')
+  readonly fim = signal('')
+  readonly erroTexto = signal('')
 
-  ngOnInit(): void { void this.carregar() }
-  reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
+  protected readonly saudacao = computed(() =>
+    textoSaudacao(new Date(), this.d()?.periodo.fuso ?? null, this.auth.usuario()?.nome ?? null))
+  protected readonly taxaTexto = computed(() => formatarTaxa(this.d()?.conversao.taxa ?? null))
+  protected readonly rotuloPedidos = computed(() => {
+    const p = this.d()
+    return p ? `Pedidos efetivados · ${formatarReais(p.pedidos.valorCentavos)}` : 'Pedidos efetivados'
+  })
+  protected readonly rotuloTarefas = computed(() => {
+    const t = this.d()?.tarefas
+    return t && t.atrasadas > 0 ? `Tarefas pendentes · ${t.atrasadas} atrasadas` : 'Tarefas pendentes'
+  })
+  protected readonly rotuloConversao = computed(() => {
+    const c = this.d()?.conversao
+    return c ? `Conversão · ${c.convertidos} de ${c.contatosNovos}` : 'Conversão'
+  })
+  protected readonly meses = computed(() => {
+    const m = this.d()?.pedidosPorMes ?? []
+    const alturas = alturasColunas(m.map((x) => x.quantidade))
+    return m.map((x, i) => ({ mes: x.mes, rotulo: rotuloMes(x.mes), quantidade: x.quantidade, altura: alturas[i] ?? 0 }))
+  })
+  protected readonly semPedidosNosMeses = computed(() => this.meses().every((m) => m.quantidade === 0))
+  protected readonly qualificacao = computed(() =>
+    (this.d()?.qualificacao ?? []).map((q) => ({ chave: q.chave, rotulo: q.rotulo, valor: q.contatos })))
+
+  protected readonly colunasRanking: readonly ColunaTabela[] = [
+    { chave: 'posicao', rotulo: '#', largura: '48px' },
+    { chave: 'nome', rotulo: 'Vendedor' },
+    { chave: 'pedidos', rotulo: 'Pedidos', alinhamento: 'dir' },
+    { chave: 'valor', rotulo: 'Valor', alinhamento: 'dir' },
+  ]
+  protected readonly linhasRanking = computed<LinhaTabela[]>(() =>
+    (this.d()?.ranking ?? []).map((r, i) => ({ ...r, posicao: i + 1 })))
+  protected readonly chaveLinha = (l: LinhaTabela): string => String(l['usuarioId'] ?? 'sem-vendedor')
+
+  ngOnInit(): void {
+    void this.carregar()
+    void this.carregarAtalhoCockpit()
+  }
+
+  private async carregarAtalhoCockpit(): Promise<void> {
+    await this.presenca.carregar()
+    if (!this.presenca.gestao()) return
+    try { this.cockpit.set((await firstValueFrom(this.http.get<RespostaCockpit>('/v1/gestao/cockpit'))).cards) }
+    catch { /* sem atalho */ }
+  }
+
+  protected reais(c: unknown): string { return formatarReais(Number(c)) }
+  protected quando(iso: string): string { return dataHoraCurta(iso, this.d()?.periodo.fuso ?? null) }
+  protected atrasada(iso: string): boolean { return new Date(iso).getTime() < Date.now() }
 
   async carregar(): Promise<void> {
+    if (periodoInvertido(this.inicio(), this.fim())) return
     this.estado.set('carregando')
+    const q = queryDoPeriodo(this.inicio(), this.fim())
     try {
-      const r = await firstValueFrom(this.http.get<Painel>('/v1/painel/inicio'))
+      const r = await firstValueFrom(this.http.get<Painel>(`/v1/painel/inicio${q ? `?${q}` : ''}`))
       this.d.set(r)
+      // Na 1ª carga o servidor escolhe o mês atual no fuso do tenant; o filtro passa a refletir isso.
+      this.inicio.set(r.periodo.inicio)
+      this.fim.set(r.periodo.fim)
       this.estado.set('pronto')
-    } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
+    } catch (e) {
+      if (e instanceof HttpErrorResponse && e.status === 403) { this.estado.set('sem_permissao'); return }
+      this.erroTexto.set(MENSAGENS_PERIODO[codigoDoErro(e) ?? ''] ?? 'Confira a conexão e tente de novo.')
+      this.estado.set('erro')
+    }
   }
 }

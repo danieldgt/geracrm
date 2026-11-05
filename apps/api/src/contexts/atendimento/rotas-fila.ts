@@ -4,6 +4,7 @@ import type { Sql } from '../../db/index.js'
 import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { atendePapel, papeisDoUsuario } from '../plataforma/papel.js'
+import { condicaoConversa, conversaNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 import { operadorAusente, RECUSA_OPERADOR_AUSENTE } from './presenca-operador.js'
 import { garantirEtapasAtendimento } from './rotas-atendimento-kanban.js'
 import { fragmentoForaDaSimulacao, fragmentoNaFila, respostaHumanaDoAtendimento } from './sla-handoff.js'
@@ -31,6 +32,14 @@ import { fragmentoForaDaSimulacao, fragmentoNaFila, respostaHumanaDoAtendimento 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export async function garantirUsuarioId(tx: Sql, req: FastifyRequest): Promise<string> {
+  // ⚠️ SESSÃO DE STAFF NUNCA GRAVA `usuario` NO CLIENTE (revisão de segurança D3).
+  //    A linha carregaria o sub e o e-mail do LOGIN do staff — e o admin do
+  //    cliente, pelo cadastro de usuários, redefiniria a senha (ou bloquearia) a
+  //    conta de quem tem acesso a TODOS os clientes. Staff age como admin sem
+  //    linha (`papeisDoUsuario`, `escopoDaRequisicao`); onde só a autoria importa
+  //    use `atorDaRequisicao` (NULL + `auditoria.ator_staff`). Ação que exige um
+  //    usuário do cliente como dono (assumir, ser responsável) é recusada.
+  if (req.atorStaff) throw new StaffSemUsuario()
   // Dev (header x-tenant-id, sem Cognito): sub sintético por tenant, para duas
   // empresas locais não disputarem a mesma linha. ⚠️ A regra do `sub` é UMA só
   // (`subDoUsuario`) — presença, ausência e autoria têm de casar a mesma linha.
@@ -43,6 +52,30 @@ export async function garantirUsuarioId(tx: Sql, req: FastifyRequest): Promise<s
     ON CONFLICT (tenant_id, cognito_sub) DO UPDATE SET email = EXCLUDED.email
     RETURNING id`
   return u!.id
+}
+
+/**
+ * Recusa tipificada: a sessão de staff tentou uma ação que precisa de um
+ * USUÁRIO do cliente como dono (assumir, ser responsável, criar em nome de).
+ * O handler de erro da app responde 403 com este código.
+ */
+export class StaffSemUsuario extends Error {
+  readonly statusCode = 403
+  readonly codigo = 'acesso.staff_sem_usuario'
+  readonly mensagemTela = 'A sessão de suporte não age como usuário do cliente nesta ação. Peça a um usuário da empresa.'
+  constructor() {
+    super('acesso.staff_sem_usuario')
+    this.name = 'StaffSemUsuario'
+  }
+}
+
+/**
+ * Autor de uma ação para colunas que ACEITAM NULL (auditoria, `atribuido_por`,
+ * `adicionado_por`…): sessão de staff = NULL (a trilha marca `ator_staff`); os
+ * demais, `garantirUsuarioId`.
+ */
+export async function atorDaRequisicao(tx: Sql, req: FastifyRequest): Promise<string | null> {
+  return req.atorStaff ? null : garantirUsuarioId(tx, req)
 }
 
 async function emitirEvento(tx: Sql, conversaId: string): Promise<void> {
@@ -63,10 +96,15 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const p = Number(req.query.p)
       if (!Number.isSafeInteger(p) || p <= 0) return reply.code(422).send({ erro: 'protocolo.invalido' })
-      const [row] = await req.comTenant((tx) => tx<{ conversa_id: string }[]>`
-        SELECT conversa_id FROM atendimento
-         WHERE tenant_id = tenant_atual() AND protocolo = ${p}
-         ORDER BY criado_em DESC LIMIT 1`)
+      const row = await req.comTenant(async (tx) => {
+        const [r] = await tx<{ conversa_id: string }[]>`
+          SELECT conversa_id FROM atendimento
+           WHERE tenant_id = tenant_atual() AND protocolo = ${p}
+           ORDER BY criado_em DESC LIMIT 1`
+        // ⚠️ Escopo (D3): protocolo de conversa fora do escopo = não encontrado.
+        if (!r || !(await conversaNoEscopo(tx, await escopoDaRequisicao(tx, req), r.conversa_id))) return null
+        return r
+      })
       if (!row) return reply.code(404).send({ erro: 'protocolo.nao_encontrado' })
       return reply.send({ conversaId: row.conversa_id })
     },
@@ -76,9 +114,12 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
   app.get('/v1/fila/contadores', { preHandler: exigirTenant }, async (req, reply) => {
     const sub = subDoUsuario(req) // a MESMA regra do assumir (dev: "dev-<tenant>")
     const r = await req.comTenant(async (tx) => {
+      // ⚠️ A contagem da aba "Fila" conta o que a aba MOSTRA (escopo D3).
+      const escopo = await escopoDaRequisicao(tx, req)
       const [fila] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM conversa cv
-         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}`
+         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}
+           AND ${condicaoConversa(tx, escopo)}`
       const [meus] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM atendimento a
          JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id
@@ -109,6 +150,11 @@ export async function rotasFila(app: FastifyInstance): Promise<void> {
         const [conv] = await tx<{ canal_id: string }[]>`
           SELECT canal_id FROM conversa WHERE tenant_id = tenant_atual() AND id = ${conversaId}`
         if (!conv) return { tipo: 'nao_encontrada' as const }
+        // ⚠️ Escopo (D3, revisão de segurança C2): só assume quem ENXERGA a
+        //    conversa — o escopo já inclui a FILA dos números que a pessoa
+        //    atende, então o fluxo da fila segue igual. Fora = 404 de
+        //    inexistente; usuário inativo não enxerga nada, logo não assume.
+        if (!(await conversaNoEscopo(tx, await escopoDaRequisicao(tx, req), conversaId))) return { tipo: 'nao_encontrada' as const }
 
         // ⚠️ AUSENTE NÃO ASSUME, e aqui o motivo é mais grave que a simetria com
         //    o envio: assumir CALA o agente naquela conversa por uma hora

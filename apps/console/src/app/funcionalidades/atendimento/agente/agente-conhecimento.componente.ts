@@ -10,11 +10,12 @@ import {
   ConhecimentoServico, type Documento, type ResultadoBusca, type TextoExtraido,
 } from './conhecimento.servico.js'
 import {
-  ARQUIVO_MAX_BYTES, DESCRICAO_TIPO, LIMITES_DOCUMENTO, OBSERVACAO_MAX, ROTULO_TIPO,
-  ajustarTipoAoAlcance, arquivoGrande, badgeAlcance, badgeForca, badgeTipo, corpoDoDocumento, descreverMotivoSemantica,
-  ehEspelhoDePoliticas, formularioDe, formularioNovo, motivoSemantica, resumoDaExtracao, rotuloFonte, rotuloSemantica,
-  semanticaLigada, temPendentes, textoPendentes, tipoArquivoDe, tiposDisponiveis, validarDocumento, validarObservacao,
-  type Alcance, type CapacidadesBusca, type FormularioDocumento, type TipoDocumento,
+  ARQUIVO_MAX_BYTES, DESCRICAO_TIPO, FILTROS_TIPO, LIMITES_DOCUMENTO, OBSERVACAO_MAX, ROTULO_TIPO, ROTULO_TIPO_PROVA, TIPOS_PROVA,
+  ajustarTipoAoAlcance, arquivoGrande, badgeAlcance, badgeAprovacao, badgeForca, badgeTipo, corpoDoDocumento, descreverMotivoSemantica,
+  ehEspelhoDePoliticas, formularioDe, formularioNovo, linhaDaFonte, motivoSemantica, pendenciasParaAprovar, resumoDaExtracao, rotuloFonte,
+  rotuloSemantica, semanticaLigada, temPendentes, textoPendentes, tipoArquivoDe, tipoDoFiltro, tiposDisponiveis, validarDocumento,
+  validarObservacao,
+  type Alcance, type CamposProvaSocialForm, type CapacidadesBusca, type FiltroTipo, type FormularioDocumento, type TipoDocumento,
 } from './conhecimento.regras.js'
 import { ConhecimentoHistoricoComponente } from './conhecimento-historico.componente.js'
 
@@ -116,6 +117,49 @@ interface Importado extends TextoExtraido { readonly nome: string }
               </fieldset>
             </div>
 
+            @if (f.tipo === 'prova_social') {
+              <!-- Prova social (G3): fonte e data SEMPRE; consentimento no depoimento. Nasce pendente; admin aprova na lista. -->
+              <fieldset class="prova">
+                <legend class="campo-rotulo">Prova social</legend>
+                <div class="grade-2">
+                  <label class="campo">
+                    <span>Tipo da prova <span class="obrig" aria-hidden="true">*</span></span>
+                    <select [value]="f.provaTipo" (change)="mudarProva('provaTipo', $any($event.target).value)">
+                      @for (t of tiposProva; track t) { <option [value]="t">{{ rotuloTipoProva[t] }}</option> }
+                    </select>
+                  </label>
+                  <label class="campo">
+                    <span>Data da apuração <span class="obrig" aria-hidden="true">*</span></span>
+                    <input type="date" [value]="f.apuradoEm" (input)="mudarProva('apuradoEm', $any($event.target).value)"
+                           [attr.aria-invalid]="erroDe('apuradoEm') ? 'true' : null" />
+                    @if (erroDe('apuradoEm'); as e) { <span class="msg-erro">{{ e }}</span> }
+                    <small>Apurada há mais de um ano, o agente deixa de usar.</small>
+                  </label>
+                  <label class="campo">
+                    <span>Fonte <span class="obrig" aria-hidden="true">*</span></span>
+                    <input type="text" [value]="f.fonte" maxlength="200" (input)="mudarProva('fonte', $any($event.target).value)"
+                           [attr.aria-invalid]="erroDe('fonte') ? 'true' : null" placeholder="Ex.: Pesquisa NPS 2026, Google Meu Negócio" />
+                    @if (erroDe('fonte'); as e) { <span class="msg-erro">{{ e }}</span> }
+                  </label>
+                  <label class="campo">
+                    <span>Link da fonte</span>
+                    <input type="url" [value]="f.link" maxlength="500" (input)="mudarProva('link', $any($event.target).value)"
+                           [attr.aria-invalid]="erroDe('link') ? 'true' : null" placeholder="https://" />
+                    @if (erroDe('link'); as e) { <span class="msg-erro">{{ e }}</span> }
+                  </label>
+                </div>
+                @if (f.provaTipo === 'depoimento') {
+                  <label class="chk">
+                    <input type="checkbox" [checked]="f.consentimento" (change)="mudarProva('consentimento', $any($event.target).checked)" />
+                    O cliente autorizou o uso do depoimento (LGPD — consentimento registrado) <span class="obrig" aria-hidden="true">*</span>
+                  </label>
+                  @if (erroDe('consentimento'); as e) { <span class="msg-erro">{{ e }}</span> }
+                }
+                <small>Só chega ao agente depois que um administrador aprova. Mudar o texto, a fonte, a data, o tipo, o consentimento ou o número volta para pendente (e cria uma versão nova).
+                  O agente cita o texto como está, com a fonte — escreva a frase que ele pode dizer.</small>
+              </fieldset>
+            }
+
             <label class="campo">
               <span>Conteúdo</span>
               <textarea rows="14" [value]="f.conteudo" (input)="mudar('conteudo', $any($event.target).value)"
@@ -188,11 +232,17 @@ interface Importado extends TextoExtraido { readonly nome: string }
         }
         @case ('pronto') {
           <div class="barra">
+            <label class="filtro">
+              <span>Mostrar</span>
+              <select [value]="filtroTipo()" (change)="mudarFiltro($any($event.target).value)">
+                @for (o of filtros; track o.valor) { <option [value]="o.valor">{{ o.rotulo }}</option> }
+              </select>
+            </label>
             <label class="chk">
               <input type="checkbox" [checked]="incluirDespublicados()" (change)="alternarDespublicados($any($event.target).checked)" />
               Incluir despublicados
             </label>
-            @if (!form()) { <ui-botao (click)="novo()">Novo documento</ui-botao> }
+            @if (!form()) { <ui-botao (click)="novo()">{{ filtroTipo() === 'prova_social' ? 'Nova prova social' : 'Novo documento' }}</ui-botao> }
           </div>
 
           @if (itens().length === 0) {
@@ -213,13 +263,33 @@ interface Importado extends TextoExtraido { readonly nome: string }
                     <span class="txt-dados meta">{{ d.trechos }} {{ d.trechos === 1 ? 'trecho' : 'trechos' }}</span>
                     @if (!d.publicado) { <ui-badge tom="atencao">despublicado</ui-badge> }
                     @if (espelho(d)) { <ui-badge tom="info">espelha a Configuração</ui-badge> }
+                    @if (aprovacao(d); as a) { <ui-badge [tom]="a.tom">{{ a.rotulo }}</ui-badge> }
                   </div>
                   <p class="previa">{{ d.conteudo }}</p>
+                  @if (d.tipo === 'prova_social') {
+                    <p class="fonte-linha">
+                      @if (fonteDe(d); as fl) { <span>{{ fl }}</span> } @else { <span class="falta">sem fonte</span> }
+                      @if (d.link) { <a class="link" [href]="d.link" target="_blank" rel="noopener noreferrer">ver fonte</a> }
+                    </p>
+                    @if (!d.aprovado && pendencias(d).length > 0) {
+                      <p class="dica">Para aprovar: {{ pendencias(d).join(' ') }}</p>
+                    }
+                  }
                   <div class="rodape">
                     <span class="txt-dados quando">atualizado {{ d.atualizadoEm | date: 'dd/MM HH:mm' }}</span>
                     <div class="acoes-item">
                       <ui-botao variante="fantasma" [desabilitado]="acaoEm() !== null" (click)="editar(d)">Editar</ui-botao>
                       <ui-botao variante="fantasma" (click)="abrirHistorico(d)">{{ historicoDe() === d.id ? 'Histórico aberto' : 'Histórico' }}</ui-botao>
+                      @if (d.tipo === 'prova_social') {
+                        @if (d.aprovado) {
+                          <ui-botao variante="fantasma" [carregando]="acaoEm() === d.id" [desabilitado]="acaoEm() !== null && acaoEm() !== d.id"
+                                    (click)="aprovar(d, false)">Revogar aprovação</ui-botao>
+                        } @else {
+                          <ui-botao variante="secundario" [carregando]="acaoEm() === d.id"
+                                    [desabilitado]="(acaoEm() !== null && acaoEm() !== d.id) || pendencias(d).length > 0"
+                                    (click)="aprovar(d, true)">Aprovar</ui-botao>
+                        }
+                      }
                       @if (d.publicado) {
                         <ui-botao variante="fantasma" [carregando]="acaoEm() === d.id" [desabilitado]="acaoEm() !== null && acaoEm() !== d.id"
                                   (click)="despublicar(d)">Despublicar</ui-botao>
@@ -330,6 +400,14 @@ interface Importado extends TextoExtraido { readonly nome: string }
     .importado { background: var(--sucesso-suave); display: grid; gap: var(--espacamento-1); }
     .aviso ul { margin: 0; padding-left: var(--espacamento-4); display: grid; gap: 2px; }
     .acoes { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; }
+    .prova { margin: 0; padding: var(--espacamento-3); border: 1px solid var(--borda); border-radius: var(--raio-controle);
+      display: grid; gap: var(--espacamento-3); min-width: 0; }
+    .prova small { font-size: 11px; color: var(--texto-suave); }
+    .obrig { color: var(--erro); }
+    .filtro { display: flex; align-items: center; gap: var(--espacamento-2); color: var(--texto-secundario); font-size: 13px; }
+    .filtro select { font: inherit; min-height: var(--densidade-alvo-clique-console); }
+    .fonte-linha { margin: 0; display: flex; gap: var(--espacamento-2); flex-wrap: wrap; color: var(--texto-secundario); font-size: 12px; overflow-wrap: anywhere; }
+    .falta { color: var(--atencao); }
 
     .barra { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-3); flex-wrap: wrap; }
     .chk { display: flex; align-items: center; gap: var(--espacamento-2); color: var(--texto); font-size: 14px; cursor: pointer; }
@@ -375,6 +453,11 @@ export class AgenteConhecimentoComponente {
   private readonly confirmacao = inject(ConfirmacaoServico)
 
   readonly rotuloTipo = ROTULO_TIPO
+  readonly tiposProva = TIPOS_PROVA
+  readonly rotuloTipoProva = ROTULO_TIPO_PROVA
+  readonly filtros = FILTROS_TIPO
+  /** Filtro da lista (G3): todos ou só prova social. */
+  readonly filtroTipo = signal<FiltroTipo>('todos')
   readonly descricaoTipo = DESCRICAO_TIPO
   readonly limites = LIMITES_DOCUMENTO
   readonly observacaoMax = OBSERVACAO_MAX
@@ -462,6 +545,9 @@ export class AgenteConhecimentoComponente {
   tipo(t: string) { return badgeTipo(t) }
   alcance(d: Documento) { return badgeAlcance(d) }
   espelho(d: Documento): boolean { return ehEspelhoDePoliticas(d) }
+  aprovacao(d: Documento) { return badgeAprovacao(d) }
+  pendencias(d: Documento): readonly string[] { return d.tipo === 'prova_social' ? pendenciasParaAprovar(d) : [] }
+  fonteDe(d: Documento): string | null { return linhaDaFonte(d) }
   forca(score: number) { return badgeForca(score) }
   fonte(f: string): string { return rotuloFonte(f) }
   pendentes(k: CapacidadesBusca): string { return textoPendentes(k) }
@@ -515,7 +601,7 @@ export class AgenteConhecimentoComponente {
   async carregar(): Promise<void> {
     this.estado.set('carregando'); this.erroMais.set(null)
     try {
-      const p = await this.api.listar({ cursor: null, canalId: this.canalId(), incluirDespublicados: this.incluirDespublicados() })
+      const p = await this.api.listar({ cursor: null, canalId: this.canalId(), incluirDespublicados: this.incluirDespublicados(), tipo: tipoDoFiltro(this.filtroTipo()) })
       this.itens.set(p.itens)
       this.proximoCursor.set(p.proximoCursor)
       this.estado.set('pronto')
@@ -529,12 +615,42 @@ export class AgenteConhecimentoComponente {
     if (!cursor || this.carregandoMais()) return
     this.carregandoMais.set(true); this.erroMais.set(null)
     try {
-      const p = await this.api.listar({ cursor, canalId: this.canalId(), incluirDespublicados: this.incluirDespublicados() })
+      const p = await this.api.listar({ cursor, canalId: this.canalId(), incluirDespublicados: this.incluirDespublicados(), tipo: tipoDoFiltro(this.filtroTipo()) })
       this.itens.update((a) => mesclarPagina(a, p.itens, (d) => d.id))
       this.proximoCursor.set(p.proximoCursor)
     } catch {
       this.erroMais.set('Não foi possível carregar mais documentos. Tente de novo.')
     } finally { this.carregandoMais.set(false) }
+  }
+
+  mudarFiltro(v: string): void {
+    this.filtroTipo.set(v === 'prova_social' ? 'prova_social' : 'todos')
+    void this.carregar()
+  }
+
+  /**
+   * Aprovar/revogar prova social. Só admin: 403 é aviso (não derruba a tela) —
+   * a pessoa continua vendo e editando, só não libera para o agente.
+   */
+  async aprovar(d: Documento, aprovado: boolean): Promise<void> {
+    if (this.acaoEm()) return
+    this.acaoEm.set(d.id)
+    try {
+      const r = await this.api.aprovar(d.id, aprovado, d.versao)
+      if (r.ok) {
+        this.toast.sucesso(aprovado ? `"${d.titulo}" aprovada — o agente pode citar.` : `Aprovação de "${d.titulo}" revogada — o agente deixa de citar.`)
+        this.substituir(r.documento)
+        return
+      }
+      if (r.status === 403) { this.toast.erro('Só um administrador aprova prova social.'); return }
+      if (r.status === 409) {
+        // Mudou desde que a lista carregou: recarrega para a pessoa conferir a versão nova antes de aprovar.
+        this.toast.erro(r.erro.mensagem ?? 'O documento mudou desde que você o abriu. Confira de novo antes de aprovar.')
+        void this.carregar()
+        return
+      }
+      this.falhaDeAcao(r.status, r.erro.mensagem, 'Não foi possível mudar a aprovação.')
+    } finally { this.acaoEm.set(null) }
   }
 
   alternarDespublicados(ligado: boolean): void {
@@ -604,7 +720,7 @@ export class AgenteConhecimentoComponente {
   // ─── Formulário ───
 
   novo(): void {
-    this.abrirForm(formularioNovo(this.canalId()))
+    this.abrirForm(formularioNovo(this.canalId(), this.filtroTipo() === 'prova_social' ? 'prova_social' : 'faq'))
   }
 
   editar(d: Documento): void {
@@ -624,6 +740,11 @@ export class AgenteConhecimentoComponente {
   }
 
   mudar<K extends 'titulo' | 'conteudo'>(campo: K, valor: FormularioDocumento[K]): void {
+    this.form.update((f) => (f ? { ...f, [campo]: valor } : f))
+    this.limparErro(campo)
+  }
+
+  mudarProva<K extends keyof CamposProvaSocialForm>(campo: K, valor: CamposProvaSocialForm[K]): void {
     this.form.update((f) => (f ? { ...f, [campo]: valor } : f))
     this.limparErro(campo)
   }

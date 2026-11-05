@@ -159,3 +159,85 @@ describe('Plataforma: cadastro de clientes', () => {
     if (chave !== undefined) process.env.AWS_ACCESS_KEY_ID = chave
   })
 })
+
+describe('Plataforma: semear o admin do cliente (revisão D3, M6)', () => {
+  it('só staff; atribui admin a um usuário ATIVO do cliente e audita nos dois tenants', async () => {
+    const r = await criarCliente({ nome: 'Cliente Sem Admin', planoCodigo: 'plano-cli', verticalCodigo: 'modelo-cli' })
+    const { id } = r.json<{ id: string }>()
+    const ana = 'c17e0000-5555-4000-8000-000000000001'
+    const inativo = 'c17e0000-5555-4000-8000-000000000002'
+    await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email, ativo) VALUES
+      (${id}, ${ana}, 'c17e-sub-ana', 'Ana Dona', 'ana@cliente.test', true),
+      (${id}, ${inativo}, 'c17e-sub-ina', 'Ex Funcionário', 'ex@cliente.test', false)`
+
+    delete process.env.DEV_STAFF
+    expect((await chamar('POST', `/v1/plataforma/clientes/${id}/admin`, { usuarioId: ana })).statusCode).toBe(403)
+    process.env.DEV_STAFF = 'on'
+
+    const inexistente = await chamar('POST', `/v1/plataforma/clientes/${id}/admin`, { usuarioId: 'c17e0000-5555-4000-8000-0000000000ff' })
+    expect(inexistente.statusCode).toBe(404)
+    expect(inexistente.json<{ erro: string }>().erro).toBe('usuario.nao_encontrado')
+    expect((await chamar('POST', `/v1/plataforma/clientes/${id}/admin`, { usuarioId: inativo })).statusCode).toBe(404)
+    const outroCliente = await chamar('POST', '/v1/plataforma/clientes/c17e0000-5555-4000-8000-0000000000ee/admin', { usuarioId: ana })
+    expect(outroCliente.json<{ erro: string }>().erro).toBe('cliente.nao_encontrado')
+
+    const ok = await chamar('POST', `/v1/plataforma/clientes/${id}/admin`, { usuarioId: ana })
+    expect(ok.statusCode).toBe(200)
+    const vinc = await dono<{ papel: string; filial_id: string | null }[]>`
+      SELECT papel, filial_id FROM usuario_filial WHERE tenant_id = ${id} AND usuario_id = ${ana}`
+    expect(vinc).toEqual([{ papel: 'admin', filial_id: null }])
+    const [noCliente] = await dono<{ ator_staff: boolean; ator_id: string | null }[]>`
+      SELECT ator_staff, ator_id FROM auditoria WHERE tenant_id = ${id} AND acao = 'usuario.admin_semeado'`
+    expect(noCliente).toEqual({ ator_staff: true, ator_id: null })
+    const [noStaff] = await dono`SELECT 1 FROM auditoria WHERE tenant_id = ${T_STAFF} AND acao = 'cliente.admin_semeado' AND entidade_id = ${id}`
+    expect(noStaff).toBeDefined()
+    // Repetir é idempotente (um vínculo de tenant inteiro só).
+    expect((await chamar('POST', `/v1/plataforma/clientes/${id}/admin`, { usuarioId: ana })).statusCode).toBe(200)
+    const [n] = await dono<{ n: number }[]>`SELECT count(*)::int AS n FROM usuario_filial WHERE tenant_id = ${id} AND usuario_id = ${ana}`
+    expect(n!.n).toBe(1)
+  })
+})
+
+describe('Plataforma: usuários de um cliente (escolha do admin)', () => {
+  it('só staff; busca no servidor; cursor sem repetir nem pular; não vaza usuário de outro cliente', async () => {
+    const a = (await criarCliente({ nome: 'Cliente Usuarios A', planoCodigo: 'plano-cli', verticalCodigo: 'modelo-cli' })).json<{ id: string }>().id
+    const b = (await criarCliente({ nome: 'Cliente Usuarios B', planoCodigo: 'plano-cli', verticalCodigo: 'modelo-cli' })).json<{ id: string }>().id
+    const uuid = (n: number) => `c17e0000-7777-4000-8000-${String(n).padStart(12, '0')}`
+    for (let i = 1; i <= 35; i++) {
+      await dono`INSERT INTO usuario (tenant_id, id, nome, email) VALUES
+        (${a}, ${uuid(i)}, ${'Pessoa ' + String(i).padStart(2, '0')}, ${`p${i}@a.test`})`
+    }
+    await dono`INSERT INTO usuario (tenant_id, id, nome, email) VALUES (${b}, ${uuid(100)}, 'Intruso B', 'intruso@b.test')`
+    await dono`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (${a}, ${uuid(1)}, NULL, 'admin')`
+
+    delete process.env.DEV_STAFF
+    expect((await chamar('GET', `/v1/plataforma/clientes/${a}/usuarios`)).statusCode).toBe(403)
+    process.env.DEV_STAFF = 'on'
+
+    const vistos: string[] = []
+    let cursor: string | null = null
+    let paginas = 0
+    do {
+      const r = await chamar('GET', `/v1/plataforma/clientes/${a}/usuarios${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`)
+      expect(r.statusCode).toBe(200)
+      const j: { itens: { id: string; papeis: string[] }[]; proximoCursor: string | null } = r.json()
+      vistos.push(...j.itens.map((u) => u.id))
+      if (paginas === 0) expect(j.itens[0]).toMatchObject({ nome: 'Pessoa 01', ativo: true, papeis: ['admin'] })
+      cursor = j.proximoCursor
+      paginas++
+    } while (cursor)
+    expect(paginas).toBe(2)
+    expect(vistos).toHaveLength(35)
+    expect(new Set(vistos).size).toBe(35)
+    expect(vistos).not.toContain(uuid(100))
+
+    const busca = (await chamar('GET', `/v1/plataforma/clientes/${a}/usuarios?busca=p7@`)).json<{ itens: { id: string }[] }>()
+    expect(busca.itens.map((u) => u.id)).toEqual([uuid(7)])
+    const doB = (await chamar('GET', `/v1/plataforma/clientes/${b}/usuarios`)).json<{ itens: { nome: string }[] }>()
+    expect(doB.itens.map((u) => u.nome)).toEqual(['Intruso B'])
+
+    expect((await chamar('GET', `/v1/plataforma/clientes/${a}/usuarios?cursor=lixo`)).statusCode).toBe(422)
+    const inexistente = await chamar('GET', '/v1/plataforma/clientes/c17e0000-5555-4000-8000-0000000000ee/usuarios')
+    expect(inexistente.statusCode).toBe(404)
+  })
+})

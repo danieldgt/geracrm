@@ -40,6 +40,11 @@ import { subDoUsuario } from '../../plugins/tenant.js'
  *          console chama no batimento de presença; token válido de alguém que
  *          o tenant desativou NÃO vira admin.
  *      Quando o primeiro admin ativo existe, a regra fica estrita para todos.
+ *      ⚠️ RISCO REGISTRADO (revisão D3): enquanto durar, qualquer usuário
+ *        ativo configura o tenant (agente, números, custo…). O cadastro de
+ *        usuários e filiais NÃO aceita o modo fundador (`exigirAdminAtribuido`)
+ *        — senão o primeiro a abrir a tela se daria admin. Cada cliente atual
+ *        precisa do admin semeado pelo staff (docs/agente-runbook.md).
  *   5. Sessão de staff (PLT-05) age como `admin` do cliente: já é auditada e é
  *      o caminho de implantação.
  *   6. `admin` satisfaz qualquer exigência; os demais papéis valem só quando
@@ -65,7 +70,11 @@ export async function papeisDoUsuario(tx: Sql, quem: { sub: string; atorStaff?: 
     SELECT (SELECT array_agg(DISTINCT uf.papel ORDER BY uf.papel)
               FROM usuario u
               JOIN usuario_filial uf ON uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id
-             WHERE u.tenant_id = tenant_atual() AND u.cognito_sub = ${quem.sub} AND u.ativo) AS papeis,
+              -- ⚠️ Vínculo em filial DESATIVADA não vale (o tenant_tem_admin
+              --    abaixo conta todos: desativar filial nunca reabre o fundador).
+              LEFT JOIN filial f ON f.tenant_id = uf.tenant_id AND f.id = uf.filial_id
+             WHERE u.tenant_id = tenant_atual() AND u.cognito_sub = ${quem.sub} AND u.ativo
+               AND (uf.filial_id IS NULL OR f.ativa)) AS papeis,
            EXISTS (SELECT 1 FROM usuario u
                     WHERE u.tenant_id = tenant_atual() AND u.cognito_sub = ${quem.sub} AND u.ativo) AS usuario_ativo,
            EXISTS (SELECT 1 FROM usuario_filial uf
@@ -87,6 +96,37 @@ export async function temPapel(req: FastifyRequest, ...aceitos: Papel[]): Promis
   if (!req.tenantId) return false
   const acesso = await req.comTenant((tx) => papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff }))
   return atendePapel(acesso, aceitos)
+}
+
+/**
+ * preHandler: exige ADMIN ATRIBUÍDO (linha `usuario_filial` com papel admin) ou
+ * sessão de staff — o MODO FUNDADOR NÃO VALE (revisão de segurança D3, M6).
+ *
+ * ⚠️ Para o cadastro de usuários e filiais: no modo fundador TODO usuário ativo
+ *    vale admin, e o primeiro que abrisse o cadastro se daria admin (e
+ *    escolheria quem mais entra). Quem semeia o primeiro admin de um cliente é o
+ *    staff — pela sessão de acesso (PLT-05) ou por
+ *    `POST /v1/plataforma/clientes/:id/admin`. As DEMAIS configurações seguem
+ *    com `exigirPapel` e o modo fundador, como antes da D3.
+ */
+export function exigirAdminAtribuido() {
+  return async function exigirAdminAtribuidoHandler(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply | undefined> {
+    if (!req.tenantId) {
+      const erro = new Error('autenticacao.ausente') as Error & { statusCode?: number }
+      erro.statusCode = 401
+      throw erro
+    }
+    const acesso = await req.comTenant((tx) => papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff }))
+    if (acesso.origem === 'staff' || (acesso.origem === 'atribuido' && acesso.papeis.includes('admin'))) return undefined
+    // Modo fundador: código próprio para a tela mostrar "sem administrador definido" (não é falta de papel).
+    return reply.code(403).send({
+      erro: acesso.origem === 'fundador' ? 'acesso.admin_atribuido' : 'acesso.papel_insuficiente',
+      mensagem: acesso.origem === 'fundador'
+        ? 'Esta empresa ainda não tem administrador definido. Peça ao suporte para definir o administrador.'
+        : 'Seu papel não permite esta ação. Peça a um administrador.',
+      exige: ['admin'],
+    })
+  }
 }
 
 /**

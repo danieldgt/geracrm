@@ -4,6 +4,7 @@ import type { Sql } from '../../db/index.js'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
 import { fragmentoForaDaSimulacao, fragmentoNaFila } from './sla-handoff.js'
+import { condicaoConversa, conversaNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 
 /**
  * Kanban de ATENDIMENTOS com etapas configuráveis por empresa (a visão do gestor).
@@ -55,14 +56,18 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
   app.get('/v1/atendimento-kanban/etapas', { preHandler: exigirTenant }, async (req, reply) => {
     const dados = await req.comTenant(async (tx) => {
       await garantirEtapasAtendimento(tx)
+      // ⚠️ Escopo (D3): os totais contam o que as colunas MOSTRAM.
+      const escopo = await escopoDaRequisicao(tx, req)
       const [fila] = await tx<{ n: number }[]>`
         SELECT count(*)::int AS n FROM conversa cv
-         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}`
+         WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}
+           AND ${condicaoConversa(tx, escopo)}`
       const etapas = await tx<{ id: string; chave: string; nome: string; tipo: string; ordem: number; total: number }[]>`
         SELECT e.id, e.chave, e.nome, e.tipo, e.ordem,
                (SELECT count(*) FROM atendimento a
                   JOIN conversa cv ON cv.tenant_id = a.tenant_id AND cv.id = a.conversa_id
                  WHERE a.tenant_id = e.tenant_id AND a.etapa_id = e.id AND ${fragmentoForaDaSimulacao(tx)}
+                   AND ${condicaoConversa(tx, escopo)}
                    AND (e.tipo = 'atendimento' OR a.entrou_etapa_em >= now() - (${DIAS_ENCERRADO} || ' days')::interval))::int AS total
           FROM atendimento_etapa e
          WHERE e.tenant_id = tenant_atual() AND e.ativo
@@ -87,6 +92,7 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
         curEm = em; curId = id
       }
       const { linhas, fuso } = await req.comTenant(async (tx) => {
+        const escopo = await escopoDaRequisicao(tx, req)
         const linhas = await tx<{
           id: string; nome: string; ultima_mensagem_em: Date | null
           at_id: string | null; sla_inicio_em: Date | null; sla_vence_em: Date | null; reatribuicao_vence_em: Date | null
@@ -108,6 +114,7 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
              LIMIT 1
           ) h ON true
          WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}
+           AND ${condicaoConversa(tx, escopo)}
            AND ${curEm === null ? tx`true` : tx`(cv.ultima_mensagem_em, cv.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
          ORDER BY cv.ultima_mensagem_em DESC NULLS LAST, cv.id DESC
          LIMIT ${PAGINA + 1}`
@@ -147,7 +154,9 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
         if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curEm = em; curId = id
       }
-      const linhas = await req.comTenant((tx) => tx<{
+      const linhas = await req.comTenant(async (tx) => {
+        const escopo = await escopoDaRequisicao(tx, req)
+        return tx<{
         id: string; conversa_id: string; nome: string; atendente: string | null
         protocolo: string; entrou_etapa_em: Date | null; versao: string
       }[]>`
@@ -159,10 +168,12 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
           JOIN contato ct ON ct.tenant_id = cv.tenant_id AND ct.id = cv.contato_id
           LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id
          WHERE a.tenant_id = tenant_atual() AND a.etapa_id = ${req.params.etapaId} AND ${fragmentoForaDaSimulacao(tx)}
+           AND ${condicaoConversa(tx, escopo)}
            AND (e.tipo = 'atendimento' OR a.entrou_etapa_em >= now() - (${DIAS_ENCERRADO} || ' days')::interval)
            AND ${curEm === null ? tx`true` : tx`(a.entrou_etapa_em, a.id) > (${curEm}::timestamptz, ${curId}::uuid)`}
          ORDER BY a.entrou_etapa_em ASC, a.id ASC
-         LIMIT ${PAGINA + 1}`)
+         LIMIT ${PAGINA + 1}`
+      })
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
       const ultimo = pagina[pagina.length - 1]
@@ -189,6 +200,8 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
           SELECT conversa_id, estado, versao::text, etapa_id FROM atendimento
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!a) return { erro: 'nao_encontrado' as const }
+        // ⚠️ Escopo (D3): card de conversa fora do escopo = inexistente.
+        if (!(await conversaNoEscopo(tx, await escopoDaRequisicao(tx, req), a.conversa_id))) return { erro: 'nao_encontrado' as const }
         if (versao !== undefined && Number(a.versao) !== versao) return { erro: 'conflito' as const }
         const [etapa] = await tx<{ tipo: string }[]>`
           SELECT tipo FROM atendimento_etapa WHERE tenant_id = tenant_atual() AND id = ${etapaId} AND ativo`

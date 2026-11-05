@@ -12,6 +12,9 @@ import {
 import { vigiarTodos } from './contexts/aquisicao/vigia.js'
 import { varrerResumoDiario, HORA_RESUMO_LOCAL } from './contexts/aquisicao/entrega-resumo.js'
 import { despacharPush, configVapid, envioReal } from './contexts/plataforma/push.js'
+import { despacharEmails, emailPorLog } from './contexts/plataforma/email-notificacao.js'
+import { enviarLembretesAgenda, INTERVALO_LEMBRETE_AGENDA_MS } from './contexts/crm/agenda-lembrete.js'
+import { processarAvisosDeReuniao, INTERVALO_AVISOS_REUNIAO_MS } from './workers/reuniao-avisos.js'
 import { despacharCampanhas } from './contexts/crm/despachante-campanha.js'
 import { vigiarConexaoCanais } from './contexts/atendimento/vigia-canal.js'
 import { processarTarefasDoAgente, INTERVALO_WORKER_MS } from './workers/agente.js'
@@ -25,9 +28,13 @@ import { batimento } from './contexts/plataforma/batimento.js'
 import { processarQualidade, INTERVALO_QUALIDADE_MS } from './workers/qualidade.js'
 import { processarSla, INTERVALO_SLA_MS } from './workers/sla.js'
 import { processarPosIngestao, INTERVALO_POS_INGESTAO_MS } from './workers/pos-ingestao.js'
+import { processarImportacoes, INTERVALO_IMPORTACAO_MS } from './workers/importacao.js'
 import {
   processarParticoes, ALERTA_PARTICOES, ATRASO_PRIMEIRA_PASSADA_PARTICOES_MS, INTERVALO_PARTICOES_MS,
 } from './workers/particoes.js'
+import { atualizarConsumoDiario, ATRASO_PRIMEIRA_PASSADA_CONSUMO_MS, INTERVALO_CONSUMO_MS } from './workers/consumo.js'
+import { codigoDoErro, processarLgpd, INTERVALO_LGPD_MS, ATRASO_PRIMEIRA_PASSADA_LGPD_MS } from './workers/lgpd.js'
+import { processarMidiaLgpd, INTERVALO_LGPD_MIDIA_MS, ATRASO_PRIMEIRA_PASSADA_LGPD_MIDIA_MS } from './workers/lgpd-midia.js'
 
 const porta = Number(process.env.PORT ?? 3000)
 
@@ -192,7 +199,8 @@ if (process.env.DATABASE_ADMIN_URL) {
     despachandoCampanha = true
     void despacharCampanhas(donoAquisicao as never, new Date())
       .then((r) => {
-        if (r.enviados > 0 || r.falhas > 0 || r.campanhasConcluidas > 0) {
+        if (r.enviados > 0 || r.falhas > 0 || r.campanhasConcluidas > 0
+            || r.v2.enviados > 0 || r.v2.falhas > 0 || r.v2.pausadas > 0 || r.v2.concluidas > 0 || r.v2.interrompidos > 0 || r.tenantsComErro > 0) {
           app.log.info(r, 'despacho de campanha')
         }
       })
@@ -262,6 +270,16 @@ if (process.env.DATABASE_ADMIN_URL) {
     ['posIngestao', INTERVALO_POS_INGESTAO_MS, () => processarPosIngestao(donoAquisicao as never, {}, new Date())],
     ['qualidade', INTERVALO_QUALIDADE_MS, () => processarQualidade(donoAquisicao as never, {}, new Date())],
     ['sla', INTERVALO_SLA_MS, () => processarSla(donoAquisicao as never, {}, new Date())],
+    ['importacao', INTERVALO_IMPORTACAO_MS, () => processarImportacoes(donoAquisicao as never, {}, new Date())],
+    ['agendaLembrete', INTERVALO_LEMBRETE_AGENDA_MS, async () => {
+      const r = await enviarLembretesAgenda(donoAquisicao as never, new Date())
+      return { processadas: r.avisados, ...r }
+    }],
+    // C3: lembretes H-24/H-2 e no-show ao CLIENTE das reuniões marcadas pela conversa.
+    ['reuniaoAvisos', INTERVALO_AVISOS_REUNIAO_MS, async () => {
+      const r = await processarAvisosDeReuniao(donoAquisicao as never, new Date())
+      return { processadas: r.lembretes + r.desfechos + r.noShows + r.handoffs + r.reagendados, ...r }
+    }],
   ] as const) {
     let rodando = false
     intervalosAquisicao.push(setInterval(() => {
@@ -300,6 +318,48 @@ if (process.env.DATABASE_ADMIN_URL) {
   intervalosAquisicao.push(setTimeout(passadaParticoes, ATRASO_PRIMEIRA_PASSADA_PARTICOES_MS))
   intervalosAquisicao.push(setInterval(passadaParticoes, INTERVALO_PARTICOES_MS))
 
+  // ⚠️ CONSUMO (0124): atualiza a MV diária da tela de Consumo a cada 15 min, com guarda
+  //    anti-sobreposição. 1ª passada logo após o boot (deploy frequente não esperaria 15 min).
+  let atualizandoConsumo = false
+  const passadaConsumo = () => {
+    if (atualizandoConsumo) return
+    atualizandoConsumo = true
+    void atualizarConsumoDiario(donoAquisicao as never)
+      .catch((e) => app.log.warn({ erro: e, contexto: 'atendimento.consumo' }, 'atualização do consumo falhou'))
+      .finally(() => { atualizandoConsumo = false })
+  }
+  intervalosAquisicao.push(setTimeout(passadaConsumo, ATRASO_PRIMEIRA_PASSADA_CONSUMO_MS))
+  intervalosAquisicao.push(setInterval(passadaConsumo, INTERVALO_CONSUMO_MS))
+  // RETENÇÃO LGPD (H2): SÓ nos tenants com `lgpd_auto` ligado (desligado por padrão), anonimiza
+  // descartados além de `tenant.retencao_meses` e opt-outs com mais de 15 dias, em lotes por tenant
+  // (sob RLS), contato a contato. 1×/dia; o que passar do orçamento retoma na passada seguinte.
+  // ⚠️ Log só com contagens e códigos — nunca dado de contato nem o erro cru.
+  let anonimizando = false
+  const passadaLgpd = () => {
+    if (anonimizando) return
+    anonimizando = true
+    void processarLgpd(donoAquisicao as never, {}, new Date())
+      .then((r) => { if (r.processadas > 0) app.log.info({ ...r, contexto: 'crm.lgpd' }, 'retenção LGPD') })
+      .catch((e) => app.log.warn({ codigo: codigoDoErro(e), contexto: 'crm.lgpd' }, 'worker de retenção LGPD falhou'))
+      .finally(() => { anonimizando = false; batimento('lgpd') })
+  }
+  intervalosAquisicao.push(setTimeout(passadaLgpd, ATRASO_PRIMEIRA_PASSADA_LGPD_MS))
+  intervalosAquisicao.push(setInterval(passadaLgpd, INTERVALO_LGPD_MS))
+
+  // MÍDIA LGPD (H2): apaga do bucket os objetos anotados pela anonimização (fora de transação, com
+  // backoff). Sem bucket configurado, não faz nada.
+  let removendoMidiaLgpd = false
+  const passadaMidiaLgpd = () => {
+    if (removendoMidiaLgpd) return
+    removendoMidiaLgpd = true
+    void processarMidiaLgpd(donoAquisicao as never, {}, new Date())
+      .then((r) => { if (r.removidas + r.falhas > 0) app.log.info({ ...r, contexto: 'crm.lgpd_midia' }, 'remoção de mídia LGPD') })
+      .catch((e) => app.log.warn({ codigo: codigoDoErro(e), contexto: 'crm.lgpd_midia' }, 'worker de mídia LGPD falhou'))
+      .finally(() => { removendoMidiaLgpd = false; batimento('lgpdMidia') })
+  }
+  intervalosAquisicao.push(setTimeout(passadaMidiaLgpd, ATRASO_PRIMEIRA_PASSADA_LGPD_MIDIA_MS))
+  intervalosAquisicao.push(setInterval(passadaMidiaLgpd, INTERVALO_LGPD_MIDIA_MS))
+
   // Push nativo (PLT-07) — a notificação que chega com o navegador fechado.
   // ⚠️ 20s: é a mesma ordem de grandeza do despachante de webhooks. Push de
   //    atendimento tem que chegar em segundos; de minutos, o cliente já
@@ -324,6 +384,18 @@ if (process.env.DATABASE_ADMIN_URL) {
   } else {
     app.log.info('push nativo desligado (sem VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY)')
   }
+
+  // E-mail de notificação (D4): SLA estourado e menção. Adaptador de LOG por padrão — nada sai da
+  // máquina até um provedor ser ligado atrás da porta `PortaEmail`.
+  const portaEmail = emailPorLog(app.log)
+  let enviandoEmail = false
+  intervalosAquisicao.push(setInterval(() => {
+    if (enviandoEmail) return
+    enviandoEmail = true
+    void despacharEmails(donoAquisicao as never, portaEmail, app.log)
+      .catch((e) => app.log.warn({ codigo: codigoDoErro(e), contexto: 'plataforma.email' }, 'despacho de e-mail falhou'))
+      .finally(() => { enviandoEmail = false })
+  }, 60_000))
 }
 
 // PERNA SEMÂNTICA (ADR-026): embute trechos de conhecimento e produtos pendentes.

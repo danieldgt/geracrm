@@ -19,7 +19,7 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 14
 
     services:
       postgres:
@@ -69,3 +69,15 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+
+      # ── Ponta a ponta: a API de verdade (workers ligados) contra um banco extra
+      #    (`geracrm_e2e`, criado e derrubado pelo próprio teste), com Meta e ERP
+      #    FALSOS e IA simulada — sem rede externa, sem segredo. ~25 s medidos.
+      #    Depois do build: reaproveita os pacotes já compilados. Ver e2e em apps/api/e2e/README.md.
+      - name: E2E (webhook → agente → humano → devolução → pedido)
+        run: pnpm e2e
+        timeout-minutes: 4
+
+      - name: Log da API do e2e (só se falhar)
+        if: failure()
+        run: cat apps/api/e2e/api.e2e.log || true

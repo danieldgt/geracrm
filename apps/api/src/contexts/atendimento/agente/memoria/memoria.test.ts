@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
+import { criarApp } from '../../../../app.js'
 import { comTenantServico, encerrarBanco } from '../../../../db/index.js'
 import { anotarMemoria, detectarDadoSensivel, lerMemoria, listarMemoria, normalizarFato, revogarMemoria } from './memoria.js'
 import { ferramentaMemoriaAnotar } from './ferramenta-memoria.js'
@@ -206,5 +208,76 @@ describe('Ferramenta memoria_anotar', () => {
   it('entrada é estrita: tipo fora da lista não passa no schema', () => {
     expect(f.entrada.safeParse({ tipo: 'segredo', fato: 'x y z' }).success).toBe(false)
     expect(f.entrada.safeParse({ tipo: 'preferencia', fato: 'x y z' }).success).toBe(true)
+  })
+})
+
+/**
+ * ⚠️ Cursor de GET /v1/contatos/:id/memoria guarda `criado_em` em MICROSSEGUNDOS. Com cursor em
+ * `toISOString()`, os fatos anotados no mesmo milissegundo repetiam ou sumiam na virada de página.
+ */
+describe('GET /v1/contatos/:id/memoria — cursor preserva microssegundos', () => {
+  const CONTATO_PAG = 'c0b40000-5555-4000-8000-000000000004'
+  let app: FastifyInstance
+
+  const chamar = (url: string) =>
+    app.inject({ method: 'GET', url, headers: { 'x-tenant-id': T } })
+
+  const percorrer = async (base: string): Promise<string[]> => {
+    const ids: string[] = []
+    let cursor: string | null = null
+    for (let pagina = 0; pagina < 10; pagina++) {
+      const r = await chamar(cursor ? `${base}?cursor=${cursor}` : base)
+      expect(r.statusCode).toBe(200)
+      const corpo = r.json() as { itens: { id: string }[]; proximoCursor: string | null }
+      ids.push(...corpo.itens.map((i) => i.id))
+      cursor = corpo.proximoCursor
+      if (cursor === null) return ids
+    }
+    throw new Error('paginação não terminou em 10 páginas')
+  }
+
+  beforeAll(async () => {
+    process.env.DEV_TENANT_HEADER = 'on'
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo)
+               VALUES (${T}, ${CONTATO_PAG}, 'Paginação', 'manual', true) ON CONFLICT DO NOTHING`
+    await dono`DELETE FROM cliente_memoria WHERE tenant_id = ${T} AND contato_id = ${CONTATO_PAG}`
+    app = await criarApp(); await app.ready()
+  })
+
+  afterAll(async () => {
+    await dono`DELETE FROM cliente_memoria WHERE tenant_id = ${T} AND contato_id = ${CONTATO_PAG}`
+    await app.close()
+  })
+
+  it('35 fatos no mesmo milissegundo: nenhum id repete e nenhum falta', async () => {
+    const criados: string[] = []
+    for (let i = 0; i < 35; i++) {
+      const id = randomUUID()
+      criados.push(id)
+      // ⚠️ ::text::timestamptz — com ::timestamptz direto o driver serializa via Date e zera os µs.
+      const micro = String(123001 + i).padStart(6, '0')
+      await dono`INSERT INTO cliente_memoria (tenant_id, id, contato_id, tipo, fato, fato_normalizado, criado_em)
+                 VALUES (${T}, ${id}, ${CONTATO_PAG}, 'preferencia', ${`fato ${i}`}, ${`fato ${i}`},
+                         ${`2026-10-20 15:00:00.${micro}+00`}::text::timestamptz)`
+    }
+    const ids = await percorrer(`/v1/contatos/${CONTATO_PAG}/memoria`)
+    expect(ids.length).toBe(35)
+    expect(new Set(ids).size).toBe(35)
+    expect([...ids].sort()).toEqual([...criados].sort())
+  })
+
+  it('cursor malformado → 422 cursor.invalido', async () => {
+    const cursor = (bruto: string) => Buffer.from(bruto).toString('base64url')
+    const uuid = randomUUID()
+    for (const ruim of [
+      `nao-e-data§${uuid}`,
+      `2026-02-30 10:00:00.123001+00§${uuid}`,
+      `2026-10-20 15:00:00.123001+00§id-que-nao-e-uuid`,
+      '2026-10-20 15:00:00.123001+00',
+    ]) {
+      const r = await chamar(`/v1/contatos/${CONTATO_PAG}/memoria?cursor=${cursor(ruim)}`)
+      expect(r.statusCode, ruim).toBe(422)
+      expect((r.json() as { erro: string }).erro).toBe('cursor.invalido')
+    }
   })
 })

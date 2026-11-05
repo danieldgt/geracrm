@@ -6,9 +6,14 @@
  * `rotas-conhecimento.ts` / `extrair-texto.ts` — se mudar lá, muda aqui.
  */
 
+import {
+  ROTULO_TIPO_PROVA_SOCIAL, TIPOS_PROVA_SOCIAL, errosFormatoProvaSocial, errosParaAprovarProvaSocial, provaSocialVigente,
+  type TipoProvaSocial,
+} from '@geracrm/shared'
+
 export type Tom = 'neutro' | 'sucesso' | 'atencao' | 'erro' | 'info'
 
-export const TIPOS_DOCUMENTO = ['politicas', 'faq', 'frete', 'pagamento', 'troca', 'produto', 'outro'] as const
+export const TIPOS_DOCUMENTO = ['politicas', 'faq', 'frete', 'pagamento', 'troca', 'produto', 'outro', 'prova_social'] as const
 export type TipoDocumento = (typeof TIPOS_DOCUMENTO)[number]
 
 export const ROTULO_TIPO: Readonly<Record<TipoDocumento, string>> = {
@@ -19,6 +24,7 @@ export const ROTULO_TIPO: Readonly<Record<TipoDocumento, string>> = {
   troca: 'Troca e devolução',
   produto: 'Produto',
   outro: 'Outro',
+  prova_social: 'Prova social',
 }
 
 export const DESCRICAO_TIPO: Readonly<Record<TipoDocumento, string>> = {
@@ -29,12 +35,13 @@ export const DESCRICAO_TIPO: Readonly<Record<TipoDocumento, string>> = {
   troca: 'Quando aceita troca ou devolução, prazos e como o cliente pede.',
   produto: 'Detalhes de produto que não cabem no catálogo: uso, composição, cuidados.',
   outro: 'Qualquer outro texto que o agente possa citar.',
+  prova_social: 'Depoimento de cliente ou número da loja que o agente pode citar — com fonte e data. Só chega ao agente depois que um administrador aprova.',
 }
 
 /** Badge do tipo. Valor desconhecido (API mais nova) sai cru, neutro — nunca quebra a lista. */
 export function badgeTipo(t: string): { rotulo: string; tom: Tom } {
   if ((TIPOS_DOCUMENTO as readonly string[]).includes(t)) {
-    return { rotulo: ROTULO_TIPO[t as TipoDocumento], tom: t === 'politicas' ? 'info' : 'neutro' }
+    return { rotulo: ROTULO_TIPO[t as TipoDocumento], tom: t === 'politicas' || t === 'prova_social' ? 'info' : 'neutro' }
   }
   return { rotulo: t, tom: 'neutro' }
 }
@@ -218,7 +225,16 @@ export function resumoDaExtracao(r: { readonly caracteres: number; readonly pagi
 
 export const LIMITES_DOCUMENTO = { tituloMax: 200, conteudoMax: 150_000 } as const
 
-export interface FormularioDocumento {
+export interface CamposProvaSocialForm {
+  readonly fonte: string
+  readonly link: string
+  /** "AAAA-MM-DD" (input type=date) ou vazio. */
+  readonly apuradoEm: string
+  readonly provaTipo: TipoProvaSocial
+  readonly consentimento: boolean
+}
+
+export interface FormularioDocumento extends CamposProvaSocialForm {
   /** `null` = criando. */
   readonly id: string | null
   readonly titulo: string
@@ -227,9 +243,22 @@ export interface FormularioDocumento {
   readonly conteudo: string
 }
 
-/** Erros por campo, com os MESMOS limites da API. Vazio = pode enviar. */
-export function validarDocumento(f: Pick<FormularioDocumento, 'titulo' | 'conteudo'>): Readonly<Record<string, string>> {
+const PROVA_SOCIAL_VAZIA: CamposProvaSocialForm = { fonte: '', link: '', apuradoEm: '', provaTipo: 'numero', consentimento: false }
+
+/**
+ * Erros por campo, com os MESMOS limites da API. Vazio = pode enviar.
+ * Prova social: salvar aceita rascunho incompleto (só o FORMATO é checado — link,
+ * data); o que falta para APROVAR é outra regra (`pendenciasParaAprovar`).
+ */
+export function validarDocumento(
+  f: Pick<FormularioDocumento, 'titulo' | 'conteudo'> & Partial<Pick<FormularioDocumento, 'tipo' | keyof CamposProvaSocialForm>>,
+): Readonly<Record<string, string>> {
   const erros: Record<string, string> = {}
+  if (f.tipo === 'prova_social') {
+    for (const e of errosFormatoProvaSocial({ fonte: f.fonte?.trim() || null, link: f.link?.trim() || null, apuradoEm: f.apuradoEm || null, provaTipo: f.provaTipo ?? null })) {
+      erros[e.campo] ??= e.mensagem
+    }
+  }
   const titulo = f.titulo.trim()
   if (titulo.length === 0) erros['titulo'] = 'Dê um título ao documento.'
   else if (titulo.length > LIMITES_DOCUMENTO.tituloMax) erros['titulo'] = `Título com no máximo ${LIMITES_DOCUMENTO.tituloMax} caracteres.`
@@ -242,27 +271,103 @@ export function validarDocumento(f: Pick<FormularioDocumento, 'titulo' | 'conteu
 }
 
 /** O corpo do POST/PATCH a partir do formulário. `canalId` só vai quando o alcance é um número. */
+export interface CorpoProvaSocial {
+  readonly fonte: string | null
+  readonly link: string | null
+  readonly apuradoEm: string | null
+  readonly provaTipo: TipoProvaSocial
+  readonly consentimento: boolean
+}
+
 export function corpoDoDocumento(f: FormularioDocumento, canalId: string): {
   titulo: string; tipo: TipoDocumento; conteudo: string; canalId: string | null
-} {
-  return {
+} & Partial<CorpoProvaSocial> {
+  const base = {
     titulo: f.titulo.trim(),
     tipo: f.tipo,
     conteudo: f.conteudo.trim(),
     canalId: f.alcance === 'canal' && canalId ? canalId : null,
   }
+  if (f.tipo !== 'prova_social') return base
+  // Vazio vira null: a API grava nulo (e o banco recusa link fora de http/https).
+  return {
+    ...base,
+    fonte: f.fonte.trim() || null,
+    link: f.link.trim() || null,
+    apuradoEm: f.apuradoEm || null,
+    provaTipo: f.provaTipo,
+    // Consentimento só faz sentido em depoimento; número não guarda o "sim" esquecido.
+    consentimento: f.provaTipo === 'depoimento' ? f.consentimento : false,
+  }
 }
 
 /** Formulário vazio para criar; quando há um número selecionado, começa valendo só para ele. */
-export function formularioNovo(canalId: string): FormularioDocumento {
-  return { id: null, titulo: '', tipo: 'faq', alcance: canalId ? 'canal' : 'global', conteudo: '' }
+export function formularioNovo(canalId: string, tipo: TipoDocumento = 'faq'): FormularioDocumento {
+  return { id: null, titulo: '', tipo, alcance: canalId ? 'canal' : 'global', conteudo: '', ...PROVA_SOCIAL_VAZIA }
 }
 
 export function formularioDe(doc: {
   readonly id: string; readonly titulo: string; readonly tipo: string; readonly canalId: string | null; readonly conteudo: string
+  readonly fonte?: string | null; readonly link?: string | null; readonly apuradoEm?: string | null
+  readonly provaTipo?: string | null; readonly consentimento?: boolean
 }): FormularioDocumento {
   const tipo = (TIPOS_DOCUMENTO as readonly string[]).includes(doc.tipo) ? (doc.tipo as TipoDocumento) : 'outro'
-  return { id: doc.id, titulo: doc.titulo, tipo, alcance: doc.canalId === null ? 'global' : 'canal', conteudo: doc.conteudo }
+  const provaTipo = (TIPOS_PROVA_SOCIAL as readonly string[]).includes(doc.provaTipo ?? '') ? (doc.provaTipo as TipoProvaSocial) : 'numero'
+  return {
+    id: doc.id, titulo: doc.titulo, tipo, alcance: doc.canalId === null ? 'global' : 'canal', conteudo: doc.conteudo,
+    fonte: doc.fonte ?? '', link: doc.link ?? '', apuradoEm: doc.apuradoEm ?? '', provaTipo, consentimento: doc.consentimento ?? false,
+  }
+}
+
+// ─── Prova social (G3) ───────────────────────────────────────────────────────
+
+export const TIPOS_PROVA = TIPOS_PROVA_SOCIAL
+export const ROTULO_TIPO_PROVA = ROTULO_TIPO_PROVA_SOCIAL
+
+/** Filtro da lista: todos os documentos ou só prova social (`?tipo=prova_social`). */
+export type FiltroTipo = 'todos' | 'prova_social'
+export const FILTROS_TIPO: readonly { readonly valor: FiltroTipo; readonly rotulo: string }[] = [
+  { valor: 'todos', rotulo: 'Todos' },
+  { valor: 'prova_social', rotulo: 'Prova social' },
+]
+export function tipoDoFiltro(f: FiltroTipo): TipoDocumento | null {
+  return f === 'prova_social' ? 'prova_social' : null
+}
+
+interface DocProva {
+  readonly tipo: string; readonly conteudo: string; readonly aprovado?: boolean; readonly publicado?: boolean
+  readonly fonte?: string | null; readonly link?: string | null; readonly apuradoEm?: string | null
+  readonly provaTipo?: string | null; readonly consentimento?: boolean
+}
+
+/**
+ * O selo da prova social na lista: aprovada (e vigente), aprovada mas VENCIDA
+ * (apurada há mais de um ano — o agente não usa), ou pendente. `null` nos outros tipos.
+ */
+export function badgeAprovacao(d: DocProva, agora: Date = new Date()): { rotulo: string; tom: Tom } | null {
+  if (d.tipo !== 'prova_social') return null
+  if (!d.aprovado) return { rotulo: 'pendente de aprovação', tom: 'atencao' }
+  if (!provaSocialVigente(d.apuradoEm ?? null, agora)) return { rotulo: 'aprovada — vencida', tom: 'erro' }
+  return { rotulo: 'aprovada', tom: 'sucesso' }
+}
+
+/** O que falta para aprovar (mesma regra da API). Vazio = o botão "Aprovar" pode agir. */
+export function pendenciasParaAprovar(d: DocProva, agora: Date = new Date()): readonly string[] {
+  const provaTipo = (TIPOS_PROVA_SOCIAL as readonly string[]).includes(d.provaTipo ?? '') ? (d.provaTipo as TipoProvaSocial) : null
+  return errosParaAprovarProvaSocial({
+    conteudo: d.conteudo, fonte: d.fonte ?? null, link: d.link ?? null, apuradoEm: d.apuradoEm ?? null, provaTipo, consentimento: d.consentimento ?? false,
+  }, agora).map((e) => e.mensagem)
+}
+
+/** "Pesquisa NPS 2026 · apurado em 01/10/2026" — sem Intl, o resultado não varia por ambiente. */
+export function linhaDaFonte(d: { readonly fonte?: string | null; readonly apuradoEm?: string | null }): string | null {
+  const partes: string[] = []
+  if (d.fonte?.trim()) partes.push(d.fonte.trim())
+  if (d.apuradoEm && /^\d{4}-\d{2}-\d{2}$/.test(d.apuradoEm)) {
+    const [a, m, dia] = d.apuradoEm.split('-')
+    partes.push(`apurado em ${dia}/${m}/${a}`)
+  }
+  return partes.length > 0 ? partes.join(' · ') : null
 }
 
 // ─── Histórico de versões (raia P9) ──────────────────────────────────────────

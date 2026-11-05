@@ -1,8 +1,9 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { NgTemplateOutlet } from '@angular/common'
 import {
-  BadgeComponente, BotaoComponente, CabecalhoTelaComponente, ConfirmacaoServico, EstadoComponente,
-  EsqueletoComponente, ToastServico, formatarReais,
+  BadgeComponente, BotaoComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente,
+  FiltrosComponente, ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente, ToastServico,
+  formatarReais, type ColunaTabela, type LinhaTabela, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
 import { CatalogoProdutosServico, type FiltroOrigem, type ProdutoLinha, type SkuLinha } from './catalogo-produtos.servico.js'
 import {
@@ -10,10 +11,13 @@ import {
   type AtributoForm, type Erros, type ProdutoForm, type SkuForm,
 } from './catalogo-produtos.regras.js'
 
+const OPCOES_ORIGEM: OpcaoSelect[] = [{ valor: 'manual', rotulo: 'Só manuais' }, { valor: 'erp', rotulo: 'Só do ERP' }]
+
 /**
- * Cadastro manual de produtos (ADR-025) — o CRUD canônico (skill
- * geracrm-layout-ui): cabeçalho, barra de busca/filtros, lista por CURSOR,
- * painel de criar/editar inline que preserva o que foi digitado, cinco estados.
+ * Cadastro manual de produtos (ADR-025) — padrão Lista (L) com cadastro em modal (M):
+ * a lista é uma tabela paginada por cursor com busca em ui-filtros; criar e editar
+ * produto abrem em ui-modal; as variações (SKU) de um produto abrem no modal
+ * "Variações", onde a tabela e o formulário da variação convivem.
  *
  * ⚠️ Convive com o catálogo do ERP: produto `origem: 'erp'` ganha o selo e só
  * aceita o que o ERP não tem (descrição longa, imagens, categoria). O resto
@@ -26,192 +30,186 @@ import {
 @Component({
   selector: 'app-catalogo-produtos',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgTemplateOutlet, CabecalhoTelaComponente, BotaoComponente, BadgeComponente, EstadoComponente, EsqueletoComponente],
+  imports: [
+    NgTemplateOutlet, BadgeComponente, BotaoComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva,
+    EstadoComponente, FiltrosComponente, ModalComponente, PaginacaoComponente, SelectComponente,
+    TabelaComponente,
+  ],
   template: `
     <div class="pagina">
-      <ui-cabecalho-tela titulo="Cadastro de Produtos"
+      <ui-cabecalho-tela titulo="Cadastro de produtos"
         subtitulo="Produtos, variações, preços e saldo cadastrados à mão — lado a lado com o que vem do ERP.">
         <ui-botao variante="secundario" [carregando]="reindexando()" (click)="reindexar()">Reindexar busca</ui-botao>
-        <ui-botao (click)="alternarNovo()">{{ painel() === 'novo' ? 'Fechar' : '+ Novo produto' }}</ui-botao>
+        <ui-botao (click)="alternarNovo()">+ Novo produto</ui-botao>
       </ui-cabecalho-tela>
 
-      <!-- Painel de criação: inline, abaixo do cabeçalho. Fechar NÃO apaga o rascunho. -->
-      @if (painel() === 'novo') {
-        <form class="painel" (submit)="criar($event)" novalidate>
-          <h2 class="txt-secao">Novo produto</h2>
-          <ng-container *ngTemplateOutlet="camposProduto; context: { erp: false }" />
-          <h3 class="txt-rotulo">Variações (SKU)</h3>
-          <p class="txt-denso dica">Cada linha é uma variação: cor × tamanho, ou o que fizer sentido (ciclo: mensal). Preços em R$. Sem controle de estoque = vende sob demanda.</p>
-          @for (s of form().skus; track $index; let i = $index) {
-            <ng-container *ngTemplateOutlet="camposSku; context: { s: s, i: i, prefixo: 'skus.' + i + '.' }" />
+      <!-- Busca e filtros: some no vazio-sem-filtro (regra do padrão). -->
+      @if (estado() !== 'sem_permissao' && (itens().length > 0 || temFiltro())) {
+        <ui-filtros placeholder="Buscar por referência ou descrição" rotuloBusca="Busca"
+          (buscar)="onBusca($event)" (aplicar)="servico.carregar()" (limpar)="limparFiltros()">
+          <ui-select rotulo="Origem" placeholder="Todas as origens" [opcoes]="opcoesOrigem" [valor]="servico.origem()"
+            (valorChange)="trocarOrigem($event)" />
+          <label class="chk">
+            <input type="checkbox" [checked]="servico.inativos()" (change)="trocarInativos($any($event.target).checked)" /> Mostrar inativos
+          </label>
+        </ui-filtros>
+      }
+
+      <div class="corpo">
+        @switch (estado()) {
+          @case ('carregando') {
+            <ui-tabela [colunas]="colunas" [linhas]="[]" [carregando]="true" />
           }
-          <div class="linha-acoes">
-            <ui-botao variante="fantasma" (click)="addLinhaSku()">+ Variação</ui-botao>
-          </div>
+          @case ('sem_permissao') {
+            <ui-estado tipo="sem-permissao" titulo="Sem acesso ao cadastro de produtos" descricao="Peça a um administrador para liberar." />
+          }
+          @case ('erro') {
+            <ui-estado tipo="erro" titulo="Não foi possível carregar o catálogo" [descricao]="servico.erroLista() ?? ''">
+              <ui-botao variante="secundario" (click)="servico.carregar()">Tentar de novo</ui-botao>
+            </ui-estado>
+          }
+          @case ('pronto') {
+            @if (itens().length === 0) {
+              @if (temFiltro()) {
+                <ui-estado titulo="Nada encontrado" descricao="Nenhum produto bate com a busca ou o filtro.">
+                  <ui-botao variante="secundario" (click)="limparFiltros()">Limpar filtros</ui-botao>
+                </ui-estado>
+              } @else {
+                <ui-estado titulo="Cadastre o primeiro produto" descricao="Sem ERP ligado, o catálogo nasce aqui — e é dele que o agente e o pedido assistido leem.">
+                  <ui-botao (click)="alternarNovo()">+ Novo produto</ui-botao>
+                </ui-estado>
+              }
+            } @else {
+              <ui-tabela [colunas]="colunas" [linhas]="linhas()">
+                <ng-template uiCelula="origem" let-p>
+                  <span class="selos">
+                    <ui-badge [tom]="p.origem === 'erp' ? 'info' : 'neutro'">{{ p.origem === 'erp' ? 'ERP' : 'Manual' }}</ui-badge>
+                    @if (!p.ativo) { <ui-badge tom="atencao">Inativo</ui-badge> }
+                  </span>
+                </ng-template>
+                <ng-template uiCelula="variacoes" let-p>{{ p.skus.length }} {{ p.skus.length === 1 ? 'variação' : 'variações' }}</ng-template>
+                <ng-template uiCelula="preco" let-p><span class="txt-dados">{{ precoRotulo(p) }}</span></ng-template>
+                <ng-template uiCelula="acoes" let-p>
+                  <span class="acoes">
+                    <ui-botao variante="fantasma" (click)="abrirVariacoes(p)">Variações</ui-botao>
+                    <ui-botao variante="fantasma" (click)="abrirEdicao(p)">Editar</ui-botao>
+                    @if (p.ativo) { <ui-botao variante="fantasma" (click)="desativar(p)">Desativar</ui-botao> }
+                  </span>
+                </ng-template>
+                <div uiVazio>
+                  <ui-estado titulo="Nenhum produto" descricao="Ajuste a busca ou os filtros." />
+                </div>
+              </ui-tabela>
+              @if (servico.erroMais(); as e) { <p class="erro" role="alert">{{ e }}</p> }
+              <ui-paginacao [mostrados]="itens().length" [temMais]="!!servico.proximoCursor()"
+                [carregando]="servico.carregandoMais()" (mais)="servico.carregarMais()" />
+            }
+          }
+        }
+      </div>
+    </div>
+
+    <!-- Novo produto: modal de cadastro. Fechar NÃO apaga o rascunho (fica em rascunhoNovo). -->
+    <ui-modal [aberto]="painel() === 'novo'" titulo="Novo produto" largura="g" (fechar)="fecharPainel()">
+      <form id="form-novo-produto" class="form" (submit)="criar($event)" novalidate>
+        <ng-container *ngTemplateOutlet="camposProduto; context: { erp: false }" />
+        <h3 class="txt-secao">Variações (SKU)</h3>
+        <p class="dica">Cada linha é uma variação: cor × tamanho, ou o que fizer sentido (ciclo: mensal). Preços em R$. Sem controle de estoque = vende sob demanda.</p>
+        @for (s of form().skus; track $index; let i = $index) {
+          <ng-container *ngTemplateOutlet="camposSku; context: { s: s, i: i, prefixo: 'skus.' + i + '.' }" />
+        }
+        <div class="linha-acoes">
+          <ui-botao variante="fantasma" (click)="addLinhaSku()">+ Variação</ui-botao>
+        </div>
+        @if (erroGeral(); as e) { <p class="erro" role="alert">{{ e }}</p> }
+      </form>
+      <div rodape>
+        <ui-botao variante="secundario" (click)="fecharPainel()">Cancelar</ui-botao>
+        <button type="submit" form="form-novo-produto" class="btn btn--primario" [disabled]="salvando()">{{ salvando() ? "Criando…" : "Criar produto" }}</button>
+      </div>
+    </ui-modal>
+
+    <!-- Editar produto: mesmos campos do cadastro; origem ERP trava o que é do ERP. -->
+    <ui-modal [aberto]="produtoEditando() !== null" [titulo]="'Editar ' + (produtoEditando()?.referencia ?? 'produto')" largura="g" (fechar)="fecharPainel()">
+      @if (produtoEditando(); as p) {
+        <form id="form-editar-produto" class="form" (submit)="salvarEdicao($event, p)" novalidate>
+          @if (p.origem === 'erp') {
+            <p class="aviso-erp" role="status">Este produto vem do ERP: referência e descrição só mudam lá. Aqui você edita descrição longa, imagens e categoria.</p>
+          }
+          <ng-container *ngTemplateOutlet="camposProduto; context: { erp: p.origem === 'erp' }" />
           @if (erroGeral(); as e) { <p class="erro" role="alert">{{ e }}</p> }
-          <div class="acoes">
-            <ui-botao variante="secundario" (click)="fecharPainel()">Cancelar</ui-botao>
-            <ui-botao tipo="submit" [carregando]="salvando()">Criar produto</ui-botao>
-          </div>
         </form>
       }
+      <div rodape>
+        <ui-botao variante="secundario" (click)="fecharPainel()">Cancelar</ui-botao>
+        <button type="submit" form="form-editar-produto" class="btn btn--primario" [disabled]="salvando()">{{ salvando() ? "Salvando…" : "Salvar" }}</button>
+      </div>
+    </ui-modal>
 
-      <!-- Barra: busca + filtros. Some no vazio-sem-filtro (regra do padrão). -->
-      @if (estado() !== 'sem_permissao' && (itens().length > 0 || temFiltro())) {
-        <div class="barra">
-          <input class="busca" type="search" [value]="buscaTexto()" (input)="onBusca($any($event.target).value)"
-                 placeholder="Buscar por referência ou descrição" aria-label="Buscar produto" />
-          <select class="sel" [value]="servico.origem()" (change)="trocarOrigem($any($event.target).value)" aria-label="Origem">
-            <option value="">Todas as origens</option>
-            <option value="manual">Só manuais</option>
-            <option value="erp">Só do ERP</option>
-          </select>
-          <label class="chk txt-denso">
-            <input type="checkbox" [checked]="servico.inativos()" (change)="trocarInativos($any($event.target).checked)" /> mostrar inativos
-          </label>
-        </div>
-      }
+    <!-- Variações de um produto: tabela das variações e, abaixo, o formulário da variação em edição. -->
+    <ui-modal [aberto]="produtoVariacoes() !== null" [titulo]="'Variações de ' + (produtoVariacoes()?.referencia ?? '')" largura="g" (fechar)="fecharVariacoes()">
+      @if (produtoVariacoes(); as p) {
+        @if (p.origem === 'erp') {
+          <p class="aviso-erp" role="status">Variações, preços e saldo deste produto vêm do ERP e só mudam lá.</p>
+        }
+        @if (p.skus.length === 0) {
+          <ui-estado titulo="Sem variações" descricao="Adicione a primeira abaixo." />
+        } @else {
+          <ui-tabela [colunas]="colunasSku" [linhas]="linhasSku(p)">
+            <ng-template uiCelula="variacao" let-s>{{ rotulo(s) }}</ng-template>
+            <ng-template uiCelula="preco" let-s>
+              <span class="txt-dados" [title]="'Preço do perfil atacado'">{{ s.precoCentavos === null ? 'sem preço' : reais(s.precoCentavos) }}</span>
+            </ng-template>
+            <ng-template uiCelula="saldo" let-s>
+              <span class="txt-dados">{{ s.saldo === null ? 'sob demanda' : s.saldo + ' un' }}</span>
+            </ng-template>
+            <ng-template uiCelula="situacao" let-s>
+              @if (!s.ativo) { <ui-badge tom="atencao">Inativo</ui-badge> } @else { <ui-badge tom="sucesso">Ativa</ui-badge> }
+            </ng-template>
+            <ng-template uiCelula="acoes" let-s>
+              <span class="acoes">
+                <ui-botao variante="fantasma" [desabilitado]="p.origem === 'erp'" (click)="abrirSku(p, s)">Editar</ui-botao>
+                @if (s.ativo) { <ui-botao variante="fantasma" [desabilitado]="p.origem === 'erp'" (click)="desativarSku(p, s)">Desativar</ui-botao> }
+              </span>
+            </ng-template>
+          </ui-tabela>
+        }
 
-      @switch (estado()) {
-        @case ('carregando') {
-          <div class="lista" aria-busy="true">
-            @for (n of [1, 2, 3]; track n) { <div class="prod"><ui-esqueleto altura="20px" largura="60%" /><ui-esqueleto altura="14px" largura="40%" /></div> }
-          </div>
-        }
-        @case ('sem_permissao') {
-          <ui-estado tipo="sem-permissao" titulo="Sem acesso ao cadastro de produtos" descricao="Peça a um administrador para liberar." />
-        }
-        @case ('erro') {
-          <ui-estado tipo="erro" titulo="Não foi possível carregar o catálogo" [descricao]="servico.erroLista() ?? ''">
-            <ui-botao variante="secundario" (click)="servico.carregar()">Tentar de novo</ui-botao>
-          </ui-estado>
-        }
-        @case ('pronto') {
-          @if (itens().length === 0) {
-            @if (temFiltro()) {
-              <ui-estado titulo="Nada encontrado" descricao="Nenhum produto bate com a busca ou o filtro.">
-                <ui-botao variante="secundario" (click)="limparFiltros()">Limpar filtros</ui-botao>
-              </ui-estado>
-            } @else {
-              <ui-estado titulo="Cadastre o primeiro produto" descricao="Sem ERP ligado, o catálogo nasce aqui — e é dele que o agente e o pedido assistido leem.">
-                <ui-botao (click)="alternarNovo()">+ Novo produto</ui-botao>
-              </ui-estado>
-            }
+        @if (p.origem !== 'erp') {
+          @if (skuAlvo()?.produtoId === p.id) {
+            <form id="form-sku" class="form sku-editor" (submit)="salvarSku($event, p)" novalidate>
+              <h3 class="txt-secao">{{ skuAlvo()!.skuId ? 'Editar variação' : 'Nova variação' }}</h3>
+              @if (precosIndisponiveis()) { <p class="aviso-erp" role="status">Não deu para ler os preços atuais desta variação — os campos abaixo começam vazios; o que você salvar vale.</p> }
+              <ng-container *ngTemplateOutlet="camposSku; context: { s: skuForm(), i: -1, prefixo: '' }" />
+              @if (erroGeral(); as e) { <p class="erro" role="alert">{{ e }}</p> }
+            </form>
+            <div class="linha-acoes">
+              <ui-botao variante="secundario" (click)="fecharSku()">Cancelar variação</ui-botao>
+              <button type="submit" form="form-sku" class="btn btn--primario" [disabled]="salvando()">{{ skuAlvo()!.skuId ? "Salvar variação" : "Adicionar variação" }}</button>
+            </div>
           } @else {
-            <ul class="lista">
-              @for (p of itens(); track p.id) {
-                <li class="prod" [class.inativo]="!p.ativo">
-                  <div class="prod-topo">
-                    <button type="button" class="abrir encolhe" (click)="alternarAberto(p.id)" [attr.aria-expanded]="aberto() === p.id">
-                      <span class="ref txt-dados">{{ p.referencia }}</span>
-                      <span class="desc encolhe">{{ p.descricao }}</span>
-                    </button>
-                    <span class="selos">
-                      <ui-badge [tom]="p.origem === 'erp' ? 'info' : 'neutro'">{{ p.origem === 'erp' ? 'ERP' : 'Manual' }}</ui-badge>
-                      @if (!p.ativo) { <ui-badge tom="atencao">Inativo</ui-badge> }
-                    </span>
-                    <span class="meta txt-denso">{{ p.skus.length }} {{ p.skus.length === 1 ? 'variação' : 'variações' }} · {{ precoRotulo(p) }}</span>
-                    <span class="prod-acoes">
-                      <ui-botao variante="fantasma" (click)="abrirEdicao(p)">Editar</ui-botao>
-                      @if (p.ativo) { <ui-botao variante="fantasma" (click)="desativar(p)">Desativar</ui-botao> }
-                    </span>
-                  </div>
-                  @if (p.categoria) { <span class="txt-denso cat">{{ p.categoria }}</span> }
-
-                  <!-- Edição do produto: painel inline no próprio item. -->
-                  @if (painel() === 'editar' && editandoId() === p.id) {
-                    <form class="painel interno" (submit)="salvarEdicao($event, p)" novalidate>
-                      <h2 class="txt-secao">Editar produto</h2>
-                      @if (p.origem === 'erp') {
-                        <p class="aviso-erp txt-denso" role="status">Este produto vem do ERP: referência e descrição só mudam lá. Aqui você edita descrição longa, imagens e categoria.</p>
-                      }
-                      <ng-container *ngTemplateOutlet="camposProduto; context: { erp: p.origem === 'erp' }" />
-                      @if (erroGeral(); as e) { <p class="erro" role="alert">{{ e }}</p> }
-                      <div class="acoes">
-                        <ui-botao variante="secundario" (click)="fecharPainel()">Cancelar</ui-botao>
-                        <ui-botao tipo="submit" [carregando]="salvando()">Salvar</ui-botao>
-                      </div>
-                    </form>
-                  }
-
-                  <!-- Variações: abertas sob demanda. -->
-                  @if (aberto() === p.id) {
-                    <div class="skus">
-                      @if (p.skus.length === 0) { <p class="txt-denso dica">Sem variações. Adicione a primeira abaixo.</p> }
-                      @for (s of p.skus; track s.id) {
-                        <div class="sku" [class.inativo]="!s.ativo">
-                          <span class="sku-rot encolhe">{{ rotulo(s) }}</span>
-                          @if (s.codigoBarras) { <span class="txt-dados sku-cb">{{ s.codigoBarras }}</span> }
-                          <span class="txt-dados sku-preco" [title]="'Preço do perfil atacado'">{{ s.precoCentavos === null ? 'sem preço' : reais(s.precoCentavos) }}</span>
-                          <span class="txt-dados sku-saldo">{{ s.saldo === null ? 'sob demanda' : s.saldo + ' un' }}</span>
-                          @if (!s.ativo) { <ui-badge tom="atencao">Inativo</ui-badge> }
-                          <span class="sku-acoes">
-                            <ui-botao variante="fantasma" [desabilitado]="p.origem === 'erp'" (click)="abrirSku(p, s)">Editar</ui-botao>
-                            @if (s.ativo) { <ui-botao variante="fantasma" [desabilitado]="p.origem === 'erp'" (click)="desativarSku(p, s)">Desativar</ui-botao> }
-                          </span>
-                        </div>
-                      }
-                      @if (p.origem === 'erp') {
-                        <p class="txt-denso dica">Variações, preços e saldo deste produto vêm do ERP e só mudam lá.</p>
-                      } @else if (skuAlvo()?.produtoId === p.id) {
-                        <form class="painel interno" (submit)="salvarSku($event, p)" novalidate>
-                          <h2 class="txt-secao">{{ skuAlvo()!.skuId ? 'Editar variação' : 'Nova variação' }}</h2>
-                          @if (precosIndisponiveis()) { <p class="txt-denso aviso-erp" role="status">Não deu para ler os preços atuais desta variação — os campos abaixo começam vazios; o que você salvar vale.</p> }
-                          <ng-container *ngTemplateOutlet="camposSku; context: { s: skuForm(), i: -1, prefixo: '' }" />
-                          @if (erroGeral(); as e) { <p class="erro" role="alert">{{ e }}</p> }
-                          <div class="acoes">
-                            <ui-botao variante="secundario" (click)="fecharSku()">Cancelar</ui-botao>
-                            <ui-botao tipo="submit" [carregando]="salvando()">{{ skuAlvo()!.skuId ? 'Salvar variação' : 'Adicionar variação' }}</ui-botao>
-                          </div>
-                        </form>
-                      } @else {
-                        <div class="linha-acoes"><ui-botao variante="fantasma" (click)="abrirSku(p, null)">+ Variação</ui-botao></div>
-                      }
-                    </div>
-                  }
-                </li>
-              }
-            </ul>
-            @if (servico.erroMais(); as e) { <p class="erro" role="alert">{{ e }}</p> }
-            @if (servico.proximoCursor()) {
-              <div class="mais"><ui-botao variante="secundario" [carregando]="servico.carregandoMais()" (click)="servico.carregarMais()">Carregar mais</ui-botao></div>
-            }
+            <div class="linha-acoes"><ui-botao variante="fantasma" (click)="abrirSku(p, null)">+ Variação</ui-botao></div>
           }
         }
       }
-    </div>
+      <div rodape>
+        <ui-botao variante="secundario" (click)="fecharVariacoes()">Fechar</ui-botao>
+      </div>
+    </ui-modal>
 
     <!-- Campos do produto (criação e edição). Rótulo VISÍVEL em tudo. -->
     <ng-template #camposProduto let-erp="erp">
       <div class="grade-campos">
-        <label class="campo">
-          <span class="rot">Referência</span>
-          <input [value]="form().referencia" (input)="setCampo('referencia', $any($event.target).value)" [disabled]="erp" maxlength="60"
-                 [attr.aria-invalid]="erros()['referencia'] ? 'true' : null" />
-          @if (erros()['referencia']; as e) { <span class="msg-erro">{{ e }}</span> }
-        </label>
-        <label class="campo campo-2">
-          <span class="rot">Descrição</span>
-          <input [value]="form().descricao" (input)="setCampo('descricao', $any($event.target).value)" [disabled]="erp" maxlength="160"
-                 [attr.aria-invalid]="erros()['descricao'] ? 'true' : null" />
-          @if (erros()['descricao']; as e) { <span class="msg-erro">{{ e }}</span> }
-        </label>
-        <label class="campo">
-          <span class="rot">Categoria</span>
-          <input [value]="form().categoria" (input)="setCampo('categoria', $any($event.target).value)" maxlength="80" />
-          @if (erros()['categoria']; as e) { <span class="msg-erro">{{ e }}</span> }
-        </label>
-        <label class="campo campo-2">
-          <span class="rot">Imagens (uma URL por linha)</span>
-          <textarea rows="2" [value]="form().imagens" (input)="setCampo('imagens', $any($event.target).value)"
-                    [attr.aria-invalid]="erros()['imagens'] ? 'true' : null"></textarea>
-          @if (erros()['imagens']; as e) { <span class="msg-erro">{{ e }}</span> }
-        </label>
-        <label class="campo campo-3">
-          <span class="rot">Descrição longa (o que o agente usa para explicar o produto)</span>
-          <textarea rows="3" [value]="form().descricaoLonga" (input)="setCampo('descricaoLonga', $any($event.target).value)" maxlength="4000"></textarea>
-          @if (erros()['descricaoLonga']; as e) { <span class="msg-erro">{{ e }}</span> }
-        </label>
+        <ui-campo rotulo="Referência" [valor]="form().referencia" (valorChange)="setCampo('referencia', $event)"
+          [desabilitado]="erp" [erro]="erros()['referencia'] ?? null" [obrigatorio]="true" />
+        <ui-campo class="campo-2" rotulo="Descrição" [valor]="form().descricao" (valorChange)="setCampo('descricao', $event)"
+          [desabilitado]="erp" [erro]="erros()['descricao'] ?? null" [obrigatorio]="true" />
+        <ui-campo rotulo="Categoria" [valor]="form().categoria" (valorChange)="setCampo('categoria', $event)"
+          [erro]="erros()['categoria'] ?? null" />
+        <ui-campo class="campo-2" tipo="textarea" rotulo="Imagens (uma URL por linha)" [valor]="form().imagens"
+          (valorChange)="setCampo('imagens', $event)" [erro]="erros()['imagens'] ?? null" />
+        <ui-campo class="campo-3" tipo="textarea" rotulo="Descrição longa (o que o agente usa para explicar o produto)"
+          [valor]="form().descricaoLonga" (valorChange)="setCampo('descricaoLonga', $event)" [erro]="erros()['descricaoLonga'] ?? null" />
       </div>
     </ng-template>
 
@@ -221,47 +219,26 @@ import {
         <div class="atributos">
           @for (a of s.atributos; track $index; let j = $index) {
             <span class="par">
-              <label class="campo mini">
-                <span class="rot">Atributo</span>
-                <input [value]="a.chave" (input)="setAtributo(i, j, 'chave', $any($event.target).value)" placeholder="cor" maxlength="40" />
-              </label>
-              <label class="campo mini">
-                <span class="rot">Valor</span>
-                <input [value]="a.valor" (input)="setAtributo(i, j, 'valor', $any($event.target).value)" placeholder="VERDE" maxlength="80" />
-              </label>
+              <ui-campo rotulo="Atributo" placeholder="cor" [valor]="a.chave" (valorChange)="setAtributo(i, j, 'chave', $event)" />
+              <ui-campo rotulo="Valor" placeholder="VERDE" [valor]="a.valor" (valorChange)="setAtributo(i, j, 'valor', $event)" />
             </span>
           }
           <button type="button" class="link txt-denso" (click)="addAtributo(i)">+ atributo</button>
         </div>
         @if (erros()[prefixo + 'atributos']; as e) { <span class="msg-erro">{{ e }}</span> }
         <div class="grade-campos">
-          <label class="campo">
-            <span class="rot">Código de barras</span>
-            <input [value]="s.codigoBarras" (input)="setSku(i, 'codigoBarras', $any($event.target).value)" maxlength="40" />
-            @if (erros()[prefixo + 'codigoBarras']; as e) { <span class="msg-erro">{{ e }}</span> }
-          </label>
-          <label class="campo">
-            <span class="rot">Preço varejo (R$)</span>
-            <input inputmode="decimal" [value]="s.precoVarejo" (input)="setSku(i, 'precoVarejo', $any($event.target).value)" placeholder="0,00"
-                   [attr.aria-invalid]="erros()[prefixo + 'precoVarejo'] ? 'true' : null" />
-            @if (erros()[prefixo + 'precoVarejo']; as e) { <span class="msg-erro">{{ e }}</span> }
-          </label>
-          <label class="campo">
-            <span class="rot">Preço atacado (R$)</span>
-            <input inputmode="decimal" [value]="s.precoAtacado" (input)="setSku(i, 'precoAtacado', $any($event.target).value)" placeholder="0,00"
-                   [attr.aria-invalid]="erros()[prefixo + 'precoAtacado'] ? 'true' : null" />
-            @if (erros()[prefixo + 'precoAtacado']; as e) { <span class="msg-erro">{{ e }}</span> }
-          </label>
+          <ui-campo rotulo="Código de barras" [valor]="s.codigoBarras" (valorChange)="setSku(i, 'codigoBarras', $event)"
+            [erro]="erros()[prefixo + 'codigoBarras'] ?? null" />
+          <ui-campo rotulo="Preço varejo (R$)" placeholder="0,00" dica="Em reais, ex.: 12,90" [valor]="s.precoVarejo"
+            (valorChange)="setSku(i, 'precoVarejo', $event)" [erro]="erros()[prefixo + 'precoVarejo'] ?? null" />
+          <ui-campo rotulo="Preço atacado (R$)" placeholder="0,00" dica="Em reais, ex.: 12,90" [valor]="s.precoAtacado"
+            (valorChange)="setSku(i, 'precoAtacado', $event)" [erro]="erros()[prefixo + 'precoAtacado'] ?? null" />
           <label class="chk txt-denso">
             <input type="checkbox" [checked]="s.controlaEstoque" (change)="setSku(i, 'controlaEstoque', $any($event.target).checked)" /> controla estoque
           </label>
           @if (s.controlaEstoque) {
-            <label class="campo">
-              <span class="rot">Saldo</span>
-              <input inputmode="numeric" [value]="s.saldo" (input)="setSku(i, 'saldo', $any($event.target).value)" placeholder="0"
-                     [attr.aria-invalid]="erros()[prefixo + 'saldo'] ? 'true' : null" />
-              @if (erros()[prefixo + 'saldo']; as e) { <span class="msg-erro">{{ e }}</span> }
-            </label>
+            <ui-campo rotulo="Saldo" tipo="number" placeholder="0" [valor]="s.saldo" (valorChange)="setSku(i, 'saldo', $event)"
+              [erro]="erros()[prefixo + 'saldo'] ?? null" />
           }
           @if (i >= 0 && form().skus.length > 1) {
             <button type="button" class="link txt-denso remover" (click)="removerLinhaSku(i)">remover variação</button>
@@ -271,67 +248,34 @@ import {
     </ng-template>
   `,
   styles: `
-    :host { display: block; width: 100%; }
-    .pagina { max-width: 960px; margin: 0 auto; padding: var(--espacamento-6) var(--espacamento-4); }
-    .barra { display: flex; gap: var(--espacamento-2); align-items: center; flex-wrap: wrap; margin-bottom: var(--espacamento-4); }
-    .busca { flex: 1; min-width: 200px; min-height: var(--densidade-alvo-clique-console); padding: var(--espacamento-2) var(--espacamento-3);
-      border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .sel { min-height: var(--densidade-alvo-clique-console); padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
-      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
+    :host { display: block; width: 100%; min-width: 0; }
+    .pagina { max-width: 1040px; margin: 0 auto; padding: var(--espacamento-6) var(--espacamento-4); }
+    ui-filtros { display: block; margin-top: var(--espacamento-4); }
+    .corpo { margin-top: var(--espacamento-3); display: grid; gap: var(--espacamento-3); min-width: 0; }
     .chk { display: inline-flex; align-items: center; gap: var(--espacamento-2); color: var(--texto-secundario); white-space: nowrap; }
-    .busca:focus-visible, .sel:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; border-color: var(--borda-foco); box-shadow: 0 0 0 2px var(--borda-foco); }
-    .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }
-    .prod { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); display: grid; gap: var(--espacamento-2); }
-    .prod.inativo { opacity: .7; }
-    .prod-topo { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; }
-    .abrir { display: flex; align-items: baseline; gap: var(--espacamento-3); flex: 1; min-width: 0; border: 0; background: transparent; padding: 0; font: inherit; color: var(--texto); cursor: pointer; text-align: left; }
-    .abrir:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
-    .ref { color: var(--acao); flex: none; }
-    .desc { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .selos { display: inline-flex; gap: var(--espacamento-1); flex: none; }
-    .meta { color: var(--texto-suave); flex: none; }
-    .cat { color: var(--texto-suave); }
-    .prod-acoes, .sku-acoes { display: inline-flex; gap: var(--espacamento-1); flex: none; }
-    .skus { display: grid; gap: var(--espacamento-2); padding-top: var(--espacamento-2); border-top: 1px solid var(--borda); }
-    .sku { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; padding: var(--espacamento-1) 0; }
-    .sku.inativo { opacity: .6; }
-    .sku-rot { flex: 1; min-width: 120px; color: var(--texto); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .sku-cb, .sku-saldo { color: var(--texto-suave); }
-    .sku-preco { color: var(--texto); min-width: 90px; text-align: right; }
-    .painel { display: grid; gap: var(--espacamento-3); padding: var(--espacamento-5); margin-bottom: var(--espacamento-5);
-      border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .painel.interno { margin: var(--espacamento-2) 0 0; background: var(--superficie); }
-    .painel h2 { margin: 0; }
-    .painel h3 { margin: var(--espacamento-2) 0 0; }
-    .dica { margin: 0; color: var(--texto-suave); }
-    .aviso-erp { margin: 0; padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle); background: var(--acao-suave); color: var(--texto); }
-    .grade-campos { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--espacamento-3); align-items: end; }
+    .selos { display: inline-flex; flex-wrap: wrap; gap: var(--espacamento-1); }
+    .acoes { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--espacamento-1); }
+    .form { display: grid; gap: var(--espacamento-3); min-width: 0; }
+    .dica { margin: 0; font-size: 13px; color: var(--texto-suave); }
+    .aviso-erp { margin: 0; padding: var(--espacamento-2) var(--espacamento-3); border-radius: var(--raio-controle); background: var(--acao-suave); color: var(--texto); font-size: 13px; }
+    .grade-campos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--espacamento-3); align-items: start; }
     .campo-2 { grid-column: span 2; }
     .campo-3 { grid-column: span 3; }
-    .campo { display: flex; flex-direction: column; gap: var(--espacamento-1); min-width: 0; }
-    .campo .rot { font-size: 13px; color: var(--texto); }
-    .campo input, .campo textarea { min-height: var(--densidade-alvo-clique-console); padding: var(--espacamento-2) var(--espacamento-3);
-      border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; width: 100%; }
-    .campo textarea { resize: vertical; }
-    .campo input:disabled { opacity: .6; }
-    .campo input[aria-invalid='true'] { border-color: var(--borda-erro); }
-    .campo.mini input { min-height: 32px; }
     .msg-erro { font-size: 12px; color: var(--erro); }
     .erro { margin: 0; color: var(--erro); font-size: 13px; }
+    .sku-editor { padding-top: var(--espacamento-3); border-top: 1px solid var(--borda); }
     .sku-form { display: grid; gap: var(--espacamento-2); padding: var(--espacamento-3); border: 1px dashed var(--borda-forte); border-radius: var(--raio-controle); }
     .atributos { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); align-items: end; }
-    .par { display: inline-flex; gap: var(--espacamento-1); }
+    .par { display: inline-flex; gap: var(--espacamento-1); align-items: end; }
     .link { border: 0; background: transparent; color: var(--acao); cursor: pointer; padding: var(--espacamento-1) 0; align-self: end; }
     .link:hover { text-decoration: underline; }
     .link:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
     .remover { color: var(--erro); }
-    .linha-acoes { display: flex; }
-    .acoes { display: flex; justify-content: flex-end; gap: var(--espacamento-2); flex-wrap: wrap; }
-    .mais { margin-top: var(--espacamento-4); display: flex; justify-content: center; }
+    .linha-acoes { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); justify-content: flex-start; }
     @media (max-width: 640px) {
+      .pagina { padding: var(--espacamento-3); }
       .grade-campos { grid-template-columns: 1fr; }
       .campo-2, .campo-3 { grid-column: auto; }
-      .meta { display: none; }
     }
   `,
 })
@@ -342,12 +286,34 @@ export class CatalogoProdutosPagina implements OnInit {
 
   readonly estado = this.servico.estado
   readonly itens = this.servico.itens
-  readonly buscaTexto = signal('')
+  readonly opcoesOrigem = OPCOES_ORIGEM
   readonly temFiltro = computed(() => this.servico.busca().trim() !== '' || this.servico.origem() !== '' || this.servico.inativos())
 
-  /** Qual painel está aberto. O rascunho de "novo" sobrevive ao fechar. */
+  protected readonly colunas: ColunaTabela[] = [
+    { chave: 'referencia', rotulo: 'Referência', mono: true, largura: '150px' },
+    { chave: 'descricao', rotulo: 'Descrição' },
+    { chave: 'origem', rotulo: 'Origem', largura: '150px' },
+    { chave: 'variacoes', rotulo: 'Variações', largura: '120px' },
+    { chave: 'preco', rotulo: 'Preço (atacado)', alinhamento: 'dir', largura: '170px' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '300px' },
+  ]
+  protected readonly colunasSku: ColunaTabela[] = [
+    { chave: 'variacao', rotulo: 'Variação' },
+    { chave: 'codigoBarras', rotulo: 'Código de barras', mono: true, largura: '150px' },
+    { chave: 'preco', rotulo: 'Preço (atacado)', alinhamento: 'dir', largura: '130px' },
+    { chave: 'saldo', rotulo: 'Saldo', alinhamento: 'dir', largura: '110px' },
+    { chave: 'situacao', rotulo: 'Situação', largura: '110px' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '170px' },
+  ]
+  protected readonly linhas = computed(() => this.itens() as unknown as readonly LinhaTabela[])
+
+  /** Qual painel de produto está aberto. O rascunho de "novo" sobrevive ao fechar. */
   readonly painel = signal<'nenhum' | 'novo' | 'editar'>('nenhum')
   readonly editandoId = signal<string | null>(null)
+  readonly produtoEditando = computed(() => {
+    const id = this.editandoId()
+    return this.painel() === 'editar' && id ? (this.itens().find((p) => p.id === id) ?? null) : null
+  })
   readonly form = signal<ProdutoForm>(produtoVazio())
   private rascunhoNovo: ProdutoForm = produtoVazio()
   readonly erros = signal<Erros>({})
@@ -355,17 +321,21 @@ export class CatalogoProdutosPagina implements OnInit {
   readonly salvando = signal(false)
   readonly reindexando = signal(false)
 
-  readonly aberto = signal<string | null>(null)
+  /** Produto cujas variações estão no modal; `null` = fechado. */
+  readonly variacoesId = signal<string | null>(null)
+  readonly produtoVariacoes = computed(() => {
+    const id = this.variacoesId()
+    return id ? (this.itens().find((p) => p.id === id) ?? null) : null
+  })
   readonly skuAlvo = signal<{ produtoId: string; skuId: string | null } | null>(null)
   readonly skuForm = signal<SkuForm>(skuVazio())
   readonly precosIndisponiveis = signal(false)
-
-  private timer?: ReturnType<typeof setTimeout>
 
   ngOnInit(): void { void this.servico.carregar() }
 
   reais(c: number): string { return formatarReais(c) }
   rotulo(s: SkuLinha): string { return rotuloSku(s.atributos) }
+  linhasSku(p: ProdutoLinha): readonly LinhaTabela[] { return p.skus as unknown as readonly LinhaTabela[] }
   precoRotulo(p: ProdutoLinha): string {
     const precos = [...new Set(p.skus.map((s) => s.precoCentavos).filter((x): x is number => x !== null))]
     if (precos.length === 0) return 'sem preço'
@@ -374,22 +344,22 @@ export class CatalogoProdutosPagina implements OnInit {
   }
 
   // ── Barra ──────────────────────────────────────────────────────────────────
-  onBusca(v: string): void {
-    this.buscaTexto.set(v)
-    clearTimeout(this.timer)
-    this.timer = setTimeout(() => { this.servico.busca.set(v); void this.servico.carregar() }, 300)
+  /** O filtro de busca já espera 300 ms; igual ao termo atual, não recarrega. */
+  onBusca(termo: string): void {
+    if (termo === this.servico.busca()) return
+    this.servico.busca.set(termo)
+    void this.servico.carregar()
   }
   trocarOrigem(v: string): void { this.servico.origem.set(v as FiltroOrigem); void this.servico.carregar() }
   trocarInativos(v: boolean): void { this.servico.inativos.set(v); void this.servico.carregar() }
   limparFiltros(): void {
-    this.buscaTexto.set(''); this.servico.busca.set(''); this.servico.origem.set(''); this.servico.inativos.set(false)
+    this.servico.busca.set(''); this.servico.origem.set(''); this.servico.inativos.set(false)
     void this.servico.carregar()
   }
 
-  // ── Painel do produto ──────────────────────────────────────────────────────
+  // ── Modal do produto ───────────────────────────────────────────────────────
   alternarNovo(): void {
     if (this.painel() === 'novo') { this.fecharPainel(); return }
-    if (this.painel() === 'editar') this.fecharPainel()
     this.form.set(this.rascunhoNovo); this.erros.set({}); this.erroGeral.set(null)
     this.painel.set('novo')
   }
@@ -485,13 +455,14 @@ export class CatalogoProdutosPagina implements OnInit {
   }
   addAtributo(i: number): void { this.mudarSku(i, (s) => ({ ...s, atributos: [...s.atributos, { chave: '', valor: '' }] })) }
 
-  alternarAberto(id: string): void {
-    this.aberto.update((a) => (a === id ? null : id))
-    if (this.skuAlvo()?.produtoId !== this.aberto()) this.fecharSku()
+  // ── Modal de variações ─────────────────────────────────────────────────────
+  abrirVariacoes(p: ProdutoLinha): void {
+    this.variacoesId.set(p.id); this.fecharSku()
   }
+  fecharVariacoes(): void { this.variacoesId.set(null); this.fecharSku() }
 
   async abrirSku(p: ProdutoLinha, s: SkuLinha | null): Promise<void> {
-    this.aberto.set(p.id); this.erros.set({}); this.erroGeral.set(null); this.precosIndisponiveis.set(false)
+    this.erros.set({}); this.erroGeral.set(null); this.precosIndisponiveis.set(false)
     this.skuAlvo.set({ produtoId: p.id, skuId: s?.id ?? null })
     if (!s) { this.skuForm.set(skuVazio()); return }
     // ⚠️ A lista só traz o preço do perfil padrão; a edição precisa dos dois.
@@ -517,7 +488,6 @@ export class CatalogoProdutosPagina implements OnInit {
       this.toasts.sucesso(alvo.skuId ? 'Variação salva.' : 'Variação adicionada.')
       this.fecharSku()
       await this.servico.carregar()
-      this.aberto.set(p.id)
     } finally { this.salvando.set(false) }
   }
 
@@ -532,6 +502,5 @@ export class CatalogoProdutosPagina implements OnInit {
     if (!r.ok) { this.toasts.erro(r.mensagem); return }
     this.toasts.sucesso('Variação desativada.')
     await this.servico.carregar()
-    this.aberto.set(p.id)
   }
 }

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { variaveisDoCorpo, validarMapeamento } from '@geracrm/shared'
+import { lerBusca, padraoContem } from '../../db/busca.js'
 
 const PAGINA = 50
 
@@ -23,7 +25,37 @@ interface Corpo {
   botoes?: { texto: string }[]
 }
 const CATEGORIAS = ['MARKETING', 'UTILITY', 'AUTHENTICATION']
+const STATUS_META = ['PENDING', 'APPROVED', 'REJECTED', 'PAUSED', 'DISABLED']
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const NOME_META = /^[a-z0-9_]{1,512}$/
+
+interface FiltrosTemplate {
+  status: string | null
+  categoria: string | null
+  canalId: string | null
+  busca: string | null
+}
+
+/**
+ * Filtros do catálogo (todos opcionais). Valor fora do conjunto → `campos` para o formulário.
+ * Ausente = sem filtro; vazio em status/categoria/canalId é erro, não "todos".
+ */
+function lerFiltrosTemplate(q: { status?: string; categoria?: string; canalId?: string; q?: string }):
+  { ok: true; filtros: FiltrosTemplate } | { ok: false; campos: Record<string, string> } {
+  const campos: Record<string, string> = {}
+  const status = q.status === undefined ? null : STATUS_META.includes(q.status) ? q.status : undefined
+  const categoria = q.categoria === undefined ? null : CATEGORIAS.includes(q.categoria) ? q.categoria : undefined
+  const canalId = q.canalId === undefined ? null : UUID.test(q.canalId) ? q.canalId : undefined
+  const busca = lerBusca(q.q)
+  if (status === undefined) campos.status = `Use um de: ${STATUS_META.join(', ')}.`
+  if (categoria === undefined) campos.categoria = `Use um de: ${CATEGORIAS.join(', ')}.`
+  if (canalId === undefined) campos.canalId = 'Informe o id (uuid) de um canal.'
+  if (busca === 'invalido') campos.q = 'Use até 100 caracteres.'
+  if (status === undefined || categoria === undefined || canalId === undefined || busca === 'invalido') {
+    return { ok: false, campos }
+  }
+  return { ok: true, filtros: { status, categoria, canalId, busca } }
+}
 
 /** Valida o corpo (componentes da Meta). Retorna erro tipificado ou null. */
 function validarCorpo(c: unknown): string | null {
@@ -39,7 +71,11 @@ function validarCorpo(c: unknown): string | null {
 
 export async function rotasTemplate(app: FastifyInstance): Promise<void> {
   /** Catálogo: cada template com a última versão (status/corpo). Cursor por criado_em. */
-  app.get<{ Querystring: { cursor?: string } }>(
+  // Filtros opcionais (a resposta só acrescenta): `status` e `categoria` pelo valor que a tabela
+  // guarda; `q` pelo nome (ILIKE "contém"). `canalId` não é coluna de template (o catálogo é do
+  // tenant): ele decide só se o número envia template — o oficial sim, o não-oficial não tem
+  // catálogo aqui e recebe lista vazia. Canal de outro tenant ou inexistente → 422.
+  app.get<{ Querystring: { cursor?: string; status?: string; categoria?: string; canalId?: string; q?: string } }>(
     '/v1/templates',
     { preHandler: exigirTenant },
     async (req, reply) => {
@@ -50,23 +86,45 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
         if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curEm = em; curId = id
       }
-      const linhas = await req.comTenant((tx) => tx<{
-        id: string; nome: string; categoria: string; idioma: string; criado_em: Date
-        versao: number; status_meta: string; motivo_rejeicao: string | null; corpo: Corpo; submetido: boolean
-      }[]>`
-        SELECT t.id, t.nome, t.categoria, t.idioma, t.criado_em,
-               v.versao, v.status_meta, v.motivo_rejeicao, v.corpo, v.id_externo IS NOT NULL AS submetido
-          FROM template t
-          JOIN LATERAL (
-            SELECT versao, status_meta, motivo_rejeicao, corpo, id_externo
-              FROM template_versao tv
-             WHERE tv.tenant_id = t.tenant_id AND tv.template_id = t.id
-             ORDER BY versao DESC LIMIT 1) v ON true
-         WHERE t.tenant_id = tenant_atual()
-           AND ${curEm === null ? tx`true`
-                : tx`(t.criado_em, t.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
-         ORDER BY t.criado_em DESC, t.id DESC
-         LIMIT ${PAGINA + 1}`)
+      const lidos = lerFiltrosTemplate(req.query)
+      if (!lidos.ok) {
+        return reply.code(422).send({ erro: 'template.filtro_invalido', mensagem: 'Filtro inválido.', campos: lidos.campos })
+      }
+      const f = lidos.filtros
+      const r = await req.comTenant(async (tx) => {
+        if (f.canalId !== null) {
+          const [canal] = await tx<{ tipo: string }[]>`
+            SELECT tipo FROM canal_conectado WHERE tenant_id = tenant_atual() AND id = ${f.canalId}`
+          if (!canal) return { estado: 'canal_invalido' as const }
+          if (canal.tipo !== 'whatsapp_oficial') return { estado: 'ok' as const, linhas: [] }
+        }
+        const linhas = await tx<{
+          id: string; nome: string; categoria: string; idioma: string; criado_em: Date
+          versao: number; status_meta: string; motivo_rejeicao: string | null; corpo: Corpo; submetido: boolean
+          mapeamento_variaveis: Record<string, string>
+        }[]>`
+          SELECT t.id, t.nome, t.categoria, t.idioma, t.criado_em, t.mapeamento_variaveis,
+                 v.versao, v.status_meta, v.motivo_rejeicao, v.corpo, v.id_externo IS NOT NULL AS submetido
+            FROM template t
+            JOIN LATERAL (
+              SELECT versao, status_meta, motivo_rejeicao, corpo, id_externo
+                FROM template_versao tv
+               WHERE tv.tenant_id = t.tenant_id AND tv.template_id = t.id
+               ORDER BY versao DESC LIMIT 1) v ON true
+           WHERE t.tenant_id = tenant_atual()
+             AND ${f.status === null ? tx`true` : tx`v.status_meta = ${f.status}`}
+             AND ${f.categoria === null ? tx`true` : tx`t.categoria = ${f.categoria}`}
+             AND ${f.busca === null ? tx`true` : tx`t.nome ILIKE ${padraoContem(f.busca)}`}
+             AND ${curEm === null ? tx`true`
+                  : tx`(t.criado_em, t.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+           ORDER BY t.criado_em DESC, t.id DESC
+           LIMIT ${PAGINA + 1}`
+        return { estado: 'ok' as const, linhas }
+      })
+      if (r.estado === 'canal_invalido') {
+        return reply.code(422).send({ erro: 'template.filtro_invalido', mensagem: 'Filtro inválido.', campos: { canalId: 'Canal não encontrado.' } })
+      }
+      const linhas = r.linhas
 
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
@@ -78,7 +136,7 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
         itens: pagina.map((l) => ({
           id: l.id, nome: l.nome, categoria: l.categoria, idioma: l.idioma, criadoEm: l.criado_em,
           versao: l.versao, statusMeta: l.status_meta, motivoRejeicao: l.motivo_rejeicao,
-          corpo: l.corpo, submetido: l.submetido,
+          corpo: l.corpo, submetido: l.submetido, mapeamentoVariaveis: l.mapeamento_variaveis,
         })),
         proximoCursor,
       })
@@ -91,8 +149,8 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
     { preHandler: exigirTenant },
     async (req, reply) => {
       const r = await req.comTenant(async (tx) => {
-        const [t] = await tx<{ id: string; nome: string; categoria: string; idioma: string; criado_em: Date }[]>`
-          SELECT id, nome, categoria, idioma, criado_em FROM template
+        const [t] = await tx<{ id: string; nome: string; categoria: string; idioma: string; criado_em: Date; mapeamento_variaveis: Record<string, string> }[]>`
+          SELECT id, nome, categoria, idioma, criado_em, mapeamento_variaveis FROM template
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!t) return null
         const versoes = await tx<{
@@ -107,7 +165,7 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
       })
       if (!r) return reply.code(404).send({ erro: 'template.nao_encontrado' })
       return reply.send({
-        id: r.t.id, nome: r.t.nome, categoria: r.t.categoria, idioma: r.t.idioma, criadoEm: r.t.criado_em,
+        id: r.t.id, nome: r.t.nome, categoria: r.t.categoria, idioma: r.t.idioma, criadoEm: r.t.criado_em, mapeamentoVariaveis: r.t.mapeamento_variaveis,
         versoes: r.versoes.map((v) => ({
           versao: v.versao, statusMeta: v.status_meta, motivoRejeicao: v.motivo_rejeicao, corpo: v.corpo,
           submetido: v.id_externo !== null, revisadoEm: v.revisado_em, criadoEm: v.criado_em,
@@ -168,6 +226,47 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
       })
       if (!r.ok) return reply.code(404).send({ erro: 'template.nao_encontrado' })
       return reply.code(201).send({ versao: r.versao })
+    },
+  )
+
+  /**
+   * Mapeamento {{n}} -> campo do contato (F2). Lista FECHADA de campos (shared) e só variáveis
+   * que o corpo da última versão realmente tem. `{}` limpa o mapeamento.
+   */
+  app.patch<{ Params: { id: string }; Body: { variaveis?: unknown } }>(
+    '/v1/templates/:id/mapeamento',
+    { preHandler: exigirTenant },
+    async (req, reply) => {
+      const v = req.body?.variaveis
+      if (!v || typeof v !== 'object' || Array.isArray(v)) {
+        return reply.code(422).send({ erro: 'mapeamento.invalido', mensagem: 'Envie variaveis como objeto {"1": campo}.', campos: { variaveis: 'Informe um objeto.' } })
+      }
+      const r = await req.comTenant(async (tx) => {
+        const [t] = await tx<{ corpo: Corpo }[]>`
+          SELECT v.corpo FROM template t
+            JOIN LATERAL (SELECT corpo FROM template_versao tv
+                           WHERE tv.tenant_id = t.tenant_id AND tv.template_id = t.id
+                           ORDER BY versao DESC LIMIT 1) v ON true
+           WHERE t.tenant_id = tenant_atual() AND t.id = ${req.params.id}`
+        if (!t) return { estado: 'nao_encontrado' as const }
+        const texto = `${t.corpo.header?.texto ?? ''} ${t.corpo.body?.texto ?? ''}`
+        const erro = validarMapeamento(v as Record<string, unknown>, variaveisDoCorpo(texto))
+        if (erro) return { estado: 'invalido' as const, erro }
+        await tx`
+          UPDATE template SET mapeamento_variaveis = ${JSON.stringify(v)}::text::jsonb
+           WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        return { estado: 'ok' as const }
+      })
+      if (r.estado === 'nao_encontrado') return reply.code(404).send({ erro: 'template.nao_encontrado' })
+      if (r.estado === 'invalido') {
+        return reply.code(422).send({
+          erro: r.erro.motivo === 'campo_invalido' ? 'mapeamento.campo_invalido' : 'mapeamento.variavel_inexistente',
+          mensagem: r.erro.motivo === 'campo_invalido'
+            ? `Campo inválido para {{${r.erro.variavel}}}.` : `O corpo do template não tem a variável {{${r.erro.variavel}}}.`,
+          campos: { [`variaveis.${r.erro.variavel}`]: r.erro.motivo === 'campo_invalido' ? 'Campo inválido.' : 'O corpo não tem esta variável.' },
+        })
+      }
+      return reply.send({ ok: true, mapeamentoVariaveis: v })
     },
   )
 

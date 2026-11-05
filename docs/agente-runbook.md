@@ -250,3 +250,73 @@ para acordar gente de madrugada, recalibrar com 2–4 semanas de histórico.
 - **Ação:** criar à mão, fora de pico: `SELECT * FROM manter_particoes_mensais(12);` (idempotente; pega
   ACCESS EXCLUSIVE na tabela-mãe por instantes). Depois, consertar a causa do worker.
 - **Volta:** nada a desfazer; o motivo some na próxima leitura da saúde.
+
+## 17. Monitor
+
+- **O que é:** um cron service do Railway (a cada 5 min) que lê `GET /saude/detalhada`, confere o console
+  e avisa no Slack/Discord quando a saúde degrada, a API/console caem ou o webhook fica parado em
+  horário comercial (componente `entrada`: última mensagem de entrada, máximo global, sem dado de tenant).
+  Avisa também quando o problema some ("voltou ao normal").
+- **Quando um alerta chega:** o texto traz o motivo (código de `/saude/detalhada`); siga a seção deste
+  runbook do motivo (§1 LLM, §4 fila, §11 webhook parado, §16 partições…).
+- **Operar/configurar:** variáveis, criação do serviço e teste local em `infra/monitor/README.md`.
+
+## 18. Cliente sem administrador (cadastro de usuários e filiais trancado)
+
+- **Sintoma:** o dono do cliente abre Configurações → Usuários (ou Filiais) e recebe 403
+  `acesso.papel_insuficiente` com "Esta empresa ainda não tem administrador definido".
+- **Por quê:** desde a revisão de segurança da D3, o cadastro de usuários e filiais exige admin **atribuído**
+  (`usuario_filial.papel = 'admin'`). O modo fundador (tenant sem admin: todo usuário ativo vale admin)
+  continua valendo para as **demais** configurações, mas não para o cadastro — senão o primeiro a abrir a tela
+  se daria admin e escolheria quem entra. ⚠️ Risco aceito e registrado: enquanto o cliente estiver em modo
+  fundador, qualquer usuário ativo configura agente, números e custo.
+- **Ação (todo cliente atual sem admin precisa disto, uma vez):** o staff semeia o admin pelo próprio login
+  (grupo `staff`, fora da sessão de acesso): `POST /v1/plataforma/clientes/:id/admin` com `{ "usuarioId": "…" }`
+  — um usuário **ativo** que já existe no cliente (nasce no primeiro login). Fica auditado no cliente
+  (`usuario.admin_semeado`, `ator_staff`) e no tenant do staff (`cliente.admin_semeado`). Alternativa: abrir a
+  sessão de acesso (PLT-05) e definir o papel pela tela de Usuários — a sessão de staff passa no cadastro.
+- **Conferir:** `SELECT t.nome FROM tenant t WHERE NOT EXISTS (SELECT 1 FROM usuario_filial uf JOIN usuario u
+  ON u.tenant_id = uf.tenant_id AND u.id = uf.usuario_id WHERE uf.tenant_id = t.id AND uf.papel = 'admin' AND u.ativo);`
+  (como dono) lista os clientes ainda em modo fundador.
+- **Nunca:** a sessão de staff não grava mais linha em `usuario` do cliente (era a porta para o admin do cliente
+  redefinir a senha da conta do staff). Ação que exige um usuário do cliente como dono (assumir conversa, ser
+  responsável) responde 403 `acesso.staff_sem_usuario` na sessão de staff — peça a alguém da empresa.
+
+## 19. Pós-venda, NPS, indicações e prova social (G3) — rollback não é seguro
+
+- **Sintoma:** precisa voltar a versão do código depois de clientes criarem regras de pós-venda
+  (`pedido_efetivado` → `agente_envia`) ou provas sociais (`tipo = 'prova_social'`).
+- **Por que o rollback de código NÃO é seguro (0130/0141 ficam):**
+  - a versão anterior não conhece o motivo `pos_venda`: o worker de retornos dela pega a linha pendente
+    e a trata como retorno comum — envia o texto **sem** a política do pós-venda (template da regra no
+    oficial, teto diário e aquecimento do não-oficial, quietude depois de o cliente escrever) e agenda a
+    cadência de 3 passos (1 h → 24 h → 72 h) em cima de uma mensagem que era única;
+  - a busca de conhecimento dela **não exclui** `prova_social`: depoimentos e números **não aprovados**
+    passam a chegar ao modelo pela `conhecimento_buscar`, sem fonte e sem o portão de aprovação;
+  - a tela de Automações dela não sabe exibir nem editar a regra (gatilho/ação desconhecidos);
+  - o painel de NPS dela conta as notas do agente como "sem atendente".
+- **Se precisar voltar mesmo assim, antes do deploy da versão anterior (como dono):**
+  1. `UPDATE automacao SET ativa = false WHERE gatilho = 'pedido_efetivado';`
+  2. `UPDATE agente_retorno SET estado = 'cancelado', detalhe = 'rollback_g3', concluido_em = now()
+      WHERE motivo = 'pos_venda' AND estado = 'pendente';`
+  3. `UPDATE conhecimento_documento SET publicado = false WHERE tipo = 'prova_social';`
+  Depois de voltar à versão nova, religue as regras e republique as provas (a aprovação continua gravada).
+- **Nunca:** apagar as colunas/índices da 0130/0141 para "limpar" — são dois deploys (CLAUDE.md), e o
+  índice `agente_retorno_pos_venda_em_curso` é o que impede reenviar um pós-venda que já saiu.
+
+## 20. IP na auditoria de login e redefinição de senha (LGPD)
+
+`auditoria.dados.ip` guarda o IP de `usuario.login`, `usuario.logout` e `usuario.senha_redefinida` (D4/D6), para investigar acesso indevido. IP é dado pessoal: base legal é segurança da conta (legítimo interesse), e ele **só aparece para gestor** na tela de Auditoria (detalhe do evento).
+
+- **Retenção hoje**: igual à da própria tabela `auditoria` (sem expurgo próprio). Anonimização de contato (LGPD) não toca nessas linhas — o titular aqui é o usuário do sistema, não o contato.
+- **Pendente (não implementado)**: expurgo do campo `ip` após N meses (sugestão: 12) por job mensal que faz `dados = dados - 'ip'` nas partições antigas, e menção do prazo na política de privacidade do tenant. Decisão do dono do produto sobre N.
+- **Nunca** logar o IP junto do e-mail em log de aplicação; a trilha de auditoria é o único lugar.
+
+## 21. IP do cliente e limite por IP (formulário, LP, login)
+
+Sintoma: 429 em massa em formulário público, LP ou login vindo do console; ou limite por IP "não pega".
+- Variável `PROXY_SEGREDO`: precisa existir com o MESMO valor nos serviços **console** e **api** do Railway.
+  Sem ela na API, todo o tráfego que passa pelo nginx tem o IP do nginx e divide um balde (429 em massa).
+- `TRUST_PROXY_HOPS` fica em 1 (padrão). Valor >1 é ignorado e a API loga `TRUST_PROXY_HOPS>1 ignorado`.
+- Código: `apps/api/src/plugins/ip-cliente.ts` (`ipDoCliente`) e `apps/console/nginx.conf.template`.
+- Rotas públicas de formulário/LP têm também um limitador global por IP (60/min, `limite-publico.ts`).

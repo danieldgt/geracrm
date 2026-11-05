@@ -72,7 +72,9 @@ export const MOTIVOS_HANDOFF_DO_MODELO = [
  */
 export const MOTIVOS_HANDOFF_DO_PIPELINE = [
   'qualidade_violacao_critica', 'limite_de_custo_conversa', 'opt_out',
-  'audio_sem_transcricao', 'pergunta_robo', 'gatilho_playbook',
+  'audio_sem_transcricao', 'pergunta_robo', 'gatilho_playbook', 'objecoes_seguidas',
+  // C3: o cliente faltou à reunião e não remarcou após o convite (worker de avisos, não o turno).
+  'reuniao_nao_compareceu',
 ] as const
 
 export const MOTIVOS_HANDOFF = [...MOTIVOS_HANDOFF_DO_MODELO, ...MOTIVOS_HANDOFF_DO_PIPELINE] as const
@@ -97,6 +99,8 @@ export const ROTULO_HANDOFF: Readonly<Record<MotivoHandoff, string>> = {
   audio_sem_transcricao: 'áudio que não deu para transcrever',
   pergunta_robo: 'o cliente insistiu em saber se fala com um robô',
   gatilho_playbook: 'gatilho de transferência do playbook',
+  objecoes_seguidas: 'três objeções seguidas sem reverter',
+  reuniao_nao_compareceu: 'o cliente faltou à reunião e não remarcou',
 }
 
 /**

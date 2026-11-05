@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify'
 import { sql, comTenantServico } from '../../db/index.js'
 import { parseWebhookMeta, verificarAssinaturaMeta, type EventoMeta } from './canais/meta.js'
-import { ingerirMensagemEntrante, registrarStatusMensagem } from './ingestao-mensagem.js'
+import { ingerirMensagemEntrante, registrarFalhaMensagem, registrarStatusMensagem } from './ingestao-mensagem.js'
 import { PREFIXO_MIDIA_META } from './canais/meta-oficial.js'
 import { aplicarQualidadeNumero, aplicarStatusTemplate } from './qualidade-numero.js'
 import type { MensagemEntrante } from './canais/porta.js'
+import { registrarFalhaDestinatario } from '../crm/campanha-destinatario.js'
 
 /**
  * Webhook da Meta (WhatsApp Cloud API / Instagram Direct).
@@ -142,9 +143,17 @@ export async function rotasWebhookMeta(app: FastifyInstance): Promise<void> {
               'pós-ingestão NÃO agendada: ausência e mídia desta mensagem não sairão')
           }
         } else if (ev.status === 'enviada' || ev.status === 'entregue' || ev.status === 'lida') {
-          await comTenantServico(canal.tenant_id, (tx) => registrarStatusMensagem(tx, ev.idExterno, ev.status as 'enviada' | 'entregue' | 'lida'))
+          await comTenantServico(canal.tenant_id, (tx) => registrarStatusMensagem(tx, ev.idExterno, ev.status as 'enviada' | 'entregue' | 'lida', agora))
+        } else if (ev.status === 'falhou') {
+          // A mensagem da thread vira `falhou` (tique no inbox; o Consumo não cobra) e o
+          // destinatário de campanha do wamid também, com o código da Meta — que decide se
+          // entra na taxa de falha ou se pausa a campanha na hora (número em risco).
+          const erroCodigo = ev.erroCodigo ?? null
+          await comTenantServico(canal.tenant_id, async (tx) => {
+            await registrarFalhaMensagem(tx, ev.idExterno)
+            await registrarFalhaDestinatario(tx, ev.idExterno, erroCodigo, agora)
+          })
         }
-        // status 'falhou' → tratamento (marcar mensagem falhou) entra depois.
       } catch (erro) {
         // ⚠️ Erro NOSSO (transitório, ex.: banco) → 500 para a Meta reenviar.
         req.log.error({ erro, phoneNumberId: ev.phoneNumberId }, 'webhook meta: falha ao processar')

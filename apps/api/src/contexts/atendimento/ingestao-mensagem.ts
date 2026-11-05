@@ -7,7 +7,12 @@ import { emSavepoint, type Sql } from '../../db/index.js'
 import { notificarMensagemEntrante, notificarConfirmacaoSemPedido } from './notificacao.js'
 import { agendarTurno } from './agente/fila.js'
 import { cancelarRetornosDaConversa } from './agente/retorno.js'
+import {
+  cancelarDescarteEReativacaoDoContato, reabrirContatoDescartadoSemResposta, travarConversaEContato,
+} from './agente/descarte-reativacao.js'
 import { midiaHabilitada } from './midia/armazenamento.js'
+import { marcarRespostaDeCampanha, registrarStatusDestinatario } from '../crm/campanha-destinatario.js'
+import { atribuirCarteiraNaEntrada } from './rodizio-entrada.js'
 
 /**
  * Ingestão de mensagem ENTRANTE — o nosso fluxo (INV-12), não o do ERP.
@@ -40,6 +45,8 @@ export type ResultadoIngestaoMensagem =
       midiaExterna?: MidiaExterna
       /** Erro ao agendar a pós-ingestão (ausência/mídia não sairão) — quem chama loga. */
       posIngestaoFalhou?: string
+      /** Erro no rodízio na entrada (o lead ficou órfão) — já logado aqui, com o tenant. */
+      rodizioFalhou?: string
     }
   | { ok: false; motivo: string }
 
@@ -57,8 +64,13 @@ export async function registrarStatusMensagem(
   tx: Sql,
   idExterno: string,
   status: 'enviada' | 'entregue' | 'lida',
+  em: Date = new Date(),
 ): Promise<{ atualizada: boolean }> {
   const ordem = ORDEM_STATUS[status] ?? 0
+  // Campanha v2 (F1): o destinatário do wamid avança junto (entregue/lida). Antes do
+  // retorno abaixo — o destinatário tem a própria régua de "só avança", e o tique da
+  // mensagem já estar adiante não pode impedir o funil da campanha de contar.
+  await registrarStatusDestinatario(tx, idExterno, status, em)
   const [m] = await tx<{ conversa_id: string }[]>`
     UPDATE mensagem SET status = ${status}, status_ordem = ${ordem}
      WHERE tenant_id = tenant_atual() AND id_externo = ${idExterno} AND direcao = 'saliente'
@@ -67,6 +79,28 @@ export async function registrarStatusMensagem(
   `
   if (!m) return { atualizada: false }
 
+  const [conv] = await tx<{ versao: string }[]>`
+    UPDATE conversa SET versao = versao + 1
+     WHERE tenant_id = tenant_atual() AND id = ${m.conversa_id} RETURNING versao`
+  await tx`
+    INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+    VALUES (tenant_atual(), 'mensagem.status', 'conversa', ${m.conversa_id},
+            ${JSON.stringify({ conversaId: m.conversa_id, versao: Number(conv?.versao ?? 0) })}::text::jsonb)`
+  return { atualizada: true }
+}
+
+/**
+ * A Meta avisou que a mensagem NOSSA falhou depois de aceita (`failed` no webhook): a
+ * mensagem da thread vira `falhou` — o inbox mostra o tique de falha e o Consumo não a
+ * cobra. Só sai de `pendente`/`enviada`: entregue/lida não regridem. Idempotente.
+ */
+export async function registrarFalhaMensagem(tx: Sql, idExterno: string): Promise<{ atualizada: boolean }> {
+  const [m] = await tx<{ conversa_id: string }[]>`
+    UPDATE mensagem SET status = 'falhou'
+     WHERE tenant_id = tenant_atual() AND id_externo = ${idExterno} AND direcao = 'saliente'
+       AND status IN ('pendente', 'enviada')
+     RETURNING conversa_id`
+  if (!m) return { atualizada: false }
   const [conv] = await tx<{ versao: string }[]>`
     UPDATE conversa SET versao = versao + 1
      WHERE tenant_id = tenant_atual() AND id = ${m.conversa_id} RETURNING versao`
@@ -221,6 +255,28 @@ export async function ingerirMensagemEntrante(
     } catch { /* atribuição é acessório; a mensagem não pode se perder por ela */ }
   }
 
+  // 6.65 RODÍZIO NA ENTRADA (RN-04, G4): o lead que acabou de nascer, sem dono,
+  //      ganha carteira pelo rodízio da filial roteada — só com a chave do número
+  //      ligada. Depois da origem (6.6), que pode decidir a filial. O vendedor
+  //      escolhido recebe UM aviso ("novo cliente na sua carteira") e a fila não
+  //      é acordada de novo no passo 7. Savepoint: a mensagem nunca se perde por ele.
+  let avisadoPeloRodizio = false
+  let rodizioFalhou: string | undefined
+  if (leadNovo) {
+    try {
+      const r = await emSavepoint(tx, (sp) => atribuirCarteiraNaEntrada(sp, { contatoId, conversaId, canalId }))
+      avisadoPeloRodizio = r.tipo === 'atribuido'
+    } catch (erro) {
+      // Rodízio é acessório: o contato fica órfão (e a fila é avisada no passo 7), mas não em silêncio.
+      rodizioFalhou = erro instanceof Error ? erro.message : String(erro)
+      const [t] = await tx<{ tenant: string | null }[]>`SELECT tenant_atual()::text AS tenant`
+      console.warn(JSON.stringify({
+        nivel: 'warn', contexto: 'roteamento', evento: 'rodizio_entrada_falhou',
+        tenantId: t?.tenant ?? null, canalId, conversaId, erro: rodizioFalhou.slice(0, 200),
+      }))
+    }
+  }
+
   // 6.7 ⚠️ AGENDA o turno do agente no MESMO commit (ADR-024, INV-40): se a
   //     mensagem reverter, a tarefa some junto. Mensagem nova numa tarefa ainda
   //     pendente REAGENDA (debounce) em vez de criar outra. Só quando o agente
@@ -236,14 +292,38 @@ export async function ingerirMensagemEntrante(
   } catch { /* agendar é acessório; a mensagem não pode se perder por ele */ }
 
   // 6.8 O cliente escreveu: os retornos agendados (R5) perdem o motivo — quem
-  //     responde agora é o turno do agente, não a cutucada programada.
+  //     responde agora é o turno do agente, não a cutucada programada. E o
+  //     descarte/reativação (G5) do CONTATO, em qualquer número dele.
+  //     ⚠️ Trava conversa (já travada pelo UPDATE do passo 5) e contato ANTES — as
+  //     mesmas linhas, na mesma ordem, que o worker do descarte trava: ou ele já
+  //     descartou (e o 6.9 reabre), ou espera este commit e vê a resposta.
   try {
-    await emSavepoint(tx, (sp) => cancelarRetornosDaConversa(sp, conversaId))
+    await emSavepoint(tx, async (sp) => {
+      await travarConversaEContato(sp, conversaId)
+      // O pós-venda (G3) NÃO é cancelado: é adiado até a conversa assentar (ver a função).
+      await cancelarRetornosDaConversa(sp, conversaId, undefined, msg.recebidaEm)
+      await cancelarDescarteEReativacaoDoContato(sp, conversaId)
+    })
   } catch { /* cancelar retorno é acessório; a mensagem não pode se perder por ele */ }
+
+  // 6.9 Quem o robô deu por perdido (`sem_resposta`) e voltou a escrever está vivo: o
+  //     contato volta a "novo" (G5). O descarte manual nunca é reaberto aqui, nem
+  //     quem escreveu para PARAR (ou já está na lista de bloqueio).
+  try {
+    await emSavepoint(tx, (sp) => reabrirContatoDescartadoSemResposta(sp, conversaId, msg.recebidaEm, msg.texto ?? null))
+  } catch { /* reabrir é acessório; a mensagem não pode se perder por ele */ }
+
+  // 6.10 Resposta a uma campanha (F1, #78): o cliente escreveu neste número em até 7
+  //      dias do envio → o destinatário vira `respondeu`. Acessório: a mensagem não
+  //      pode se perder por ele.
+  try {
+    await emSavepoint(tx, (sp) => marcarRespostaDeCampanha(sp, { contatoId, canalId, recebidaEm: msg.recebidaEm }))
+  } catch { /* atribuição é acessória */ }
 
   // 7. Notifica o atendente que assumiu esta conversa (PLT-07), no mesmo commit.
   //    Só entrante NOVA chega aqui — a duplicada já retornou lá em cima.
-  await notificarMensagemEntrante(tx, { conversaId })
+  //    O lead que o rodízio (6.65) acabou de dar a alguém já avisou o dono.
+  if (!avisadoPeloRodizio) await notificarMensagemEntrante(tx, { conversaId })
 
   // 8. Mídia externa a copiar (E5-14): imagem/áudio que ainda aponta para a URL
   //    do provedor. A cópia é rede — vai para o worker, nunca no request.
@@ -270,6 +350,7 @@ export async function ingerirMensagemEntrante(
     ok: true, conversaId, contatoId, duplicada: false, leadNovo,
     ...(midiaExterna ? { midiaExterna } : {}),
     ...(posIngestaoFalhou ? { posIngestaoFalhou } : {}),
+    ...(rodizioFalhou ? { rodizioFalhou } : {}),
   }
 }
 

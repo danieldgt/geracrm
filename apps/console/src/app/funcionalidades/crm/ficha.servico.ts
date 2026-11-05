@@ -8,6 +8,17 @@ export interface FichaContato {
   readonly id: string
   readonly nome: string
   readonly modalidade: string | null
+  readonly razaoSocial: string | null
+  readonly nomeFantasia: string | null
+  readonly email: string | null
+  readonly prioridade: string | null
+  readonly temperatura: string | null
+  readonly valorEstimadoCentavos: number | null
+  readonly observacoes: string | null
+  readonly perfilPreco?: string | null
+  readonly origem?: string | null
+  readonly criadoEm?: string | null
+  readonly vendedor?: { readonly id: string; readonly nome: string } | null
   readonly qualificado: boolean | null
   readonly recebeCampanhas: boolean
   readonly recebeAutomacoes: boolean
@@ -15,7 +26,7 @@ export interface FichaContato {
   readonly documentos: readonly { seq: number; tipo: string; numero: string; fiscal: boolean }[]
   readonly totalDocumentos: number
   readonly endereco: {
-    logradouro: string | null; numero: string | null; bairro: string | null
+    logradouro: string | null; numero: string | null; complemento: string | null; bairro: string | null
     cidade: string | null; uf: string | null; cep: string | null
   } | null
   readonly metricas: {
@@ -41,11 +52,17 @@ export class FichaServico {
   /** Trajetória do segmento RFV (transições no tempo). */
   readonly segmentoHistorico = signal<readonly { segmento: string; capturadoEm: string }[]>([])
 
-  async carregar(id: string): Promise<void> {
-    this.estado.set('carregando')
+  /**
+   * `silencioso` recarrega SEM esvaziar a tela (depois de uma edição): a ficha não pisca, as abas e
+   * os blocos mantêm o estado. Sem ele (troca de contato), parte do zero.
+   */
+  async carregar(id: string, silencioso = false): Promise<void> {
+    if (!silencioso || this.ficha()?.id !== id) {
+      this.estado.set('carregando')
+      this.ficha.set(null)
+      this.segmentoHistorico.set([])
+    }
     this.erro.set(null)
-    this.ficha.set(null)
-    this.segmentoHistorico.set([])
     try {
       const f = await firstValueFrom(this.http.get<FichaContato>(`/v1/contatos/${id}`))
       this.ficha.set(f)
@@ -55,6 +72,7 @@ export class FichaServico {
         .then((r) => this.segmentoHistorico.set(r.itens))
         .catch(() => { /* sem histórico */ })
     } catch (e) {
+      if (silencioso && this.ficha()) return // a edição já valeu; a tela segue com o que tem
       if (e instanceof HttpErrorResponse) {
         if (e.status === 404) { this.estado.set('nao_encontrado'); return }
         if (e.status === 403) { this.estado.set('sem_permissao'); return }
@@ -74,7 +92,7 @@ export class FichaServico {
     this.erroEdicao.set(null)
     try {
       await op
-      if (this.idAtual) await this.carregar(this.idAtual)
+      if (this.idAtual) await this.carregar(this.idAtual, true)
       return true
     } catch (e) {
       this.erroEdicao.set(e instanceof HttpErrorResponse && (e.error as { mensagem?: string })?.mensagem

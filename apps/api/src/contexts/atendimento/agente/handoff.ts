@@ -17,7 +17,8 @@ import { armarSlaDoHandoff } from '../sla-handoff.js'
  *  3. encerra a sessão do agente com o motivo;
  *  4. marca a conversa como conduzida por humano;
  *  5. ARMA O SLA (P18, ADR-034): prazos em minutos ÚTEIS do número e o
- *     responsável roteado (dono da carteira → pool em rodízio → gestor);
+ *     responsável roteado (dono da carteira → filial roteada em rodízio → pool
+ *     em rodízio → gestor da filial → gestor; G4);
  *  6. notifica (o responsável; rota 'gestor' = todos os gestores; sem rota, a
  *     fila ou o dono da carteira) e emite
  *     o evento de tempo real.

@@ -35,8 +35,12 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/plataforma/auditoria.pagina.js').then((m) => m.AuditoriaPagina),
   bloqueios: () =>
     import('./funcionalidades/crm/bloqueios.pagina.js').then((m) => m.BloqueiosPagina),
+  'etiquetas-origens': () =>
+    import('./funcionalidades/crm/etiquetas-origens.pagina.js').then((m) => m.EtiquetasOrigensPagina),
   webhooks: () =>
     import('./funcionalidades/integracao/webhooks.pagina.js').then((m) => m.WebhooksPagina),
+  importar: () =>
+    import('./funcionalidades/integracao/importacao.pagina.js').then((m) => m.ImportacaoPagina),
   funil: () =>
     import('./funcionalidades/crm/funil.pagina.js').then((m) => m.FunilPagina),
   crm: () =>
@@ -45,22 +49,36 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/crm/crm-avancado.pagina.js').then((m) => m.CrmAvancadoPagina),
   templates: () =>
     import('./funcionalidades/atendimento/templates.pagina.js').then((m) => m.TemplatesPagina),
+  cockpit: () =>
+    import('./funcionalidades/gestao/cockpit.pagina.js').then((m) => m.CockpitPagina),
+  'carteira-higienizacao': () =>
+    import('./funcionalidades/gestao/carteira-higienizacao.pagina.js').then((m) => m.CarteiraHigienizacaoPagina),
   'atendimento-kanban': () =>
     import('./funcionalidades/atendimento/atendimento-kanban.pagina.js').then((m) => m.AtendimentoKanbanPagina),
   campanhas: () =>
     import('./funcionalidades/campanha/campanhas.pagina.js').then((m) => m.CampanhasPagina),
+  consumo: () =>
+    import('./funcionalidades/consumo/consumo.pagina.js').then((m) => m.ConsumoPagina),
   pedidos: () =>
     import('./funcionalidades/pedido/pedidos.pagina.js').then((m) => m.PedidosPagina),
   catalogo: () =>
     import('./funcionalidades/catalogo/catalogo.pagina.js').then((m) => m.CatalogoPagina),
   midia: () =>
     import('./funcionalidades/aquisicao/midia.pagina.js').then((m) => m.MidiaPagina),
+  formularios: () =>
+    import('./funcionalidades/aquisicao/formularios.pagina.js').then((m) => m.FormulariosPagina),
   segmentos: () =>
     import('./funcionalidades/crm/segmentos.pagina.js').then((m) => m.SegmentosPagina),
   inicio: () =>
     import('./funcionalidades/painel/inicio.pagina.js').then((m) => m.InicioPagina),
+  usuarios: () =>
+    import('./funcionalidades/acesso/usuarios.pagina.js').then((m) => m.UsuariosPagina),
+  filiais: () =>
+    import('./funcionalidades/acesso/filiais.pagina.js').then((m) => m.FiliaisPagina),
   tarefas: () =>
     import('./funcionalidades/crm/tarefas.pagina.js').then((m) => m.TarefasPagina),
+  agenda: () =>
+    import('./funcionalidades/agenda/agenda.pagina.js').then((m) => m.AgendaPagina),
   carteiras: () =>
     import('./funcionalidades/crm/carteiras.pagina.js').then((m) => m.CarteirasPagina),
   metas: () =>
@@ -71,6 +89,8 @@ export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
     import('./funcionalidades/analitico/bi.pagina.js').then((m) => m.BiPagina),
   performance: () =>
     import('./funcionalidades/analitico/performance.pagina.js').then((m) => m.PerformancePagina),
+  relatorios: () =>
+    import('./funcionalidades/analitico/relatorios.pagina.js').then((m) => m.RelatoriosPagina),
   mercado: () =>
     import('./funcionalidades/analitico/mercado.pagina.js').then((m) => m.MercadoPagina),
   mapa: () =>
@@ -122,6 +142,24 @@ export const ROTAS: Routes = [
     path: 'login',
     loadComponent: () => import('./nucleo/login.pagina.js').then((m) => m.LoginPagina),
   },
+  // Formulário PÚBLICO (F3): fora da casca, sem guard — quem preenche não tem conta.
+  // ⚠️ Só `/f/<chave>` é o formulário (e só ele pode ir para iframe, ver nginx.conf). Qualquer outro
+  //    caminho sob `/f/` mostra "indisponível" — nunca cai na casca/login, que não pode ser incorporada.
+  {
+    path: 'f',
+    children: [
+      {
+        path: ':chave',
+        loadComponent: () =>
+          import('./funcionalidades/aquisicao/formulario-publico.pagina.js').then((m) => m.FormularioPublicoPagina),
+      },
+      {
+        path: '**',
+        loadComponent: () =>
+          import('./funcionalidades/aquisicao/formulario-publico.pagina.js').then((m) => m.FormularioPublicoPagina),
+      },
+    ],
+  },
   {
     path: '',
     component: ShellComponente,
@@ -133,6 +171,18 @@ export const ROTAS: Routes = [
       { path: 'conversas', pathMatch: 'full', redirectTo: 'contatos' },
       // Ficha do contato: rota de detalhe (não vai no menu). `id` liga ao input
       // do componente via withComponentInputBinding.
+      // Cadastro/edição do contato (formulário-página). ⚠️ `contato/novo` ANTES de
+      // `contato/:id`, senão "novo" casa como id.
+      {
+        path: 'contato/novo',
+        loadComponent: () =>
+          import('./funcionalidades/crm/contato-form.pagina.js').then((m) => m.ContatoFormPagina),
+      },
+      {
+        path: 'contato/:id/editar',
+        loadComponent: () =>
+          import('./funcionalidades/crm/contato-form.pagina.js').then((m) => m.ContatoFormPagina),
+      },
       {
         path: 'contato/:id',
         loadComponent: () =>
@@ -151,12 +201,45 @@ export const ROTAS: Routes = [
         loadComponent: () =>
           import('./nucleo/perfil.pagina.js').then((m) => m.PerfilPagina),
       },
+      // Notificações (D4): a página inteira do sino — lista por cursor, filtros, marcar todas.
+      {
+        path: 'notificacoes',
+        loadComponent: () =>
+          import('./nucleo/notificacoes.pagina.js').then((m) => m.NotificacoesPagina),
+      },
       // ROI de um anúncio (AQ-16): detalhe, não vai no menu — chega pela lista
       // de Mídia paga.
       {
         path: 'midia/anuncio/:id',
         loadComponent: () =>
           import('./funcionalidades/aquisicao/anuncio-roi.pagina.js').then((m) => m.AnuncioRoiPagina),
+      },
+      // Builder do formulário: `novo` ANTES de `:id`, senão "novo" casa como id.
+      {
+        path: 'formularios/novo',
+        loadComponent: () =>
+          import('./funcionalidades/aquisicao/formulario-builder.pagina.js').then((m) => m.FormularioBuilderPagina),
+      },
+      {
+        path: 'formularios/:id',
+        loadComponent: () =>
+          import('./funcionalidades/aquisicao/formulario-builder.pagina.js').then((m) => m.FormularioBuilderPagina),
+      },
+      // Campanhas v2 (F1b): wizard e detalhe. `nova` ANTES de `:id`, senão "nova" casa como id.
+      {
+        path: 'campanhas/nova',
+        loadComponent: () =>
+          import('./funcionalidades/campanha/campanha-wizard.pagina.js').then((m) => m.CampanhaWizardPagina),
+      },
+      {
+        path: 'campanhas/:id/editar',
+        loadComponent: () =>
+          import('./funcionalidades/campanha/campanha-wizard.pagina.js').then((m) => m.CampanhaWizardPagina),
+      },
+      {
+        path: 'campanhas/:id',
+        loadComponent: () =>
+          import('./funcionalidades/campanha/campanha-detalhe.pagina.js').then((m) => m.CampanhaDetalhePagina),
       },
       ...rotasFilhas,
       // Rota desconhecida volta para a base — não deixa tela órfã.

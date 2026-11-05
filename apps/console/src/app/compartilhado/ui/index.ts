@@ -1,6 +1,18 @@
 // Biblioteca de componentes — bloco 1 (R-12). Import único.
 export { BotaoComponente } from './botao.componente.js'
 export { CampoComponente } from './campo.componente.js'
+export { SelectComponente, type OpcaoSelect } from './select.componente.js'
+export { SelectMultiComponente } from './select-multi.componente.js'
+export { adicionarId, removerId, limiteAtingido, rotuloDoChip } from './select-multi.regras.js'
+export { BotaoIconeComponente } from './botao-icone.componente.js'
+export { SelectPaginadoComponente } from './select-paginado.componente.js'
+export { type CarregarOpcoes, type OpcaoPaginada, type PaginaOpcoes } from './select-paginado.estado.js'
+export { MascaraDiretiva } from './mascara.diretiva.js'
+export {
+  formatarCpf, formatarCnpj, formatarCpfCnpj, formatarTelefone, formatarCep, formatarMascara, soDigitos,
+  type TipoMascara,
+} from './mascaras.js'
+export { centavosParaTexto, type TipoCampo } from './campo.regras.js'
 export { BadgeComponente } from './badge.componente.js'
 export { PainelComponente } from './painel.componente.js'
 export { EsqueletoComponente } from './esqueleto.componente.js'
@@ -14,8 +26,32 @@ export { corpoDoErro, codigoDoErro, mensagemDeErro, ehStatus, type ErroApi } fro
 export { HorarioAtendimentoComponente, somenteDiasAbertos, DIAS,
          type Faixa, type HorarioAtendimento } from './horario-atendimento.componente.js'
 export { QualidadeComponente } from './qualidade.componente.js'
+// Componentes de lista (L0c) — padrão Lista do plano de paridade.
+export { TabelaComponente, CelulaDiretiva, type ColunaTabela, type LinhaTabela } from './tabela.componente.js'
+export { FiltrosComponente, DEBOUNCE_BUSCA_MS } from './filtros.componente.js'
+export { PaginacaoComponente } from './paginacao.componente.js'
+export { AcoesLoteComponente } from './acoes-lote.componente.js'
+export { StatCardComponente, type TomStat } from './stat-card.componente.js'
+export { FiltroPeriodoComponente } from './filtro-periodo.componente.js'
+export { BotaoCsvComponente } from './botao-csv.componente.js'
+export { paraCsv, baixarCsv, type ColunaCsv, type OpcoesCsv } from './csv.js'
+export { periodoDoAtalho, atalhoAtivo, hojeIso, ATALHOS_PERIODO, type AtalhoPeriodo, type Periodo } from './periodo.js'
+export { estadoSelecaoPagina, alternarPagina, alternarChave, textoMostrando, textoSelecionados, comDebounce } from './lista.regras.js'
 export {
   PROVEDORES_IA, QUALIDADE_MAX, rotuloProvedor, pontosQualidade, rotuloQualidade, formatarUsd, linhaDeCusto,
   agruparPorPreco, badgesDoModelo, permitidosDe, alternarCodigo, codigosParaSalvar, mudouPermissao,
   type ModeloIa, type ModeloComPermissao, type ProvedorIa,
 } from './modelos-ia.regras.js'
+export { FormPaginaComponente } from './form-pagina.componente.js'
+export { SecaoFormComponente } from './secao-form.componente.js'
+export { GradeFormComponente } from './grade-form.componente.js'
+export { BreadcrumbComponente } from './breadcrumb.componente.js'
+export { itensDaTrilha, type ItemTrilha, type ItemTrilhaVista } from './breadcrumb.regras.js'
+export { ModalComponente, ModalRodapeDiretiva, type LarguraModal } from './modal.componente.js'
+export { AbasComponente } from './abas.componente.js'
+export { abaAtiva, proximaAba, type Aba } from './abas.regras.js'
+export { ListaDefinicaoComponente, valorDefinicao, type ItemDefinicao } from './lista-definicao.componente.js'
+export { ChipsEtiquetaComponente, alternarChip, type OpcaoChip } from './chips-etiqueta.componente.js'
+export { focaveisDe, primeiroAlvoDeFoco, prenderTab, devolverFoco } from './foco.js'
+export { IconeComponente } from './icone.componente.js'
+export { ICONES } from './icones-lucide.js'

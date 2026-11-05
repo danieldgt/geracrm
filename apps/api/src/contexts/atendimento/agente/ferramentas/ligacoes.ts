@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { lerPlaybookVigente } from '@geracrm/shared'
+import { agendaNoTurno, lerPlaybookVigente, objecoesAtivas } from '@geracrm/shared'
 import { comTenantServico, type Sql, sql } from '../../../../db/index.js'
 import { buscarCatalogo, detalharProduto, precoEEstoque, type ProdutoDetalhe } from '../../../catalogo/busca.js'
 import {
@@ -14,6 +14,7 @@ import { proporPedido, HORAS_VALIDADE_PROPOSTA } from '../../../pedido/proposta.
 import type { CatalogoPorta, Ligacoes, PedidoParaLlm, PedidoPorta, ProdutoParaLlm, SituacaoItem } from './ligacoes-porta.js'
 import type { ContextoFerramenta } from './porta.js'
 import { conhecimentoReal } from '../conhecimento/conhecimento-real.js'
+import { agendaReal } from './agenda-ligacao.js'
 
 /**
  * As LIGAÇÕES padrão do agente com os outros contextos — implementadas sobre
@@ -25,15 +26,27 @@ import { conhecimentoReal } from '../conhecimento/conhecimento-real.js'
  * canal — degradação visível (ADR-008), não busca vazia fingindo que procurou.
  */
 export async function ligacoesPadrao(cfg: { tenantId: string; politicas: string; modo?: string | undefined; canalId?: string | undefined }): Promise<Ligacoes> {
-  const { temCatalogo, acoes } = await comTenantServico(cfg.tenantId, async (tx) => {
-    const [r] = await tx<{ tem: boolean; playbook: unknown }[]>`
+  const { temCatalogo, acoes, objecoes, agenda } = await comTenantServico(cfg.tenantId, async (tx) => {
+    const [r] = await tx<{ tem: boolean; playbook: unknown; agenda_modulo: boolean; agenda_chave: boolean | null; modo_numero: string | null }[]>`
       SELECT EXISTS (SELECT 1 FROM produto_indice WHERE tenant_id = tenant_atual()) AS tem,
              ${cfg.canalId
                ? tx`(SELECT ac.playbook FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${cfg.canalId})`
-               : tx`NULL::jsonb`} AS playbook`
+               : tx`NULL::jsonb`} AS playbook,
+             EXISTS (SELECT 1 FROM tenant_modulo tm WHERE tm.tenant_id = tenant_atual() AND tm.modulo = 'agenda' AND tm.ativo) AS agenda_modulo,
+             ${cfg.canalId
+               ? tx`(SELECT ac.agenda_reunioes FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${cfg.canalId})`
+               : tx`NULL::boolean`} AS agenda_chave,
+             ${cfg.canalId
+               ? tx`(SELECT ac.modo FROM agente_config ac WHERE ac.tenant_id = tenant_atual() AND ac.canal_id = ${cfg.canalId})`
+               : tx`NULL::text`} AS modo_numero`
     // Ações do PLAYBOOK publicado do número (P17) — o espelho em agente_config;
     // sem número (chamador antigo) ou sem playbook, todas ligadas.
-    return { temCatalogo: r?.tem ?? false, acoes: lerPlaybookVigente(r?.playbook)?.conteudo.acoes }
+    // Objeções ativas do mesmo espelho (G2): o vocabulário de `registrar_objecao`.
+    const vigente = lerPlaybookVigente(r?.playbook)
+    // Agenda (C3): módulo do tenant + chave do NÚMERO + número em assistido/autônomo.
+    //   ⚠️ Desligada, a porta não existe e `agendar_reuniao` não entra no menu (ADR-029).
+    const agenda = agendaNoTurno({ moduloAtivo: r?.agenda_modulo ?? false, chaveLigada: r?.agenda_chave ?? false, modoDoNumero: r?.modo_numero })
+    return { temCatalogo: r?.tem ?? false, acoes: vigente?.conteudo.acoes, objecoes: objecoesAtivas(vigente?.conteudo), agenda }
   })
   // ⚠️ Só o modo AUTÔNOMO toca o pedido real. Sombra, assistido e simulação
   //    ensaiam num carrinho em memória — nunca no rascunho da vendedora.
@@ -43,6 +56,8 @@ export async function ligacoesPadrao(cfg: { tenantId: string; politicas: string;
     pedido,
     conhecimento: conhecimentoReal,
     ...(acoes ? { acoes } : {}),
+    ...(objecoes.length ? { objecoes } : {}),
+    ...(agenda ? { agenda: agendaReal } : {}),
   }
 }
 

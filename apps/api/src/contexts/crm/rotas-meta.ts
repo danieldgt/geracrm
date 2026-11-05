@@ -8,13 +8,18 @@ import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
  * das vendas do período. ⚠️ O realizado nunca é lido de um contador gravado: sai
  * de `venda` (excluindo canceladas), a mesma fonte de verdade do faturamento.
  *
- * Conjunto pequeno e limitado (uma meta por vendedor + a da equipe, por mês) —
- * não é grid de domínio, então a leitura por período não usa cursor.
+ * Conjunto limitado POR CONSTRUÇÃO: no máximo uma meta por (vendedor|equipe, tipo)
+ * no mês — índices únicos parciais da tabela `meta` — e são 3 tipos. Logo o teto
+ * é (usuários + 1) × 3 de UM mês; por isso não há cursor, e sim um teto explícito
+ * (`TETO_METAS`) no SQL, para que uma anomalia nunca vire lista ilimitada.
  *
  * ⚠️ Só o tipo 'faturamento' tem realizado calculado hoje (é o dado que temos, em
  * centavos). Metas de outros tipos são aceitas, mas o realizado volta 0 até o
  * cálculo existir — sinalizado por `realizadoDisponivel`.
  */
+/** Teto de linhas de um período: 3 tipos × até 166 vendedores + equipe. Acima disso, vira cursor. */
+const TETO_METAS = 500
+
 export async function rotasMeta(app: FastifyInstance): Promise<void> {
   // Metas de um período (default: mês corrente), com realizado e progresso.
   app.get<{ Querystring: { ano?: string; mes?: string } }>(
@@ -35,7 +40,8 @@ export async function rotasMeta(app: FastifyInstance): Promise<void> {
             FROM meta m
             LEFT JOIN usuario u ON u.tenant_id = m.tenant_id AND u.id = m.usuario_id
            WHERE m.tenant_id = tenant_atual() AND m.ano = ${ano} AND m.mes = ${mes}
-           ORDER BY (m.usuario_id IS NULL) DESC, u.nome ASC, m.tipo ASC`
+           ORDER BY (m.usuario_id IS NULL) DESC, u.nome ASC, m.tipo ASC
+           LIMIT ${TETO_METAS}`
 
         // Realizado de faturamento no mês: total por vendedor + total geral,
         // numa passada só (a partição da venda já limita o range).

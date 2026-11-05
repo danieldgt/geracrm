@@ -23,8 +23,19 @@ const TIMESTAMP = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,6})?([+-]\d{2}
 export function lerCursor(bruto: string | undefined): { em: string; id: string } | null | 'invalido' {
   if (!bruto) return null
   const [em, id] = Buffer.from(bruto, 'base64url').toString('utf8').split(SEPARADOR)
-  if (!em || !id || !UUID.test(id) || !TIMESTAMP.test(em)) return 'invalido'
+  if (!em || !id || !UUID.test(id) || !TIMESTAMP.test(em) || !dataHoraReal(em)) return 'invalido'
   return { em, id }
+}
+
+/**
+ * O regex só olha o formato. `Date.parse` aceita `2026-02-30` (rola para março) e o Postgres
+ * recusa com erro de faixa → 500. Confere o dia no calendário e que a hora existe.
+ */
+function dataHoraReal(em: string): boolean {
+  const [a, m, d] = em.slice(0, 10).split('-').map(Number) as [number, number, number]
+  const dia = new Date(Date.UTC(a, m - 1, d))
+  const calendarioOk = dia.getUTCFullYear() === a && dia.getUTCMonth() === m - 1 && dia.getUTCDate() === d
+  return calendarioOk && !Number.isNaN(Date.parse(em))
 }
 
 /** Corta a página (PAGINA+1 linhas lidas) e monta o próximo cursor. */

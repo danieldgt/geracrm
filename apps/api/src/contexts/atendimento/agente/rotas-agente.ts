@@ -4,7 +4,7 @@ import {
   REGRAS_AGENTE_PADRAO, validarRegrasAgente, MODOS_AGENTE, OBJETIVOS_AGENTE, SLOTS_QUALIFICACAO,
   persona as personaSchema, alcadaAgente, ALCADA_PADRAO, PERSONA_PADRAO,
   recorteAgente, exigeConfirmacao, confirmacaoConfere, textoDeConfirmacao, decidirModoEfetivo, ehModoAgente,
-  lerPlaybookVigente, personaDoPlaybook, slotsDoPlaybook, PLAYBOOK_SIMULACAO, LIMITE_MENSAGENS_SIMULACAO, FERRAMENTAS_DE_ESCRITA,
+  lerPlaybookVigente, personaDoPlaybook, slotsDoPlaybook, PLAYBOOK_SIMULACAO, LIMITE_MENSAGENS_SIMULACAO, FERRAMENTAS_DE_ESCRITA, objecoesAtivas,
   type RegrasDoAgente, type ModoAgente,
 } from '@geracrm/shared'
 import { z } from 'zod'
@@ -12,8 +12,9 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { exigirTenant, subDoUsuario } from '../../../plugins/tenant.js'
 import { comTenantServico } from '../../../db/index.js'
 import { exigirPapel, temPapel } from '../../plataforma/papel.js'
+import { condicaoConversa, conversaNoEscopo, escopoDaRequisicao } from '../../plataforma/escopo.js'
 import { auditar } from '../../plataforma/auditoria.js'
-import { garantirUsuarioId } from '../rotas-fila.js'
+import { atorDaRequisicao, garantirUsuarioId } from '../rotas-fila.js'
 import { faltaParaLlmFerramentas, faltaParaReserva } from './fabrica-ferramentas.js'
 import { estadoDoLlm } from './llm-estado.js'
 import { lerFatosDoModo } from './pipeline/modo-efetivo.js'
@@ -54,7 +55,7 @@ import { atorSemCriar, registrarReinicioPlayground } from './homologacao.js'
  * direto (nota de integração do plano, §4 P14 — mesmo padrão de rotas-custo).
  */
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
-  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+  if (req.tenantId && !req.atorStaff) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 
 function pedirConfirmacao(reply: FastifyReply, modo: ModoAgente, alvo: string): FastifyReply {
@@ -164,7 +165,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           SELECT btrim(coalesce(mensagem_ausencia, '')) <> '' AS tem
             FROM canal_configuracao
            WHERE tenant_id = tenant_atual() AND canal_id = ${req.params.id}`
-        await garantirUsuarioId(tx, req)
+        await atorDaRequisicao(tx, req)
         // Número ainda sem linha: o que vai valer quando nascer é o playbook da CONTA (trigger de INSERT, 0106).
         const daConta = linha ? null : await espelhoDaConta(tx)
         return { cfg: linha, daConta, temMensagemAusencia: canal?.tem ?? false, fatos: await lerFatosDoModo(tx, new Date(), req.params.id) }
@@ -349,7 +350,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         // PUT que não mudou nada não é evento: auditar "salvou igual" enterra a mudança real.
         if (!antes || dif.campos.length > 0) {
           await auditar(tx, {
-            atorId: await garantirUsuarioId(tx, req), atorStaff: req.atorStaff ?? false,
+            atorId: await atorDaRequisicao(tx, req), atorStaff: req.atorStaff ?? false,
             acao: 'agente.config_alterada', entidade: 'agente_config', entidadeId: req.params.id,
             dados: { antes: dif.antes, depois: dif.depois, campos: dif.campos, criacao: !antes },
           })
@@ -379,7 +380,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
    */
   app.get('/v1/agente/tenant', { preHandler: exigirTenant }, async (req, reply) => {
     const l = await req.comTenant(async (tx) => {
-      await garantirUsuarioId(tx, req)
+      await atorDaRequisicao(tx, req)
       const [t] = await tx<{ modo_maximo: string; atualizado_em: Date; por: string | null }[]>`
         SELECT at.modo_maximo, at.atualizado_em, u.nome AS por
           FROM agente_tenant at
@@ -411,7 +412,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         // Sem linha o teto é autônomo: "voltar a autônomo" a partir dali não muda nada.
         if (exigeConfirmacao(atual ?? 'autonomo', novo) && !confirmacaoConfere(p.data.confirmacao, novo)) return 'confirmar' as const
         if ((atual ?? 'autonomo') === novo) return 'igual' as const
-        const eu = await garantirUsuarioId(tx, req)
+        const eu = await atorDaRequisicao(tx, req)
         await tx`
           INSERT INTO agente_tenant (tenant_id, modo_maximo, atualizado_em, atualizado_por)
           VALUES (tenant_atual(), ${novo}, now(), ${eu})
@@ -438,7 +439,8 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curEm = em; curId = id
       }
-      const linhas = await req.comTenant((tx) => tx<{
+      // ⚠️ Escopo (D3): só sessões de conversas que quem pede enxerga.
+      const linhas = await req.comTenant(async (tx) => tx<{
         id: string; conversa_id: string; contato: string | null; estado: string; turnos: number; motivo_saida: string | null
         iniciada_em: Date; encerrada_em: Date | null; extraido: Record<string, unknown>; descartados: unknown[]
         tokens_entrada: number; tokens_saida: number; fase: string; modo: string | null; slots: Record<string, unknown>; custo_centavos: string
@@ -450,6 +452,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           JOIN conversa cv ON cv.tenant_id = s.tenant_id AND cv.id = s.conversa_id
           LEFT JOIN contato ct ON ct.tenant_id = cv.tenant_id AND ct.id = cv.contato_id
          WHERE s.tenant_id = tenant_atual()
+           AND ${condicaoConversa(tx, await escopoDaRequisicao(tx, req))}
            AND ${curEm === null ? tx`true` : tx`(s.iniciada_em, s.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
          ORDER BY s.iniciada_em DESC, s.id DESC LIMIT ${PAGINA + 1}`)
       const temMais = linhas.length > PAGINA
@@ -482,7 +485,16 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
       }
       const conversaId = req.query.conversaId && UUID.test(req.query.conversaId) ? req.query.conversaId : null
       const canalId = req.query.canalId && UUID.test(req.query.canalId) ? req.query.canalId : null
-      const linhas = await req.comTenant((tx) => tx<{
+      // ⚠️ Escopo (D3): `conversaId` fora do escopo = 404 (como inexistente); a
+      //    lista só traz decisões de conversas visíveis. A ENTRADA e a SAÍDA das
+      //    ferramentas (dados de catálogo, cliente, pedido) só para gestão — o
+      //    vendedor vê quais ferramentas rodaram, não o que elas devolveram.
+      const gestao = await temPapel(req, 'gestor', 'supervisor')
+      const r = await req.comTenant(async (tx) => {
+        const escopo = await escopoDaRequisicao(tx, req)
+        if (req.query.conversaId !== undefined && !(await conversaNoEscopo(tx, escopo, req.query.conversaId))) return null
+        if (req.query.conversaId !== undefined && !conversaId) return null
+        return tx<{
         id: string; conversa_id: string; canal_id: string; contato: string | null; modo: string; desfecho: string
         portao_motivo: string | null; modelo: string | null; ferramentas: unknown[]; resposta: unknown; confianca: string | null
         handoff_motivo: string | null; numeros_bloqueados: unknown[]; uso: unknown; custo_centavos: string; latencia_ms: number | null
@@ -497,8 +509,15 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
          WHERE d.tenant_id = tenant_atual()
            AND ${conversaId ? tx`d.conversa_id = ${conversaId}` : tx`true`}
            AND ${canalId ? tx`d.canal_id = ${canalId}` : tx`true`}
+           AND ${condicaoConversa(tx, escopo)}
            AND ${curEm === null ? tx`true` : tx`(d.criado_em, d.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
-         ORDER BY d.criado_em DESC, d.id DESC LIMIT ${PAGINA + 1}`)
+         ORDER BY d.criado_em DESC, d.id DESC LIMIT ${PAGINA + 1}`
+      })
+      if (r === null) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
+      const linhas = gestao ? r : r.map((l) => ({
+        ...l,
+        ferramentas: (Array.isArray(l.ferramentas) ? l.ferramentas : []).map((f) => ({ nome: (f as { nome?: unknown })?.nome ?? null })),
+      }))
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
       const ultimo = pagina[pagina.length - 1]
@@ -619,7 +638,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         const espelho = r ? espelhoDoConteudo(r.conteudo, { versaoId: r.id, numero: null, escopo: escopoRascunho }) : null
         const deps: DepsTurno = espelho && r
           ? {
-            ligacoes: ligacoesDoSandbox(ligacoesPadrao, canalId, r.conteudo.acoes), simulacao: true,
+            ligacoes: ligacoesDoSandbox(ligacoesPadrao, canalId, r.conteudo.acoes, objecoesAtivas(r.conteudo)), simulacao: true,
             pipeline: pipelineComPlaybook(espelho),
             llm: llmComPlaybook(preparo.modelo ? criarLlmDoCatalogo(preparo.modelo) : llmFerramentasDoAmbiente(), r.conteudo, preparo.cfg.objetivo),
           }

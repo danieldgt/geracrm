@@ -1,13 +1,24 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
 import { RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import {
+  AbasComponente, CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, TabelaComponente,
+  type Aba, type ColunaTabela, type LinhaTabela,
+} from '../../compartilhado/ui/index.js'
 
 interface Bi {
   readonly dias: number
   readonly topClientes: { contatoId: string; nome: string; receitaCentavos: number; qtdVendas: number }[]
   readonly topProdutos: { rotulo: string; quantidade: number; receitaCentavos: number }[]
   readonly porVendedor: { usuarioId: string | null; nome: string; receitaCentavos: number; qtdVendas: number }[]
+  /** Cada ranking: `Truncado` quando há mais grupos que os 10 listados; `Total` = grupos no período. */
+  readonly topClientesTruncado: boolean
+  readonly topClientesTotal: number
+  readonly topProdutosTruncado: boolean
+  readonly topProdutosTotal: number
+  readonly porVendedorTruncado: boolean
+  readonly porVendedorTotal: number
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
@@ -16,124 +27,151 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
 /**
  * Painéis (BI) — rankings de venda no período (top clientes/produtos/vendedores).
  * ⚠️ Vendas canceladas ficam fora (a API já exclui). Top 10 por ranking, rotulado.
- * Segue geracrm-layout-ui (5 estados, tokens, responsivo, sem cor literal).
+ * Padrão Lista de leitura: período em abas e três rankings em ui-tabela, cada
+ * um com barra de receita na célula.
  */
 @Component({
   selector: 'app-bi',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink],
+  imports: [AbasComponente, CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, RouterLink, TabelaComponente],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1 class="txt-titulo">Painéis (BI)</h1>
-        <p class="sub">Quem mais compra, o que mais sai, quem mais vende — no período.</p>
-      </div>
-      <div class="abas">
-        @for (p of periodos; track p.dias) {
-          <button [class.on]="dias() === p.dias" (click)="trocar(p.dias)">{{ p.rotulo }}</button>
-        }
-      </div>
-    </header>
+    <ui-cabecalho-tela titulo="Painéis (BI)" subtitulo="Quem mais compra, o que mais sai, quem mais vende — no período." />
 
-    @switch (estado()) {
-      @case ('carregando') { <div class="grade"><div class="esq"></div><div class="esq"></div><div class="esq"></div></div> }
-      @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
-      @case ('pronto') {
-        @if (d(); as bi) {
-          <div class="grade">
-            <section class="painel">
-              <h2 class="txt-secao">Top clientes</h2>
-              @if (bi.topClientes.length === 0) { <p class="vazio">Sem vendas no período.</p> }
-              @else {
-                <ul>
-                  @for (c of bi.topClientes; track c.contatoId; let i = $index) {
-                    <li>
-                      <span class="pos">{{ i + 1 }}</span>
-                      <a class="rot encolhe" [routerLink]="['/contato', c.contatoId]">{{ c.nome }}</a>
-                      <span class="barra"><span class="fill" [style.width.%]="pct(c.receitaCentavos, maxCliente())"></span></span>
-                      <span class="val txt-dados">{{ reais(c.receitaCentavos) }}</span>
-                    </li>
-                  }
-                </ul>
-              }
-            </section>
+    <div class="periodo">
+      <ui-abas [abas]="abasPeriodo" [ativa]="periodoAtivo()" (ativaChange)="trocar($event)" />
+    </div>
 
-            <section class="painel">
-              <h2 class="txt-secao">Top produtos</h2>
-              @if (bi.topProdutos.length === 0) { <p class="vazio">Sem itens vendidos no período.</p> }
-              @else {
-                <ul>
-                  @for (p of bi.topProdutos; track p.rotulo; let i = $index) {
-                    <li>
-                      <span class="pos">{{ i + 1 }}</span>
-                      <span class="rot encolhe">{{ p.rotulo }}</span>
-                      <span class="barra"><span class="fill" [style.width.%]="pct(p.receitaCentavos, maxProduto())"></span></span>
-                      <span class="val txt-dados">{{ reais(p.receitaCentavos) }}</span>
-                    </li>
-                  }
-                </ul>
-              }
-            </section>
-
-            <section class="painel">
-              <h2 class="txt-secao">Por vendedor</h2>
-              @if (bi.porVendedor.length === 0) { <p class="vazio">Sem vendas no período.</p> }
-              @else {
-                <ul>
-                  @for (v of bi.porVendedor; track v.usuarioId ?? 'sem'; let i = $index) {
-                    <li>
-                      <span class="pos">{{ i + 1 }}</span>
-                      <span class="rot encolhe">{{ v.nome }}</span>
-                      <span class="barra"><span class="fill" [style.width.%]="pct(v.receitaCentavos, maxVendedor())"></span></span>
-                      <span class="val txt-dados">{{ reais(v.receitaCentavos) }}</span>
-                    </li>
-                  }
-                </ul>
-              }
-            </section>
+    <div class="corpo">
+      @switch (estado()) {
+        @case ('carregando') {
+          <div class="grade" aria-busy="true">
+            <ui-esqueleto altura="200px" />
+            <ui-esqueleto altura="200px" />
+            <ui-esqueleto altura="200px" />
           </div>
         }
+        @case ('sem_permissao') {
+          <ui-estado tipo="sem-permissao" titulo="Sem acesso aos painéis" descricao="Peça a um administrador da sua empresa para liberar este acesso." />
+        }
+        @case ('erro') {
+          <ui-estado tipo="erro" titulo="Não foi possível carregar os painéis" descricao="Verifique a conexão e tente de novo.">
+            <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+          </ui-estado>
+        }
+        @case ('pronto') {
+          @if (d(); as bi) {
+            <div class="grade">
+              <section class="painel" aria-labelledby="titulo-clientes">
+                <h2 class="txt-secao" id="titulo-clientes">Top clientes</h2>
+                <ui-tabela [colunas]="colunasCliente" [linhas]="linhasClientes()" [chaveLinha]="chaveClientes">
+                  <ng-template uiCelula="nome" let-c>
+                    <a class="rot" [routerLink]="['/contato', c.contatoId]">{{ c.nome }}</a>
+                  </ng-template>
+                  <ng-template uiCelula="receita" let-c>
+                    <span class="barra-val">
+                      <span class="barra" aria-hidden="true"><span class="fill" [style.width.%]="pct(c.receitaCentavos, maxCliente())"></span></span>
+                      <span class="val txt-dados">{{ reais(c.receitaCentavos) }}</span>
+                    </span>
+                  </ng-template>
+                  <div uiVazio><ui-estado titulo="Sem vendas no período" descricao="Nenhum cliente comprou neste intervalo." /></div>
+                </ui-tabela>
+                @if (bi.topClientesTruncado) {
+                  <p class="corte">Mostrando os 10 maiores de {{ bi.topClientesTotal }} clientes.</p>
+                }
+              </section>
+
+              <section class="painel" aria-labelledby="titulo-produtos">
+                <h2 class="txt-secao" id="titulo-produtos">Top produtos</h2>
+                <ui-tabela [colunas]="colunasProduto" [linhas]="linhasProdutos()" [chaveLinha]="chaveProdutos">
+                  <ng-template uiCelula="receita" let-p>
+                    <span class="barra-val">
+                      <span class="barra" aria-hidden="true"><span class="fill" [style.width.%]="pct(p.receitaCentavos, maxProduto())"></span></span>
+                      <span class="val txt-dados">{{ reais(p.receitaCentavos) }}</span>
+                    </span>
+                  </ng-template>
+                  <div uiVazio><ui-estado titulo="Sem itens vendidos" descricao="Nenhum produto saiu neste período." /></div>
+                </ui-tabela>
+                @if (bi.topProdutosTruncado) {
+                  <p class="corte">Mostrando os 10 maiores de {{ bi.topProdutosTotal }} produtos.</p>
+                }
+              </section>
+
+              <section class="painel" aria-labelledby="titulo-vendedores">
+                <h2 class="txt-secao" id="titulo-vendedores">Por vendedor</h2>
+                <ui-tabela [colunas]="colunasVendedor" [linhas]="linhasVendedores()" [chaveLinha]="chaveVendedores">
+                  <ng-template uiCelula="receita" let-v>
+                    <span class="barra-val">
+                      <span class="barra" aria-hidden="true"><span class="fill" [style.width.%]="pct(v.receitaCentavos, maxVendedor())"></span></span>
+                      <span class="val txt-dados">{{ reais(v.receitaCentavos) }}</span>
+                    </span>
+                  </ng-template>
+                  <div uiVazio><ui-estado titulo="Sem vendas no período" descricao="Nenhum vendedor fechou venda neste intervalo." /></div>
+                </ui-tabela>
+                @if (bi.porVendedorTruncado) {
+                  <p class="corte">Mostrando os 10 maiores de {{ bi.porVendedorTotal }} vendedores.</p>
+                }
+              </section>
+            </div>
+          }
+        }
       }
-    }
+    </div>
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { display: flex; justify-content: space-between; align-items: start; gap: var(--espacamento-4); margin-bottom: var(--espacamento-4); flex-wrap: wrap; }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .abas { display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }
-    .abas button { padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); font: inherit; font-size: 13px; cursor: pointer; }
-    .abas button.on { background: var(--acao); border-color: var(--acao); color: var(--acao-texto); }
-    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--espacamento-4); align-items: start; }
+    .periodo { margin-top: var(--espacamento-3); }
+    .corpo { margin-top: var(--espacamento-4); min-width: 0; }
+    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: var(--espacamento-4); align-items: start; min-width: 0; }
     .painel { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); min-width: 0; }
     .painel h2 { margin: 0 0 var(--espacamento-3); }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
-    .esq { height: 200px; border-radius: var(--raio-painel); background: var(--superficie); }
-    ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }
-    li { display: grid; grid-template-columns: 20px 1fr auto; align-items: center; gap: var(--espacamento-2); }
-    .pos { color: var(--texto-suave); font-size: 12px; text-align: center; }
     .rot { color: var(--texto); font-size: 13px; text-decoration: none; }
-    a.rot:hover { color: var(--acao); }
-    .barra { grid-column: 2 / 3; height: 4px; border-radius: var(--raio-completo); background: var(--superficie); overflow: hidden; display: none; }
+    a.rot:hover { color: var(--acao); text-decoration: underline; }
+    .barra-val { display: flex; align-items: center; gap: var(--espacamento-2); min-width: 120px; }
+    .barra { flex: 1; height: 4px; border-radius: var(--raio-completo); background: var(--superficie); overflow: hidden; }
     .fill { display: block; height: 100%; background: var(--acao); }
-    .val { color: var(--texto-secundario); font-size: 12px; }
-    .vazio { color: var(--texto-suave); font-size: 13px; margin: 0; }
-    @media (min-width: 480px) {
-      li { grid-template-columns: 20px minmax(80px, 1fr) 3fr auto; }
-      .barra { grid-column: auto; display: block; }
-    }
+    .val { color: var(--texto-secundario); font-size: 12px; white-space: nowrap; }
+    .corte { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
   `,
 })
 export class BiPagina implements OnInit {
   private readonly http = inject(HttpClient)
-  readonly periodos = PERIODOS
+  readonly abasPeriodo: readonly Aba[] = PERIODOS.map((p) => ({ id: String(p.dias), rotulo: p.rotulo }))
   readonly estado = signal<Estado>('carregando')
   readonly d = signal<Bi | null>(null)
   readonly dias = signal(30)
+  readonly periodoAtivo = computed(() => String(this.dias()))
+
+  protected readonly colunasCliente: readonly ColunaTabela[] = [
+    { chave: 'posicao', rotulo: '#', mono: true, largura: '40px' },
+    { chave: 'nome', rotulo: 'Cliente' },
+    { chave: 'receita', rotulo: 'Receita', alinhamento: 'dir' },
+  ]
+  protected readonly colunasProduto: readonly ColunaTabela[] = [
+    { chave: 'posicao', rotulo: '#', mono: true, largura: '40px' },
+    { chave: 'rotulo', rotulo: 'Produto' },
+    { chave: 'receita', rotulo: 'Receita', alinhamento: 'dir' },
+  ]
+  protected readonly colunasVendedor: readonly ColunaTabela[] = [
+    { chave: 'posicao', rotulo: '#', mono: true, largura: '40px' },
+    { chave: 'nome', rotulo: 'Vendedor' },
+    { chave: 'receita', rotulo: 'Receita', alinhamento: 'dir' },
+  ]
+
+  protected readonly linhasClientes = computed<LinhaTabela[]>(() => (this.d()?.topClientes ?? []).map((c, i) => ({
+    posicao: i + 1, nome: c.nome, contatoId: c.contatoId, receitaCentavos: c.receitaCentavos,
+  })))
+  protected readonly linhasProdutos = computed<LinhaTabela[]>(() => (this.d()?.topProdutos ?? []).map((p, i) => ({
+    posicao: i + 1, rotulo: p.rotulo, receitaCentavos: p.receitaCentavos,
+  })))
+  protected readonly linhasVendedores = computed<LinhaTabela[]>(() => (this.d()?.porVendedor ?? []).map((v, i) => ({
+    posicao: i + 1, nome: v.nome, chaveVendedor: v.usuarioId ?? 'sem', receitaCentavos: v.receitaCentavos,
+  })))
+  protected readonly chaveClientes = (l: LinhaTabela): string => String(l['contatoId'])
+  protected readonly chaveProdutos = (l: LinhaTabela): string => String(l['rotulo'])
+  protected readonly chaveVendedores = (l: LinhaTabela): string => String(l['chaveVendedor'])
 
   ngOnInit(): void { void this.carregar() }
-  trocar(dias: number): void { this.dias.set(dias); void this.carregar() }
+  trocar(dias: string): void { this.dias.set(Number(dias)); void this.carregar() }
   reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
   pct(v: number, max: number): number { return max > 0 ? Math.round((v / max) * 100) : 0 }
   maxCliente(): number { return Math.max(1, ...(this.d()?.topClientes.map((c) => c.receitaCentavos) ?? [])) }

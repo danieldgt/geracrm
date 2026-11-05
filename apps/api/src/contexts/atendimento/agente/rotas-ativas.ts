@@ -1,12 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import {
-  ATIVAS_PADRAO, contarVariaveis, corpoAtivas, lerConfigAtivas, normalizarFeriados, templateDeRetornoCompativel,
+  ATIVAS_PADRAO, canalAceitaReativacao, contarVariaveis, corpoAtivas, lerConfigAtivas, normalizarFeriados, templateDeRetornoCompativel,
   type EstadoAtivas, type TemplateAprovadoResumo,
 } from '@geracrm/shared'
 import { exigirTenant } from '../../../plugins/tenant.js'
 import { exigirPapel } from '../../plataforma/papel.js'
 import { auditar } from '../../plataforma/auditoria.js'
-import { garantirUsuarioId } from '../rotas-fila.js'
+import { atorDaRequisicao } from '../rotas-fila.js'
 import { proximaAbertura, situacaoDoExpediente, type HorarioAtendimento } from '../expediente.js'
 import { liberarAtivas } from '../qualidade-numero.js'
 
@@ -116,8 +116,34 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
           if (!templateDeRetornoCompativel(tpl.corpo?.body?.texto ?? '')) return { tipo: 'template_incompativel' as const }
         }
 
-        const antes = { ...lerConfigAtivas(cfg.ativas), feriados: normalizarFeriados(cfg.feriados) }
-        const ativas = { limiteDia: corpo.limiteDia, limiteSemana: corpo.limiteSemana, templateRetorno: corpo.templateRetorno }
+        const atual = lerConfigAtivas(cfg.ativas)
+        // Reativação: oficial exige template APROVADO e compatível (mesma régua do retorno);
+        // ligada no não-oficial só vale com texto — sem ele nada sai, então a tela não deixa ligar vazia.
+        if (corpo.reativacao?.ativa) {
+          // Reativação só existe em WhatsApp (oficial e não-oficial).
+          if (!canalAceitaReativacao(cfg.tipo)) return { tipo: 'reativacao_canal' as const }
+          if (cfg.tipo === 'whatsapp_oficial') {
+            if (!corpo.reativacao.templateId) return { tipo: 'reativacao_sem_conteudo' as const }
+            const [tpl] = await tx<{ corpo: { body?: { texto?: string } } }[]>`
+              SELECT tv.corpo FROM template_versao tv
+               WHERE tv.tenant_id = tenant_atual() AND tv.template_id = ${corpo.reativacao.templateId} AND tv.status_meta = 'APPROVED'`
+            if (!tpl) return { tipo: 'reativacao_template_indisponivel' as const }
+            if (!templateDeRetornoCompativel(tpl.corpo?.body?.texto ?? '')) return { tipo: 'reativacao_template_incompativel' as const }
+          } else if (!corpo.reativacao.texto) {
+            return { tipo: 'reativacao_sem_conteudo' as const }
+          }
+          // ⚠️ ADR-021: LIGAR a reativação no não-oficial exige a confirmação explícita
+          //    (digitada na tela) do risco de banimento. Já ligada, editar não pede de novo.
+          if (cfg.tipo === 'whatsapp_nao_oficial' && !atual.reativacao.ativa && corpo.confirmaRiscoBanimento !== true) {
+            return { tipo: 'reativacao_sem_confirmacao' as const }
+          }
+        }
+        const antes = { ...atual, feriados: normalizarFeriados(cfg.feriados) }
+        const ativas = {
+          limiteDia: corpo.limiteDia, limiteSemana: corpo.limiteSemana, templateRetorno: corpo.templateRetorno,
+          descarteAposHoras: corpo.descarteAposHoras ?? atual.descarteAposHoras,
+          reativacao: corpo.reativacao ?? atual.reativacao,
+        }
         const feriados = normalizarFeriados(corpo.feriados)
         await tx`
           UPDATE agente_config SET ativas = ${JSON.stringify(ativas)}::text::jsonb
@@ -126,10 +152,15 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
           INSERT INTO canal_configuracao (tenant_id, canal_id, feriados)
           VALUES (tenant_atual(), ${req.params.id}, ${JSON.stringify(feriados)}::text::jsonb)
           ON CONFLICT (tenant_id, canal_id) DO UPDATE SET feriados = EXCLUDED.feriados`
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         await auditar(tx, {
           atorId, atorStaff: req.atorStaff === true, acao: 'agente.ativas_alteradas', entidade: 'canal_conectado',
-          entidadeId: req.params.id, dados: { antes, depois: { ...ativas, feriados } },
+          entidadeId: req.params.id,
+          dados: {
+            antes, depois: { ...ativas, feriados },
+            ...(corpo.confirmaRiscoBanimento === true && ativas.reativacao.ativa && !atual.reativacao.ativa
+              ? { riscoBanimentoConfirmado: true } : {}),
+          },
         })
         return { tipo: 'ok' as const }
       })
@@ -146,6 +177,33 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
           mensagem: 'O template de retorno só pode ter a variável {{1}} (primeiro nome do cliente).',
         })
       }
+      if (r.tipo === 'reativacao_sem_conteudo') {
+        return reply.code(422).send({
+          erro: 'ativas.reativacao_sem_conteudo', campos: ['reativacao'],
+          mensagem: 'Para ligar a reativação, escolha um template aprovado (oficial) ou escreva o texto (não-oficial).',
+        })
+      }
+      if (r.tipo === 'reativacao_canal') {
+        return reply.code(422).send({
+          erro: 'ativas.reativacao_canal_incompativel', campos: ['reativacao'],
+          mensagem: 'A reativação só existe nos números de WhatsApp (oficial e não-oficial).',
+        })
+      }
+      if (r.tipo === 'reativacao_sem_confirmacao') {
+        return reply.code(422).send({
+          erro: 'ativas.confirmar_risco_banimento', campos: ['reativacao'],
+          mensagem: 'Número não-oficial: ligar a reativação exige confirmar o risco de banimento do número.',
+        })
+      }
+      if (r.tipo === 'reativacao_template_indisponivel') {
+        return reply.code(422).send({ erro: 'ativas.template_indisponivel', mensagem: 'Escolha um template aprovado pela Meta para a reativação.', campos: ['reativacao'] })
+      }
+      if (r.tipo === 'reativacao_template_incompativel') {
+        return reply.code(422).send({
+          erro: 'ativas.template_incompativel', campos: ['reativacao'],
+          mensagem: 'O template de reativação só pode ter a variável {{1}} (primeiro nome do cliente).',
+        })
+      }
       return { ok: true }
     },
   )
@@ -160,7 +218,7 @@ export async function rotasAtivas(app: FastifyInstance): Promise<void> {
            WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return 'nao_encontrado' as const
         if (!(await liberarAtivas(tx, req.params.id, new Date()))) return 'nao_suspensa' as const
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         await auditar(tx, {
           atorId, atorStaff: req.atorStaff === true, acao: 'agente.ativas_liberadas', entidade: 'canal_conectado',
           entidadeId: req.params.id, dados: { motivoDaSuspensao: c.motivo },

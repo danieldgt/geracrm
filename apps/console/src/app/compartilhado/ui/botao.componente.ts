@@ -8,7 +8,7 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core'
   selector: 'ui-botao',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <button [type]="tipo()" [disabled]="desabilitado() || carregando()"
+    <button [type]="tipo()" [attr.form]="form()" [disabled]="desabilitado() || carregando()"
             [attr.data-variante]="variante()" [class.bloco]="bloco()">
       @if (carregando()) { <span class="spin" aria-hidden="true"></span> }
       <ng-content />
@@ -41,7 +41,10 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core'
 })
 export class BotaoComponente {
   readonly variante = input<'primario' | 'secundario' | 'perigo' | 'fantasma'>('primario')
-  readonly tipo = input<'button' | 'submit'>('button')
+  /** Padrão `button` (não envia formulário). `submit` com `form` envia um formulário de fora do botão. */
+  readonly tipo = input<'button' | 'submit' | 'reset'>('button')
+  /** Id do `<form>` ao qual o botão pertence, mesmo quando o botão está fora dele (ex.: rodapé de modal). */
+  readonly form = input<string | null>(null)
   readonly desabilitado = input(false)
   readonly carregando = input(false)
   readonly bloco = input(false)

@@ -1177,6 +1177,440 @@ produto** e ele é pré-requisito da Onda 1.
 
 ---
 
+## 5B. Componentes de composição e formulário (paridade AM)
+
+> Fichas dos componentes das raias L0a–L0c em `apps/console/src/app/compartilhado/ui/`. Diferente das
+> fichas `gc-*` acima (especificação de comportamento), estas descrevem a **API real do código**: seletor
+> `ui-*`, inputs, outputs e slots exatos. Se a API mudar, esta seção muda no mesmo commit. Os seis padrões
+> de tela (L, F, M, A, D, C) estão em `geracrm-layout-ui`; as regras de formulário BR, em `geracrm-formularios`.
+>
+> **Estado:** os componentes existem e têm spec, mas ainda **nenhuma tela de feature os usa** (a migração é
+> a onda 1+ do plano). Qualquer convenção aqui é a que o código faz hoje.
+
+### 5B.1 `ui-campo` — campo de formulário (estendido)
+
+**O que é:** rótulo visível + controle + dica + erro. Serve a dois usos: `[(valor)]` (texto) ou Reactive
+Forms (ControlValueAccessor). Cobre texto, e-mail, telefone, número, senha, busca, data, hora, data-hora,
+área de texto, **dinheiro** e **máscara**.
+
+**API:**
+- `valor` — `model<string>` (texto exibido; API legada `[(valor)]`).
+- `rotulo`, `placeholder` — string.
+- `tipo` — `'text' | 'email' | 'tel' | 'number' | 'password' | 'search' | 'date' | 'time' | 'datetime-local' | 'textarea' | 'dinheiro'`. **Não existe `tipo="select"`**: para lista use `ui-select`.
+- `mascara` — `'cpf' | 'cnpj' | 'cpfCnpj' | 'telefone' | 'cep' | null`.
+- `erro` — `string | null`; `dica` — string; `obrigatorio`, `largo`, `desabilitado` — boolean; `autocomplete` — string | null.
+- `inputmode` — `string | null` (`numeric`, `decimal`, `tel`, `email`...): repassado ao `<input>`; em `dinheiro` o padrão é `decimal`.
+- Slot `[acao]` — botão ao lado do controle (ex.: consultar CNPJ).
+- `maxlength` — `number | null`; `min`, `max`, `step` — `string | number | null`. Opcionais, repassados ao controle (`<input>` ou `<textarea>`). Em `tipo="textarea"` com `maxlength`, aparece o contador discreto "n/max" abaixo do campo.
+- Valor no CVA: texto; `tipo="number"` → número; `tipo="dinheiro"` → **centavos inteiros**; com `mascara` → **só dígitos**.
+
+**Estados:** repouso · foco (`--borda-foco`) · erro (`aria-invalid`, mensagem com `role="alert"`) · desabilitado (por input ou `setDisabledState`) · obrigatório (asterisco).
+
+**Acessibilidade:** `for`/`id` gerados por instância (`ui-campo-N`); `aria-required` com `obrigatorio`; `aria-describedby` aponta para erro e depois dica; `inputmode="decimal"` em dinheiro. O asterisco é `aria-hidden`: o obrigatório é anunciado por `aria-required`.
+
+> ⚠️ **Armadilha: atributo sem valor não liga entrada booleana.** `<ui-campo obrigatorio>` entrega string
+> vazia (falsy), então o asterisco e o `aria-required` **não aparecem** e nada avisa. Use
+> `[obrigatorio]="true"`. Vale para `largo` e `desabilitado` também. Para máscara, use o input `mascara`
+> aqui, não a diretiva `uiMascara` (que é para `<input>` cru).
+
+### 5B.2 `ui-select` — select de opções fixas
+
+**O que é:** `<select>` nativo com o mesmo rótulo/dica/erro/obrigatório/largo do `ui-campo`.
+
+**API:**
+- `valor` — `model<string>`; `''` é "nada selecionado".
+- `opcoes` — `OpcaoSelect[]` = `{ valor: string; rotulo: string }`.
+- `rotulo`, `placeholder` (padrão `'Selecione'`), `erro`, `dica`, `obrigatorio`, `largo`, `desabilitado`.
+- CVA: o placeholder grava `null`.
+
+**Estados:** com placeholder · com valor · erro · desabilitado.
+
+**Acessibilidade:** select nativo (teclado e leitor do sistema funcionam sem reimplementar), `for`/`id`,
+`aria-invalid`/`aria-required`/`aria-describedby` como no `ui-campo`.
+
+> ⚠️ **Armadilha: lista fixa e curta, só.** Opções que não crescem e cabem numa tela (UF, status, perfil,
+> forma de pagamento). Lista que vem do servidor ou que pode crescer vai para `ui-select-paginado`. Este
+> select não tem busca: com muitas opções, o usuário rola às cegas.
+
+### 5B.3 `ui-select-paginado` — combobox com busca no servidor
+
+**O que é:** combobox WAI-ARIA com busca no servidor, paginado pelo `carregar` de quem usa (o tamanho da
+página é decidido pelo loader), e rolagem para a próxima página.
+
+**API:**
+- `carregar` — `input.required<CarregarOpcoes>` = `(pagina: number, termo: string) => Promise<{ itens: OpcaoPaginada[]; temMais: boolean }>`. **`pagina` começa em 1.**
+- `opcaoInjetada` — `OpcaoPaginada | null` (`{ valor, rotulo, dica? }`). Rótulo do valor já salvo.
+- `rotulo`, `placeholder` (`'Selecione'`), `erro`, `dica`, `obrigatorio`, `largo`, `desabilitado`.
+- CVA: valor é o `valor` da opção (id, string).
+
+**Estados:** fechado · aberto com itens · `Carregando…` · `Não foi possível carregar.` (falha) · `Nada encontrado.` (busca vazia) · desabilitado.
+
+**Comportamento:** contrato `carregar(cursor, termo) → { itens, proximoCursor }`; abrir recarrega do início (cursor `null`); digitar espera 300 ms; rolar até o fim (ou seta para baixo na última opção) traz a próxima página; clique fora fecha.
+
+**Acessibilidade:** `role="combobox"` no input, `role="listbox"`/`option`, `aria-expanded`, `aria-controls`,
+`aria-activedescendant`, `aria-selected`. Setas movem, Enter escolhe, Esc fecha uma camada.
+
+> ⚠️ **Armadilha: sem `opcaoInjetada`, a edição abre vazia.** O rótulo do valor salvo só é achado na página
+> carregada ou na opção injetada. Fora disso o campo mostra **vazio** (nem o id, nem o placeholder), e o
+> usuário conclui que "não salvou". Na edição, passe sempre a opção salva, com o nome que a API já devolve
+> (sem chamada extra). Não é necessário na filtragem de listagem nem em formulário só de criação.
+
+### 5B.4 `uiMascara` — diretiva de máscara para `<input>`
+
+**O que é:** diretiva de atributo que formata o texto ao digitar e grava **só dígitos** no controle.
+Funções puras em `mascaras.ts`: `formatarMascara(tipo, bruto)` e `digitosDaMascara(tipo, bruto)`.
+
+**API:** `<input uiMascara="cpf" [formControl]="c">`. `uiMascara` é `input.required<TipoMascara>()` com
+`'cpf' | 'cnpj' | 'cpfCnpj' | 'telefone' | 'cep'`. (Dinheiro não é máscara: é `ui-campo tipo="dinheiro"`.)
+
+**Estados:** formatação ao digitar · formatação ao receber valor (`writeValue`) · desabilitado via CVA.
+
+**Acessibilidade:** a diretiva não cria rótulo. O `<label>` é responsabilidade de quem usa; ver a regra de
+rótulo visível em `geracrm-layout-ui`.
+
+> ⚠️ **Armadilha: máscara não valida.** Um CPF com 11 dígitos e dígito verificador errado passa pela
+> máscara. A validação é `validarCpf` / `validarCnpj` de `@geracrm/shared`, e a API roda a mesma regra. Não
+> reimplemente o cálculo na tela.
+
+### 5B.5 `ui-form-pagina` — cartão de formulário
+
+**O que é:** cartão com cabeçalho (título e subtítulo), corpo de seções e rodapé de ações à direita.
+
+**API:**
+- `titulo`, `subtitulo` — string.
+- Conteúdo (default) = corpo. Slot `[rodape]` = ações.
+
+**Estados:** o rodapé some quando vazio (`:empty`). O cartão **não tem** estado de carregamento próprio:
+quem carrega mostra `ui-esqueleto` no corpo, nunca o formulário vazio.
+
+**Acessibilidade:** `<section>` com `<h2>`. A tela já tem o `h1` do `ui-cabecalho-tela`; não troque o nível.
+
+> ⚠️ **Armadilha: o botão sem `rodape` cai no corpo.** Ações sem o atributo `rodape` são projetadas
+> no corpo do formulário e ficam no meio, não no rodapé. No celular os botões do rodapé ocupam a largura
+> toda; isso é intencional.
+
+### 5B.6 `ui-secao-form` — seção dentro do formulário
+
+**O que é:** bloco com título de seção (`txt-rotulo`) e ícone opcional, seguido do conteúdo.
+
+**API:** `titulo` — string. Slot `[icone]` antes do título: `<ui-icone icone nome="user" />` (o atributo `icone` é o que o slot seleciona).
+
+**Estados:** sem estados próprios.
+
+**Acessibilidade:** `<section>` com `<h3>`, que segue o `h2` do `ui-form-pagina`.
+
+> ⚠️ **Armadilha: caixa alta é CSS, não texto.** `txt-rotulo` põe o título em maiúsculas. Escreva o título
+> em caixa normal (`Dados principais`). Digitar em maiúsculas faz o leitor de tela soletrar.
+
+### 5B.7 `ui-grade-form` — grade de campos
+
+**O que é:** grade de 2 colunas (ou 3) para campos; abaixo de 640 px **do contêiner** volta a 1 coluna.
+
+**API:**
+- `colunas` — `2 | 3` (padrão `2`). Use `[colunas]="3"`, não `colunas="3"`.
+- Filho com a classe `largo` ou o atributo `largo` ocupa a linha inteira (a partir da largura de 2 colunas).
+
+**Estados:** 1 coluna (contêiner < 640 px) · 2 ou 3 colunas. Container query: o trilho de chat reduz a
+largura útil e a grade reage a ela, não ao viewport.
+
+**Acessibilidade:** a ordem de leitura e de Tab é a ordem do DOM; a grade não reordena nada.
+
+> ⚠️ **Armadilha: `largo` só vale para filho direto.** A regra é `.ui-grade-form > .largo`. Se o campo
+> estiver dentro de um `<div>` intermediário, ele volta a ocupar uma coluna sem erro visível. Com `ui-campo`,
+> use `[largo]="true"` no próprio elemento.
+
+### 5B.8 `ui-breadcrumb` — trilha de navegação
+
+**O que é:** `A › B › C`. O último item é a página atual: texto, nunca link, mesmo que tenha `rota`.
+
+**API:** `itens` — `readonly ItemTrilha[]` = `{ rotulo: string; rota?: string }`. Usado no slot `[trilha]` do `ui-cabecalho-tela`.
+
+**Estados:** um item (só a página atual) · N itens (links nos anteriores).
+
+**Acessibilidade:** `<nav aria-label="Trilha">` (o nome do landmark é `Trilha`, não `breadcrumb`); o separador
+`›` é `aria-hidden`; a página atual tem `aria-current="page"`.
+
+> ⚠️ **Armadilha: a trilha vai no cabeçalho, não no corpo.** O `ui-cabecalho-tela` tem o slot `[trilha]`
+> acima do título. Uma trilha solta no corpo da tela duplica a navegação e rouba a posição do `h1`.
+
+### 5B.9 `ui-modal` — modal de ação e de CRUD
+
+**O que é:** caixa sobre véu, com cabeçalho (título e ×), corpo que rola e rodapé fixo.
+
+**API:**
+- `aberto` — input boolean (`[aberto]="x()"`).
+- `titulo` — string.
+- `largura` — `'p' | 'm' | 'g'` (420, 640 e 960 px; padrão `'m'`).
+- Output `fechar` — disparado por Esc, clique no véu e no ×. **Quem fecha é o pai**: o modal só some quando `aberto` vira `false`.
+- Conteúdo (default) = corpo. Slot `[rodape]` = botões (só quando é filho DIRETO do `<ui-modal>`).
+- `<ng-template uiModalRodape>botões</ng-template>` = rodapé por template: funciona em qualquer profundidade, inclusive dentro de `@if`/`@for`.
+
+> ⚠️ **Armadilha: `[rodape]` dentro de `@if` com mais de um nó raiz não projeta no rodapé.** O Angular projeta o
+> bloco inteiro no slot padrão (o corpo), levando o rodapé junto. Antes se contornava com `display: contents`;
+> agora use `<ng-template uiModalRodape>`. O slot `[rodape]` segue valendo para o caso simples.
+
+**Estados:** fechado (não renderiza nada) · aberto · tela inteira abaixo de 720 px (rodapé continua fixo).
+
+**Acessibilidade:** `role="dialog"`, `aria-modal="true"`, `aria-labelledby` apontando para o `h2`. Foco vai
+para o primeiro alvo focável; Tab e Shift+Tab ficam presos no diálogo; ao fechar, o foco volta ao elemento
+que o abriu. Esc fecha.
+
+> ⚠️ **Armadilha: fechar apaga o que foi digitado.** Como o `@if` remove o corpo do DOM, qualquer
+> estado que vive dentro do modal se perde ao fechar. Guarde o formulário no componente pai. Esc, véu e ×
+> disparam o mesmo `fechar`: num formulário com dados, o pai pergunta antes de fechar ou ignora o evento.
+
+### 5B.10 `ui-abas` — abas
+
+**O que é:** barra de abas com borda inferior; a aba ativa vem da rota ou de um estado.
+
+**API:**
+- `abas` — `readonly Aba[]` = `{ id: string; rotulo: string; icone?: string; contador?: number; rota?: string }`.
+- `ativa` — `model<string>`, usado quando as abas não têm `rota`.
+- Com `rota` na aba: `routerLink`, e a aba ativa é a de rota mais específica que casa com a URL. Sem casamento, vale `ativa`; sem nada, a primeira.
+
+**Estados:** ativa (`aria-selected`, texto e borda em `--acao`) · inativa · com contador · foco (`tabindex` de roving).
+
+**Acessibilidade:** `role="tablist"` e `role="tab"`. Setas esquerda e direita (circulares), Home e End.
+Com `rota`, a seta só move o foco e Enter segue o link (ativação manual).
+
+> ⚠️ **Armadilha: `icone` é texto, não ícone.** O campo recebe uma `string` que é renderizada como texto
+> (`aria-hidden`). Passar `'house'` mostra a palavra `house`. Não há slot de `ui-icone` nas abas hoje: deixe
+> `icone` vazio até que isso mude. E com `rota`, a URL precisa bater com a rota da aba; senão a aba ativa
+> cai no `ativa`, e isso parece um bug de seleção.
+
+### 5B.11 `ui-lista-definicao` — pares rótulo/valor
+
+**O que é:** lista de definição (`dl`) em 1 a 3 colunas, para a lateral "Informações" de um detalhe.
+
+**API:**
+- `itens` — `readonly ItemDefinicao[]` = `{ rotulo: string; valor?: string | number | null; mono?: boolean }`.
+- `colunas` — `1 | 2 | 3` (padrão `1`). Use `[colunas]="3"`.
+
+**Estados:** valor vazio (`null`, `undefined` ou só espaços) mostra `—`, nunca some.
+
+**Acessibilidade:** `<dl>` semântico: rótulo em `dt`, valor em `dd`.
+
+> ⚠️ **Armadilha: 2 e 3 colunas dependem do painel, não da tela.** A grade só abre a partir de 480 px do
+> contêiner (container query). Num painel estreito, `[colunas]="3"` cai para 1 coluna sem aviso. Isso é o
+> esperado; não force a largura com CSS da página.
+
+### 5B.12 `ui-chips-etiqueta` — chips de seleção múltipla
+
+**O que é:** conjunto de chips ligáveis (etiquetas). Usado para etiquetas e filtros de múltipla escolha.
+
+**API:**
+- `opcoes` — `readonly OpcaoChip[]` = `{ valor: string; rotulo: string; cor?: string }`. `cor` é um token CSS (ex.: `var(--sucesso)`) e vira só um ponto decorativo.
+- `selecionadas` — `model<string[]>`. Alternar cria uma lista nova; não muta a anterior.
+
+**Estados:** ligado (`--acao`, `aria-pressed="true"`) · desligado · hover · foco.
+
+**Acessibilidade:** cada chip é um `<button>` com `aria-pressed`. O grupo é `role="group"` **sem nome**: dê
+um nome ao grupo no pai (texto visível com `aria-labelledby`).
+
+> ⚠️ **Armadilha: cor não carrega o significado.** O chip tem o rótulo escrito ao lado do ponto colorido.
+> Não use só a cor para dizer "urgente" ou "ganho". Vale para qualquer `cor` passada.
+
+### 5B.13 `ui-tabela` — lista com `<table>` (+ `uiCelula`, `uiVazio`)
+
+**O que é:** tabela de lista com cabeçalho real, linha de 40 px, seleção por checkbox, esqueleto e vazio
+embutidos. Rola na horizontal dentro da caixa. A paginação **não** mora aqui: fica em `ui-paginacao`.
+
+**API:**
+- `colunas` — `input.required<readonly ColunaTabela[]>` = `{ chave: string; rotulo: string; alinhamento?: 'esq' | 'dir' | 'centro'; mono?: boolean; largura?: string }`.
+- `linhas` — `LinhaTabela[]` (`Record<string, unknown>`), lidas pela chave da coluna.
+- `chaveLinha` — `(linha) => string`. Padrão: `String(linha['id'])`.
+- `selecionavel` — boolean; `selecionados` — `model<ReadonlySet<string>>`.
+- `carregando` — boolean; `linhasEsqueleto` — número (padrão 5).
+- `rodape` — `Record<chave, string> | null` (opcional). Linha de totais (`tfoot`) com um texto por chave de coluna, já formatado por quem chama (ex.: `formatarReais`); chave sem valor fica vazia. Some durante o carregamento.
+- Template por coluna: `<ng-template uiCelula="status" let-linha>…</ng-template>`.
+- Vazio: `<div uiVazio>…</div>`.
+
+**Estados:** carregando (esqueleto com as colunas) · vazio (só quando não está carregando e não há linhas; mostra o slot `uiVazio`) · com linhas · linha selecionada (`data-selecionada`).
+
+**Acessibilidade:** `<th scope="col">`. Checkbox do cabeçalho "Selecionar todos desta página", com estado
+indeterminado quando a seleção é parcial. Checkbox de linha com `aria-label="Selecionar linha"`.
+
+> ⚠️ **Armadilha: três coisas que quebram a seleção sem erro.** (1) Linha sem `id` (ou `chaveLinha` que não
+> é única) faz todas as linhas colidirem: marcar uma marca todas. (2) A seleção não se limpa sozinha; ao
+> trocar filtro ou página, zere `selecionados`. (3) `uiVazio` é só para "não há nada"; falha de carga é
+> ramo próprio, nunca o vazio, senão a tela diz "nenhum registro" para um erro.
+
+### 5B.14 `ui-filtros` — cartão de filtros
+
+**O que é:** cartão com busca (lupa), controles projetados e os botões Filtrar e Limpar.
+
+**API:**
+- `placeholder` (`'Buscar'`), `rotuloBusca` (`'Busca'`), `compacto` (boolean): para colunas estreitas (~300 px), sem Filtrar/Limpar e com o rótulo visualmente oculto (continua lido por leitor de tela).
+- Saídas: `buscar` (string, com debounce de 300 ms; `''` ao limpar), `aplicar` (sem payload; Enter e o botão Filtrar), `limpar`.
+- Controles: conteúdo projetado, sem seletor (`ui-select`, `ui-filtro-periodo` etc.).
+
+**Estados:** digitando (aguarda o debounce) · aplicado · limpo.
+
+**Acessibilidade:** `<form>`; Enter no campo envia. A busca é `type="search"` com `aria-label` igual ao
+placeholder, dentro de um `<label>` com o texto "Busca".
+
+> ⚠️ **Armadilha: todo filtro que muda zera o cursor.** O componente não conhece a lista. Quem escuta
+> `buscar`, `aplicar` e as mudanças dos controles projetados precisa voltar ao início do cursor. `limpar`
+> chega junto com `buscar('')`: trate uma vez. O submit emite só `aplicar` (e `buscar` apenas se o texto
+> digitado ainda não saiu pelo debounce). A busca tem rótulo visível e **sem** `aria-label`.
+
+### 5B.15 `ui-paginacao` — rodapé por cursor
+
+**O que é:** "Mostrando N" ou "Mostrando N de T" e o botão "Carregar mais". Só cursor, nunca página numerada.
+
+**API:**
+- `mostrados` — `input.required<number>`.
+- `total` — `number | null | undefined`. Opcional.
+- `temMais` — boolean; `carregando` — boolean.
+- Saída `mais`.
+
+**Estados:** sem mais (só a contagem) · com mais ("Carregar mais") · carregando ("Carregando…", botão desabilitado).
+
+**Acessibilidade:** a contagem é `aria-live="polite"`: o leitor anuncia quando a lista cresce.
+
+> ⚠️ **Armadilha: `total` só com total barato.** Passe `total` apenas quando a API devolver um número
+> barato (contador mantido ou estimativa). `count(*)` em tabela grande é justamente o que a regra de
+> paginação proíbe. Um total errado engana mais do que nenhum total. Não há "página 1 de 7" neste
+> componente, de propósito.
+
+### 5B.16 `ui-acoes-lote` — faixa de seleção
+
+**O que é:** faixa com "N selecionados", botões de ação (conteúdo projetado) e "Limpar seleção".
+
+**API:** `quantidade` — `input.required<number>`; conteúdo = botões; saída `limpar`.
+
+**Estados:** com 0 selecionados **não renderiza nada** · com seleção aparece como faixa.
+
+**Acessibilidade:** `role="region"` com `aria-label="Ações em lote"`; a contagem é `aria-live`.
+
+> ⚠️ **Armadilha: "selecionar todos" é a página, não o filtro.** A contagem vale para as linhas carregadas.
+> A faixa empurra a tabela para baixo quando aparece: monte-a entre os filtros e a tabela, nunca
+> sobreposta a ela.
+
+### 5B.17 `ui-stat-card` — indicador
+
+**O que é:** cartão com ícone à esquerda, valor e rótulo. Para o painel e o detalhe.
+
+**API:**
+- `valor` — `input.required<string | number>`. A formatação é de quem chama (dinheiro com `formatarReais`).
+- `rotulo` — `input.required<string>`.
+- `tom` — `'acao' | 'sucesso' | 'atencao' | 'erro' | 'ia' | 'neutro'` (padrão `'neutro'`).
+- `rotuloAcima` — boolean; rótulo acima do valor.
+- Slot de ícone: qualquer elemento com o atributo `uiIcone` (ex.: `<ui-icone uiIcone nome="house" />`).
+
+**Estados:** valor curto · valor longo (trunca com reticências) · sem ícone (o círculo some).
+
+**Acessibilidade:** o ícone é `aria-hidden` (vem do slot); valor e rótulo são texto comum.
+
+> ⚠️ **Armadilha: ícone sem o atributo some em silêncio.** O slot é `select="[uiIcone]"`: um `<svg>` ou
+> `<ui-icone>` sem o atributo não é projetado e não gera erro. Confira o atributo quando o cartão aparecer
+> sem ícone.
+
+### 5B.18 `ui-filtro-periodo` — período
+
+**O que é:** atalhos (Hoje, 7 dias, 30 dias, Mês atual, Mês passado), datas livres "De" e "Até" e "Aplicar".
+
+**API:**
+- `inicio`, `fim` — `model<string>` em ISO `yyyy-mm-dd`.
+- `hoje` — `input<string | null>`; injetável para teste e fuso de negócio (padrão: data local).
+- Saída `aplicar`. Conteúdo projetado antes de "Aplicar".
+- Helpers puros: `periodoDoAtalho`, `atalhoAtivo`, `hojeIso`, `ATALHOS_PERIODO`.
+
+**Estados:** atalho ativo (`aria-pressed`, primário) · datas livres (nenhum atalho marcado).
+
+**Acessibilidade:** atalhos em `role="group"` com nome "Atalhos de período"; cada data tem seu rótulo
+(De, Até) por envolvimento.
+
+> ⚠️ **Armadilha: atalho aplica; data não.** Clicar num atalho dispara `aplicar` na hora. Trocar a data só
+> muda o `model`: é preciso clicar em "Aplicar". Quem usa o componente precisa tratar as duas formas de
+> disparo como uma só busca, senão a tela mostra um período e os dados são de outro.
+
+### 5B.19 `ui-botao-csv` — exportação
+
+**O que é:** botão que baixa CSV das linhas **já carregadas**. Separador `;`, BOM UTF-8, CRLF.
+
+**API:**
+- `colunas` — `input.required<readonly ColunaCsv[]>` = `{ chave: string; rotulo: string }`.
+- `linhas` — `Record<string, unknown>[]`; `arquivo` — string (padrão `'exportacao'`); `virgulaDecimal` — boolean (padrão `false`; números com vírgula, estilo Excel pt-BR).
+- Conteúdo projetado = rótulo (padrão "Exportar CSV").
+
+**Estados:** sem linhas → desabilitado · com linhas → baixa o arquivo.
+
+**Acessibilidade:** botão comum com rótulo visível.
+
+> ⚠️ **Armadilha: exporta a tela, não o filtro.** Com cursor, o CSV tem só as linhas carregadas (a página
+> ou as páginas já trazidas). Quem lê o CSV e espera o total do filtro se engana. O rótulo ou a dica deve
+> dizer o escopo, por exemplo "Exportar as linhas da tela".
+
+### 5B.20 `ui-botao` — botão
+
+**O que é:** botão com variantes (primário, secundário, perigo, fantasma), estado de carregamento e largura total opcional.
+
+**API:**
+- `variante` — `'primario' | 'secundario' | 'perigo' | 'fantasma'` (padrão `primario`).
+- `tipo` — `'button' | 'submit' | 'reset'` (padrão `button`, que não envia formulário).
+- `form` — `string | null`: id do `<form>` ao qual o botão pertence. Use para enviar um formulário a partir de um botão fora dele (rodapé do `ui-modal` ou do `ui-form-pagina`).
+- `desabilitado`, `carregando`, `bloco` — boolean.
+
+**Estados:** repouso · hover · pressionado · foco (`--borda-foco`) · desabilitado · carregando (spinner, botão desabilitado).
+
+**Acessibilidade:** `<button>` nativo; o spinner é `aria-hidden`.
+
+> ⚠️ **Armadilha: `tipo="submit"` sem `form` só envia o formulário que o contém.** Um botão no rodapé de um modal
+> fica fora do `<form>` do corpo: passe `form` com o id do formulário e `tipo="submit"`, e dê `id` ao `<form>`.
+> Sem isso, o clique não envia nada e a tela parece travada.
+
+### 5B.21 `ui-icone` — ícone Lucide
+
+**O que é:** ícone SVG do Lucide, a partir de um mapa local (`icones-lucide.ts`). Substitui emoji na casca e nas ações.
+
+**API:**
+- `nome` — `input.required<string>`, kebab-case: `house`, `bar-chart-3`. Os nomes válidos são as chaves de `ICONES`. Desenhos adicionados nesta rodada (conferidos no `lucide-static` 1.67.0): `pause`, `play`, `flame`, `zap`, `mail`, `bell-off`, `calendar-clock`, `route`, `shuffle`; na R2: `inbox`, `lock`, `arrow-up`, `arrow-down`, `smile`, `mic`, `square`.
+- `tamanho` — `14 | 16 | 18 | 24 | 40` (padrão `18`). 40 é a ilustração do `ui-estado`.
+- `rotulo` — string opcional.
+
+**Estados:** nome conhecido → desenho do ícone · nome desconhecido → círculo de reserva (nunca texto cru).
+
+**Acessibilidade:** sem `rotulo` → `aria-hidden="true"` (decorativo). Com `rotulo` → `role="img"` e `aria-label`.
+
+> ⚠️ **Armadilha: `nome` é chave, nunca markup.** O componente usa `[innerHTML]` com
+> `bypassSecurityTrustHtml`, seguro porque o markup vem só das constantes de `ICONES`. Se algum dia o markup
+> vier de API ou de tenant, esse bypass vira XSS; nesse caso, sanitize antes. Para ícone novo, adicione o
+> miolo ao mapa local (licença ISC citada no arquivo), sem pacote novo.
+
+### 5B.22 `ui-select-multi` — seleção múltipla com chips
+
+**O que é:** o `ui-select-paginado` com chips removíveis. Busca no servidor, por cursor; nunca carrega tudo.
+
+**API:**
+- `carregar` — `input.required<CarregarOpcoes>` (mesmo contrato do select paginado: `(cursor, termo) => { itens, proximoCursor }`).
+- `valor` — `model<readonly string[]>` (ids). CVA: o valor do controle é `string[]`.
+- `opcoesInjetadas` — `OpcaoPaginada[]`: rótulos dos ids já salvos (edição). Sem elas o chip mostra o id.
+- `max` — `number | null`: ao atingir, a busca desabilita e a dica avisa o limite.
+- `rotulo` (obrigatório), `placeholder`, `dica`, `erro`, `obrigatorio`, `largo`, `desabilitado`.
+- Output `escolhidas` — `OpcaoPaginada[]` (id + rótulo) a cada mudança do usuário; útil a quem guarda o rótulo junto (wizard de campanha).
+
+**Estados:** vazio · com chips · limite atingido · desabilitado (chips sem o ×) · erro.
+
+**Acessibilidade:** a do select paginado; a lista de chips tem `aria-label` "Selecionados: …" e cada × tem `aria-label` "Remover …".
+
+> ⚠️ **Armadilha: rótulo vem de duas fontes.** Cache do carregador (páginas já vistas) e `opcoesInjetadas`.
+> Na edição, passe sempre as opções salvas, senão o chip aparece com o id até o usuário rolar a lista.
+
+### 5B.23 `ui-botao-icone` — botão quadrado só com ícone
+
+**O que é:** botão sem texto para subir/descer, remover, menu ⋯.
+
+**API:** `icone` (nome do `ui-icone`, obrigatório) · `rotulo` (obrigatório: vira `aria-label` e `title`) · `tamanho` `'p' | 'm'` (28 px / alvo de clique do console; padrão `m`) · `variante` `'neutro' | 'perigo'` · `desabilitado`. O clique sai pelo host: `(click)` no `<ui-botao-icone>`.
+
+**Estados:** repouso · hover · foco (`--borda-foco`) · desabilitado (não dispara clique) · perigo.
+
+**Acessibilidade:** `<button type="button">` nativo com nome acessível; o ícone é decorativo.
+
+> ⚠️ **Armadilha: sem texto, o rótulo é tudo.** "Remover" sozinho não diz o quê: use "Remover telefone 2".
+
+---
+
 ## 6. O que NÃO construir
 
 ⚠️ Reimplementar qualquer linha desta tabela é retrabalho garantido **e** regressão de
@@ -1267,3 +1701,8 @@ que em oito componentes já escritos duas vezes.
 | 4 | **Card de atribuição** e **donut de categorias** (Home, §6 das telas) | Onda 2. ⚠️ O card de atribuição carrega a regra mais delicada do produto — receita **exata** e **estimada** exibidas separadas, jamais somadas — e merece ficha própria quando a tela for detalhada |
 | 5 | **Gráfico de barras + linha** (vendas no período) | Onda 2; depende da escolha da biblioteca de gráficos, que precisa consumir tokens |
 | 6 | **Indicador de presença** ("Eduarda está nesta conversa") | Onda 1, comportamento já definido em `geracrm-tempo-real`; a ficha visual sai com o protótipo do inbox |
+
+### Adendo R2 — `ui-estado` com ícone Lucide
+
+`icone` aceita o **nome de um `ui-icone`** (`users`, `message-circle`). Padrões sem emoji: vazio `inbox`, erro
+`alert-triangle`, sem permissão `lock`. Valor que não é nome conhecido (emoji legado) renderiza como texto.

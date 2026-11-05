@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import postgres from 'postgres'
 import { criarApp } from '../../app.js'
@@ -97,4 +98,45 @@ describe('Fidelidade (degradação sem ERP)', () => {
     const r = (await chamar(OUTRO, '/v1/fidelidade')).json() as { disponivel: boolean; motivo: string }
     expect(r).toMatchObject({ disponivel: false, motivo: 'sem_conector' })
   })
+
+  it('topSaldos: top 20 com topSaldosTruncado na fronteira (20 = não corta; 21 = corta)', async () => {
+    type Fid = { topSaldos: { contato: string; saldo: number }[]; topSaldosTruncado: boolean }
+    const ler = async (t: string) => (await chamar(t, '/v1/fidelidade')).json() as Fid
+    await conexao(true)
+    try {
+      await saldosExtras(1, 20)
+      const no = await ler(T)
+      expect(no.topSaldos).toHaveLength(20)
+      expect(no.topSaldosTruncado).toBe(false)
+
+      await saldosExtras(21, 21)
+      const com = await ler(T)
+      expect(com.topSaldos).toHaveLength(20)
+      expect(com.topSaldosTruncado).toBe(true)
+      expect(com.topSaldos[0]).toMatchObject({ contato: 'Extra 21', saldo: 21000 }) // maior saldo primeiro
+
+      // OUTRO: conector próprio com UM saldo — não herda o corte de T.
+      await dono`INSERT INTO conexao_erp (tenant_id, id, conector, nome_amigavel, capacidades, estado)
+                 VALUES (${OUTRO}, ${randomUUID()}, 'geracloud', 'ERP outro', ${JSON.stringify({ fidelidade: true })}::text::jsonb, 'ativa')`
+      const idAlheio = randomUUID()
+      await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${OUTRO}, ${idAlheio}, 'Alheio', 'teste', true)`
+      await dono`INSERT INTO fidelidade_saldo (tenant_id, contato_id, saldo, unidade) VALUES (${OUTRO}, ${idAlheio}, 500, 'centavos')`
+      const outro = await ler(OUTRO)
+      expect(outro.topSaldos).toHaveLength(1)
+      expect(outro.topSaldosTruncado).toBe(false)
+    } finally {
+      await dono`DELETE FROM fidelidade_saldo WHERE tenant_id = ${T} AND contato_id IN
+                 (SELECT id FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Extra %')`
+      await dono`DELETE FROM contato WHERE tenant_id = ${T} AND nome LIKE 'Extra %'`
+    }
+  })
 })
+
+/** Contatos extras de T, cada um com saldo de k × 1000 centavos — para a fronteira do top 20. */
+async function saldosExtras(de: number, ate: number) {
+  for (let k = de; k <= ate; k++) {
+    const id = randomUUID()
+    await dono`INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo) VALUES (${T}, ${id}, ${'Extra ' + k}, 'teste', true)`
+    await dono`INSERT INTO fidelidade_saldo (tenant_id, contato_id, saldo, unidade) VALUES (${T}, ${id}, ${k * 1000}, 'centavos')`
+  }
+}

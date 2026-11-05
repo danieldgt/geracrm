@@ -15,6 +15,15 @@ import { decifrar } from './cofre.js'
  * variável de ambiente — ao contrário da chave do LLM, que é nossa.
  */
 
+/**
+ * ⚠️ `GERACLOUD_TOKEN_URL` é costura de TESTE (e2e: o Keycloak do fornecedor é
+ * sempre falso no CI) e é IGNORADA em produção.
+ */
+const buscarLogin: typeof fetch = (url, init) =>
+  process.env.NODE_ENV !== 'production' && process.env.GERACLOUD_TOKEN_URL
+    ? fetch(process.env.GERACLOUD_TOKEN_URL, init)
+    : fetch(url, init)
+
 /** Cache de token por conexão: autenticar a cada pedido seria absurdo. */
 const sessoes = new Map<string, { token: string; expiraEmMs: number }>()
 
@@ -65,7 +74,7 @@ export async function conectorDoTenant(tx: Sql): Promise<ConexaoDoTenant> {
     //    ter entrado e nós trataríamos como falha.
     if (atual && Date.now() < atual.expiraEmMs - 30_000) return atual.token
     const auth = await autenticarGeraCloud(
-      { baseUrl, usuario: cred['usuario']!, senha: cred['senha']! } as never, fetch)
+      { baseUrl, usuario: cred['usuario']!, senha: cred['senha']! } as never, buscarLogin)
     if (!auth.ok) throw new Error(`login no ERP: ${auth.motivo}`)
     sessoes.set(chave, {
       token: auth.sessao.accessToken,

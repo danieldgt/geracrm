@@ -1,9 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import type { Sql } from 'postgres'
 import { classificarRfv, normalizarTelefone, normalizarDocumento, ehPerfilPreco, perfilDeCotacao } from '@geracrm/shared'
-import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
+import { atendePapel, papeisDoUsuario } from '../plataforma/papel.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
 import { parseCsvContatos } from './importar-csv.js'
+import { condicaoContato, contatoNoEscopo, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
+import { validarCadastro } from './contato-cadastro.js'
+import { CONTATO_ANONIMIZADO, contatoAnonimizado, gravarDocumentoEEndereco } from './contato-gravacao.js'
+import { exigirPapel } from '../plataforma/papel.js'
+import { condicaoFiltros, contextoDosFiltros, lerFiltros } from './contatos-filtros.js'
 
 /** Teto de linhas por importação — evita engolir um arquivo gigante numa tx. */
 const MAX_LINHAS_CSV = 5000
@@ -30,6 +37,14 @@ interface LinhaMetrica {
   dias_sem_comprar: number | null; atraso_relativo: string | null
   media_entre_vendas_dias: string | null; ultima_venda_em: Date | null
   confiavel: boolean; ticket_medio_centavos: string | null
+}
+
+/** Linha da lista de contatos: métricas + o que a tabela mostra ao lado (A2). */
+interface LinhaContato extends LinhaMetrica {
+  email: string | null; qualificado: boolean | null; criado_em: Date
+  origem_nome: string | null; vendedor_nome: string | null; telefone: string | null
+  etiquetas_json: { id: string; nome: string; cor: string }[]; etiquetas_total: number
+  sem_proximo_passo: boolean
 }
 
 /** Converte a linha em item de API, já com o segmento RFV do domínio. */
@@ -68,40 +83,186 @@ function lerCursor(cursor: string | undefined): [string, string] | null {
 const escreverCursor = (a: string | number, id: string) =>
   Buffer.from(`${a}:${id}`, 'utf8').toString('base64url')
 
+/** Sub-rotas do contato: fora do escopo do usuário = 404, como inexistente (D3). */
+const ESCOPO_CONTATO = exigirNoEscopo('contato')
+
+/**
+ * Telefone principal de uma edição. A linha do ERP não é reescrita: a antiga é
+ * demovida e uma linha 'manual' (nova ou reativada) vira a principal. Linha
+ * principal já manual é atualizada no lugar. Mesmo número e mesmo WhatsApp que o
+ * ERP já mostra → nada a fazer.
+ */
+async function gravarTelefonePrincipal(tx: Sql, id: string, tel: { e164: string; chaveBloqueio: string }, whatsapp: boolean | undefined): Promise<void> {
+  const linhas = await tx<{ seq: number; e164: string; chave_bloqueio: string; whatsapp: boolean | null; principal: boolean; fonte: string }[]>`
+    SELECT seq, e164, chave_bloqueio, whatsapp, principal, fonte FROM contato_telefone
+     WHERE tenant_id = tenant_atual() AND contato_id = ${id} ORDER BY seq`
+  const atual = linhas.find((l) => l.principal)
+  const whats = whatsapp ?? atual?.whatsapp ?? true
+  const proximo = Math.max(0, ...linhas.map((l) => l.seq)) + 1
+
+  if (atual && atual.fonte === 'manual') {
+    await tx`
+      UPDATE contato_telefone SET e164 = ${tel.e164}, chave_bloqueio = ${tel.chaveBloqueio}, whatsapp = ${whats}, visto_em = now()
+       WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${atual.seq}`
+    return
+  }
+  if (atual && atual.e164 === tel.e164 && (atual.whatsapp ?? true) === whats) return
+
+  if (atual) {
+    await tx`UPDATE contato_telefone SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${atual.seq}`
+  }
+  const reativar = linhas.find((l) => l.fonte === 'manual' && l.e164 === tel.e164)
+  if (reativar) {
+    await tx`UPDATE contato_telefone SET principal = true, whatsapp = ${whats}, visto_em = now()
+              WHERE tenant_id = tenant_atual() AND contato_id = ${id} AND seq = ${reativar.seq}`
+  } else {
+    await tx`
+      INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
+      VALUES (tenant_atual(), ${id}, ${proximo}, ${tel.e164}, ${tel.chaveBloqueio}, true, ${whats}, 'manual')`
+  }
+}
+
+/** Violação de unicidade do telefone principal (corrida entre dois cadastros do mesmo número). */
+const ehTelefonePrincipalDuplicado = (err: unknown) =>
+  typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505' &&
+  (err as { constraint_name?: string }).constraint_name === 'contato_telefone_principal_unico'
+
+const respostaTelefoneDuplicado = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
+  reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.',
+    campos: { telefone: 'Este telefone já é o principal de outro contato.' } })
+
+/**
+ * Origem informada tem de existir, ser do tenant (RLS) e estar ativa — ou ser a
+ * que o contato já tem gravada (mesmo desativada, para não travar a edição).
+ */
+async function origemValida(tx: Sql, origemId: string, atualDoContato: string | null): Promise<boolean> {
+  if (origemId === atualDoContato) return true
+  const [o] = await tx`SELECT 1 FROM origem WHERE tenant_id = tenant_atual() AND id = ${origemId} AND ativa`
+  return !!o
+}
+
+const respostaOrigemInvalida = (reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
+  reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.',
+    campos: { origemId: 'Origem inexistente ou inativa.' } })
+
 export async function rotasContatos(app: FastifyInstance): Promise<void> {
   /**
-   * Cadastra um contato (nome + telefone). ⚠️ Idempotente pelo telefone: se já
-   * existe um contato com esse número principal, DEVOLVE o existente em vez de
-   * duplicar — telefone é identidade no WhatsApp.
+   * Cadastra um contato. Corpo completo (`contato-cadastro.ts`) com só nome +
+   * telefone obrigatórios — o POST antigo (nome+telefone) segue valendo.
+   * ⚠️ Idempotente pelo telefone: se já existe um contato com esse número
+   * principal, DEVOLVE o existente (200, `novo:false`) em vez de duplicar —
+   * telefone é identidade no WhatsApp. Erro de validação: 422 por campo.
    */
-  app.post<{ Body: { nome?: string; telefone?: string } }>(
+  app.post<{ Body: unknown }>(
     '/v1/contatos',
     { preHandler: exigirTenant },
     async (req, reply) => {
-      const nome = req.body?.nome?.trim()
-      const tel = normalizarTelefone(req.body?.telefone ?? '')
-      if (!nome) return reply.code(422).send({ erro: 'contato.nome_obrigatorio', mensagem: 'Informe o nome.' })
-      if (!tel) return reply.code(422).send({ erro: 'contato.telefone_invalido', mensagem: 'Telefone inválido. Use DDD + número.' })
+      const v = validarCadastro(req.body)
+      if (!v.ok) return reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.', campos: v.campos })
+      const d = v.dados
+      const tel = normalizarTelefone(d.telefone)!
 
-      const r = await req.comTenant(async (tx) => {
+      let r: { id: string; novo: boolean } | { erro: 'origem' | 'ja_existe_fora' }
+      try {
+        r = await req.comTenant(async (tx) => {
         const [existe] = await tx<{ contato_id: string }[]>`
           SELECT contato_id FROM contato_telefone
            WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal
            LIMIT 1`
+        // ⚠️ Escopo (D3): o existente FORA do escopo não devolve o id (seria a
+        //    porta para a ficha alheia) — 409 sem id.
+        if (existe && !(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), existe.contato_id))) {
+          return { erro: 'ja_existe_fora' as const }
+        }
         if (existe) return { id: existe.contato_id, novo: false }
+        if (d.origemId && !(await origemValida(tx, d.origemId, null))) return { erro: 'origem' as const }
 
         const id = randomUUID()
         await tx`
-          INSERT INTO contato (tenant_id, id, nome, origem_carga, ativo)
-          VALUES (tenant_atual(), ${id}, ${nome}, 'manual', true)`
+          INSERT INTO contato (tenant_id, id, nome, razao_social, nome_fantasia, email, modalidade, prioridade, temperatura,
+                               origem_id, valor_estimado_centavos, observacoes, origem_carga, ativo)
+          VALUES (tenant_atual(), ${id}, ${d.nome}, ${d.razaoSocial ?? null}, ${d.nomeFantasia ?? null}, ${d.email ?? null},
+                  ${d.modalidade ?? null}, ${d.prioridade ?? null}, ${d.temperatura ?? null}, ${d.origemId ?? null},
+                  ${d.valorEstimadoCentavos ?? null}, ${d.observacoes ?? null}, 'manual', true)`
         await tx`
           INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
-          VALUES (tenant_atual(), ${id}, 1, ${tel.e164}, ${tel.chaveBloqueio}, true, true, 'manual')
-          ON CONFLICT DO NOTHING`
+          VALUES (tenant_atual(), ${id}, 1, ${tel.e164}, ${tel.chaveBloqueio}, true, ${d.whatsapp ?? true}, 'manual')`
+        await gravarDocumentoEEndereco(tx, id, d)
         return { id, novo: true }
-      })
+        })
+      } catch (err) {
+        if (ehTelefonePrincipalDuplicado(err)) return respostaTelefoneDuplicado(reply)
+        throw err
+      }
+      if ('erro' in r) {
+        if (r.erro === 'ja_existe_fora') {
+          return reply.code(409).send({ erro: 'contato.ja_existe', mensagem: 'Já existe um contato com este telefone. Peça ao gestor para atribuí-lo a você.' })
+        }
+        return respostaOrigemInvalida(reply)
+      }
 
-      return reply.code(r.novo ? 201 : 200).send({ id: r.id, nome, novo: r.novo })
+      return reply.code(r.novo ? 201 : 200).send({ id: r.id, nome: d.nome, novo: r.novo })
+    },
+  )
+
+  /**
+   * Edição COMPLETA do cadastro (formulário-página). Substitui os campos
+   * editáveis: opcional omitido/vazio vira NULL — EXCETO `origemId`, em que omitido
+   * preserva e só `null`/'' limpa (o formulário sempre envia tudo; um cliente de
+   * API que não conhece a origem não a apaga por esquecimento). Telefone principal trocado
+   * vira o novo principal; se já é principal de OUTRO contato → 422 no campo.
+   * Telefone/documento/endereço do ERP não são reescritos: a edição manual vira
+   * a principal e a do ERP é só demovida (ver `gravarDocumento`).
+   */
+  app.put<{ Params: { id: string }; Body: unknown }>(
+    '/v1/contatos/:id', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
+    async (req, reply) => {
+      const id = req.params.id
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.code(400).send({ erro: 'contato.id_invalido', mensagem: 'Id de contato inválido.' })
+      const v = validarCadastro(req.body)
+      if (!v.ok) return reply.code(422).send({ erro: 'validacao', mensagem: 'Corrija os campos destacados.', campos: v.campos })
+      const d = v.dados
+      const tel = normalizarTelefone(d.telefone)!
+
+      let r: { ok: true } | { erro: 'contato.nao_encontrado' | 'telefone_duplicado' | 'origem' | 'anonimizado' }
+      try {
+        r = await req.comTenant(async (tx) => {
+        const [c] = await tx<{ origem_id: string | null; anonimizado_em: Date | null }[]>`SELECT origem_id, anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${id}`
+        if (!c) return { erro: 'contato.nao_encontrado' as const }
+        if (c.anonimizado_em) return { erro: 'anonimizado' as const }
+
+        const [outro] = await tx`
+          SELECT 1 FROM contato_telefone
+           WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal AND contato_id <> ${id} LIMIT 1`
+        if (outro) return { erro: 'telefone_duplicado' as const }
+
+        // Ausente ≠ null: omitir `origemId` preserva; `null`/'' limpa.
+        const origemFinal = d.origemId === undefined ? c.origem_id : d.origemId
+        if (origemFinal && !(await origemValida(tx, origemFinal, c.origem_id))) return { erro: 'origem' as const }
+
+        await tx`
+          UPDATE contato SET
+            nome = ${d.nome}, razao_social = ${d.razaoSocial ?? null}, nome_fantasia = ${d.nomeFantasia ?? null},
+            email = ${d.email ?? null}, modalidade = ${d.modalidade ?? null}, prioridade = ${d.prioridade ?? null},
+            temperatura = ${d.temperatura ?? null}, origem_id = ${origemFinal},
+            valor_estimado_centavos = ${d.valorEstimadoCentavos ?? null}, observacoes = ${d.observacoes ?? null}
+           WHERE tenant_id = tenant_atual() AND id = ${id}`
+
+        await gravarTelefonePrincipal(tx, id, tel, d.whatsapp)
+        await gravarDocumentoEEndereco(tx, id, d)
+        return { ok: true as const }
+        })
+      } catch (err) {
+        if (ehTelefonePrincipalDuplicado(err)) return respostaTelefoneDuplicado(reply)
+        throw err
+      }
+      if ('erro' in r) {
+        if (r.erro === 'telefone_duplicado') return respostaTelefoneDuplicado(reply)
+        if (r.erro === 'origem') return respostaOrigemInvalida(reply)
+        if (r.erro === 'anonimizado') return reply.code(409).send(CONTATO_ANONIMIZADO)
+        return reply.code(404).send({ erro: 'contato.nao_encontrado', mensagem: 'Contato não encontrado.' })
+      }
+      return reply.send({ ok: true, id })
     },
   )
 
@@ -124,7 +285,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
    */
   app.post<{ Body: { csv?: string } }>(
     '/v1/contatos/importar',
-    { preHandler: exigirTenant },
+    // ⚠️ Importar em massa é ação de GESTÃO (revisão D3, M5): o vendedor não
+    //    despeja base no tenant.
+    { preHandler: [exigirTenant, exigirPapel('gestor', 'supervisor')] },
     async (req, reply) => {
       const csv = req.body?.csv
       if (typeof csv !== 'string' || !csv.trim()) {
@@ -137,8 +300,17 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
       let criados = 0
       let atualizados = 0
+      let bloqueadosLgpd = 0
       await req.comTenant(async (tx) => {
         for (const l of linhas) {
+          // ⚠️ LGPD (H2): número de contato anonimizado não volta por importação. A chave é a mesma
+          //    do opt-out (55+DDD+8); o retorno é só uma contagem — nunca ecoa o telefone.
+          if (l.chaveBloqueio) {
+            const [lgpd] = await tx<{ ok: number }[]>`
+              SELECT 1 AS ok FROM lista_bloqueio
+               WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${l.chaveBloqueio} AND lgpd_em IS NOT NULL`
+            if (lgpd) { bloqueadosLgpd++; continue }
+          }
           let contatoId: string | null = null
 
           if (l.documento) {
@@ -194,6 +366,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         total: linhas.length + rejeicoes.length,
         criados, atualizados,
         rejeitados: rejeicoes.length,
+        bloqueadosLgpd,
         rejeicoes: rejeicoes.slice(0, 50),
       })
     },
@@ -207,7 +380,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
     const q = String((req.query as { q?: string })?.q ?? '').trim()
     if (q.length < 2) return reply.send({ itens: [] })
     const digitos = q.replace(/\D/g, '')
-    const linhas = await req.comTenant((tx) => tx<{ id: string; nome: string; e164: string | null }[]>`
+    const linhas = await req.comTenant(async (tx) => {
+      const escopo = await escopoDaRequisicao(tx, req)
+      return tx<{ id: string; nome: string; e164: string | null }[]>`
       SELECT c.id, c.nome, ct.e164
         FROM contato c
         LEFT JOIN contato_telefone ct
@@ -215,11 +390,13 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
        WHERE c.tenant_id = tenant_atual() AND c.ativo
          -- ⚠️ O contato de simulação do playground não é cliente: fica fora de toda lista.
          AND coalesce(c.origem_carga, '') <> 'simulacao'
+         AND ${condicaoContato(tx, escopo, 'c')}
          AND ( c.nome ILIKE ${'%' + q + '%'}
                ${digitos.length >= 4 ? tx`OR ct.e164 LIKE ${'%' + digitos + '%'}` : tx``} )
        ORDER BY c.nome ASC
        LIMIT 20
-    `)
+    `
+    })
     return reply.send({ itens: linhas.map((l) => ({ id: l.id, nome: l.nome, telefone: l.e164 })) })
   })
 
@@ -245,32 +422,92 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
     const q = (req.query ?? {}) as { cursor?: string; limite?: string }
     const limite = limiteDe(q.limite)
     const c = lerCursor(q.cursor)
+    const lf = lerFiltros(req.query)
+    if (!lf.ok) {
+      return reply.code(422).send({ erro: 'contatos.filtro_invalido', mensagem: 'Algum filtro é inválido.', campos: lf.campos })
+    }
+    const filtros = lf.filtros
 
-    const linhas = await req.comTenant((tx) => tx<LinhaMetrica[]>`
-      SELECT c.id, c.nome,
-             coalesce(m.qtd_vendas, 0)::text     AS qtd_vendas,
-             coalesce(m.total_centavos, 0)::text AS total_centavos,
-             m.dias_sem_comprar, m.atraso_relativo::text,
-             m.media_entre_vendas_dias::text, m.ultima_venda_em,
-             coalesce(m.confiavel, false) AS confiavel,
-             m.ticket_medio_centavos::text
-        FROM contato c
-        LEFT JOIN metricas_contato m
-          ON m.tenant_id = c.tenant_id AND m.contato_id = c.id
-       WHERE c.tenant_id = tenant_atual() AND c.ativo
-         AND coalesce(c.origem_carga, '') <> 'simulacao'
-         AND ${c === null ? tx`true`
-              : tx`(coalesce(m.total_centavos, 0), c.id) < (${Number(c[0])}, ${c[1]}::uuid)`}
-       ORDER BY coalesce(m.total_centavos, 0) DESC, c.id DESC
-       LIMIT ${limite + 1}
-    `)
+    const { linhas, gestao } = await req.comTenant(async (tx) => {
+      const escopo = await escopoDaRequisicao(tx, req)
+      // A tela mostra transferir/criar tarefa/filtros de gestão só a quem a API deixa fazer (a API revalida).
+      const gestao = atendePapel(await papeisDoUsuario(tx, { sub: subDoUsuario(req), atorStaff: req.atorStaff }), ['gestor', 'supervisor'])
+      const ctx = await contextoDosFiltros(tx, filtros)
+      // A página sai primeiro (LIMIT) e SÓ ENTÃO ganha origem, vendedor, etiquetas e
+      // "sem próximo passo" — o enriquecimento roda em ≤ 101 linhas, nunca na base toda.
+      const linhas = await tx<LinhaContato[]>`
+      WITH pag AS (
+        SELECT c.id, c.nome, c.email, c.qualificado, c.origem_id, c.criado_em,
+               coalesce(m.qtd_vendas, 0)::text     AS qtd_vendas,
+               coalesce(m.total_centavos, 0)::text AS total_centavos,
+               m.dias_sem_comprar, m.atraso_relativo::text,
+               m.media_entre_vendas_dias::text, m.ultima_venda_em,
+               coalesce(m.confiavel, false) AS confiavel,
+               m.ticket_medio_centavos::text
+          FROM contato c
+          LEFT JOIN metricas_contato m
+            ON m.tenant_id = c.tenant_id AND m.contato_id = c.id
+         WHERE c.tenant_id = tenant_atual() AND c.ativo
+           AND coalesce(c.origem_carga, '') <> 'simulacao'
+           AND ${condicaoContato(tx, escopo, 'c')}
+           AND ${condicaoFiltros(tx, filtros, ctx)}
+           AND ${c === null ? tx`true`
+                : tx`(coalesce(m.total_centavos, 0), c.id) < (${Number(c[0])}, ${c[1]}::uuid)`}
+         ORDER BY coalesce(m.total_centavos, 0) DESC, c.id DESC
+         LIMIT ${limite + 1}
+      )
+      SELECT pag.*,
+             o.nome AS origem_nome,
+             v.nome AS vendedor_nome,
+             tel.e164 AS telefone,
+             coalesce(et.itens, '[]'::json) AS etiquetas_json,
+             coalesce(et.total, 0)::int AS etiquetas_total,
+             (NOT EXISTS (SELECT 1 FROM tarefa ft WHERE ft.tenant_id = tenant_atual() AND ft.contato_id = pag.id
+                             AND ft.estado = 'aberta' AND ft.vence_em >= now())
+              ${ctx.agenda ? tx`AND NOT EXISTS (SELECT 1 FROM evento_agenda fe WHERE fe.tenant_id = tenant_atual()
+                             AND fe.contato_id = pag.id AND fe.status = 'agendado' AND fe.inicio >= now())` : tx``}) AS sem_proximo_passo
+        FROM pag
+        LEFT JOIN origem o ON o.tenant_id = tenant_atual() AND o.id = pag.origem_id
+        LEFT JOIN LATERAL (
+          SELECT u.nome FROM carteira_atribuicao ca
+            JOIN usuario u ON u.tenant_id = ca.tenant_id AND u.id = ca.usuario_id
+           WHERE ca.tenant_id = tenant_atual() AND ca.contato_id = pag.id AND ca.ate IS NULL AND ca.usuario_id IS NOT NULL
+           LIMIT 1) v ON true
+        LEFT JOIN LATERAL (
+          SELECT ct.e164 FROM contato_telefone ct
+           WHERE ct.tenant_id = tenant_atual() AND ct.contato_id = pag.id AND ct.principal LIMIT 1) tel ON true
+        LEFT JOIN LATERAL (
+          SELECT (SELECT json_agg(json_build_object('id', x.id, 'nome', x.nome, 'cor', x.cor) ORDER BY lower(x.nome), x.id)
+                    FROM (SELECT e.id, e.nome, e.cor FROM contato_etiqueta ce
+                            JOIN etiqueta e ON e.tenant_id = ce.tenant_id AND e.id = ce.etiqueta_id
+                           WHERE ce.tenant_id = tenant_atual() AND ce.contato_id = pag.id
+                           ORDER BY lower(e.nome), e.id LIMIT 3) x) AS itens,
+                 (SELECT count(*) FROM contato_etiqueta ce
+                   WHERE ce.tenant_id = tenant_atual() AND ce.contato_id = pag.id) AS total) et ON true
+       ORDER BY coalesce(pag.total_centavos::bigint, 0) DESC, pag.id DESC
+    `
+      return { linhas, gestao }
+    })
 
     const temMais = linhas.length > limite
     const pagina = temMais ? linhas.slice(0, limite) : linhas
     const ultimo = pagina[pagina.length - 1]
     return reply.send({
-      itens: pagina.map(paraItem),
+      itens: pagina.map((l) => ({
+        ...paraItem(l),
+        email: l.email,
+        telefone: l.telefone,
+        qualificacao: l.qualificado === null ? 'novo' : l.qualificado ? 'qualificado' : 'descartado',
+        origem: l.origem_nome,
+        vendedor: l.vendedor_nome,
+        etiquetas: l.etiquetas_json,
+        etiquetasTotal: l.etiquetas_total,
+        ultimaCompraEm: l.ultima_venda_em,
+        criadoEm: l.criado_em,
+        semProximoPasso: l.sem_proximo_passo,
+      })),
       proximoCursor: temMais && ultimo ? escreverCursor(ultimo.total_centavos, ultimo.id) : null,
+      gestao,
     })
   })
 
@@ -291,12 +528,24 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       }
 
       const dados = await req.comTenant(async (tx) => {
+        // ⚠️ Fora do escopo do usuário = 404, igual a inexistente (D3).
+        if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), id))) return null
         const [contato] = await tx<{
-          id: string; nome: string; modalidade: string | null; qualificado: boolean
+          id: string; nome: string; modalidade: string | null; qualificado: boolean; descarte_motivo: string | null
           recebe_campanhas: boolean; recebe_automacoes: boolean; criado_em: Date; perfil_preco: string | null
+          razao_social: string | null; nome_fantasia: string | null; email: string | null; prioridade: string | null
+          temperatura: string | null; origem_id: string | null; valor_estimado_centavos: string | null; observacoes: string | null
+          origem_nome: string | null; vendedor_id: string | null; vendedor_nome: string | null
         }[]>`
-          SELECT id, nome, modalidade, qualificado, recebe_campanhas, recebe_automacoes, criado_em, perfil_preco
-            FROM contato WHERE id = ${id}
+          SELECT contato.id, contato.nome, modalidade, qualificado, descarte_motivo, recebe_campanhas, recebe_automacoes, contato.criado_em, perfil_preco,
+                 razao_social, nome_fantasia, email, prioridade, temperatura, origem_id,
+                 valor_estimado_centavos::text, observacoes,
+                 (SELECT o.nome FROM origem o WHERE o.tenant_id = contato.tenant_id AND o.id = contato.origem_id) AS origem_nome,
+                 ca.usuario_id AS vendedor_id,
+                 (SELECT u.nome FROM usuario u WHERE u.tenant_id = contato.tenant_id AND u.id = ca.usuario_id) AS vendedor_nome
+            FROM contato
+            LEFT JOIN carteira_atribuicao ca ON ca.tenant_id = contato.tenant_id AND ca.contato_id = contato.id AND ca.ate IS NULL
+           WHERE contato.id = ${id}
         `
         if (!contato) return null
 
@@ -322,10 +571,10 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         const [{ n: totalDocumentos } = { n: 0 }] = await tx<{ n: number }[]>`
           SELECT count(DISTINCT numero)::int AS n FROM contato_documento WHERE contato_id = ${id}`
         const [endereco] = await tx<{
-          logradouro: string | null; numero: string | null; bairro: string | null
+          logradouro: string | null; numero: string | null; complemento: string | null; bairro: string | null
           cidade: string | null; uf: string | null; cep: string | null
         }[]>`
-          SELECT logradouro, numero, bairro, cidade, uf, cep FROM contato_endereco
+          SELECT logradouro, numero, complemento, bairro, cidade, uf, cep FROM contato_endereco
            WHERE contato_id = ${id} ORDER BY principal DESC, seq LIMIT 1`
 
         const ultimasVendas = await tx<{ id: string; ocorrida_em: Date; valor_centavos: string; cancelada: boolean }[]>`
@@ -361,9 +610,22 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
         id: dados.contato.id,
         nome: dados.contato.nome,
         modalidade: dados.contato.modalidade,
+        razaoSocial: dados.contato.razao_social,
+        nomeFantasia: dados.contato.nome_fantasia,
+        email: dados.contato.email,
+        prioridade: dados.contato.prioridade,
+        temperatura: dados.contato.temperatura,
+        origemId: dados.contato.origem_id,
+        origem: dados.contato.origem_nome,
+        criadoEm: dados.contato.criado_em,
+        vendedor: dados.contato.vendedor_id ? { id: dados.contato.vendedor_id, nome: dados.contato.vendedor_nome ?? 'Usuário' } : null,
+        valorEstimadoCentavos: dados.contato.valor_estimado_centavos === null ? null : Number(dados.contato.valor_estimado_centavos),
+        observacoes: dados.contato.observacoes,
         // Perfil de preço DECLARADO (ADR-025). null = cota pelo padrão (atacado).
         perfilPreco: dados.contato.perfil_preco,
         qualificado: dados.contato.qualificado,
+        // Por que está Descartado: "sem_resposta" = descarte automático do fim da cadência (G5); null = manual.
+        descarteMotivo: dados.contato.descarte_motivo,
         recebeCampanhas: dados.contato.recebe_campanhas,
         recebeAutomacoes: dados.contato.recebe_automacoes,
         telefones: dados.telefones,
@@ -394,7 +656,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
    *    requisição de item nunca carrega preço.
    */
   app.patch<{ Params: { id: string }; Body: { nome?: string; ativo?: boolean; perfilPreco?: string | null } }>(
-    '/v1/contatos/:id', { preHandler: exigirTenant },
+    '/v1/contatos/:id', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const nome = req.body?.nome?.trim()
       const ativo = req.body?.ativo
@@ -404,6 +666,8 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       if (perfilPreco !== undefined && perfilPreco !== null && !ehPerfilPreco(perfilPreco)) {
         return reply.code(422).send({ erro: 'contato.perfil_preco_invalido', mensagem: 'Perfil de preço deve ser varejo ou atacado.' })
       }
+      const bloqueado = await req.comTenant((tx) => contatoAnonimizado(tx, req.params.id))
+      if (bloqueado) return reply.code(409).send(CONTATO_ANONIMIZADO)
       const [r] = await req.comTenant((tx) => tx`
         UPDATE contato SET
           nome  = ${nome ?? tx`nome`},
@@ -417,13 +681,14 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Adiciona um telefone ao contato (idempotente por chave_bloqueio). */
   app.post<{ Params: { id: string }; Body: { telefone?: string; principal?: boolean } }>(
-    '/v1/contatos/:id/telefones', { preHandler: exigirTenant },
+    '/v1/contatos/:id/telefones', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const tel = normalizarTelefone(req.body?.telefone ?? '')
       if (!tel) return reply.code(422).send({ erro: 'telefone.invalido', mensagem: 'Telefone inválido.' })
       const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [c] = await tx<{ anonimizado_em: Date | null }[]>`SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return { erro: 404 as const }
+        if (c.anonimizado_em) return { erro: 409 as const }
         const [linhaProx] = await tx<{ prox: number }[]>`
           SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
         const prox = linhaProx!.prox
@@ -435,26 +700,29 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
           ON CONFLICT DO NOTHING`
         return { ok: true }
       })
-      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if ('erro' in r) return r.erro === 409 ? reply.code(409).send(CONTATO_ANONIMIZADO) : reply.code(404).send({ erro: 'contato.nao_encontrado' })
       return reply.code(201).send({ ok: true })
     },
   )
 
   /** Define qual telefone é o principal. */
   app.post<{ Params: { id: string; seq: string } }>(
-    '/v1/contatos/:id/telefones/:seq/principal', { preHandler: exigirTenant },
+    '/v1/contatos/:id/telefones/:seq/principal', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
-      await req.comTenant(async (tx) => {
+      const bloqueado = await req.comTenant(async (tx) => {
+        if (await contatoAnonimizado(tx, req.params.id)) return true
         await tx`UPDATE contato_telefone SET principal = false WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
         await tx`UPDATE contato_telefone SET principal = true WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`
+        return false
       })
+      if (bloqueado) return reply.code(409).send(CONTATO_ANONIMIZADO)
       return reply.send({ ok: true })
     },
   )
 
   /** Remove um telefone. */
   app.delete<{ Params: { id: string; seq: string } }>(
-    '/v1/contatos/:id/telefones/:seq', { preHandler: exigirTenant },
+    '/v1/contatos/:id/telefones/:seq', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       await req.comTenant((tx) => tx`
         DELETE FROM contato_telefone WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`)
@@ -464,15 +732,16 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Adiciona um documento (CNPJ/CPF) validando o dígito. */
   app.post<{ Params: { id: string }; Body: { tipo?: 'cnpj' | 'cpf'; numero?: string } }>(
-    '/v1/contatos/:id/documentos', { preHandler: exigirTenant },
+    '/v1/contatos/:id/documentos', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const tipo = req.body?.tipo
       if (tipo !== 'cnpj' && tipo !== 'cpf') return reply.code(422).send({ erro: 'documento.tipo_invalido' })
       const numero = normalizarDocumento(tipo, req.body?.numero ?? '')
       if (!numero) return reply.code(422).send({ erro: 'documento.invalido', mensagem: `${tipo.toUpperCase()} inválido (dígito verificador).` })
       const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [c] = await tx<{ anonimizado_em: Date | null }[]>`SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return { erro: 404 as const }
+        if (c.anonimizado_em) return { erro: 409 as const }
         const [linhaProx] = await tx<{ prox: number }[]>`
           SELECT coalesce(max(seq), 0) + 1 AS prox FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id}`
         const prox = linhaProx!.prox
@@ -480,14 +749,14 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
                  VALUES (tenant_atual(), ${req.params.id}, ${prox}, ${tipo}, ${numero}, 'manual')`
         return { ok: true }
       })
-      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if ('erro' in r) return r.erro === 409 ? reply.code(409).send(CONTATO_ANONIMIZADO) : reply.code(404).send({ erro: 'contato.nao_encontrado' })
       return reply.code(201).send({ ok: true, numero })
     },
   )
 
   /** Remove um documento. */
   app.delete<{ Params: { id: string; seq: string } }>(
-    '/v1/contatos/:id/documentos/:seq', { preHandler: exigirTenant },
+    '/v1/contatos/:id/documentos/:seq', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       await req.comTenant((tx) => tx`
         DELETE FROM contato_documento WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id} AND seq = ${Number(req.params.seq)}`)
@@ -497,12 +766,13 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Define/atualiza o endereço principal (um por contato, seq 1). */
   app.put<{ Params: { id: string }; Body: Record<string, string | undefined> }>(
-    '/v1/contatos/:id/endereco', { preHandler: exigirTenant },
+    '/v1/contatos/:id/endereco', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const b = req.body ?? {}
       const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [c] = await tx<{ anonimizado_em: Date | null }[]>`SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return { erro: 404 as const }
+        if (c.anonimizado_em) return { erro: 409 as const }
         await tx`
           INSERT INTO contato_endereco (tenant_id, contato_id, seq, logradouro, numero, complemento, bairro, cidade, uf, cep, principal, fonte)
           VALUES (tenant_atual(), ${req.params.id}, 1, ${b['logradouro'] ?? null}, ${b['numero'] ?? null}, ${b['complemento'] ?? null},
@@ -512,14 +782,14 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
             bairro = EXCLUDED.bairro, cidade = EXCLUDED.cidade, uf = EXCLUDED.uf, cep = EXCLUDED.cep`
         return { ok: true }
       })
-      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if ('erro' in r) return r.erro === 409 ? reply.code(409).send(CONTATO_ANONIMIZADO) : reply.code(404).send({ erro: 'contato.nao_encontrado' })
       return reply.send({ ok: true })
     },
   )
 
   /** Comentários/notas do contato — histórico simples. */
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/comentarios', { preHandler: exigirTenant },
+    '/v1/contatos/:id/comentarios', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const linhas = await req.comTenant((tx) => tx<{ id: string; texto: string; autor: string | null; criado_em: Date }[]>`
         SELECT c.id, c.texto, u.nome AS autor, c.criado_em
@@ -532,7 +802,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
 
   /** Trajetória do segmento RFV (transições ao longo do tempo). Skill funil-de-vendas. */
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/segmento/historico', { preHandler: exigirTenant },
+    '/v1/contatos/:id/segmento/historico', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const linhas = await req.comTenant((tx) => tx<{ segmento: string; capturado_em: Date }[]>`
         SELECT segmento, capturado_em
@@ -544,19 +814,20 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
   )
 
   app.post<{ Params: { id: string }; Body: { texto?: string } }>(
-    '/v1/contatos/:id/comentarios', { preHandler: exigirTenant },
+    '/v1/contatos/:id/comentarios', { preHandler: [exigirTenant, ESCOPO_CONTATO] },
     async (req, reply) => {
       const texto = req.body?.texto?.trim()
       if (!texto) return reply.code(422).send({ erro: 'comentario.vazio', mensagem: 'Escreva algo.' })
       const r = await req.comTenant(async (tx) => {
-        const [c] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
+        const [c] = await tx<{ anonimizado_em: Date | null }[]>`SELECT anonimizado_em FROM contato WHERE tenant_id = tenant_atual() AND id = ${req.params.id}`
         if (!c) return { erro: 404 as const }
+        if (c.anonimizado_em) return { erro: 409 as const }
         const autorId = await garantirUsuarioId(tx, req)
         await tx`INSERT INTO comentario (tenant_id, id, contato_id, autor_id, texto)
                  VALUES (tenant_atual(), ${randomUUID()}, ${req.params.id}, ${autorId}, ${texto})`
         return { ok: true }
       })
-      if ('erro' in r) return reply.code(404).send({ erro: 'contato.nao_encontrado' })
+      if ('erro' in r) return r.erro === 409 ? reply.code(409).send(CONTATO_ANONIMIZADO) : reply.code(404).send({ erro: 'contato.nao_encontrado' })
       return reply.code(201).send({ ok: true })
     },
   )
@@ -573,7 +844,9 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
     const limite = limiteDe(q.limite)
     const c = lerCursor(q.cursor)
 
-    const linhas = await req.comTenant((tx) => tx<(LinhaMetrica & { urgencia: string })[]>`
+    const linhas = await req.comTenant(async (tx) => {
+      const escopo = await escopoDaRequisicao(tx, req)
+      return tx<(LinhaMetrica & { urgencia: string })[]>`
       WITH fila AS (
         SELECT c.id, c.nome, m.qtd_vendas::text, m.total_centavos::text,
                m.dias_sem_comprar, m.atraso_relativo::text,
@@ -584,6 +857,7 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
                --    entrar na fila em vez de sumir por não ter média.
                coalesce(m.atraso_relativo, m.dias_sem_comprar::numeric / 30) AS urgencia
           FROM metricas_contato m JOIN contato c ON c.id = m.contato_id
+         WHERE ${condicaoContato(tx, escopo, 'c')}
       )
       SELECT * FROM fila
        -- Só quem precisa de ação: quem está dentro do ritmo (<= 0.9) fica fora.
@@ -591,7 +865,8 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
          AND ${c === null ? tx`true` : tx`(urgencia, id) < (${Number(c[0])}, ${c[1]}::uuid)`}
        ORDER BY urgencia DESC, id DESC
        LIMIT ${limite + 1}
-    `)
+    `
+    })
 
     const temMais = linhas.length > limite
     const pagina = temMais ? linhas.slice(0, limite) : linhas

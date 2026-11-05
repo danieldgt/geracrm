@@ -5,6 +5,7 @@ import { exigirTenant, subDoUsuario } from '../../plugins/tenant.js'
 import { garantirUsuarioId } from './rotas-fila.js'
 import { fragmentoForaDaSimulacao, fragmentoNaFila } from './sla-handoff.js'
 import { midiaHabilitada, urlAssinada, ehChaveMidia } from './midia/armazenamento.js'
+import { condicaoConversa, contatoNoEscopo, conversaNoEscopo, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
 
 /**
  * E5-14: na leitura, a CHAVE de mídia vira URL ASSINADA de expiração curta. O
@@ -56,6 +57,8 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
       const resultado = await req.comTenant(async (tx) => {
         const [contato] = await tx`SELECT 1 FROM contato WHERE tenant_id = tenant_atual() AND id = ${contatoId}`
         if (!contato) return { erro: 'contato_nao_encontrado' as const }
+        // ⚠️ Escopo (D3): puxar para o chat só o cliente que a pessoa enxerga.
+        if (!(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), contatoId))) return { erro: 'contato_nao_encontrado' as const }
 
         const [canal] = req.body?.canalId
           // ⚠️ Canal arquivado (0083) não abre conversa nova: ele saiu da
@@ -91,7 +94,7 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
   /** Marca a conversa como lida ATÉ a versão atual, para o usuário (E5-12). */
   app.post<{ Params: { id: string } }>(
     '/v1/conversas/:id/lida',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       const conversaId = req.params.id
       const ok = await req.comTenant(async (tx) => {
@@ -113,9 +116,21 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
   )
 
   app.get('/v1/conversas', { preHandler: exigirTenant }, async (req, reply) => {
-    const q = (req.query ?? {}) as { cursor?: string; limite?: string; canal?: string; filtro?: string }
+    const q = (req.query ?? {}) as { cursor?: string; limite?: string; canal?: string; filtro?: string; conduzidoPor?: string }
     const limite = Math.min(Number(q.limite) || LIMITE_PADRAO, LIMITE_MAX)
     const filtro = q.filtro === 'fila' || q.filtro === 'meus' ? q.filtro : 'todas'
+    // Quem CONDUZ agora (combina com `filtro`): agente = conduzida pela IA sem atendimento aberto;
+    // humano = atendimento aberto com atendente; aguardando = na fila (mesma régua da aba Fila).
+    // ⚠️ `conduzida_por = 'humano'` SEM atendimento aberto (atendimento encerrado, ou conversa que
+    //    nasceu de envio nosso — campanha, template) não entra em NENHUM chip enquanto a última
+    //    palavra for nossa: ninguém conduz e ninguém espera. NÃO vai para "Aguardando" de propósito:
+    //    o chip é a régua ÚNICA da fila (`fragmentoNaFila` — contador, aba Fila, coluna do kanban), e
+    //    pôr ali quem não está esperando inflaria a fila com conversas encerradas. Quando o cliente
+    //    escreve, `ultima_direcao` vira 'entrante' e a conversa entra em "Aguardando" sozinha.
+    const conduzidoPor = q.conduzidoPor === 'agente' || q.conduzidoPor === 'humano' || q.conduzidoPor === 'aguardando' ? q.conduzidoPor : null
+    if (q.conduzidoPor !== undefined && q.conduzidoPor !== '' && conduzidoPor === null) {
+      return reply.code(422).send({ erro: 'conversas.conduzido_por_invalido', validos: ['agente', 'humano', 'aguardando'] })
+    }
 
     // Cursor: "<ultima_mensagem_em iso>:<conversa_id>".
     let cursorEm: string | null = null
@@ -126,7 +141,11 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
     }
 
     const sub = subDoUsuario(req) // a MESMA regra do assumir (dev: "dev-<tenant>")
-    const linhas = await req.comTenant((tx) => tx<{
+    const linhas = await req.comTenant(async (tx) => {
+      // ⚠️ Escopo (D3): a fila de não atribuídas do número que a pessoa atende
+      //    continua visível (é dela que se assume) — ver condicaoConversa.
+      const escopo = await escopoDaRequisicao(tx, req)
+      return tx<{
       id: string; contato_id: string; nome: string; conduzida_por: string
       ultima_mensagem_em: Date | null; ultima_entrante_em: Date | null
       ultima_direcao: string | null; arquivada: boolean
@@ -169,6 +188,7 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
         ) um ON true
        WHERE NOT cv.arquivada
          AND ${fragmentoForaDaSimulacao(tx)}
+         AND ${condicaoConversa(tx, escopo)}
          AND ${q.canal ? tx`cv.canal_id = ${q.canal}::uuid` : tx`true`}
          AND ${
            filtro === 'fila'
@@ -181,11 +201,26 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
                        AND a.estado <> 'encerrado' AND u.cognito_sub = ${sub})`
                : tx`true`
          }
+         AND ${
+           conduzidoPor === 'agente'
+             ? tx`cv.conduzida_por = 'ia' AND NOT EXISTS (
+                     SELECT 1 FROM atendimento a
+                      WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado <> 'encerrado')`
+             : conduzidoPor === 'humano'
+               ? tx`EXISTS (
+                     SELECT 1 FROM atendimento a
+                      WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id
+                        AND a.estado <> 'encerrado' AND a.atendente_id IS NOT NULL)`
+               : conduzidoPor === 'aguardando'
+                 ? fragmentoNaFila(tx)
+                 : tx`true`
+         }
          AND ${cursorEm === null ? tx`true` : tx`
                (cv.ultima_mensagem_em, cv.id) < (${cursorEm}::timestamptz, ${cursorId}::uuid)`}
        ORDER BY cv.ultima_mensagem_em DESC NULLS LAST, cv.id DESC
        LIMIT ${limite + 1}
-    `)
+    `
+    })
 
     const agora = new Date()
     const temMais = linhas.length > limite
@@ -229,19 +264,22 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ erro: 'conversa.id_invalido', mensagem: 'Id inválido.' })
       }
 
+      const sub = subDoUsuario(req)
       const dados = await req.comTenant(async (tx) => {
+        // ⚠️ Fora do escopo do usuário = 404, igual a inexistente (D3).
+        if (!(await conversaNoEscopo(tx, await escopoDaRequisicao(tx, req), id))) return null
         const [conversa] = await tx<{
           id: string; nome: string; contato_id: string
           ultima_entrante_em: Date | null; conduzida_por: string; canal_tipo: string
-          at_estado: string | null; at_nome: string | null; at_protocolo: string | null
+          at_estado: string | null; at_nome: string | null; at_protocolo: string | null; at_meu: boolean | null
         }[]>`
           SELECT cv.id, ct.nome, cv.contato_id, cv.ultima_entrante_em, cv.conduzida_por,
-                 cc.tipo AS canal_tipo, at.estado AS at_estado, at.nome AS at_nome, at.protocolo AS at_protocolo
+                 cc.tipo AS canal_tipo, at.estado AS at_estado, at.nome AS at_nome, at.protocolo AS at_protocolo, at.meu AS at_meu
             FROM conversa cv
             JOIN contato ct ON ct.id = cv.contato_id
             JOIN canal_conectado cc ON cc.tenant_id = cv.tenant_id AND cc.id = cv.canal_id
             LEFT JOIN LATERAL (
-              SELECT a.estado, a.protocolo, u.nome
+              SELECT a.estado, a.protocolo, u.nome, coalesce(u.cognito_sub = ${sub}, false) AS meu
                 FROM atendimento a
                 LEFT JOIN usuario u ON u.tenant_id = a.tenant_id AND u.id = a.atendente_id
                WHERE a.tenant_id = cv.tenant_id AND a.conversa_id = cv.id AND a.estado <> 'encerrado'
@@ -282,6 +320,8 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
               estado: dados.conversa.at_estado,
               atendenteNome: dados.conversa.at_nome,
               protocolo: dados.conversa.at_protocolo ? Number(dados.conversa.at_protocolo) : null,
+              // Quem conduz sou EU? (G1: a tela só oferece "Devolver" a quem conduz ou à gestão.)
+              meu: dados.conversa.at_meu === true,
             }
           : null,
         // ⚠️ A janela de 24h + template é regra SÓ do WhatsApp Oficial (Meta).
@@ -309,7 +349,7 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
    */
   app.get<{ Params: { id: string }; Querystring: { anteriorEm?: string; anteriorId?: string } }>(
     '/v1/conversas/:id/mensagens',
-    { preHandler: exigirTenant },
+    { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       const id = req.params.id
       const { anteriorEm, anteriorId } = req.query

@@ -8,10 +8,14 @@ import { InboxServico, type ItemConversa, type Mensagem, type Thread } from '../
 import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { PresencaServico } from '../../nucleo/presenca.servico.js'
 import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.componente.js'
+import { BotaoComponente, EstadoComponente, FiltrosComponente, IconeComponente } from '../../compartilhado/ui/index.js'
 import { SugestaoServico } from './sugestao.servico.js'
 import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo, seloDaSugestao, tituloDaSugestao } from './sugestao.regras.js'
 import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.js'
 import { SlaCronometroComponente } from './sla-cronometro.componente.js'
+import { AcoesConversaComponente } from './acoes-conversa.componente.js'
+import { AgendarReuniaoComponente } from '../agenda/agendar-reuniao.componente.js'
+import { CONDUCOES } from '../../nucleo/devolucao.regras.js'
 import { CelularServico } from '../../nucleo/celular.servico.js'
 import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
 
@@ -24,7 +28,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
  */
 @Component({
   selector: 'app-inbox',
-  imports: [FormsModule, RouterLink, CanalSimboloComponente, SlaCronometroComponente],
+  imports: [FormsModule, RouterLink, BotaoComponente, EstadoComponente, FiltrosComponente, IconeComponente, CanalSimboloComponente, SlaCronometroComponente, AcoesConversaComponente, AgendarReuniaoComponente],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="wa" [class.tem-conversa]="servico.selecionadaId()">
@@ -55,50 +59,59 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
              saiu — porque o número está fora do ar. -->
         @for (c of canaisCaidos(); track c.id) {
           <div class="canal-caido" role="alert">
-            <strong>⚠️ {{ c.nome || 'Número' }} desconectado</strong>
+            <strong><ui-icone nome="alert-triangle" [tamanho]="14" /> {{ c.nome || 'Número' }} desconectado</strong>
             <span>Mensagens não são enviadas nem recebidas por este número.</span>
             <a routerLink="/numeros">Reconectar por QR →</a>
           </div>
         }
 
-        <div class="busca-wrap">
-          <span class="lupa">🔍</span>
-          <input class="busca" type="search" placeholder="Pesquisar conversa"
-                 [ngModel]="busca()" (ngModelChange)="busca.set($event)" />
-        </div>
-
-        <div class="abas">
-          <button [class.ativa]="servico.filtro() === 'todas'" (click)="servico.trocarFiltro('todas')">Todas</button>
-          <button [class.ativa]="servico.filtro() === 'fila'" (click)="servico.trocarFiltro('fila')">
-            Fila @if (servico.contadores().fila) { <span class="cont">{{ servico.contadores().fila }}</span> }
-          </button>
-          <button [class.ativa]="servico.filtro() === 'meus'" (click)="servico.trocarFiltro('meus')">
-            Meus @if (servico.contadores().meus) { <span class="cont">{{ servico.contadores().meus }}</span> }
-          </button>
-        </div>
+        <!-- Busca local sobre as conversas carregadas (+ abrir por protocolo). Enter aplica na hora;
+             o debounce de 300 ms é do ui-filtros. As abas ficam projetadas no cartão. -->
+        <ui-filtros class="filtros-lista" [compacto]="true" rotuloBusca="Pesquisar" placeholder="Pesquisar conversa ou #protocolo"
+                    (buscar)="busca.set($event)">
+          <div class="abas-wrap">
+            <div class="abas">
+              <button type="button" [class.ativa]="servico.filtro() === 'todas'" (click)="servico.trocarFiltro('todas')">Todas</button>
+              <button type="button" [class.ativa]="servico.filtro() === 'fila'" (click)="servico.trocarFiltro('fila')">
+                Fila @if (servico.contadores().fila) { <span class="cont">{{ servico.contadores().fila }}</span> }
+              </button>
+              <button type="button" [class.ativa]="servico.filtro() === 'meus'" (click)="servico.trocarFiltro('meus')">
+                Meus @if (servico.contadores().meus) { <span class="cont">{{ servico.contadores().meus }}</span> }
+              </button>
+            </div>
+            <div class="abas conducao" role="group" aria-label="Quem conduz a conversa">
+              @for (c of conducoes; track c.id) {
+                <button type="button" [class.ativa]="servico.conduzidoPor() === c.id" [attr.aria-pressed]="servico.conduzidoPor() === c.id"
+                        (click)="servico.trocarConducao(c.id)">{{ c.rotulo }}</button>
+              }
+            </div>
+          </div>
+        </ui-filtros>
 
         <div class="itens">
           @switch (servico.estado()) {
             @case ('carregando') {
               @for (i of [1,2,3,4,5,6,7]; track i) { <div class="item esqueleto"></div> }
             }
-            @case ('sem_permissao') { <p class="aviso">Você não tem acesso às conversas.</p> }
+            @case ('sem_permissao') {
+              <ui-estado tipo="sem-permissao" titulo="Sem acesso às conversas"
+                         descricao="Peça a quem administra a conta a permissão de atendimento." />
+            }
             @case ('erro') {
-              <div class="aviso"><p>{{ servico.erro() }}</p>
-                <button (click)="servico.carregar()">Tentar de novo</button></div>
+              <ui-estado tipo="erro" titulo="Não foi possível carregar as conversas" [descricao]="servico.erro() ?? ''">
+                <ui-botao variante="secundario" (click)="servico.carregar()">Tentar de novo</ui-botao>
+              </ui-estado>
             }
             @case ('pronto') {
               @if (protocoloBusca()) {
                 <button class="item proto-busca" (click)="servico.abrirPorProtocolo(protocoloBusca()!)">
-                  🔎 Abrir protocolo <b class="proto">{{ protocoloFmtBusca() }}</b>
+                  <ui-icone nome="search" [tamanho]="14" /> Abrir protocolo <b class="proto">{{ protocoloFmtBusca() }}</b>
                 </button>
                 @if (servico.avisoBusca()) { <p class="aviso">{{ servico.avisoBusca() }}</p> }
               }
               @if (servico.vazio()) {
-                <div class="vazio-lista">
-                  <span class="icone">💬</span>
-                  <p>Nenhuma conversa ainda. Elas aparecem aqui quando chegar uma mensagem.</p>
-                </div>
+                <ui-estado titulo="Nenhuma conversa ainda" icone="message-circle"
+                           descricao="Elas aparecem aqui quando chegar uma mensagem." />
               } @else if (conversasFiltradas().length === 0) {
                 <p class="aviso">Nada encontrado para “{{ busca() }}”.</p>
               } @else {
@@ -126,7 +139,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                            a pessoa da relação saiba que ele escreveu. -->
                       @if (c.donoCarteira) {
                         <span class="carteira" [title]="'Cliente da carteira de ' + c.donoCarteira">
-                          👤 {{ c.donoCarteira }}
+                          <ui-icone nome="user" [tamanho]="14" /> {{ c.donoCarteira }}
                         </span>
                       }
                     </span>
@@ -151,13 +164,12 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
       <section class="conversa">
         @switch (servico.estadoThread()) {
           @case ('nenhuma') {
-            <div class="placeholder">
-              <span class="icone">💬</span>
-              <p>Selecione uma conversa para começar a atender.</p>
-            </div>
+            <ui-estado class="placeholder" titulo="Selecione uma conversa" icone="message-circle"
+                       descricao="Escolha uma conversa da lista para começar a atender." />
           }
           @case ('carregando') { <div class="placeholder" aria-busy="true"><p>Abrindo…</p></div> }
-          @case ('erro') { <div class="placeholder"><p>Não foi possível abrir esta conversa.</p></div> }
+          @case ('erro') { <ui-estado class="placeholder" tipo="erro" titulo="Não foi possível abrir esta conversa"
+                                  descricao="Volte à lista e tente abrir de novo." /> }
           @case ('pronto') {
             @if (servico.thread(); as t) {
               <header class="topo">
@@ -175,12 +187,14 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                 </span>
                 <div class="topo-acoes">
                   <a class="pedido-btn" routerLink="/pedido" [queryParams]="{ conversa: t.id }"
-                     title="Montar um pedido para este cliente">🛒 Montar pedido</a>
+                     title="Montar um pedido para este cliente"><ui-icone nome="shopping-cart" [tamanho]="14" /> Montar pedido</a>
+                  <app-acoes-conversa [conversaId]="t.id" [atendimento]="t.atendimento" /><!-- G1: devolver ao agente / reatribuir -->
+                  <app-agendar-reuniao [conversaId]="t.id" /><!-- C3: só com o módulo Agenda ligado -->
                   <app-sla-cronometro [conversaId]="t.id" /><!-- P18: SLA do handoff (some sem SLA armado) -->
                   @if (t.atendimento && t.atendimento.estado !== 'na_fila') {
                     <span class="atend-badge" [title]="'Atendimento ' + protocoloFmt(t.atendimento.protocolo)">
                       @if (t.atendimento.protocolo) { <b class="proto">{{ protocoloFmt(t.atendimento.protocolo) }}</b> }
-                      👤 {{ t.atendimento.atendenteNome || 'Em atendimento' }}
+                      <ui-icone nome="user" [tamanho]="14" /> {{ t.atendimento.atendenteNome || 'Em atendimento' }}
                     </span>
                   } @else {
                     <!-- ⚠️ Ausente não assume: assumir CALA o agente naquela
@@ -200,7 +214,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
               <!-- Presença (INB-18): evita dois atendentes no mesmo cliente. -->
               @if (servico.presentes().length) {
                 <div class="presenca" role="status">
-                  👀 {{ textoPresenca(servico.presentes()) }}
+                  <ui-icone nome="eye" [tamanho]="14" /> {{ textoPresenca(servico.presentes()) }}
                 </div>
               }
 
@@ -229,7 +243,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                         <span class="txt apagada-txt">{{ texto(m) }}</span>
                       }
                       <span class="meta">
-                        <span class="apg-badge" [title]="m.apagadaParaTodos ? 'Apagada para todos (recall no WhatsApp)' : 'Apagada só aqui'">🚫 apagada</span>
+                        <span class="apg-badge" [title]="m.apagadaParaTodos ? 'Apagada para todos (recall no WhatsApp)' : 'Apagada só aqui'"><ui-icone nome="ban" [tamanho]="14" /> apagada</span>
                         <span class="h">{{ hora(m.criadoEm) }}</span>
                       </span>
                     } @else if (editandoId() === m.id) {
@@ -247,7 +261,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                         <audio class="msg-audio" controls preload="none" [src]="audioDe(m)"></audio>
                       } @else if (m.tipo === 'acao') {
                         <div class="card-acao" [attr.data-estado]="acaoCampo(m,'estado')">
-                          <div class="card-tit">📋 {{ acaoCampo(m,'titulo') }}</div>
+                          <div class="card-tit"><ui-icone nome="file-text" [tamanho]="14" /> {{ acaoCampo(m,'titulo') }}</div>
                           @if (acaoCampo(m,'resumo')) { <div class="card-res">{{ acaoCampo(m,'resumo') }}</div> }
                           @if (acaoCampo(m,'estado') === 'pendente') {
                             <div class="card-opcoes">
@@ -258,7 +272,8 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                             </div>
                           } @else {
                             <div class="card-resolvido">
-                              {{ acaoCampo(m,'estado') === 'confirmado' ? '✅ Confirmado' : '❌ Recusado' }}
+                              @if (acaoCampo(m,'estado') === 'confirmado') { <ui-icone nome="check" [tamanho]="14" /> Confirmado }
+                              @else { <ui-icone nome="x" [tamanho]="14" /> Recusado }
                             </div>
                           }
                         </div>
@@ -404,12 +419,12 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                       }
                     </div>
                   }
-                  <button class="ic" type="button" title="Emoji" (click)="toggleEmojis($event)">😊</button>
+                  <button class="ic" type="button" title="Emoji" (click)="toggleEmojis($event)" aria-label="Emoji"><ui-icone nome="smile" [tamanho]="24" /></button>
                   <button class="ic" type="button" title="Enviar imagem" (click)="arquivoImg.click()"
-                          [disabled]="servico.enviando()">＋</button>
+                          aria-label="Enviar imagem" [disabled]="servico.enviando()"><ui-icone nome="plus" /></button>
                   <input #arquivoImg type="file" accept="image/*" hidden
                          (change)="aoEscolherImagem($event, t.id)" />
-                  <button class="ic" type="button" title="Gerar pedido" (click)="gerarPedido(t.id)">📋</button>
+                  <button class="ic" type="button" title="Gerar pedido" aria-label="Gerar pedido" (click)="gerarPedido(t.id)"><ui-icone nome="file-text" /></button>
                   <!-- ⚠️ textarea, não input: input type=text NÃO cresce, por
                        definição — nenhum CSS resolve. Quem cola um parágrafo via
                        uma linha e não consegue reler o que escreveu antes de
@@ -425,15 +440,15 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                   @if (servico.rascunho().trim()) {
                     <button class="enviar" type="button" (click)="enviarEVoltarAoCampo(entrada)"
                             [disabled]="servico.enviando()"
-                            [title]="servico.enviando() ? 'Enviando…' : 'Enviar'">➤</button>
+                            [title]="servico.enviando() ? 'Enviando…' : 'Enviar'" aria-label="Enviar"><ui-icone nome="send" /></button>
                   } @else {
                     <button class="enviar" type="button" [class.gravando]="gravando()"
                             (click)="alternarGravacao(t.id)" [disabled]="servico.enviando()"
-                            [title]="gravando() ? 'Parar e enviar' : 'Gravar áudio'">{{ gravando() ? '⏹' : '🎤' }}</button>
+                            [title]="gravando() ? 'Parar e enviar' : 'Gravar áudio'"><ui-icone [nome]="gravando() ? 'square' : 'mic'" [tamanho]="18" /></button>
                   }
                 } @else {
                   <div class="fechada">
-                    ⚠️ Janela de 24h fechada — só um <strong>template</strong> aprovado reabre a conversa.
+                    <ui-icone nome="alert-triangle" [tamanho]="14" /> Janela de 24h fechada — só um <strong>template</strong> aprovado reabre a conversa.
                   </div>
                 }
                 @if (servico.erroEnvio()) { <p class="erro-envio">{{ servico.erroEnvio() }}</p> }
@@ -497,15 +512,13 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .conexao[data-estado='conectando'], .conexao[data-estado='reconectando'] { color: #e0b341; }
     .conexao[data-estado='offline'] { color: #ff6b5e; }
 
-    .busca-wrap { padding: 8px 12px; position: relative; }
-    .lupa { position: absolute; left: 24px; top: 50%; transform: translateY(-50%); font-size: 12px; opacity: .6; }
-    .busca { width: 100%; padding: 8px 12px 8px 34px; border: 0; border-radius: 8px; background: var(--wa-panel); color: var(--wa-text); font: inherit; font-size: 14px; }
-    .busca::placeholder { color: var(--wa-sec); }
-    .busca:focus { outline: 1px solid var(--wa-green); }
+    .filtros-lista { margin: var(--espacamento-2); }
+    .abas-wrap { flex: 1 1 100%; display: grid; gap: var(--espacamento-1); min-width: 0; }
 
-    .abas { display: flex; gap: 4px; padding: 0 12px 8px; }
+    .abas { display: flex; gap: 4px; }
     .abas button { flex: 1; padding: 7px 8px; border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13px; background: var(--wa-panel); color: var(--wa-sec); display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
     .abas button.ativa { background: var(--wa-hover); color: var(--wa-text); font-weight: 600; }
+        .abas.conducao button { font-size: 12px; padding: 4px 8px; }
     .abas .cont { background: var(--wa-green); color: #04231d; font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 999px; min-width: 18px; text-align: center; }
     .itens { flex: 1; overflow-y: auto; min-height: 0; }
     .item { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: none; border: 0; border-bottom: 1px solid var(--wa-line); cursor: pointer; text-align: left; color: inherit; }
@@ -532,8 +545,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .proto-busca .proto { color: var(--wa-green); font-variant-numeric: tabular-nums; }
     .esqueleto { height: 44px; margin: 10px 14px; border-radius: 8px; background: linear-gradient(90deg, var(--wa-panel), var(--wa-hover), var(--wa-panel)); background-size: 200% 100%; animation: brilho 1.3s infinite; }
     @keyframes brilho { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
-    .aviso, .vazio-lista { padding: 24px 18px; color: var(--wa-sec); font-size: 13px; text-align: center; }
-    .vazio-lista .icone { font-size: 32px; display: block; margin-bottom: 8px; }
+    .aviso { padding: 24px 18px; color: var(--wa-sec); font-size: 13px; text-align: center; }
     .aviso button { margin-top: 10px; padding: 6px 12px; border: 0; border-radius: 6px; background: var(--wa-green); color: #04231d; font-weight: 600; cursor: pointer; }
 
     /* ── Conversa ── */
@@ -542,7 +554,6 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .conversa::before { content: ''; position: absolute; inset: 0; opacity: .04; pointer-events: none;
       background-image: radial-gradient(var(--wa-text) 1px, transparent 1px); background-size: 22px 22px; }
     .placeholder { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--wa-sec); text-align: center; padding: 24px; }
-    .placeholder .icone { font-size: 48px; }
 
     .topo { min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 6px 16px; background: var(--wa-panel); z-index: 1; }
     .topo .avatar { width: 40px; height: 40px; font-size: 14px; }
@@ -618,6 +629,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .emoji { border: 0; background: none; cursor: pointer; font-size: 20px; padding: 4px; border-radius: 6px; line-height: 1; }
     .emoji:hover { background: var(--wa-hover); }
     .ic { flex: none; width: 34px; height: 34px; border: 0; border-radius: 50%; background: none; color: var(--wa-sec); font-size: 20px; cursor: pointer; }
+    .ic, .enviar { display: inline-grid; place-items: center; }
     .ic:disabled { opacity: .5; cursor: default; }
     /* ⚠️ Cresce com o texto até 8 linhas e então rola por dentro. Sem o teto, um
        texto longo empurraria a conversa inteira para fora da tela — o composer
@@ -718,6 +730,7 @@ export class InboxPagina implements OnDestroy {
    * dois falando com o mesmo cliente, cada um sem saber do outro.
    */
   readonly presenca = inject(PresencaServico)
+  readonly conducoes = CONDUCOES
   /** P13: a sugestão do agente da conversa aberta (assistido/copiloto). */
   readonly sugestao = inject(SugestaoServico)
   readonly rotuloModo = rotuloModo

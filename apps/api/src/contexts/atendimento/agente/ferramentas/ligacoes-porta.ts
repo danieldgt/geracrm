@@ -1,4 +1,4 @@
-import type { AcoesPlaybook, AtributosSku } from '@geracrm/shared'
+import type { AcoesPlaybook, AtributosSku, ObjecaoPlaybook } from '@geracrm/shared'
 import type { ContextoFerramenta } from './porta.js'
 
 /**
@@ -72,6 +72,42 @@ export interface ConhecimentoPorta {
   buscar(ctx: ContextoFerramenta, pergunta: string): Promise<{ trechos: readonly { texto: string; fonte: string }[] }>
 }
 
+/**
+ * AGENDA (C3) — o que o vendedor precisa para marcar reunião: ofertar horários livres
+ * (responsável do contato primeiro, depois a filial) e confirmar a opção que o CLIENTE
+ * escolheu. `real: false` = modo seco (nada é gravado). Erro de negócio é `situacao`
+ * nomeada, nunca exceção.
+ */
+export interface OpcaoParaLlm {
+  readonly n: number
+  /** "qua, 05/11 às 15:00" — no fuso da loja. */
+  readonly quando: string
+  /** Primeiro nome de quem atende. */
+  readonly com: string
+}
+/** Hora e data LOCAIS de um horário devolvido (fonte da guarda da resposta). */
+export interface QuandoLocal { readonly data: string; readonly hora: string; readonly diaIso: number }
+
+export type ResultadoOferta =
+  | { readonly situacao: 'ok'; readonly opcoes: readonly (OpcaoParaLlm & QuandoLocal)[]; readonly ofertaId: string | null }
+  | { readonly situacao: 'sem_horarios' | 'sem_vendedor' | 'dia_invalido' | 'limite_ofertas' }
+  | { readonly situacao: 'ja_tem_reuniao'; readonly quando: string }
+export type ResultadoConfirmacaoReuniao =
+  | {
+    readonly situacao: 'agendado'; readonly eventoId: string; readonly usuarioId: string; readonly quando: string; readonly com: string
+    readonly contato: string; readonly local: QuandoLocal
+  }
+  | {
+    readonly situacao: 'sem_oferta' | 'mesmo_turno' | 'oferta_nao_enviada' | 'oferta_vencida' | 'ja_confirmada' | 'sem_confirmacao'
+      | 'cliente_recusou' | 'opcao_inexistente' | 'ocupado' | 'responsavel_indisponivel' | 'sem_conversa' | 'confirmacao_divergente'
+  }
+  | { readonly situacao: 'ja_tem_reuniao'; readonly quando: string }
+
+export interface AgendaPorta {
+  ofertar(ctx: ContextoFerramenta, p: { dia: string | null; real: boolean }): Promise<ResultadoOferta>
+  confirmar(ctx: ContextoFerramenta, p: { opcao: number }): Promise<ResultadoConfirmacaoReuniao>
+}
+
 export interface Ligacoes {
   readonly catalogo?: CatalogoPorta | undefined
   readonly pedido?: PedidoPorta | undefined
@@ -82,4 +118,15 @@ export interface Ligacoes {
    * perfil do cliente não são ação habilitável (sempre no menu).
    */
   readonly acoes?: AcoesPlaybook | undefined
+  /**
+   * Objeções do playbook publicado do número (G2) — o vocabulário de
+   * `registrar_objecao`. Ausente/vazio = a ferramenta não entra no menu.
+   */
+  readonly objecoes?: readonly ObjecaoPlaybook[] | undefined
+  /**
+   * Agenda (C3): presente SÓ com o módulo Agenda ligado, a chave "O agente pode marcar
+   * reuniões" do número ligada e o número em assistido/autônomo (`agendaNoTurno`). Ausente =
+   * `agendar_reuniao` não entra no menu (ADR-029: não basta instruir o prompt).
+   */
+  readonly agenda?: AgendaPorta | undefined
 }

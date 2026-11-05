@@ -1,9 +1,11 @@
 import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
-import { FormsModule } from '@angular/forms'
 import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, moveItemInArray, transferArrayItem } from '@angular/cdk/drag-drop'
 import { AtendimentoKanbanServico, type Card, type CardAtend, type Coluna } from './atendimento-kanban.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
-import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
+import {
+  CabecalhoTelaComponente, CampoComponente, EstadoComponente, IconeComponente, ModalComponente, SelectComponente,
+  ConfirmacaoServico, ToastServico, type OpcaoSelect,
+} from '../../compartilhado/ui/index.js'
 import { SlaCronometroComponente } from './sla-cronometro.componente.js'
 
 /**
@@ -15,15 +17,17 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
 @Component({
   selector: 'app-atendimento-kanban',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CdkDropListGroup, CdkDropList, CdkDrag, FormsModule, SlaCronometroComponente],
+  imports: [
+    CdkDropListGroup, CdkDropList, CdkDrag, SlaCronometroComponente, CabecalhoTelaComponente, CampoComponente,
+    EstadoComponente, IconeComponente, ModalComponente, SelectComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1 class="txt-titulo">Painel de Atendimentos</h1>
-        <p class="sub">Arraste conforme o atendimento avança. O fluxo é configurável pela sua empresa.</p>
-      </div>
-      <button class="btn btn--secundario" (click)="abrirConfig()">⚙️ Configurar fluxo</button>
-    </header>
+    <ui-cabecalho-tela titulo="Painel de Atendimentos"
+      subtitulo="Arraste conforme o atendimento avança. O fluxo é configurável pela sua empresa.">
+      <button class="btn btn--secundario" type="button" (click)="abrirConfig()">
+        <ui-icone nome="settings" [tamanho]="14" /> Configurar fluxo
+      </button>
+    </ui-cabecalho-tela>
 
     @if (servico.erroMove(); as e) { <p class="erro-move" role="alert">{{ e }}</p> }
 
@@ -31,9 +35,15 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
       @case ('carregando') {
         <div class="board"><div class="col-esq"></div><div class="col-esq"></div><div class="col-esq"></div></div>
       }
-      @case ('sem_permissao') { <div class="bloco aviso"><h2 class="txt-secao">Sem acesso ao painel</h2></div> }
-      @case ('erro') { <div class="bloco aviso"><h2 class="txt-secao">Não foi possível carregar</h2>
-        <button (click)="servico.carregar()">Tentar de novo</button></div> }
+      @case ('sem_permissao') {
+        <ui-estado tipo="sem-permissao" titulo="Você não tem acesso ao painel de atendimentos"
+          descricao="Peça a um administrador a permissão de gestor de atendimento." />
+      }
+      @case ('erro') {
+        <ui-estado tipo="erro" titulo="Não foi possível carregar o painel" descricao="Os atendimentos continuam salvos; tente de novo.">
+          <button class="btn btn--primario" type="button" (click)="servico.carregar()">Tentar de novo</button>
+        </ui-estado>
+      }
       @case ('pronto') {
         <div class="board rolagem-x" cdkDropListGroup>
           @for (col of servico.colunas(); track col.chave) {
@@ -54,9 +64,9 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
                         <span class="card-proto">#{{ card.protocolo }}</span>
                         @if (card.atendente) { <span class="card-resp">· {{ card.atendente }}</span> }
                       </span>
-                      <span class="card-aging" [class.card-aging--velho]="velho(card.entrouEtapaEm)">⏱ {{ aging(card.entrouEtapaEm) }} nesta etapa</span>
+                      <span class="card-aging" [class.card-aging--velho]="velho(card.entrouEtapaEm)"><ui-icone nome="timer" [tamanho]="14" /> {{ aging(card.entrouEtapaEm) }} nesta etapa</span>
                     } @else {
-                      <span class="card-aging">💬 {{ aging(card.ultimaMensagemEm) }} aguardando · arraste para assumir</span>
+                      <span class="card-aging"><ui-icone nome="message-circle" [tamanho]="14" /> {{ aging(card.ultimaMensagemEm) }} aguardando · arraste para assumir</span>
                       @if (card.sla) { <app-sla-cronometro [sla]="card.sla" [compacto]="true" /> }
                     }
                   </article>
@@ -75,42 +85,35 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
     }
 
     <!-- Configuração do fluxo: CRUD de etapas por empresa. -->
-    @if (config()) {
-      <div class="fora" (click)="fecharConfig()"></div>
-      <div class="config-modal" role="dialog" aria-label="Configurar fluxo de atendimento">
-        <header class="cfg-topo">
-          <h2 class="txt-secao">Fluxo de atendimento</h2>
-          <button class="cfg-x" (click)="fecharConfig()" aria-label="Fechar">✕</button>
-        </header>
-        <p class="cfg-dica">As etapas viram colunas do painel. Uma empresa monta um fluxo simples ou completo — o tipo <b>Encerrado</b> fecha o atendimento ao receber o card.</p>
-        @if (servico.erroConfig(); as e) { <p class="cfg-erro" role="alert">{{ e }}</p> }
+    <ui-modal [aberto]="config()" titulo="Fluxo de atendimento" largura="m" (fechar)="fecharConfig()">
+      <p class="cfg-dica">As etapas viram colunas do painel. Uma empresa monta um fluxo simples ou completo — o tipo <b>Encerrado</b> fecha o atendimento ao receber o card.</p>
+      @if (servico.erroConfig(); as e) { <p class="cfg-erro" role="alert">{{ e }}</p> }
 
-        <ul class="cfg-lista">
-          @for (e of servico.config(); track e.id) {
-            <li class="cfg-item" [class.cfg-item--off]="!e.ativo">
-              <span class="cfg-ordem">
-                <button (click)="reordenar(e, -1)" [disabled]="$first" aria-label="Subir">▲</button>
-                <button (click)="reordenar(e, 1)" [disabled]="$last" aria-label="Descer">▼</button>
-              </span>
-              <input class="cfg-nome" [value]="e.nome" (change)="renomear(e, $event)" />
-              <span class="cfg-tipo" [class.cfg-tipo--enc]="e.tipo === 'encerrado'">{{ e.tipo === 'encerrado' ? 'Encerrado' : 'Atendimento' }}</span>
-              <span class="cfg-qtd">{{ e.total }}</span>
-              <button class="cfg-toggle" (click)="alternarAtivo(e)">{{ e.ativo ? 'Ativa' : 'Inativa' }}</button>
-              <button class="cfg-del" (click)="remover(e)" aria-label="Remover">🗑</button>
-            </li>
-          }
-        </ul>
+      <ul class="cfg-lista">
+        @for (e of servico.config(); track e.id) {
+          <li class="cfg-item" [class.cfg-item--off]="!e.ativo">
+            <span class="cfg-ordem">
+              <button type="button" (click)="reordenar(e, -1)" [disabled]="$first" aria-label="Subir"><ui-icone nome="chevron-down" [tamanho]="14" class="gira" /></button>
+              <button type="button" (click)="reordenar(e, 1)" [disabled]="$last" aria-label="Descer"><ui-icone nome="chevron-down" [tamanho]="14" /></button>
+            </span>
+            <input class="cfg-nome" [value]="e.nome" (change)="renomear(e, $event)" [attr.aria-label]="'Nome da etapa ' + e.nome" />
+            <span class="cfg-tipo" [class.cfg-tipo--enc]="e.tipo === 'encerrado'">{{ e.tipo === 'encerrado' ? 'Encerrado' : 'Atendimento' }}</span>
+            <span class="cfg-qtd">{{ e.total }}</span>
+            <button type="button" class="cfg-toggle" (click)="alternarAtivo(e)">{{ e.ativo ? 'Ativa' : 'Inativa' }}</button>
+            <button type="button" class="cfg-del" (click)="remover(e)" aria-label="Remover etapa"><ui-icone nome="x" [tamanho]="14" /></button>
+          </li>
+        }
+      </ul>
 
-        <div class="cfg-novo">
-          <input class="cfg-nome" [(ngModel)]="novoNome" placeholder="Nova etapa…" (keydown.enter)="criar()" />
-          <select class="cfg-select" [(ngModel)]="novoTipo">
-            <option value="atendimento">Atendimento</option>
-            <option value="encerrado">Encerrado</option>
-          </select>
-          <button class="cfg-add" (click)="criar()" [disabled]="!novoNome().trim()">Adicionar</button>
-        </div>
+      <div class="cfg-novo">
+        <ui-campo rotulo="Nova etapa" placeholder="Nome da etapa" [valor]="novoNome()" (valorChange)="novoNome.set($event)" />
+        <ui-select rotulo="Tipo" [opcoes]="opcoesTipo" [valor]="novoTipo()" (valorChange)="novoTipo.set($event === 'encerrado' ? 'encerrado' : 'atendimento')" />
       </div>
-    }
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharConfig()">Fechar</button>
+        <button type="button" class="btn btn--primario" (click)="criar()" [disabled]="!novoNome().trim()">Adicionar etapa</button>
+      </div>
+    </ui-modal>
   `,
   styles: `
     /* ⚠️ Altura DEFINIDA — e nem 100%, nem min-height. Um kanban só funciona se
@@ -126,13 +129,9 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
     :host { display: flex; flex-direction: column;
       height: calc(100dvh - var(--altura-barra-topo));
       padding: var(--espacamento-6); overflow: hidden; }
-    .cabecalho { margin-bottom: var(--espacamento-4); display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
     .cfg-erro { margin: 0 0 var(--espacamento-3); padding: var(--espacamento-2) var(--espacamento-3);
       border-radius: var(--raio-controle); background: var(--erro-suave); color: var(--erro); font-size: 12px; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
     .board { display: flex; gap: var(--espacamento-3); align-items: stretch; flex: 1; min-height: 0; overflow-x: auto; padding-bottom: var(--espacamento-2); }
     .col-esq { width: 280px; height: 200px; border-radius: var(--raio-painel); background: var(--superficie); flex: none; }
     .coluna { width: 280px; flex: none; display: flex; flex-direction: column; min-height: 0;
@@ -156,7 +155,7 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
     .card-meta { font-size: 12px; color: var(--texto-secundario); }
     .card-proto { font-variant-numeric: tabular-nums; }
     .card-resp { color: var(--texto-suave); }
-    .card-aging { font-size: 11px; color: var(--texto-suave); }
+    .card-aging { display: inline-flex; align-items: center; gap: var(--espacamento-1); font-size: 11px; color: var(--texto-suave); }
     .card-aging--velho { color: var(--erro); }
     .col-vazia { margin: var(--espacamento-2) 0; color: var(--texto-suave); font-size: 12px; text-align: center; }
     .mais { margin: 0 var(--espacamento-3) var(--espacamento-3); padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
@@ -166,30 +165,21 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
     .cdk-drag-placeholder { opacity: .4; }
     .cdk-drop-list-dragging .card:not(.cdk-drag-placeholder) { transition: transform var(--movimento-estado-duracao) var(--movimento-estado-curva); }
     /* Modal de configuração */
-    .fora { position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 40; }
-    .config-modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 41; width: min(560px, 92vw); max-height: 86vh; overflow: auto;
-      background: var(--superficie-elevada); border: 1px solid var(--borda); border-radius: var(--raio-painel);
-      box-shadow: var(--elevacao-modal); padding: var(--espacamento-5); }
-    .cfg-topo { display: flex; align-items: center; justify-content: space-between; }
-    .cfg-topo h2 { margin: 0; color: var(--texto); }
-    .cfg-x { border: 0; background: transparent; color: var(--texto-secundario); font-size: 16px; }
     .cfg-dica { margin: var(--espacamento-2) 0 var(--espacamento-4); font-size: 12px; color: var(--texto-suave); }
     .cfg-lista { list-style: none; margin: 0 0 var(--espacamento-4); padding: 0; display: flex; flex-direction: column; gap: var(--espacamento-2); }
     .cfg-item { display: flex; align-items: center; gap: var(--espacamento-2); padding: var(--espacamento-2); border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); }
     .cfg-item--off { opacity: .55; }
     .cfg-ordem { display: flex; flex-direction: column; }
-    .cfg-ordem button { border: 0; background: transparent; color: var(--texto-suave); font-size: 9px; line-height: 1; padding: 1px; }
+    .cfg-ordem button { border: 0; background: transparent; color: var(--texto-suave); line-height: 0; padding: 1px; }
     .cfg-ordem button:disabled { opacity: .3; }
     .cfg-nome { flex: 1; min-width: 0; padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 13px; }
     .cfg-tipo { flex: none; font-size: 11px; padding: 2px 8px; border-radius: var(--raio-completo); background: var(--acao-suave); color: var(--acao); }
     .cfg-tipo--enc { background: var(--sucesso-suave); color: var(--sucesso); }
     .cfg-qtd { flex: none; font-size: 12px; color: var(--texto-suave); min-width: 20px; text-align: right; font-variant-numeric: tabular-nums; }
     .cfg-toggle { flex: none; font-size: 11px; padding: 2px 8px; border: 1px solid var(--borda-controle); border-radius: var(--raio-completo); background: var(--superficie-elevada); color: var(--texto-secundario); }
-    .cfg-del { flex: none; border: 0; background: transparent; font-size: 13px; }
-    .cfg-novo { display: flex; gap: var(--espacamento-2); align-items: center; }
-    .cfg-select { flex: none; padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 13px; }
-    .cfg-add { flex: none; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--acao); border-radius: var(--raio-controle); background: var(--acao); color: var(--acao-texto); font: inherit; font-size: 13px; }
-    .cfg-add:disabled { opacity: .5; }
+    .cfg-del { flex: none; border: 0; background: transparent; color: var(--texto-secundario); }
+    .cfg-novo { display: grid; grid-template-columns: 1fr 180px; gap: var(--espacamento-3); align-items: end; }
+    .gira { transform: rotate(180deg); }
     @media (max-width: 640px) { :host { padding: var(--espacamento-3); } .coluna, .col-esq { width: 240px; } }
   `,
 })
@@ -200,6 +190,7 @@ export class AtendimentoKanbanPagina implements OnInit {
   private readonly toast = inject(ToastServico)
   readonly config = signal(false)
   readonly novoNome = signal('')
+  readonly opcoesTipo: OpcaoSelect[] = [{ valor: 'atendimento', rotulo: 'Atendimento' }, { valor: 'encerrado', rotulo: 'Encerrado' }]
   readonly novoTipo = signal<'atendimento' | 'encerrado'>('atendimento')
 
   ngOnInit(): void { void this.servico.carregar() }

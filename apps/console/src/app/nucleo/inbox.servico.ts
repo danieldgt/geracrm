@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs'
 import type { TipoCanal } from '@geracrm/shared'
 import { PresencaServico } from './presenca.servico.js'
 import { mesclarPagina } from '../compartilhado/ui/cursor.js'
+import { alternarConducao, type Conducao, type MotivoDevolucao } from './devolucao.regras.js'
 
 /** Estado da janela de 24h — vem do domínio (calcularJanela), não daqui. */
 export interface Janela {
@@ -57,6 +58,8 @@ export interface Thread {
     readonly estado: string
     readonly atendenteNome: string | null
     readonly protocolo: number | null
+    /** Quem conduz sou eu (G1: só quem conduz, ou a gestão, vê "Devolver"). */
+    readonly meu?: boolean
   } | null
   readonly temMaisAntigas: boolean
   readonly janela: Janela
@@ -109,6 +112,8 @@ export class InboxServico {
     const f = this.filtro()
     const qs = new URLSearchParams({ limite: String(opcoes.limite ?? InboxServico.PAGINA) })
     if (f !== 'todas') qs.set('filtro', f)
+    const c = this.conduzidoPor()
+    if (c) qs.set('conduzidoPor', c)
     if (opcoes.cursor) qs.set('cursor', opcoes.cursor)
     return `/v1/conversas?${qs}`
   }
@@ -151,6 +156,57 @@ export class InboxServico {
     this.filtro.set(f)
     await this.carregar()
   }
+  /** Chips "Agente · Humano · Aguardando" (G1): quem conduz agora; combina com a aba. */
+  readonly conduzidoPor = signal<Conducao | null>(null)
+  async trocarConducao(c: Conducao): Promise<void> {
+    this.conduzidoPor.set(alternarConducao(this.conduzidoPor(), c))
+    await this.carregar()
+  }
+
+  /**
+   * Devolve a conversa ao agente (ou à fila, se o agente não fala sozinho agora). No sucesso diz
+   * para onde foi e, na fila, o aviso do servidor com o porquê; no erro, o texto e o código (a tela
+   * oferece "Recarregar" quando o estado mudou por baixo dela).
+   */
+  async devolverAoAgente(conversaId: string, corpo: { motivo: MotivoDevolucao; observacao?: string }):
+    Promise<{ ok: true; destino: 'agente' | 'fila'; aviso: string | null } | { ok: false; erro: string; codigo: string | null }> {
+    try {
+      const r = await firstValueFrom(this.http.post<{ destino?: 'agente' | 'fila'; aviso?: string }>(`/v1/conversas/${conversaId}/devolver-agente`, corpo))
+      await Promise.all([this.atualizarThread(conversaId), this.carregar(), this.carregarContadores()])
+      return { ok: true, destino: r.destino === 'fila' ? 'fila' : 'agente', aviso: r.aviso ?? null }
+    } catch (e) {
+      await this.atualizarThread(conversaId)
+      return { ok: false, erro: this.textoDoErro(e, 'Não foi possível devolver ao agente.'), codigo: this.codigoDoErro(e) }
+    }
+  }
+
+  async reatribuir(conversaId: string, corpo: { usuarioId: string; motivo: string }):
+    Promise<{ ok: true } | { ok: false; erro: string; codigo: string | null }> {
+    try {
+      await firstValueFrom(this.http.post(`/v1/conversas/${conversaId}/reatribuir`, corpo))
+      await Promise.all([this.atualizarThread(conversaId), this.carregar(), this.carregarContadores()])
+      return { ok: true }
+    } catch (e) {
+      await this.atualizarThread(conversaId)
+      return { ok: false, erro: this.textoDoErro(e, 'Não foi possível reatribuir.'), codigo: this.codigoDoErro(e) }
+    }
+  }
+
+  /** "Recarregar" depois de um 409/403 de estado velho: a conversa, a lista e os contadores. */
+  async recarregarConversa(conversaId: string): Promise<void> {
+    await Promise.all([this.atualizarThread(conversaId), this.carregar(), this.carregarContadores()])
+  }
+
+  private codigoDoErro(e: unknown): string | null {
+    const corpo = e instanceof HttpErrorResponse ? (e.error as { erro?: unknown } | null) : null
+    return typeof corpo?.erro === 'string' ? corpo.erro : null
+  }
+
+  private textoDoErro(e: unknown, padrao: string): string {
+    const corpo = e instanceof HttpErrorResponse ? (e.error as { mensagem?: string } | null) : null
+    return corpo?.mensagem ?? padrao
+  }
+
   async carregarContadores(): Promise<void> {
     try {
       const c = await firstValueFrom(this.http.get<{ fila: number; meus: number }>('/v1/fila/contadores'))

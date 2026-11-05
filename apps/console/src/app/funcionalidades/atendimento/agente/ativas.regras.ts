@@ -1,5 +1,7 @@
 import {
-  FERIADO, LIMITE_ATIVAS_MAX_DIA, LIMITE_ATIVAS_MAX_SEMANA, MAX_FERIADOS, normalizarFeriados,
+  DESCARTE_APOS_HORAS_MAX, FERIADO, LIMITE_ATIVAS_MAX_DIA, LIMITE_ATIVAS_MAX_SEMANA, MAX_FERIADOS, REATIVACAO_DIAS_MAX,
+  REATIVACAO_DIAS_MIN, REATIVACAO_LIMITE_DIA_MAX, REATIVACAO_MAX_PASSOS, REATIVACAO_TEXTO_MAX, normalizarFeriados,
+  type ReativacaoAtivas,
 } from '@geracrm/shared'
 
 /**
@@ -12,6 +14,9 @@ export interface FormAtivas {
   readonly limiteDia: number
   readonly limiteSemana: number
   readonly templateRetorno: string | null
+  /** Horas sem resposta após o último retorno até descartar o contato. 0 = não descarta. */
+  readonly descarteAposHoras: number
+  readonly reativacao: ReativacaoAtivas
   readonly feriados: readonly string[]
 }
 
@@ -28,8 +33,49 @@ export function validarAtivas(f: FormAtivas): ErrosAtivas {
   } else if (!e.limiteDia && f.limiteSemana < f.limiteDia) {
     e.limiteSemana = 'O limite da semana não pode ser menor que o do dia.'
   }
+  if (!Number.isInteger(f.descarteAposHoras) || f.descarteAposHoras < 0 || f.descarteAposHoras > DESCARTE_APOS_HORAS_MAX) {
+    e.descarteAposHoras = `Use um número inteiro de 0 a ${DESCARTE_APOS_HORAS_MAX} (0 não descarta).`
+  }
+  const dias = f.reativacao.dias
+  if (dias.length < 1 || dias.length > REATIVACAO_MAX_PASSOS) {
+    e.reativacao = `Informe de 1 a ${REATIVACAO_MAX_PASSOS} prazos.`
+  } else if (dias.some((d) => !Number.isInteger(d) || d < REATIVACAO_DIAS_MIN || d > REATIVACAO_DIAS_MAX)) {
+    e.reativacao = `Cada prazo deve ficar entre ${REATIVACAO_DIAS_MIN} e ${REATIVACAO_DIAS_MAX} dias.`
+  } else if (dias.some((d, i) => i > 0 && d <= dias[i - 1]!)) {
+    e.reativacao = 'Os prazos devem ser crescentes (ex.: 30, 90).'
+  } else if ((f.reativacao.texto ?? '').length > REATIVACAO_TEXTO_MAX) {
+    e.reativacao = `O texto aceita até ${REATIVACAO_TEXTO_MAX} caracteres.`
+  } else if (!Number.isInteger(f.reativacao.limiteDia) || f.reativacao.limiteDia < 1 || f.reativacao.limiteDia > REATIVACAO_LIMITE_DIA_MAX) {
+    e.reativacao = `O máximo de reativações por dia vai de 1 a ${REATIVACAO_LIMITE_DIA_MAX}.`
+  }
   if (f.feriados.length > MAX_FERIADOS) e.feriados = `No máximo ${MAX_FERIADOS} feriados.`
   return e
+}
+
+/**
+ * Ligar a reativação num número NÃO-OFICIAL pede a confirmação digitada do risco
+ * de banimento (ADR-021) — e a API recusa sem ela. Só ao LIGAR: editar a
+ * reativação já ligada não pergunta de novo.
+ */
+export function exigeConfirmarRiscoReativacao(tipoCanal: string, antes: FormAtivas | null, depois: FormAtivas): boolean {
+  return tipoCanal === 'whatsapp_nao_oficial' && depois.reativacao.ativa && !(antes?.reativacao.ativa ?? false)
+}
+
+export function confirmacaoRiscoReativacao(): {
+  titulo: string; mensagem: string; acao: string; perigo: boolean; digitar: string
+} {
+  return {
+    titulo: 'Ligar a reativação neste número não-oficial?',
+    mensagem: 'A reativação escreve para quem parou de responder. Num número não-oficial, mensagem não solicitada é o que mais '
+      + 'leva a denúncias, e o WhatsApp pode BANIR o número sem aviso. O teto diário e o aquecimento reduzem o risco, '
+      + 'mas não o eliminam. Digite "reativar" para confirmar que você assume esse risco.',
+    acao: 'Ligar mesmo assim', perigo: true, digitar: 'reativar',
+  }
+}
+
+/** "30, 90" → [30, 90]; qualquer item que não seja inteiro vira NaN (a validação aponta). */
+export function lerDias(texto: string): number[] {
+  return texto.split(/[\s,;]+/).filter(Boolean).map((x) => (/^\d+$/.test(x) ? Number(x) : Number.NaN))
 }
 
 /**
@@ -130,7 +176,8 @@ export function badgeStatusTemplate(status: string): { rotulo: string; tom: 'suc
 export function erroDaApi(codigo: string | undefined, mensagem: string | undefined, campos: readonly string[] | undefined): ErrosAtivas {
   const texto = mensagem?.trim() || 'Não foi possível salvar.'
   const campo = campos?.[0]
-  if (campo === 'limiteDia' || campo === 'limiteSemana' || campo === 'feriados' || campo === 'templateRetorno') {
+  if (campo === 'limiteDia' || campo === 'limiteSemana' || campo === 'feriados' || campo === 'templateRetorno'
+    || campo === 'descarteAposHoras' || campo === 'reativacao') {
     return { [campo]: texto }
   }
   if (codigo === 'acesso.papel_insuficiente') return { geral: 'Só um administrador pode mudar as mensagens ativas.' }

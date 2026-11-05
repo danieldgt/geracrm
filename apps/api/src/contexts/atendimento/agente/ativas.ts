@@ -96,11 +96,11 @@ export async function lerContextoAtiva(
            cfg.horario_atendimento AS horario, coalesce(cfg.feriados, '[]'::jsonb) AS feriados,
            t.fuso, coalesce(ac.ativas, '{}'::jsonb) AS ativas, c.ultima_entrante_em,
            (SELECT count(*)::int FROM agente_retorno r
-             WHERE r.tenant_id = c.tenant_id AND r.conversa_id = c.id AND r.estado = 'enviado'
+             WHERE r.tenant_id = c.tenant_id AND r.conversa_id = c.id AND r.estado = 'enviado' AND r.motivo <> 'descarte_sem_resposta'
                AND r.concluido_em > greatest(coalesce(c.ultima_entrante_em, '-infinity'::timestamptz),
                                              ${p.agora}::timestamptz - interval '1 day')) AS dia,
            (SELECT count(*)::int FROM agente_retorno r
-             WHERE r.tenant_id = c.tenant_id AND r.conversa_id = c.id AND r.estado = 'enviado'
+             WHERE r.tenant_id = c.tenant_id AND r.conversa_id = c.id AND r.estado = 'enviado' AND r.motivo <> 'descarte_sem_resposta'
                AND r.concluido_em > greatest(coalesce(c.ultima_entrante_em, '-infinity'::timestamptz),
                                              ${p.agora}::timestamptz - interval '7 days')) AS semana
       FROM conversa c

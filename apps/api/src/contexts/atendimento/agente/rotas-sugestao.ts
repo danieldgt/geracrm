@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { descartarSugestaoEntrada, type RespostaSugestao } from '@geracrm/shared'
 import { exigirTenant } from '../../../plugins/tenant.js'
+import { conversaNoEscopo, escopoDaRequisicao, exigirNoEscopo } from '../../plataforma/escopo.js'
 import { auditar } from '../../plataforma/auditoria.js'
-import { garantirUsuarioId } from '../rotas-fila.js'
+import { atorDaRequisicao, garantirUsuarioId } from '../rotas-fila.js'
 import {
   descartarSugestao, gerarCopiloto, lerConversaParaSugestao, lerSugestaoVigente, metricasSugestoes, modoDoCopiloto, publicarSugestaoMudou,
   type OpcoesCopiloto,
@@ -29,7 +30,7 @@ const MENSAGEM_SEM_SUGESTAO: Record<string, string> = {
 
 export async function rotasSugestao(app: FastifyInstance, opcoes: { copiloto?: OpcoesCopiloto } = {}): Promise<void> {
   app.get<{ Params: { id: string } }>(
-    '/v1/conversas/:id/sugestao', { preHandler: exigirTenant },
+    '/v1/conversas/:id/sugestao', { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       const lido = await req.comTenant(async (tx) => {
@@ -52,7 +53,7 @@ export async function rotasSugestao(app: FastifyInstance, opcoes: { copiloto?: O
   )
 
   app.post<{ Params: { id: string } }>(
-    '/v1/conversas/:id/sugestao/gerar', { preHandler: exigirTenant },
+    '/v1/conversas/:id/sugestao/gerar', { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       const eu = await req.comTenant((tx) => garantirUsuarioId(tx, req))
@@ -92,11 +93,17 @@ export async function rotasSugestao(app: FastifyInstance, opcoes: { copiloto?: O
       const corpo = descartarSugestaoEntrada.safeParse(req.body ?? {})
       if (!corpo.success) return reply.code(422).send({ erro: 'sugestao.invalida', mensagem: 'Motivo inválido (até 200 caracteres).' })
       const r = await req.comTenant(async (tx) => {
+        // ⚠️ Escopo (D3): sugestão de conversa fora do escopo = inexistente.
+        const [dec] = await tx<{ conversa_id: string }[]>`
+          SELECT conversa_id FROM agente_decisao WHERE tenant_id = tenant_atual() AND id = ${req.params.decisaoId}`
+        if (dec && !(await conversaNoEscopo(tx, await escopoDaRequisicao(tx, req), dec.conversa_id))) {
+          return { ok: false as const, motivo: 'nao_encontrada' as const }
+        }
         const d = await descartarSugestao(tx, req.params.decisaoId, new Date())
         if (!d.ok) return d
         await publicarSugestaoMudou(tx, d.conversaId, req.params.decisaoId)
         await auditar(tx, {
-          atorId: await garantirUsuarioId(tx, req), acao: 'agente.sugestao_descartada', entidade: 'agente_decisao',
+          atorId: await atorDaRequisicao(tx, req), acao: 'agente.sugestao_descartada', entidade: 'agente_decisao',
           entidadeId: req.params.decisaoId, ...(corpo.data.motivo ? { dados: { motivo: corpo.data.motivo } } : {}),
         })
         return d

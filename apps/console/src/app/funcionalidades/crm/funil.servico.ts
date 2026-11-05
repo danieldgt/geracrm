@@ -1,7 +1,9 @@
 import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
-import { firstValueFrom } from 'rxjs'
+import { firstValueFrom, type Observable } from 'rxjs'
 import { mensagemDeErro } from '../../compartilhado/ui/index.js'
+import type { PedidoDoContato } from './funil-acoes.regras.js'
+import { FILTROS_VAZIOS, SEM_DONO, SEM_FILIAL, queryDaApi, type Agrupar, type FiltrosBoard, type GrupoPanorama } from './funil-filtros.regras.js'
 
 export interface Etapa {
   readonly id: string
@@ -25,6 +27,9 @@ export interface Coluna {
   proximoCursor: string | null
   carregandoMais: boolean
 }
+/** Resultado tipificado de uma ação do funil: o corpo do erro volta para a tela mapear por campo. */
+export type ResultadoAcao = { ok: true } | { ok: false; status: number; corpo: unknown; mensagem: string }
+
 export interface Motivo { readonly codigo: string; readonly nome: string }
 
 /** Etapa na visão de CONFIGURAÇÃO: inclui as inativas, a ordem e o uso. */
@@ -79,6 +84,51 @@ export class FunilServico {
   readonly carregandoMetricas = signal(false)
   /** Métrica é secundária: falhar não derruba o kanban, mas a tela DIZ que falhou. */
   readonly erroMetricas = signal<string | null>(null)
+
+  /** Filtros do board (B1). Valem para os totais e para cada coluna; a tela os espelha na URL. */
+  readonly filtros = signal<FiltrosBoard>(FILTROS_VAZIOS)
+
+  // ── Panorama (B1) ──
+  readonly panorama = signal<readonly GrupoPanorama[]>([])
+  readonly panoramaTruncado = signal(false)
+  readonly estadoPanorama = signal<'carregando' | 'pronto' | 'sem_permissao' | 'erro'>('carregando')
+  /** Etapas abertas, na ordem do funil: as colunas da contagem de cada cartão. */
+  readonly etapasPanorama = signal<readonly { id: string; nome: string }[]>([])
+  /** Opções dos selects de gestão: vendedores da equipe e filiais que o escopo enxerga. */
+  readonly vendedores = signal<{ valor: string; rotulo: string }[]>([])
+  readonly filiais = signal<{ valor: string; rotulo: string }[]>([])
+  #pedidoPanorama = 0
+
+  async carregarPanorama(agrupar: Agrupar): Promise<void> {
+    const pedido = ++this.#pedidoPanorama
+    this.estadoPanorama.set('carregando')
+    try {
+      const [r, etapas] = await Promise.all([
+        firstValueFrom(this.http.get<{ itens: GrupoPanorama[]; truncado: boolean }>(`/v1/funil/panorama?agrupar=${agrupar}`)),
+        firstValueFrom(this.http.get<{ itens: Etapa[] }>('/v1/funil/etapas')),
+      ])
+      if (pedido !== this.#pedidoPanorama) return // resposta atrasada: vale só a última
+      this.panorama.set(r.itens)
+      this.panoramaTruncado.set(r.truncado)
+      this.etapasPanorama.set(etapas.itens.filter((e) => e.tipo === 'aberto').map((e) => ({ id: e.id, nome: e.nome })))
+      this.estadoPanorama.set('pronto')
+    } catch (e) {
+      if (pedido !== this.#pedidoPanorama) return
+      this.estadoPanorama.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro')
+    }
+  }
+
+  /** Vendedores e filiais para os filtros da gestão. Falha não derruba o board: o select fica sem opções. */
+  async carregarOpcoesGestao(): Promise<void> {
+    if (this.vendedores().length > 0 || this.filiais().length > 0) return
+    const [eq, fi] = await Promise.all([
+      firstValueFrom(this.http.get<{ itens: { id: string; nome: string }[] }>('/v1/equipe')).catch(() => ({ itens: [] })),
+      firstValueFrom(this.http.get<{ itens: GrupoPanorama[] }>('/v1/funil/panorama?agrupar=filial')).catch(() => ({ itens: [] })),
+    ])
+    this.vendedores.set([{ valor: SEM_DONO, rotulo: 'Sem dono' }, ...eq.itens.map((u) => ({ valor: u.id, rotulo: u.nome }))])
+    this.filiais.set(fi.itens.filter((g) => g.chave !== SEM_DONO)
+      .map((g) => ({ valor: g.chave, rotulo: g.chave === SEM_FILIAL ? 'Sem filial' : g.rotulo })))
+  }
 
   // ── Configuração das raias (etapas e motivos) ──
   readonly config = signal<readonly EtapaConfig[]>([])
@@ -153,7 +203,7 @@ export class FunilServico {
     this.estado.set('carregando')
     try {
       const [etapas, motivos] = await Promise.all([
-        firstValueFrom(this.http.get<{ itens: Etapa[] }>('/v1/funil/etapas')),
+        firstValueFrom(this.http.get<{ itens: Etapa[] }>(`/v1/funil/etapas${queryDaApi(this.filtros())}`)),
         firstValueFrom(this.http.get<{ itens: Motivo[] }>('/v1/funil/motivos')).catch(() => ({ itens: [] })),
       ])
       this.motivos.set(motivos.itens)
@@ -169,9 +219,10 @@ export class FunilServico {
   }
 
   private buscarColuna(etapaId: string, cursor: string | null): Promise<{ itens: Card[]; proximoCursor: string | null }> {
-    const url = cursor
-      ? `/v1/funil/coluna/${etapaId}?cursor=${encodeURIComponent(cursor)}`
-      : `/v1/funil/coluna/${etapaId}`
+    const u = new URLSearchParams(queryDaApi(this.filtros()))
+    if (cursor) u.set('cursor', cursor)
+    const qs = u.toString()
+    const url = `/v1/funil/coluna/${etapaId}${qs ? `?${qs}` : ''}`
     return firstValueFrom(this.http.get<{ itens: Card[]; proximoCursor: string | null }>(url))
   }
 
@@ -222,14 +273,49 @@ export class FunilServico {
     }
   }
 
-  async criar(contatoId: string): Promise<boolean> {
+  /** Cria a oportunidade na etapa inicial escolhida. Falha de negócio volta tipificada (mensagem do servidor). */
+  async criar(corpo: { contatoId: string; etapaId: string; valorCentavos?: number }): Promise<ResultadoAcao> {
+    const r = await this.acao(() => this.http.post('/v1/funil/oportunidades', corpo), 'Não foi possível criar a oportunidade.')
+    if (r.ok) await this.carregar()
+    return r
+  }
+
+  /** Ganhar: valida/grava os dados do contato e move, numa transação só (422 por campo em `corpo`). */
+  async ganhar(cardId: string, corpo: unknown): Promise<ResultadoAcao> {
+    const r = await this.acao(() => this.http.post(`/v1/funil/oportunidades/${cardId}/ganhar`, corpo), 'Não foi possível ganhar o negócio.')
+    // 422 (dados) mantém o modal aberto e o quadro como está; o resto recarrega para refletir o servidor.
+    if (r.ok || r.status !== 422) await this.carregar()
+    return r
+  }
+
+  async perder(cardId: string, corpo: unknown): Promise<ResultadoAcao> {
+    const r = await this.acao(() => this.http.post(`/v1/funil/oportunidades/${cardId}/perder`, corpo), 'Não foi possível registrar a perda.')
+    if (r.ok || r.status !== 422) await this.carregar()
+    return r
+  }
+
+  async transferir(cardId: string, corpo: { usuarioId: string; motivo: string }): Promise<ResultadoAcao> {
+    const r = await this.acao(() => this.http.post(`/v1/funil/oportunidades/${cardId}/transferir`, corpo), 'Não foi possível transferir.')
+    if (r.ok) await this.carregar()
+    return r
+  }
+
+  /** Pedidos do contato (os mais recentes, uma página) para vincular ao ganho. */
+  async pedidosDoContato(contatoId: string): Promise<PedidoDoContato[]> {
     try {
-      await firstValueFrom(this.http.post('/v1/funil/oportunidades', { contatoId }))
-      await this.carregar()
-      return true
+      const r = await firstValueFrom(this.http.get<{ itens: PedidoDoContato[] }>(`/v1/pedidos?contatoId=${encodeURIComponent(contatoId)}`))
+      return r.itens
+    } catch { return [] }
+  }
+
+  private async acao(chamar: () => Observable<unknown>, padrao: string): Promise<ResultadoAcao> {
+    try {
+      await firstValueFrom(chamar())
+      return { ok: true }
     } catch (e) {
-      this.erroMove.set(mensagemDeErro(e, 'Não foi possível criar a oportunidade.'))
-      return false
+      const status = e instanceof HttpErrorResponse ? e.status : 0
+      const corpo = e instanceof HttpErrorResponse ? e.error : null
+      return { ok: false, status, corpo, mensagem: mensagemDeErro(e, padrao) }
     }
   }
 }

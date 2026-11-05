@@ -32,21 +32,33 @@ describe('Limite de taxa da superfície pública', () => {
    * temporizador — `setInterval` de limpeza sobrevive ao processo de teste e
    * segura o encerramento.
    */
-  it('poda entradas de janelas velhas em vez de crescer sem fim', () => {
+  it('mapa cheio descarta a entrada mais antiga em vez de crescer sem fim', () => {
     const l = criarLimiteTaxa({ teto: 5, janelaMs: 1_000, maxChaves: 3 })
     l.permitir('a', 0); l.permitir('b', 0); l.permitir('c', 0)
     expect(l.tamanho()).toBe(3)
-
-    // Janela nova: as três velhas saem para dar lugar.
     expect(l.permitir('d', 5_000)).toBe(true)
-    expect(l.tamanho()).toBe(1)
+    expect(l.tamanho()).toBe(3)
   })
 
-  it('rajada real dentro da MESMA janela é recusada, não expande a memória', () => {
+  /**
+   * ⚠️ Antes, mapa cheio na mesma janela RECUSAVA: um scanner com milhares de IPs enchia o mapa e
+   * bloqueava todo visitante legítimo. Agora o mais antigo sai e o legítimo passa.
+   */
+  it('mapa cheio não bloqueia o legítimo: o mais antigo é descartado (LRU)', () => {
     const l = criarLimiteTaxa({ teto: 1, janelaMs: 60_000, maxChaves: 2 })
     expect(l.permitir('a', 0)).toBe(true)
     expect(l.permitir('b', 0)).toBe(true)
-    expect(l.permitir('c', 0)).toBe(false)
+    expect(l.permitir('legitimo', 0)).toBe(true)
     expect(l.tamanho()).toBe(2)
+    // 'b' foi usado depois de 'a': 'a' foi quem saiu, 'b' continua contado.
+    expect(l.permitir('b', 0)).toBe(false)
+  })
+
+  it('uso recente protege a chave do descarte', () => {
+    const l = criarLimiteTaxa({ teto: 1, janelaMs: 60_000, maxChaves: 2 })
+    l.permitir('a', 0); l.permitir('b', 0)
+    expect(l.permitir('a', 0)).toBe(false) // 'a' tocado agora
+    l.permitir('c', 0) // descarta 'b'
+    expect(l.permitir('a', 0)).toBe(false) // 'a' ainda contado
   })
 })

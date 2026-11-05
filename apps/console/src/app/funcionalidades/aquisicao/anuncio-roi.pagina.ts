@@ -2,6 +2,10 @@ import { Component, ChangeDetectionStrategy, inject, input, signal, computed, On
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { RouterLink } from '@angular/router'
 import { firstValueFrom } from 'rxjs'
+import {
+  BadgeComponente, BreadcrumbComponente, CabecalhoTelaComponente, CampoComponente, EsqueletoComponente, EstadoComponente,
+  FiltroPeriodoComponente, SelectComponente, StatCardComponente, type ItemTrilha, type OpcaoSelect,
+} from '../../compartilhado/ui/index.js'
 
 type Modelo = 'primeiro_toque' | 'ultimo_toque'
 
@@ -29,6 +33,11 @@ interface Roi {
 
 type Estado = 'carregando' | 'pronto' | 'nao_encontrado' | 'sem_permissao' | 'erro'
 
+const OPCOES_MODELO: OpcaoSelect[] = [
+  { valor: 'ultimo_toque', rotulo: 'Último toque' },
+  { valor: 'primeiro_toque', rotulo: 'Primeiro toque' },
+]
+
 /**
  * ROI da veiculação (AQ-16) — quanto o anúncio custou e quanto fez faturar.
  *
@@ -42,143 +51,113 @@ type Estado = 'carregando' | 'pronto' | 'nao_encontrado' | 'sem_permissao' | 'er
  * atribuído e o sem ambiguidade.** Perto, o número se sustenta. Longe, ele é
  * artefato da modelagem — e o cliente merece saber disso antes de assinar
  * performance em cima.
+ *
+ * Padrão Detalhe: trilha, cabeçalho do anúncio, filtro de período com modelo e
+ * janela, e três blocos (fato, modelo, sem ambiguidade).
  */
 @Component({
   selector: 'app-anuncio-roi',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink],
+  imports: [
+    BadgeComponente, BreadcrumbComponente, CabecalhoTelaComponente, CampoComponente, EsqueletoComponente, EstadoComponente,
+    FiltroPeriodoComponente, RouterLink, SelectComponente, StatCardComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <div>
-        <a class="voltar" routerLink="/midia">← Mídia paga</a>
-        <h1>{{ dados()?.anuncio?.nome ?? 'Anúncio' }}</h1>
-        @if (dados(); as d) {
-          <p class="sub">{{ d.anuncio.campanha }}
-            @if (d.anuncio.estado !== 'ativa') { <span class="badge">{{ d.anuncio.estado }}</span> }
-          </p>
+    <ui-cabecalho-tela [titulo]="dados()?.anuncio?.nome ?? 'Anúncio'" [subtitulo]="dados()?.anuncio?.campanha ?? ''">
+      <ui-breadcrumb trilha [itens]="trilha()" />
+      @if (dados(); as d) {
+        @if (d.anuncio.estado !== 'ativa') { <ui-badge tom="neutro">{{ d.anuncio.estado }}</ui-badge> }
+      }
+    </ui-cabecalho-tela>
+
+    <div class="corpo">
+      <ui-filtro-periodo [(inicio)]="de" [(fim)]="ate" (aplicar)="carregar()">
+        <ui-select rotulo="Modelo de atribuição" [opcoes]="opcoesModelo" [valor]="modelo()"
+          (valorChange)="modelo.set($event === 'primeiro_toque' ? 'primeiro_toque' : 'ultimo_toque')" />
+        <ui-campo rotulo="Janela (dias)" tipo="number" [valor]="janelaTexto()" (valorChange)="janelaTexto.set($event)"
+          dica="De 1 a 90 dias." />
+      </ui-filtro-periodo>
+
+      @switch (estado()) {
+        @case ('carregando') {
+          <div class="esqueletos" aria-busy="true">
+            <ui-esqueleto altura="120px" />
+            <ui-esqueleto altura="120px" />
+          </div>
         }
-      </div>
-    </header>
-
-    <form class="filtros" (submit)="$event.preventDefault(); carregar()">
-      <label>De <input type="date" [value]="de()" (change)="de.set($any($event.target).value)" /></label>
-      <label>Até <input type="date" [value]="ate()" (change)="ate.set($any($event.target).value)" /></label>
-      <label>Modelo de atribuição
-        <select [value]="modelo()" (change)="modelo.set($any($event.target).value)">
-          <option value="ultimo_toque">Último toque</option>
-          <option value="primeiro_toque">Primeiro toque</option>
-        </select>
-      </label>
-      <label>Janela (dias)
-        <input type="number" min="1" max="90" [value]="janela()"
-               (change)="janela.set(+$any($event.target).value)" />
-      </label>
-      <button class="btn btn--secundario" type="submit">Aplicar</button>
-    </form>
-
-    @switch (estado()) {
-      @case ('carregando') {
-        <div class="bloco" aria-busy="true"><div class="esqueleto"></div><div class="esqueleto"></div></div>
-      }
-      @case ('nao_encontrado') {
-        <div class="bloco aviso">
-          <h2>Este anúncio não existe mais</h2>
-          <p>Ele pode ter sido removido na plataforma ou o link está velho.</p>
-          <a class="btn btn--secundario" routerLink="/midia">Voltar para a lista</a>
-        </div>
-      }
-      @case ('sem_permissao') {
-        <div class="bloco aviso"><h2>Sem acesso</h2>
-          <p>Sua conta não tem permissão para ver a mídia.</p></div>
-      }
-      @case ('erro') {
-        <div class="bloco aviso"><h2>Não foi possível carregar</h2>
-          <button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div>
-      }
-      @case ('pronto') {
-        @if (dados(); as d) {
-          <!-- FATOS — o que veio medido, sem interpretação nossa. -->
-          <section class="painel">
-            <h2 class="titulo-secao">O que aconteceu <span class="etiqueta fato">medido</span></h2>
-            <div class="grade">
-              <div class="kpi"><span class="rot">Investido</span><span class="val">{{ dinheiro(d.custoCentavos) }}</span></div>
-              <div class="kpi"><span class="rot">Impressões</span><span class="val">{{ d.impressoes }}</span></div>
-              <div class="kpi"><span class="rot">Cliques</span><span class="val">{{ d.cliques }}</span></div>
-              <div class="kpi"><span class="rot">Leads no CRM</span><span class="val">{{ d.leads }}</span></div>
-              <!-- ⚠️ Traço, não R$ 0,00: zero lead não é custo-por-lead zero, é
-                   indefinido — e R$ 0,00 faria o pior anúncio parecer o melhor. -->
-              <div class="kpi"><span class="rot">Custo por lead</span>
-                <span class="val forte">{{ d.custoPorLeadCentavos === null ? '—' : dinheiro(d.custoPorLeadCentavos) }}</span>
+        @case ('nao_encontrado') {
+          <ui-estado titulo="Este anúncio não existe mais" descricao="Ele pode ter sido removido na plataforma ou o link está velho.">
+            <a class="btn btn--secundario" routerLink="/midia">Voltar para a lista</a>
+          </ui-estado>
+        }
+        @case ('sem_permissao') {
+          <ui-estado tipo="sem-permissao" titulo="Sem acesso à mídia paga" descricao="Sua conta não tem permissão para ver a mídia." />
+        }
+        @case ('erro') {
+          <ui-estado tipo="erro" titulo="Não foi possível carregar o ROI deste anúncio" descricao="Verifique a conexão e tente de novo.">
+            <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+          </ui-estado>
+        }
+        @case ('pronto') {
+          @if (dados(); as d) {
+            <!-- FATOS — o que veio medido, sem interpretação nossa. -->
+            <section class="painel">
+              <h2 class="titulo-secao">O que aconteceu <ui-badge tom="sucesso">medido</ui-badge></h2>
+              <div class="grade">
+                <ui-stat-card rotulo="Investido" [valor]="dinheiro(d.custoCentavos)" />
+                <ui-stat-card rotulo="Impressões" [valor]="d.impressoes" />
+                <ui-stat-card rotulo="Cliques" [valor]="d.cliques" />
+                <ui-stat-card rotulo="Leads no CRM" [valor]="d.leads" />
+                <!-- ⚠️ Traço, não R$ 0,00: zero lead não é custo-por-lead zero, é
+                     indefinido — e R$ 0,00 faria o pior anúncio parecer o melhor. -->
+                <ui-stat-card rotulo="Custo por lead" tom="acao"
+                  [valor]="d.custoPorLeadCentavos === null ? '—' : dinheiro(d.custoPorLeadCentavos)" />
               </div>
-            </div>
-          </section>
+            </section>
 
-          <!-- MODELO — separado de propósito, com o rótulo colado no número. -->
-          <section class="painel">
-            <h2 class="titulo-secao">O que atribuímos a ele
-              <span class="etiqueta modelo">{{ rotuloModelo(d.atribuicao.modelo) }} · {{ d.atribuicao.janelaDias }} dias</span>
-            </h2>
-            <div class="grade">
-              <div class="kpi"><span class="rot">Vendas</span><span class="val">{{ d.atribuicao.vendas }}</span></div>
-              <div class="kpi"><span class="rot">Receita atribuída</span><span class="val">{{ dinheiro(d.atribuicao.receitaCentavos) }}</span></div>
-              <div class="kpi"><span class="rot">ROAS ({{ rotuloModelo(d.atribuicao.modelo) }}, {{ d.atribuicao.janelaDias }}d)</span>
-                <span class="val forte">{{ d.atribuicao.roas === null ? '—' : (d.atribuicao.roas.toFixed(1) + '×') }}</span>
+            <!-- MODELO — separado de propósito, com o rótulo colado no número. -->
+            <section class="painel">
+              <h2 class="titulo-secao">O que atribuímos a ele
+                <ui-badge tom="atencao">{{ rotuloModelo(d.atribuicao.modelo) }} · {{ d.atribuicao.janelaDias }} dias</ui-badge>
+              </h2>
+              <div class="grade">
+                <ui-stat-card rotulo="Vendas" [valor]="d.atribuicao.vendas" />
+                <ui-stat-card rotulo="Receita atribuída" [valor]="dinheiro(d.atribuicao.receitaCentavos)" />
+                <ui-stat-card tom="acao" [rotulo]="'ROAS (' + rotuloModelo(d.atribuicao.modelo) + ', ' + d.atribuicao.janelaDias + 'd)'"
+                  [valor]="d.atribuicao.roas === null ? '—' : (d.atribuicao.roas.toFixed(1) + '×')" />
               </div>
-            </div>
-            <p class="nota">Uma venda de semanas depois é ligada ao anúncio por um <strong>modelo</strong>,
-              nunca por um vínculo registrado. Por isso o modelo e a janela andam colados ao número.</p>
-          </section>
+              <p class="nota">Uma venda de semanas depois é ligada ao anúncio por um <strong>modelo</strong>,
+                nunca por um vínculo registrado. Por isso o modelo e a janela andam colados ao número.</p>
+            </section>
 
-          <!-- A distância entre os dois é o que diz se o ROAS se sustenta. -->
-          <section class="painel">
-            <h2 class="titulo-secao">Sem depender do modelo <span class="etiqueta fato">contatos de um toque só</span></h2>
-            <div class="grade">
-              <div class="kpi"><span class="rot">Vendas</span><span class="val">{{ d.semAmbiguidade.vendas }}</span></div>
-              <div class="kpi"><span class="rot">Receita</span><span class="val">{{ dinheiro(d.semAmbiguidade.receitaCentavos) }}</span></div>
-              <div class="kpi"><span class="rot">ROAS</span>
-                <span class="val forte">{{ d.semAmbiguidade.roas === null ? '—' : (d.semAmbiguidade.roas.toFixed(1) + '×') }}</span>
+            <!-- A distância entre os dois é o que diz se o ROAS se sustenta. -->
+            <section class="painel">
+              <h2 class="titulo-secao">Sem depender do modelo <ui-badge tom="sucesso">contatos de um toque só</ui-badge></h2>
+              <div class="grade">
+                <ui-stat-card rotulo="Vendas" [valor]="d.semAmbiguidade.vendas" />
+                <ui-stat-card rotulo="Receita" [valor]="dinheiro(d.semAmbiguidade.receitaCentavos)" />
+                <ui-stat-card rotulo="ROAS" tom="acao"
+                  [valor]="d.semAmbiguidade.roas === null ? '—' : (d.semAmbiguidade.roas.toFixed(1) + '×')" />
               </div>
-            </div>
-            @if (leitura(); as l) {
-              <p class="nota" [class.alerta]="l.longe">{{ l.texto }}</p>
-            }
-          </section>
+              @if (leitura(); as l) {
+                <p class="nota" [class.alerta]="l.longe">{{ l.texto }}</p>
+              }
+            </section>
+          }
         }
       }
-    }
+    </div>
   `,
   styles: `
-    :host { display: block; width: 100%; max-width: var(--largura-forma); margin: 0 auto; padding: var(--espacamento-6); }
-    .cabecalho { margin-bottom: var(--espacamento-5); }
-    .voltar { display: inline-block; margin-bottom: var(--espacamento-2); font-size: 13px; color: var(--acao); text-decoration: none; }
-    .voltar:hover { text-decoration: underline; }
-    h1 { margin: 0; font-size: 20px; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .badge { margin-left: var(--espacamento-2); font-size: 11px; padding: 1px 6px; border-radius: var(--raio-controle);
-      border: 1px solid var(--borda); color: var(--texto-suave); }
-    .filtros { display: flex; gap: var(--espacamento-3); align-items: end; margin-bottom: var(--espacamento-4); flex-wrap: wrap; }
-    .filtros label { display: flex; flex-direction: column; gap: var(--espacamento-1); font-size: 12px; color: var(--texto-secundario); }
-    .filtros input, .filtros select { padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
-      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .bloco.aviso { text-align: center; }
-    .bloco h2 { margin: 0 0 var(--espacamento-2); font-size: 16px; color: var(--texto); }
-    .bloco p { color: var(--texto-secundario); margin: 0 auto var(--espacamento-4); max-width: 44ch; }
-    .esqueleto { height: 56px; margin-bottom: var(--espacamento-3); background: var(--superficie); border-radius: var(--raio-controle); }
-    .painel { padding: var(--espacamento-4); margin-bottom: var(--espacamento-4); border: 1px solid var(--borda);
-      border-radius: var(--raio-painel); background: var(--superficie-elevada); }
+    :host { display: block; width: 100%; padding: var(--espacamento-6); }
+    .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-3); min-width: 0; }
+    .esqueletos { display: grid; gap: var(--espacamento-3); }
+    .painel { padding: var(--espacamento-4); border: 1px solid var(--borda);
+      border-radius: var(--raio-painel); background: var(--superficie-elevada); min-width: 0; }
     .titulo-secao { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap;
       margin: 0 0 var(--espacamento-4); font-size: 15px; color: var(--texto); }
-    .etiqueta { font-size: 11px; font-weight: 400; padding: 1px 8px; border-radius: var(--raio-completo); border: 1px solid var(--borda); }
-    .etiqueta.fato { color: var(--sucesso); border-color: var(--sucesso); }
-    .etiqueta.modelo { color: var(--atencao); border-color: var(--atencao); }
     /* auto-fit: de 320px a wide sem media query e sem coluna espremida. */
-    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--espacamento-4); }
-    .kpi { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .rot { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--texto-suave); }
-    .val { font-size: 20px; color: var(--texto); font-variant-numeric: tabular-nums;
-      overflow: hidden; text-overflow: ellipsis; }
-    .val.forte { font-weight: 600; }
+    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--espacamento-3); }
     .nota { margin: var(--espacamento-4) 0 0; font-size: 12px; color: var(--texto-suave); line-height: 1.5; }
     .nota.alerta { color: var(--atencao); }
   `,
@@ -190,11 +169,19 @@ export class AnuncioRoiPagina implements OnInit {
   readonly #http = inject(HttpClient)
   readonly estado = signal<Estado>('carregando')
   readonly dados = signal<Roi | null>(null)
+  protected readonly opcoesModelo = OPCOES_MODELO
 
   readonly de = signal(this.#diasAtras(30))
   readonly ate = signal(this.#diasAtras(0))
   readonly modelo = signal<Modelo>('ultimo_toque')
-  readonly janela = signal(14)
+  /** Texto do campo; a janela efetiva é `janela()`, limitada a 1–90 dias. */
+  readonly janelaTexto = signal('14')
+  readonly janela = computed(() => Math.min(90, Math.max(1, Math.trunc(Number(this.janelaTexto())) || 14)))
+
+  protected readonly trilha = computed<ItemTrilha[]>(() => [
+    { rotulo: 'Mídia paga', rota: '/midia' },
+    { rotulo: this.dados()?.anuncio?.nome ?? 'Anúncio' },
+  ])
 
   /**
    * ⚠️ A leitura que a tela existe para dar. O ROAS sozinho não diz se dá para

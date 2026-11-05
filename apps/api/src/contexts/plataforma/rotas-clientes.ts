@@ -4,6 +4,7 @@ import { exigirStaff, exigirTenant } from '../../plugins/tenant.js'
 import { sql, comTenantServico } from '../../db/index.js'
 import { auditar } from './auditoria.js'
 import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { naoEhLinhaDeStaff } from '../identidade/linha-staff.js'
 import { MODELOS_FUNIL, ehModeloFunil, MODELO_FUNIL_PADRAO, garantirEtapasFunil } from '../crm/funil-modelos.js'
 import { cognitoAdminConfigurado, criarUsuarioCognito, EmailJaExiste, CognitoAdminIndisponivel } from '../identidade/cognito-admin.js'
 
@@ -29,6 +30,7 @@ import { cognitoAdminConfigurado, criarUsuarioCognito, EmailJaExiste, CognitoAdm
  * destrutiva bem mais perigosa do que o caso que ela resolveria.
  */
 
+const PAGINA_USUARIOS = 30
 const FUSO_PADRAO = 'America/Sao_Paulo'
 
 /** Senha inicial forte, mostrada UMA vez (mesmo padrão do segredo de webhook). */
@@ -67,6 +69,53 @@ export async function rotasClientes(app: FastifyInstance): Promise<void> {
       })),
     })
   })
+
+  /**
+   * Usuários de UM cliente, para o staff escolher quem nomear admin (sem copiar
+   * UUID do banco). Só staff (`exigirStaff`); o cliente vem da rota e é validado
+   * contra `listar_tenants()`, nunca do corpo; a leitura corre sob RLS DAQUELE
+   * cliente (`comTenantServico`), então não alcança usuário de outro. Linhas
+   * legadas de staff ficam de fora (`naoEhLinhaDeStaff`). Cursor `(nome, id)`;
+   * `busca` por nome/e-mail no servidor. Leitura: não auditada, como as
+   * vizinhas GET (`/clientes`, `/opcoes`).
+   */
+  app.get<{ Params: { id: string }; Querystring: { cursor?: string; busca?: string } }>(
+    '/v1/plataforma/clientes/:id/usuarios', { preHandler: [exigirTenant, exigirStaff] },
+    async (req, reply) => {
+      const clienteId = req.params.id
+      if (!UUID.test(clienteId)) return reply.code(404).send({ erro: 'cliente.nao_encontrado', mensagem: 'Cliente não encontrado.' })
+      let curNome: string | null = null, curId: string | null = null
+      if (req.query.cursor) {
+        const [n, i] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
+        if (n === undefined || !i || !UUID.test(i)) return reply.code(422).send({ erro: 'cursor.invalido' })
+        curNome = n; curId = i
+      }
+      const busca = req.query.busca?.trim()
+      const [cliente] = await sql<{ id: string }[]>`SELECT id FROM listar_tenants() WHERE id = ${clienteId}`
+      if (!cliente) return reply.code(404).send({ erro: 'cliente.nao_encontrado', mensagem: 'Cliente não encontrado.' })
+
+      const linhas = await comTenantServico(clienteId, (tx) => tx<{
+        id: string; nome: string; email: string; ativo: boolean; papeis: string[]
+      }[]>`
+        SELECT u.id, u.nome, u.email, u.ativo,
+               coalesce((SELECT array_agg(DISTINCT uf.papel ORDER BY uf.papel)
+                           FROM usuario_filial uf
+                          WHERE uf.tenant_id = u.tenant_id AND uf.usuario_id = u.id), '{}') AS papeis
+          FROM usuario u
+         WHERE u.tenant_id = tenant_atual() AND ${naoEhLinhaDeStaff(tx, 'u')}
+           AND ${busca ? tx`(u.nome ILIKE ${'%' + busca + '%'} OR u.email ILIKE ${'%' + busca + '%'})` : tx`true`}
+           AND ${curNome === null ? tx`true` : tx`(u.nome, u.id) > (${curNome}, ${curId}::uuid)`}
+         ORDER BY u.nome ASC, u.id ASC
+         LIMIT ${PAGINA_USUARIOS + 1}`)
+      const temMais = linhas.length > PAGINA_USUARIOS
+      const pagina = temMais ? linhas.slice(0, PAGINA_USUARIOS) : linhas
+      const ultimo = pagina[pagina.length - 1]
+      return reply.send({
+        itens: pagina.map((u) => ({ id: u.id, nome: u.nome, email: u.email, ativo: u.ativo, papeis: u.papeis })),
+        proximoCursor: temMais && ultimo ? Buffer.from(`${ultimo.nome}§${ultimo.id}`).toString('base64url') : null,
+      })
+    },
+  )
 
   app.post<{
     Body: {
@@ -151,4 +200,57 @@ export async function rotasClientes(app: FastifyInstance): Promise<void> {
 
     return reply.code(201).send({ id: tenantId, nome, modeloFunil, login })
   })
+
+  /**
+   * SEMEAR O ADMIN de um cliente (revisão de segurança D3, M6).
+   *
+   * O cadastro de usuários e filiais exige admin ATRIBUÍDO (o modo fundador não
+   * vale ali): um cliente sem admin não teria quem cadastrasse ninguém. Este é o
+   * caminho seguro — só staff (grupo do Cognito, NÃO a sessão dentro do
+   * cliente), auditado nos DOIS tenants: no cliente (`ator_staff`) e no do staff.
+   *
+   * Corpo: `{ usuarioId }` — um usuário ATIVO que já existe no cliente (nasceu
+   * no primeiro login dele, ou no cadastro pela sessão de acesso). Ganha
+   * `admin` em todas as filiais (`filial_id NULL`); se já tinha um vínculo de
+   * tenant inteiro, ele vira admin. Linha legada de staff é recusada (404).
+   */
+  app.post<{ Params: { id: string }; Body: { usuarioId?: string } }>(
+    '/v1/plataforma/clientes/:id/admin', { preHandler: [exigirTenant, exigirStaff] },
+    async (req, reply) => {
+      const clienteId = req.params.id
+      const usuarioId = req.body?.usuarioId
+      if (!UUID.test(clienteId)) return reply.code(404).send({ erro: 'cliente.nao_encontrado', mensagem: 'Cliente não encontrado.' })
+      if (typeof usuarioId !== 'string' || !UUID.test(usuarioId)) {
+        return reply.code(422).send({ erro: 'usuario.invalido', mensagem: 'Informe o usuário do cliente.', campos: ['usuarioId'] })
+      }
+      const [cliente] = await sql<{ id: string }[]>`SELECT id FROM listar_tenants() WHERE id = ${clienteId}`
+      if (!cliente) return reply.code(404).send({ erro: 'cliente.nao_encontrado', mensagem: 'Cliente não encontrado.' })
+
+      const r = await comTenantServico(clienteId, async (tx) => {
+        const [u] = await tx<{ email: string }[]>`
+          SELECT u.email FROM usuario u
+           WHERE u.tenant_id = tenant_atual() AND u.id = ${usuarioId} AND u.ativo AND ${naoEhLinhaDeStaff(tx, 'u')}`
+        if (!u) return null
+        await tx`SELECT pg_advisory_xact_lock(hashtextextended(tenant_atual()::text || ':cadastro-usuarios', 0))`
+        await tx`DELETE FROM usuario_filial WHERE tenant_id = tenant_atual() AND usuario_id = ${usuarioId} AND filial_id IS NULL`
+        await tx`INSERT INTO usuario_filial (tenant_id, usuario_id, filial_id, papel) VALUES (tenant_atual(), ${usuarioId}, NULL, 'admin')`
+        await auditar(tx, {
+          atorId: null, atorStaff: true, acao: 'usuario.admin_semeado', entidade: 'usuario', entidadeId: usuarioId,
+          dados: { staff: req.usuarioEmail ?? null },
+        })
+        return u
+      })
+      if (!r) return reply.code(404).send({ erro: 'usuario.nao_encontrado', mensagem: 'Usuário ativo não encontrado neste cliente.' })
+
+      await req.comTenant(async (tx) => {
+        await auditar(tx, {
+          atorId: await garantirUsuarioId(tx, req),
+          acao: 'cliente.admin_semeado', entidade: 'tenant', entidadeId: clienteId, dados: { usuarioId },
+        })
+      })
+      return reply.send({ ok: true, usuarioId, email: r.email })
+    },
+  )
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i

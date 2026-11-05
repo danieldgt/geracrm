@@ -93,6 +93,47 @@ nenhum.
 voltar à condição (ex.: comprou, atrasou de novo). Para "cadência recorrente"
 seria preciso janelar o dedup por período — está fora deste corte.
 
+## Pós-venda pelo agente (G3, migrations 0130 e 0141)
+
+Par **fixo** gatilho + ação (a API recusa um sem o outro, 422 `automacao.pos_venda_combinacao`):
+
+| Gatilho | Parâmetro | Ação | Parâmetro |
+|---|---|---|---|
+| `pedido_efetivado` | `{ diasDepois: 0..60 }` | `agente_envia` | `{ roteiro: 'agradecimento'\|'nps'\|'indicacao', texto?, templateId? }` (texto e/ou template) |
+
+- **Age por PEDIDO, não por contato**: cada compra efetivada recebe a sua mensagem. Idempotência por
+  pedido + roteiro: índice único `agente_retorno_pos_venda_em_curso` (pendente/enviado, 0141) — nunca
+  duas na fila, nunca reenviar o que saiu. Não é retroativa (só pedidos efetivados depois de a regra
+  existir) e só agenda até 7 dias depois do dia previsto (`JANELA_POS_VENDA_DIAS`).
+- **Impedimento passageiro não é perda** (0141): ativa encerrada SEM envio (humano atendendo, fora do
+  recorte, template em análise) é reagendada pelo motor depois de 6 h (`RETENTATIVA_POS_VENDA_MS`), até 3
+  tentativas (`MAX_TENTATIVAS_POS_VENDA`), dentro da janela.
+- O motor **não envia**: agenda uma ativa na fila do agente (`agente_retorno`, motivo `pos_venda`), com
+  horário **espalhado** por contato em até 2 h. O worker de retornos envia com a política das ativas:
+  modo efetivo **autônomo**, suspensão por qualidade, expediente/feriado (adia), limites do dia/semana,
+  opt-out e `recebe_automacoes`, oficial fora de 24h **só com o template aprovado** da regra, não-oficial
+  **só texto**, dentro da cota do **aquecimento** e do teto de 30 pós-vendas/dia por número
+  (`TETO_POS_VENDA_DIA_NAO_OFICIAL`).
+- **Conversa-alvo**: só WhatsApp, número conectado/degradado e não arquivado, conversa não arquivada —
+  a do pedido, senão a de um número com agente autônomo, senão a mais recente. Sem ela, não agenda.
+- **Humano conduzindo**: com atendimento aberto o motor não agenda (tenta na próxima passada); aberto
+  depois de agendado, a ativa é cancelada (`humano_atendendo`) e volta a ser candidata depois.
+  **Cliente que escreve** antes de a ativa sair a **adia** (2 h de quietude, `QUIETUDE_POS_VENDA_MS`) —
+  não cancela.
+- Uma ativa pendente por conversa (índice `agente_retorno_um_pendente`): o roteiro seguinte do mesmo
+  pedido espera a próxima passada.
+- O envio de **NPS** e de **indicação** grava o roteiro na sessão do agente
+  (`estado_agente.posVenda.nps` / `.indicacao`, independentes): a etapa `pos-venda` do pipeline orienta o
+  turno; o **portão** deixa o agente responder mesmo com a equipe disponível enquanto houver pergunta
+  pendente (atendente presente e humano assumido continuam vencendo). `registrar_nps` só aceita nota
+  com o roteiro NPS aberto (7 dias); nota ≤ 6 cria tarefa para o gestor + notificação, independente de
+  regra `nps_detrator`. `registrar_indicacoes` (ação do playbook **desligada por padrão**) só com o pedido
+  de indicação aberto, teto de 5 por roteiro, e responde `registrado` igual para novo e existente (não
+  revela quem já é cliente). Indicados nascem com origem "Indicação", `indicado_por` e **sem dono**
+  (entram na distribuição normal — não herdam a carteira do indicante).
+- Rollback de código depois de criar regras/provas não é seguro: `docs/agente-runbook.md` §19.
+
+
 ## Rodar agora
 
 `POST /v1/automacoes/executar` roda a varredura para o tenant do token na hora

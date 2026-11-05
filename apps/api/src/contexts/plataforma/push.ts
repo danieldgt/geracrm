@@ -117,6 +117,16 @@ interface Pendente {
   auth: string
 }
 
+/**
+ * D4: a pessoa desligou o PUSH deste tipo? Só linha explícita com `ligado = false` bloqueia — sem
+ * linha vale o padrão (ligado). ⚠️ O MESMO filtro entra na janela do cursor: janelas diferentes
+ * fariam o cursor ficar para trás e o aviso sair de novo.
+ */
+const semPushDesligado = (sql: Sql) => sql`NOT EXISTS (
+  SELECT 1 FROM usuario_preferencia_notificacao pr
+   WHERE pr.tenant_id = n.tenant_id AND pr.usuario_id = n.usuario_id
+     AND pr.tipo = n.tipo AND pr.canal = 'push' AND NOT pr.ligado)`
+
 /** Teto por passada e por tenant — rajada não vira tempestade de push. */
 const LOTE = 200
 
@@ -152,6 +162,7 @@ export async function despacharPushDoTenant(
        AND n.criado_em > (SELECT c.ate_criado_em FROM push_cursor c WHERE c.tenant_id = ${tenantId})
        -- ⚠️ Já lida não vira push: a pessoa está com o console aberto e já viu.
        AND n.lida_em IS NULL
+       AND ${semPushDesligado(sql)}
      ORDER BY n.criado_em ASC
      LIMIT ${LOTE}`
 
@@ -195,6 +206,7 @@ export async function despacharPushDoTenant(
                   WHERE n.tenant_id = ${tenantId}
                     AND n.criado_em > c.ate_criado_em
                     AND n.lida_em IS NULL
+                    AND ${semPushDesligado(sql)}
                   ORDER BY n.criado_em ASC
                   LIMIT ${LOTE}
                ) lote

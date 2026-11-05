@@ -9,6 +9,7 @@ import { comTenantServico, type Sql } from '../db/index.js'
 import { enviarTextoNaConversa } from '../contexts/atendimento/envio-conversa.js'
 import { situacaoDoExpediente } from '../contexts/atendimento/expediente.js'
 import { destinatariosDaFilaDoNumero, notificarPessoasDaConversa } from '../contexts/atendimento/notificacao.js'
+import { gestoresDaFilial } from '../contexts/atendimento/roteamento.js'
 import { gestoresDoTenant, lerContextoSla, respostaHumanaDoAtendimento } from '../contexts/atendimento/sla-handoff.js'
 
 /**
@@ -20,8 +21,8 @@ import { gestoresDoTenant, lerContextoSla, respostaHumanaDoAtendimento } from '.
  *
  *   0. alguém da equipe RESPONDEU (mensagem com autor) → `sla_respondido_em`;
  *      o relógio pára e nada mais acontece;
- *   1. venceu o SLA → `sla_estourado_em`, notifica os GESTORES (sem gestor
- *      declarado: o responsável e a fila do número), abre/atualiza o alerta
+ *   1. venceu o SLA → `sla_estourado_em`, notifica os GESTORES (os da filial
+ *      do roteamento primeiro; sem gestor declarado: o responsável e a fila do número), abre/atualiza o alerta
  *      `sla_handoff_estourado`;
  *   2. venceu o 2º limiar → `reatribuicao_liberada_em` e avisa o pool do número:
  *      qualquer um assume (inclusive de quem assumiu e não respondeu);
@@ -173,7 +174,7 @@ interface Passo {
 }
 
 interface Linha {
-  id: string; conversa_id: string; canal_id: string; responsavel_id: string | null; estado: string
+  id: string; conversa_id: string; canal_id: string; responsavel_id: string | null; responsavel_filial_id: string | null; estado: string
   sla_vence_em: Date; reatribuicao_vence_em: Date | null; aviso_espera_previsto_em: Date | null
   sla_estourado_em: Date | null; reatribuicao_liberada_em: Date | null; aviso_espera_em: Date | null
   sla_respondido_em: Date | null; respondido_em: Date | null
@@ -183,7 +184,7 @@ interface Linha {
 
 async function processarUm(tx: Sql, atendimentoId: string, agora: Date): Promise<Passo | null> {
   const [a] = await tx<Linha[]>`
-    SELECT a.id, a.conversa_id, a.canal_id, a.responsavel_id, a.estado,
+    SELECT a.id, a.conversa_id, a.canal_id, a.responsavel_id, a.responsavel_filial_id, a.estado,
            a.sla_vence_em, a.reatribuicao_vence_em, a.aviso_espera_previsto_em,
            a.sla_estourado_em, a.reatribuicao_liberada_em, a.aviso_espera_em, a.sla_respondido_em,
            ${respostaHumanaDoAtendimento(tx)} AS respondido_em,
@@ -229,7 +230,11 @@ async function processarUm(tx: Sql, atendimentoId: string, agora: Date): Promise
     if (m) {
       estourou = true
       await evento(tx, a.id, 'sla_estourado', `SLA de ${ctx?.config.slaMinutos ?? '?'} min úteis sem resposta`)
-      const gestores = (await gestoresDoTenant(tx)).map((g) => g.id)
+      // G4: atendimento roteado por filial avisa ANTES os gestores daquela filial (ativos e
+      // presentes); sem nenhum, cai no geral — igual ao atendimento sem filial.
+      const daFilial = a.responsavel_filial_id
+        ? (await gestoresDaFilial(tx, a.responsavel_filial_id)).filter((g) => !g.ausente).map((g) => g.id) : []
+      const gestores = daFilial.length > 0 ? daFilial : (await gestoresDoTenant(tx)).map((g) => g.id)
       const alvos = gestores.length > 0 ? gestores
         : [...(a.responsavel_id ? [a.responsavel_id] : []), ...await destinatariosDaFilaDoNumero(tx, a.canal_id)]
       await notificarPessoasDaConversa(tx, alvos, 'sla.estourado', 'SLA do atendimento estourado: ninguém respondeu ainda', a.conversa_id)

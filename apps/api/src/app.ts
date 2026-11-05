@@ -6,12 +6,21 @@ import { rotasIntegracao } from './contexts/integracao/rotas.js'
 import { rotasSync } from './contexts/integracao/rotas-sync.js'
 import { rotasWebhooksSaida } from './contexts/integracao/rotas-webhooks-saida.js'
 import { rotasContatos } from './contexts/crm/rotas-contatos.js'
+import { rotasContatosAcoesEmMassa } from './contexts/crm/rotas-contatos-massa.js'
+import { rotasConsultas } from './contexts/crm/rotas-consultas.js'
 import { rotasBloqueios } from './contexts/crm/rotas-bloqueios.js'
+import { rotasLgpd } from './contexts/crm/rotas-lgpd.js'
+import { rotasEtiquetas } from './contexts/crm/rotas-etiquetas.js'
+import { rotasContatoFeed } from './contexts/crm/rotas-contato-feed.js'
+import { rotasContatoArquivo } from './contexts/crm/rotas-contato-arquivo.js'
 import { rotasFunil } from './contexts/crm/rotas-funil.js'
 import { rotasLeads } from './contexts/crm/rotas-leads.js'
 import { rotasCrmAvancado } from './contexts/crm/rotas-crm-avancado.js'
 import { rotasSegmentos } from './contexts/crm/rotas-segmentos.js'
 import { rotasTarefa } from './contexts/crm/rotas-tarefa.js'
+import { rotasImportacao } from './contexts/crm/rotas-importacao.js'
+import { rotasAgenda } from './contexts/crm/rotas-agenda.js'
+import { rotasReuniao } from './contexts/crm/rotas-reuniao.js'
 import { rotasCarteira } from './contexts/crm/rotas-carteira.js'
 import { rotasMeta } from './contexts/crm/rotas-meta.js'
 import { rotasLista } from './contexts/crm/rotas-lista.js'
@@ -20,7 +29,7 @@ import { rotasNps } from './contexts/crm/rotas-nps.js'
 import { rotasSequencia } from './contexts/crm/rotas-sequencia.js'
 import { rotasAutomacao } from './contexts/crm/rotas-automacao.js'
 import { rotasFidelidade } from './contexts/crm/rotas-fidelidade.js'
-import { rotasCampanha } from './contexts/crm/rotas-campanha.js'
+import { rotasCampanha, type OpcoesRotasCampanha } from './contexts/crm/rotas-campanha.js'
 import { rotasConversas } from './contexts/atendimento/rotas-conversas.js'
 import { rotasCanais } from './contexts/atendimento/rotas-canais.js'
 import { rotasCanalConfig } from './contexts/atendimento/rotas-canal-config.js'
@@ -32,6 +41,7 @@ import { rotasWebhook } from './contexts/atendimento/rotas-webhook.js'
 import { rotasWebhookMeta } from './contexts/atendimento/rotas-webhook-meta.js'
 import { rotasMensagens } from './contexts/atendimento/rotas-mensagens.js'
 import { rotasFila } from './contexts/atendimento/rotas-fila.js'
+import { rotasDevolucao } from './contexts/atendimento/rotas-devolucao.js'
 import { rotasTemplate } from './contexts/atendimento/rotas-template.js'
 import { rotasAtendimentoKanban } from './contexts/atendimento/rotas-atendimento-kanban.js'
 import { rotasPresenca } from './contexts/atendimento/rotas-presenca.js'
@@ -40,6 +50,9 @@ import { rotasAuditoria } from './contexts/plataforma/rotas-auditoria.js'
 import { rotasMetricas } from './contexts/plataforma/rotas-metricas.js'
 import { rotasPainel } from './contexts/plataforma/rotas-painel.js'
 import { rotasBi } from './contexts/plataforma/rotas-bi.js'
+import { rotasRelatorios } from './contexts/plataforma/rotas-relatorios.js'
+import { rotasRelatoriosGestao } from './contexts/plataforma/rotas-relatorios-gestao.js'
+import { rotasRelatoriosAnalise } from './contexts/plataforma/rotas-relatorios-analise.js'
 import { rotasPerformance } from './contexts/plataforma/rotas-performance.js'
 import { rotasMercado } from './contexts/plataforma/rotas-mercado.js'
 import { rotasMapa } from './contexts/plataforma/rotas-mapa.js'
@@ -52,27 +65,68 @@ import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
 import { rotasCatalogoManual } from './contexts/catalogo/rotas-catalogo-manual.js'
 import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
 import { rotasLpPublica } from './contexts/aquisicao/rotas-lp-publica.js'
+import { rotasFormularios } from './contexts/aquisicao/rotas-formularios.js'
+import { rotasFormularioPublico } from './contexts/aquisicao/rotas-formulario-publico.js'
 import { rotasPush } from './contexts/plataforma/rotas-push.js'
 import { rotasAuth } from './contexts/identidade/rotas-auth.js'
+import { rotasUsuarios } from './contexts/identidade/rotas-usuarios.js'
+import { rotasFiliais } from './contexts/identidade/rotas-filiais.js'
+import { provedorIdentidadeCognito } from './contexts/identidade/provedor-identidade-cognito.js'
+import type { ProvedorIdentidade } from './contexts/identidade/provedor-identidade.js'
+import type { ProvedorSenha } from './contexts/identidade/provedor-senha.js'
+import { rotasPerfil } from './contexts/identidade/rotas-perfil.js'
+import { rotasNotificacoesPreferencias } from './contexts/atendimento/rotas-notificacoes-preferencias.js'
 // Raias do plano-port-playbook-am: registradas pela P0, preenchidas cada uma no seu arquivo.
 import { rotasCompliance } from './contexts/atendimento/agente/rotas-compliance.js'
 import { rotasCusto } from './contexts/atendimento/agente/rotas-custo.js'
+import { rotasAgendaAgente } from './contexts/atendimento/agente/rotas-agenda-agente.js'
+import { rotasConsumo } from './contexts/atendimento/rotas-consumo.js'
 import { rotasPrivacidade } from './contexts/atendimento/agente/rotas-privacidade.js'
 import { rotasAtivas } from './contexts/atendimento/agente/rotas-ativas.js'
 import { rotasQualidade } from './contexts/atendimento/agente/rotas-qualidade.js'
 import { rotasRevisao } from './contexts/atendimento/agente/rotas-revisao.js'
 import { rotasSugestao } from './contexts/atendimento/agente/rotas-sugestao.js'
 import { rotasPlaybook } from './contexts/atendimento/agente/rotas-playbook.js'
+import { rotasObjecoes } from './contexts/atendimento/agente/rotas-objecoes.js'
 import { rotasGoLive } from './contexts/atendimento/agente/rotas-go-live.js'
 import { rotasSaudeDetalhada } from './contexts/plataforma/rotas-saude-detalhada.js'
 import { rotasSla } from './contexts/atendimento/rotas-sla.js'
+import { rotasRoteamento } from './contexts/atendimento/rotas-roteamento.js'
+import { rotasCarteiraHigienizacao } from './contexts/plataforma/rotas-carteira-higienizacao.js'
+import { rotasCockpit } from './contexts/plataforma/rotas-cockpit.js'
+
+/**
+ * Saltos de proxy CONFIÁVEIS (`TRUST_PROXY_HOPS`): sempre 1 — a borda do Railway.
+ *
+ * ⚠️ O domínio da API é público e o app Expo chama direto: com 2 saltos, quem chama direto forja o
+ * `X-Forwarded-For` e escolhe o próprio `req.ip`. O IP de quem passa pelo nginx do console vem de cabeçalho
+ * autenticado por segredo compartilhado (`PROXY_SEGREDO`), ver `plugins/ip-cliente.ts`. Valor >1 é recusado
+ * (volta para 1, com aviso no log); 0 desliga (o IP é o do socket).
+ */
+export function saltosDeProxy(bruto = process.env.TRUST_PROXY_HOPS): number | false {
+  const n = bruto === undefined || bruto.trim() === '' ? 1 : Number(bruto)
+  if (!Number.isInteger(n) || n < 0 || n > 1) return 1
+  return n === 0 ? false : n
+}
+
+/** `true` quando `TRUST_PROXY_HOPS` pede mais de 1 salto (valor ignorado — o chamador avisa no log). */
+export function saltosExcessivos(bruto = process.env.TRUST_PROXY_HOPS): boolean {
+  const n = bruto === undefined || bruto.trim() === '' ? 1 : Number(bruto)
+  return Number.isInteger(n) && n > 1
+}
 
 /**
  * Builds the app without listening — so tests can use `app.inject()`
  * without opening a port.
+ *
+ * `provedorIdentidade`: a porta do cadastro de usuários (D3). Produção usa o
+ * Cognito; os testes passam o falso — nenhum teste chama a AWS.
  */
-export async function criarApp(): Promise<FastifyInstance> {
+export async function criarApp(
+  opcoes: { provedorIdentidade?: ProvedorIdentidade; campanha?: OpcoesRotasCampanha; provedorSenha?: ProvedorSenha } = {},
+): Promise<FastifyInstance> {
   const app = Fastify({
+    trustProxy: saltosDeProxy(),
     logger:
       process.env.NODE_ENV === 'test'
         ? false
@@ -97,6 +151,13 @@ export async function criarApp(): Promise<FastifyInstance> {
     // ⚠️ 403 precisa do próprio código: `exigirStaff` LANÇA (não usa reply.send),
     //    então cair no genérico fazia a tela receber status 403 com a mensagem
     //    "Erro interno." — o estado certo com o texto errado.
+    // Erro lançado com código próprio (ex.: `StaffSemUsuario`) leva o código dele.
+    const proprio = erro as { codigo?: unknown; mensagemTela?: unknown }
+    if (status < 500 && typeof proprio.codigo === 'string') {
+      return reply.code(status).send({
+        erro: proprio.codigo, mensagem: typeof proprio.mensagemTela === 'string' ? proprio.mensagemTela : '',
+      })
+    }
     const tipado: Record<number, { erro: string; mensagem: string }> = {
       401: { erro: 'autenticacao.ausente', mensagem: 'Autenticação ausente ou inválida.' },
       403: { erro: 'autorizacao.sem_permissao', mensagem: 'Você não tem acesso a esta área.' },
@@ -104,18 +165,30 @@ export async function criarApp(): Promise<FastifyInstance> {
     return reply.code(status).send(tipado[status] ?? { erro: 'erro.interno', mensagem: 'Erro interno.' })
   })
 
+  if (saltosExcessivos()) {
+    app.log.warn({ TRUST_PROXY_HOPS: process.env.TRUST_PROXY_HOPS }, 'TRUST_PROXY_HOPS>1 ignorado (usando 1): o IP do nginx do console vem de PROXY_SEGREDO')
+  }
   await app.register(pluginTenant)
   await app.register(pluginTestarConexao)
   await app.register(rotasIntegracao)
   await app.register(rotasSync)
   await app.register(rotasWebhooksSaida)
   await app.register(rotasContatos)
+  await app.register(rotasContatosAcoesEmMassa)
+  await app.register(rotasConsultas)
   await app.register(rotasBloqueios)
+  await app.register(rotasLgpd)
+  await app.register(rotasEtiquetas)
+  await app.register(rotasContatoFeed)
+  await app.register(rotasContatoArquivo)
   await app.register(rotasFunil)
   await app.register(rotasLeads)
   await app.register(rotasCrmAvancado)
   await app.register(rotasSegmentos)
   await app.register(rotasTarefa)
+  await app.register(rotasImportacao)
+  await app.register(rotasAgenda)
+  await app.register(rotasReuniao)
   await app.register(rotasCarteira)
   await app.register(rotasMeta)
   await app.register(rotasLista)
@@ -124,7 +197,7 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasSequencia)
   await app.register(rotasAutomacao)
   await app.register(rotasFidelidade)
-  await app.register(rotasCampanha)
+  await app.register(rotasCampanha, opcoes.campanha ?? {})
   await app.register(rotasConversas)
   await app.register(rotasCanais)
   await app.register(rotasCanalConfig)
@@ -136,14 +209,19 @@ export async function criarApp(): Promise<FastifyInstance> {
   await app.register(rotasWebhookMeta)
   await app.register(rotasMensagens)
   await app.register(rotasFila)
+  await app.register(rotasDevolucao)
   await app.register(rotasTemplate)
   await app.register(rotasAtendimentoKanban)
   await app.register(rotasPresenca)
   await app.register(rotasNotificacoes)
+  await app.register(rotasNotificacoesPreferencias)
   await app.register(rotasAuditoria)
   await app.register(rotasMetricas)
   await app.register(rotasPainel)
   await app.register(rotasBi)
+  await app.register(rotasRelatorios)
+  await app.register(rotasRelatoriosGestao)
+  await app.register(rotasRelatoriosAnalise)
   await app.register(rotasPerformance)
   await app.register(rotasMercado)
   await app.register(rotasMapa)
@@ -159,22 +237,36 @@ export async function criarApp(): Promise<FastifyInstance> {
   //    RESOLVIDO pela chave da URL (0062), como o webhook resolve pelo
   //    phone_number_id (0057) — nunca recebido em parâmetro (ADR-001).
   await app.register(rotasLpPublica)
+  await app.register(rotasFormularios)
+  await app.register(rotasFormularioPublico)
   await app.register(rotasPush)
-  await app.register(rotasAuth)
+  const identidade = opcoes.provedorIdentidade ?? provedorIdentidadeCognito()
+  await app.register(rotasAuth, { provedorIdentidade: identidade, ...(opcoes.provedorSenha ? { provedorSenha: opcoes.provedorSenha } : {}) })
+  // Cadastro de usuários e filiais (D3) — admin; o login nasce atrás da porta.
+  await app.register(rotasUsuarios, { provedor: identidade })
+  await app.register(rotasFiliais)
+  // Meu perfil (D4): dados da pessoa, foto no bucket, troca de senha pela porta de senha.
+  await app.register(rotasPerfil, opcoes.provedorSenha ? { provedorSenha: opcoes.provedorSenha } : {})
   // ⚠️ Pontos de extensão das raias P2–P19 (plano-port-playbook-am, P0): cada
   //    plugin começa vazio e a raia dona preenche o seu arquivo — ninguém mais
   //    precisa editar este bloco.
   await app.register(rotasCompliance)
   await app.register(rotasCusto)
+  await app.register(rotasAgendaAgente)
+  await app.register(rotasConsumo)
   await app.register(rotasPrivacidade)
   await app.register(rotasAtivas)
   await app.register(rotasQualidade)
   await app.register(rotasRevisao)
   await app.register(rotasSugestao)
   await app.register(rotasPlaybook)
+  await app.register(rotasObjecoes)
   await app.register(rotasGoLive)
   await app.register(rotasSaudeDetalhada)
   await app.register(rotasSla)
+  await app.register(rotasRoteamento)
+  await app.register(rotasCarteiraHigienizacao)
+  await app.register(rotasCockpit)
 
   /** Liveness — no database. Answers even with the bank down, on purpose. */
   /**

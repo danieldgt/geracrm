@@ -109,7 +109,7 @@ describe('PUT /v1/canais/:id/agente/ativas', () => {
     const r = await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, feriados: ['2026-11-20', '12-25', '12-25'] })
     expect(r.statusCode).toBe(200)
     const g = (await pedir('GET', URL_ATIVAS)).json()
-    expect(g.config).toEqual({ limiteDia: 1, limiteSemana: 3, templateRetorno: null })
+    expect(g.config).toEqual({ ...ATIVAS_PADRAO, limiteDia: 1, limiteSemana: 3, templateRetorno: null })
     expect(g.feriados).toEqual(['12-25', '2026-11-20'])
     const [a] = await dono<{ acao: string; dados: { antes: { limiteDia: number }; depois: { limiteDia: number } } }[]>`
       SELECT acao, dados FROM auditoria WHERE tenant_id = ${A}`
@@ -142,6 +142,104 @@ describe('PUT /v1/canais/:id/agente/ativas', () => {
     expect((await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, templateRetorno: bom })).statusCode).toBe(200)
     const g = (await pedir('GET', URL_ATIVAS)).json()
     expect(g.template).toMatchObject({ id: bom, nome: 'retorno_bom', status: 'APPROVED', variaveis: 1, compativel: true })
+  })
+
+  it('descarte após a cadência e reativação: grava, devolve no GET e a auditoria guarda antes e depois', async () => {
+    const tpl = await novoTemplate('reativacao_bom', 'APPROVED')
+    const reativacao = { ativa: true, dias: [30, 90], templateId: tpl, texto: null }
+    const r = await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, descarteAposHoras: 48, reativacao })
+    expect(r.statusCode).toBe(200)
+    const g = (await pedir('GET', URL_ATIVAS)).json()
+    expect(g.config).toMatchObject({ descarteAposHoras: 48, reativacao })
+    // ⚠️ Descarte DESLIGADO por padrão; reativação desligada, teto de 30 por dia.
+    expect(g.padroes).toMatchObject({ descarteAposHoras: 0, reativacao: { ativa: false, dias: [30, 90], limiteDia: 30 } })
+    expect(g.config.reativacao.limiteDia).toBe(30)
+    const [a] = await dono<{ dados: { antes: { descarteAposHoras: number }; depois: { descarteAposHoras: number } } }[]>`
+      SELECT dados FROM auditoria WHERE tenant_id = ${A} AND acao = 'agente.ativas_alteradas'`
+    expect(a!.dados).toMatchObject({ antes: { descarteAposHoras: 0 }, depois: { descarteAposHoras: 48 } })
+  })
+
+  it('cliente antigo (sem os campos novos) não zera a política de descarte/reativação já salva', async () => {
+    const tpl = await novoTemplate('reativacao_bom2', 'APPROVED')
+    const reativacao = { ativa: true, dias: [15, 45], templateId: tpl, texto: null }
+    await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, descarteAposHoras: 0, reativacao })
+    expect((await pedir('PUT', URL_ATIVAS, A, corpoValido)).statusCode).toBe(200)
+    expect((await pedir('GET', URL_ATIVAS)).json().config).toMatchObject({ descarteAposHoras: 0, reativacao })
+  })
+
+  it('validação da reativação: dias crescentes, 7 a 365, no máximo 3 → 422 no campo', async () => {
+    for (const dias of [[90, 30], [3, 30], [30, 400], [7, 30, 90, 180], []]) {
+      const r = await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, reativacao: { ativa: false, dias, templateId: null, texto: null } })
+      expect(r.statusCode, JSON.stringify(dias)).toBe(422)
+      expect(r.json()).toMatchObject({ erro: 'ativas.invalido', campos: ['reativacao'] })
+    }
+    expect((await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, descarteAposHoras: 9999 })).json()).toMatchObject({ campos: ['descarteAposHoras'] })
+    for (const limiteDia of [0, 201, 2.5]) {
+      const r = await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, reativacao: { ativa: false, dias: [30, 90], templateId: null, texto: null, limiteDia } })
+      expect(r.statusCode, String(limiteDia)).toBe(422)
+      expect(r.json()).toMatchObject({ erro: 'ativas.invalido', campos: ['reativacao'] })
+    }
+  })
+
+  it('⚠️ ligar a reativação no NÃO-OFICIAL exige confirmaRiscoBanimento: true (422 tipificado); já ligada, editar não pede', async () => {
+    await dono`INSERT INTO agente_config (tenant_id, canal_id, ativo, modo, politicas, persona, alcada)
+               VALUES (${A}, ${SEM_AGENTE}, true, 'sombra', 'x', '{"nome":"Lia","loja":"Loja"}'::jsonb, '{}'::jsonb) ON CONFLICT DO NOTHING`
+    try {
+      const nao = `/v1/canais/${SEM_AGENTE}/agente/ativas`
+      const reativacao = { ativa: true, dias: [30, 90], templateId: null, texto: 'Oi! Posso ajudar?', limiteDia: 20 }
+      const sem = await pedir('PUT', nao, A, { ...corpoValido, reativacao })
+      expect(sem.statusCode).toBe(422)
+      expect(sem.json()).toMatchObject({ erro: 'ativas.confirmar_risco_banimento', campos: ['reativacao'] })
+      expect((await pedir('PUT', nao, A, { ...corpoValido, reativacao, confirmaRiscoBanimento: false })).statusCode).toBe(422)
+      expect((await pedir('GET', nao)).json().config.reativacao.ativa).toBe(false)   // nada gravado
+
+      const com = await pedir('PUT', nao, A, { ...corpoValido, reativacao, confirmaRiscoBanimento: true })
+      expect(com.statusCode).toBe(200)
+      expect((await pedir('GET', nao)).json().config.reativacao).toMatchObject({ ativa: true, limiteDia: 20 })
+      const [a] = await dono<{ dados: { riscoBanimentoConfirmado?: boolean } }[]>`
+        SELECT dados FROM auditoria WHERE tenant_id = ${A} AND acao = 'agente.ativas_alteradas' AND entidade_id = ${SEM_AGENTE}`
+      expect(a!.dados.riscoBanimentoConfirmado).toBe(true)
+      // Já ligada: mudar o teto não pede de novo.
+      expect((await pedir('PUT', nao, A, { ...corpoValido, reativacao: { ...reativacao, limiteDia: 10 } })).statusCode).toBe(200)
+      // O oficial não pede confirmação (não carrega o risco do não-oficial).
+      const tpl = await novoTemplate('reat_oficial', 'APPROVED')
+      expect((await pedir('PUT', URL_ATIVAS, A, { ...corpoValido, reativacao: { ...reativacao, templateId: tpl } })).statusCode).toBe(200)
+    } finally {
+      await dono`DELETE FROM agente_config WHERE tenant_id = ${A} AND canal_id = ${SEM_AGENTE}`
+    }
+  })
+
+  it('reativação só em WhatsApp: ligar num Instagram → 422 tipificado', async () => {
+    const IG = randomUUID()
+    await dono`INSERT INTO canal_conectado (tenant_id, id, tipo, provedor, nome_amigavel, estado)
+               VALUES (${A}, ${IG}, 'instagram', 'meta_oficial', 'Instagram', 'conectado')`
+    await dono`INSERT INTO agente_config (tenant_id, canal_id, ativo, modo, politicas, persona, alcada)
+               VALUES (${A}, ${IG}, true, 'sombra', 'x', '{"nome":"Lia","loja":"Loja"}'::jsonb, '{}'::jsonb)`
+    try {
+      const r = await pedir('PUT', `/v1/canais/${IG}/agente/ativas`, A,
+        { ...corpoValido, reativacao: { ativa: true, dias: [30, 90], templateId: null, texto: 'Oi!' }, confirmaRiscoBanimento: true })
+      expect(r.statusCode).toBe(422)
+      expect(r.json()).toMatchObject({ erro: 'ativas.reativacao_canal_incompativel', campos: ['reativacao'] })
+    } finally {
+      await dono`DELETE FROM agente_config WHERE tenant_id = ${A} AND canal_id = ${IG}`
+      await dono`DELETE FROM canal_conectado WHERE tenant_id = ${A} AND id = ${IG}`
+    }
+  })
+
+  it('ligar a reativação no oficial exige template aprovado e compatível; no não-oficial, texto', async () => {
+    const lig = (extra: object) => ({ ...corpoValido, reativacao: { ativa: true, dias: [30, 90], templateId: null, texto: null, ...extra } })
+    expect((await pedir('PUT', URL_ATIVAS, A, lig({}))).json()).toMatchObject({ erro: 'ativas.reativacao_sem_conteudo' })
+    const pendente = await novoTemplate('reat_pendente', 'PENDING')
+    expect((await pedir('PUT', URL_ATIVAS, A, lig({ templateId: pendente }))).json()).toMatchObject({ erro: 'ativas.template_indisponivel' })
+    const duas = await novoTemplate('reat_duas', 'APPROVED', 'Oi {{1}} {{2}}')
+    expect((await pedir('PUT', URL_ATIVAS, A, lig({ templateId: duas }))).json()).toMatchObject({ erro: 'ativas.template_incompativel' })
+    // Não-oficial: texto configurado em vez de template.
+    await dono`INSERT INTO agente_config (tenant_id, canal_id, ativo, modo, politicas, persona, alcada)
+               VALUES (${A}, ${SEM_AGENTE}, true, 'sombra', 'x', '{"nome":"Lia","loja":"Loja"}'::jsonb, '{}'::jsonb) ON CONFLICT DO NOTHING`
+    const nao = `/v1/canais/${SEM_AGENTE}/agente/ativas`
+    expect((await pedir('PUT', nao, A, lig({}))).json()).toMatchObject({ erro: 'ativas.reativacao_sem_conteudo' })
+    expect((await pedir('PUT', nao, A, { ...lig({ texto: 'Oi! Posso ajudar?' }), confirmaRiscoBanimento: true })).statusCode).toBe(200)
+    await dono`DELETE FROM agente_config WHERE tenant_id = ${A} AND canal_id = ${SEM_AGENTE}`
   })
 
   it('número sem agente configurado → 409 nomeado', async () => {

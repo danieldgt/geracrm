@@ -48,7 +48,7 @@ const UUID = /^[0-9a-f-]{36}$/i
 export const depsPlaybook: { llm: PortaLlmFerramentas | null } = { llm: null }
 
 async function garantirUsuario(req: FastifyRequest): Promise<void> {
-  if (req.tenantId) await req.comTenant((tx) => garantirUsuarioId(tx, req))
+  if (req.tenantId && !req.atorStaff) await req.comTenant((tx) => garantirUsuarioId(tx, req))
 }
 /**
  * Autor da escrita, com a ORDEM CANÔNICA de locks (revisão P17, deadlock com o PUT

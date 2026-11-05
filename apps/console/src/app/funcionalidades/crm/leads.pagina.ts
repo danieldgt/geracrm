@@ -4,6 +4,7 @@ import { LeadsServico, type CardLead, type ChaveLead, type ColunaLead } from './
 import { formatarTelefoneBR } from '@geracrm/shared'
 import { idadeToque, semDonoImporta } from './leads.regras.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
+import { CabecalhoTelaComponente, EstadoComponente, IconeComponente } from '../../compartilhado/ui/index.js'
 
 /**
  * CRM (Leads) — kanban de qualificação do lead novo (eixo negociação/aquisição).
@@ -14,22 +15,22 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
 @Component({
   selector: 'app-leads',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CdkDropListGroup, CdkDropList, CdkDrag],
+  imports: [CdkDropListGroup, CdkDropList, CdkDrag, CabecalhoTelaComponente, EstadoComponente, IconeComponente],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1 class="txt-titulo">CRM — Leads</h1>
-        <p class="sub">Qualifique quem vale o esforço. Arraste o card ou use os botões.</p>
-      </div>
-    </header>
+    <ui-cabecalho-tela titulo="CRM — Leads" subtitulo="Qualifique quem vale o esforço. Arraste o card ou use os botões." />
 
     @if (servico.erroMove(); as e) { <p class="erro-move" role="alert">{{ e }}</p> }
 
     @switch (servico.estado()) {
-      @case ('carregando') { <div class="board"><div class="col-esq"></div><div class="col-esq"></div><div class="col-esq"></div></div> }
-      @case ('sem_permissao') { <div class="bloco aviso"><h2 class="txt-secao">Sem acesso aos leads</h2></div> }
-      @case ('erro') { <div class="bloco aviso"><h2 class="txt-secao">Não foi possível carregar</h2>
-        <button (click)="servico.carregar()">Tentar de novo</button></div> }
+      @case ('carregando') { <div class="board" aria-busy="true"><div class="col-esq"></div><div class="col-esq"></div><div class="col-esq"></div></div> }
+      @case ('sem_permissao') {
+        <ui-estado tipo="sem-permissao" titulo="Sem acesso aos leads" descricao="Peça a um administrador da sua empresa para liberar este acesso." />
+      }
+      @case ('erro') {
+        <ui-estado tipo="erro" titulo="Não foi possível carregar os leads" descricao="Verifique a conexão e tente de novo.">
+          <button type="button" class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button>
+        </ui-estado>
+      }
       @case ('pronto') {
         <div class="board rolagem-x" cdkDropListGroup>
           @for (col of servico.colunas(); track col.chave) {
@@ -57,6 +58,9 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                       <span class="card-topo">
                         <span class="card-nome encolhe">{{ card.nome }}</span>
                         @if (card.uf) { <span class="card-uf">{{ card.uf }}</span> }
+                        @if (col.chave === 'descartado' && card.descarteMotivo === 'sem_resposta') {
+                          <span class="card-selo" title="Descartado pelo sistema: sem resposta ao fim da sequência de retornos. Volta sozinho se o cliente escrever.">descarte automático</span>
+                        }
                       </span>
                       <span class="card-tel txt-dados">{{ telefone(card) }}</span>
                       <!-- ⚠️ A terceira linha é a MESMA caixa das ações: elas
@@ -65,7 +69,9 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                            esconde justamente o que a pessoa varre. -->
                       <span class="card-rodape">
                         <span class="card-resp" [class.orfa]="semDono(card, col.chave)">{{ card.responsavel || 'sem responsável' }}</span>
-                        @if (card.qtdVendas > 0) { <span class="card-vendas">🛒 {{ card.qtdVendas }}</span> }
+                        @if (card.qtdVendas > 0) {
+                          <span class="card-vendas"><ui-icone nome="shopping-cart" [tamanho]="14" rotulo="Compras" /> {{ card.qtdVendas }}</span>
+                        }
                         <!-- ⚠️ A idade do último toque é o que deixa priorizar
                              sem abrir card por card numa coluna de centenas. -->
                         <span class="card-toque" [class.frio]="card.ultimoToqueEm === null">{{ toque(card) }}</span>
@@ -117,11 +123,8 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
        O que sobra é a viewport menos a barra da casca. */
     :host { display: flex; flex-direction: column; height: calc(100dvh - var(--altura-barra-topo));
       padding: var(--espacamento-6); overflow: hidden; }
-    .cabecalho { margin-bottom: var(--espacamento-4); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
     .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
+    .card-vendas ui-icone { vertical-align: -2px; }
     /* ⚠️ stretch (não flex-start): a coluna precisa de altura para o próprio
        scroll funcionar. E o rolo horizontal é DAQUI, não da página — página que
        rola de lado é defeito (skill de layout). */
@@ -167,6 +170,8 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .card-uf { flex: none; font-size: 11px; color: var(--texto-suave); border: 1px solid var(--borda); border-radius: var(--raio-completo); padding: 0 6px; }
     .card-resp { font-size: 11px; color: var(--texto-suave); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .card-resp.orfa { color: var(--atencao); }
+    .card-selo { flex: none; font-size: 10px; line-height: 14px; padding: 0 6px; border-radius: var(--raio-completo);
+      background: var(--superficie); border: 1px solid var(--borda); color: var(--texto-secundario); white-space: nowrap; }
     .card-vendas { flex: none; font-size: 11px; color: var(--texto-suave); }
     .card-toque { flex: none; margin-left: auto; font-size: 11px; color: var(--texto-suave); }
     .card-toque.frio { color: var(--texto-suave); opacity: .75; font-style: italic; }

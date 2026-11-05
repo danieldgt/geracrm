@@ -1,8 +1,13 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
-import { garantirUsuarioId } from '../atendimento/rotas-fila.js'
+import { atorDaRequisicao } from '../atendimento/rotas-fila.js'
+import { condicaoContato, escopoDaRequisicao, exigirNoEscopo, responsavelNoEscopo } from '../plataforma/escopo.js'
+import { TETO_EQUIPE } from '../plataforma/limites-listas.js'
+import { exigirPapel, temPapel } from '../plataforma/papel.js'
+import { naoEhLinhaDeStaff } from '../identidade/linha-staff.js'
 
 const PAGINA = 30
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * Carteirização — quem é o dono de cada cliente, com histórico auditável.
@@ -25,10 +30,11 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
   // e limitado (dezenas), não é grid de domínio; ordenado por nome, com teto de
   // segurança para nunca virar lista ilimitada.
   app.get('/v1/equipe', { preHandler: exigirTenant }, async (req, reply) => {
+    // ⚠️ Sem as linhas legadas do staff (`naoEhLinhaDeStaff`): não são da equipe.
     const linhas = await req.comTenant((tx) => tx<{ id: string; nome: string }[]>`
-      SELECT id, nome FROM usuario
-       WHERE tenant_id = tenant_atual() AND ativo = true
-       ORDER BY nome ASC LIMIT 200`)
+      SELECT u.id, u.nome FROM usuario u
+       WHERE u.tenant_id = tenant_atual() AND u.ativo = true AND ${naoEhLinhaDeStaff(tx, 'u')}
+       ORDER BY u.nome ASC LIMIT 200`)
     return reply.send({ itens: linhas.map((l) => ({ id: l.id, nome: l.nome })) })
   })
 
@@ -41,7 +47,8 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
           JOIN usuario u ON u.tenant_id = ca.tenant_id AND u.id = ca.usuario_id
          WHERE ca.tenant_id = tenant_atual() AND ca.ate IS NULL AND ca.usuario_id IS NOT NULL
          GROUP BY u.id, u.nome
-         ORDER BY clientes DESC, u.nome ASC`
+         -- Lista de EQUIPE: teto TETO_EQUIPE; o corte é por carteira maior (o órfão vem à parte, sempre).
+         ORDER BY clientes DESC, u.nome ASC, u.id LIMIT ${TETO_EQUIPE + 1}`
       const [o] = await tx<{ orfaos: number }[]>`
         SELECT count(*)::int AS orfaos
           FROM contato c
@@ -52,8 +59,11 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
                 AND ca.ate IS NULL AND ca.usuario_id IS NOT NULL)`
       return { porVendedor, orfaos: o?.orfaos ?? 0 }
     })
+    const cortou = porVendedor.length > TETO_EQUIPE
+    const carteiras = cortou ? porVendedor.slice(0, TETO_EQUIPE) : porVendedor
     return reply.send({
-      itens: porVendedor.map((l) => ({ usuarioId: l.usuario_id, usuario: l.usuario, clientes: l.clientes })),
+      itens: carteiras.map((l) => ({ usuarioId: l.usuario_id, usuario: l.usuario, clientes: l.clientes })),
+      truncado: cortou,
       orfaos,
     })
   })
@@ -72,7 +82,10 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
         if (!nome || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
         curNome = nome; curId = id
       }
-      const linhas = await req.comTenant((tx) => {
+      const linhas = await req.comTenant(async (tx) => {
+        // ⚠️ Escopo (D3): o vendedor que pede a carteira de OUTRO (ou os órfãos)
+        //    recebe a lista vazia — a carteira alheia não está no escopo dele.
+        const escopo = await escopoDaRequisicao(tx, req)
         // Órfão = sem dono vigente com usuario_id não-nulo.
         const filtroDono = orfaos === '1'
           ? tx`NOT EXISTS (
@@ -87,6 +100,7 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
           SELECT c.id, c.nome, c.qtd_vendas, c.ultima_venda_em
             FROM contato c
            WHERE c.tenant_id = tenant_atual() AND ${filtroDono}
+             AND ${condicaoContato(tx, escopo, 'c')}
              AND ${curNome === null ? tx`true` : tx`(c.nome, c.id) > (${curNome}, ${curId}::uuid)`}
            ORDER BY c.nome ASC, c.id ASC LIMIT ${PAGINA + 1}`
       })
@@ -105,7 +119,7 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
 
   // Histórico de posse de UM cliente (para a ficha).
   app.get<{ Params: { id: string } }>(
-    '/v1/contatos/:id/carteira/historico', { preHandler: exigirTenant },
+    '/v1/contatos/:id/carteira/historico', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
       const linhas = await req.comTenant((tx) => tx<{
         id: string; usuario_id: string | null; usuario: string | null
@@ -129,20 +143,32 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
   )
 
   // Atribuir/transferir o dono. usuarioId null (ou ausente) = remover o dono.
+  // ⚠️ Só GESTÃO (gestor/supervisor/admin): o vendedor não distribui clientes —
+  //    ele só SOLTA a própria (DELETE). O destino precisa estar no escopo de quem
+  //    transfere (`responsavelNoEscopo`: gestor de filial → alguém da filial) e
+  //    ativo; fora disso é o MESMO 422 de inexistente.
   app.post<{ Params: { id: string }; Body: { usuarioId?: string | null; motivo?: string } }>(
-    '/v1/contatos/:id/carteira', { preHandler: exigirTenant },
+    '/v1/contatos/:id/carteira', { preHandler: [exigirTenant, exigirNoEscopo('contato'), exigirPapel('gestor', 'supervisor')] },
     async (req, reply) => {
       const novoDono = req.body?.usuarioId ?? null
       const motivo = req.body?.motivo?.trim() || null
+      if (novoDono !== null && (typeof novoDono !== 'string' || !UUID.test(novoDono))) {
+        return reply.code(422).send({ erro: 'carteira.usuario_invalido', mensagem: 'Vendedor não encontrado.' })
+      }
       try {
         const resultado = await req.comTenant(async (tx) => {
-          const eu = await garantirUsuarioId(tx, req)
+          if (novoDono !== null) {
+            const [ativo] = await tx`SELECT 1 FROM usuario WHERE tenant_id = tenant_atual() AND id = ${novoDono} AND ativo`
+            if (!ativo || !(await responsavelNoEscopo(tx, await escopoDaRequisicao(tx, req), novoDono))) return 'destino_invalido' as const
+          }
+          const eu = await atorDaRequisicao(tx, req)
           const [r] = await tx<{ transferir_carteira: string | null }[]>`
             SELECT transferir_carteira(
               tenant_atual(), ${req.params.id}, ${novoDono},
               ${eu}, 'manual', ${motivo})`
           return r?.transferir_carteira ?? null
         })
+        if (resultado === 'destino_invalido') return reply.code(422).send({ erro: 'carteira.usuario_invalido', mensagem: 'Vendedor não encontrado.' })
         // NULL = já era esse o dono; a função não cria linha para uma mudança que não houve.
         if (resultado === null) return reply.send({ id: null, semMudanca: true })
         return reply.send({ id: resultado, semMudanca: false })
@@ -157,15 +183,30 @@ export async function rotasCarteira(app: FastifyInstance): Promise<void> {
   )
 
   // Soltar o cliente (vira órfão). Atalho para transferir com dono NULL.
+  // ⚠️ Gestão solta qualquer cliente do escopo; os demais, SÓ o que é da
+  //    própria carteira vigente (403 tipificado se for de outro dono).
   app.delete<{ Params: { id: string } }>(
-    '/v1/contatos/:id/carteira', { preHandler: exigirTenant },
+    '/v1/contatos/:id/carteira', { preHandler: [exigirTenant, exigirNoEscopo('contato')] },
     async (req, reply) => {
+      const gestao = await temPapel(req, 'gestor', 'supervisor')
       const resultado = await req.comTenant(async (tx) => {
-        const eu = await garantirUsuarioId(tx, req)
+        const eu = await atorDaRequisicao(tx, req)
+        if (!gestao) {
+          const [meu] = await tx`
+            SELECT 1 FROM carteira_atribuicao
+             WHERE tenant_id = tenant_atual() AND contato_id = ${req.params.id} AND ate IS NULL AND usuario_id = ${eu}::uuid`
+          if (!meu) return 'nao_e_meu' as const
+        }
         const [r] = await tx<{ transferir_carteira: string | null }[]>`
           SELECT transferir_carteira(tenant_atual(), ${req.params.id}, NULL, ${eu}, 'manual', NULL)`
         return r?.transferir_carteira ?? null
       })
+      if (resultado === 'nao_e_meu') {
+        return reply.code(403).send({
+          erro: 'acesso.papel_insuficiente', exige: ['gestor', 'supervisor'],
+          mensagem: 'Você só pode soltar clientes da sua própria carteira.',
+        })
+      }
       if (resultado === null) return reply.send({ id: null, semMudanca: true })
       return reply.send({ id: resultado, semMudanca: false })
     },

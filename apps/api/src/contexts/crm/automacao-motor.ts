@@ -1,4 +1,7 @@
-import { classificarRfv } from '@geracrm/shared'
+import {
+  MAX_TENTATIVAS_POS_VENDA, RETENTATIVA_POS_VENDA_MS, classificarRfv, espalhamentoDoPosVenda, validarAcaoAgenteEnvia,
+  validarGatilhoPedidoEfetivado,
+} from '@geracrm/shared'
 import postgres from 'postgres'
 import type { Sql } from '../../db/index.js'
 import { enviarTextoNaConversa } from '../atendimento/envio-conversa.js'
@@ -25,7 +28,104 @@ const CAP_POR_REGRA = 200 // teto por regra por passada — não explode em raja
 
 interface Automacao {
   id: string; nome: string; gatilho: string; gatilho_param: Record<string, unknown>
-  acao: string; acao_param: Record<string, unknown>
+  acao: string; acao_param: Record<string, unknown>; criado_em: Date
+}
+
+/**
+ * Até quantos dias DEPOIS do dia previsto o pós-venda ainda é agendado. Cobre o
+ * worker parado e a conversa ocupada por outro pós-venda pendente (o índice
+ * `agente_retorno_um_pendente` deixa um por conversa: o próximo espera a vez).
+ * Passado isso, a mensagem já não é "pós-venda" — fica sem enviar.
+ */
+export const JANELA_POS_VENDA_DIAS = 7
+
+/**
+ * PÓS-VENDA POR PEDIDO (G3): gatilho `pedido_efetivado` + ação `agente_envia`.
+ *
+ * Diferente das outras regras, age POR PEDIDO (o mesmo cliente compra de novo e
+ * recebe de novo), e não executa nada aqui: AGENDA uma ativa na fila do agente
+ * (`agente_retorno`, motivo `pos_venda`), que o worker de retornos envia com a
+ * política das ativas (expediente, limites, opt-out, suspensão, janela/template,
+ * aquecimento, teto diário do não-oficial) e só no modo efetivo autônomo.
+ *
+ * ⚠️ Idempotência por pedido + roteiro: índice único `agente_retorno_pos_venda_em_curso`
+ *    (pendente/enviado, 0141) + `ON CONFLICT DO NOTHING` — nunca duas na fila, nunca
+ *    reenviar o que saiu. Encerrada SEM envio (cancelada/recusada: impedimento
+ *    passageiro) pode ser reagendada (M1), até `MAX_TENTATIVAS_POS_VENDA`, com
+ *    `RETENTATIVA_POS_VENDA_MS` entre elas, dentro de `JANELA_POS_VENDA_DIAS`.
+ *    Conflito com outro pós-venda PENDENTE na mesma conversa também não insere —
+ *    o pedido continua candidato e entra na próxima passada.
+ * ⚠️ Não é retroativo: só pedidos efetivados DEPOIS de a regra existir.
+ * ⚠️ Não agenda com atendimento humano aberto (a pessoa conduz) nem para telefone
+ *    na lista de bloqueio; tenta de novo na próxima passada, dentro da janela.
+ * ⚠️ Conversa-alvo (M4): só WhatsApp (oficial/não-oficial), número ativo e não
+ *    arquivado, conversa não arquivada — preferindo a do pedido, depois a de um
+ *    número onde o agente é autônomo, depois a mais recente. Sem conversa assim, não
+ *    agenda (não inventa conversa fria).
+ * ⚠️ Horário espalhado por contato (M3): `executar_em = agora + [0, 2 h)`, determinístico.
+ */
+async function agendarPosVenda(sql: Sql, tid: string, a: Automacao, agora: Date): Promise<number> {
+  const g = validarGatilhoPedidoEfetivado(a.gatilho_param)
+  const ac = validarAcaoAgenteEnvia(a.acao_param)
+  if (!g.ok || !ac.ok) return 0
+  const dias = g.dados.diasDepois
+  const { roteiro, texto, templateId } = ac.dados
+  const retentarAntesDe = new Date(agora.getTime() - RETENTATIVA_POS_VENDA_MS)
+  const candidatos = await sql<{ pedido_id: string; contato_id: string; nome: string; conversa_id: string; canal_id: string }[]>`
+    SELECT p.id AS pedido_id, p.contato_id, c.nome, cv.id AS conversa_id, cv.canal_id
+      FROM pedido p
+      JOIN contato c ON c.tenant_id = p.tenant_id AND c.id = p.contato_id
+      JOIN LATERAL (
+        SELECT x.id, x.canal_id FROM conversa x
+          JOIN canal_conectado cc ON cc.tenant_id = x.tenant_id AND cc.id = x.canal_id
+          LEFT JOIN agente_config ag ON ag.tenant_id = x.tenant_id AND ag.canal_id = x.canal_id
+         WHERE x.tenant_id = p.tenant_id AND (x.id = p.conversa_id OR x.contato_id = p.contato_id)
+           AND NOT x.arquivada
+           AND cc.tipo IN ('whatsapp_oficial', 'whatsapp_nao_oficial')
+           AND cc.arquivado_em IS NULL AND cc.estado IN ('conectado', 'degradado')
+         ORDER BY (x.id = p.conversa_id) DESC NULLS LAST, (ag.modo = 'autonomo') DESC NULLS LAST,
+                  x.ultima_mensagem_em DESC NULLS LAST
+         LIMIT 1) cv ON true
+     WHERE p.tenant_id = ${tid} AND p.estado = 'efetivado' AND p.efetivado_em IS NOT NULL
+       AND p.efetivado_em >= ${a.criado_em}
+       AND p.efetivado_em <= ${agora}::timestamptz - (${dias} || ' days')::interval
+       AND p.efetivado_em >= ${agora}::timestamptz - (${dias + JANELA_POS_VENDA_DIAS} || ' days')::interval
+       AND c.ativo AND c.recebe_automacoes
+       -- Em curso, já enviada, ou encerrada sem envio há pouco: espera.
+       AND NOT EXISTS (SELECT 1 FROM agente_retorno r
+                        WHERE r.tenant_id = p.tenant_id AND r.pedido_id = p.id AND r.roteiro = ${roteiro}
+                          AND (r.estado IN ('pendente', 'enviado') OR r.concluido_em > ${retentarAntesDe}))
+       AND (SELECT count(*) FROM agente_retorno r
+             WHERE r.tenant_id = p.tenant_id AND r.pedido_id = p.id AND r.roteiro = ${roteiro}) < ${MAX_TENTATIVAS_POS_VENDA}
+       AND NOT EXISTS (SELECT 1 FROM atendimento at
+                        WHERE at.tenant_id = p.tenant_id AND at.conversa_id = cv.id AND at.estado <> 'encerrado')
+       AND NOT EXISTS (SELECT 1 FROM contato_telefone ct
+                         JOIN lista_bloqueio lb ON lb.tenant_id = ct.tenant_id AND lb.chave_bloqueio = ct.chave_bloqueio
+                        WHERE ct.tenant_id = p.tenant_id AND ct.contato_id = p.contato_id)
+     ORDER BY p.efetivado_em
+     LIMIT ${CAP_POR_REGRA}`
+  let agendados = 0
+  for (const cand of candidatos) {
+    // ⚠️ O texto é resolvido AQUI (nome do contato) e viaja pronto, como no `enviar_mensagem`.
+    const pronto = texto ? aplicarMarcadores(texto, cand.nome) : null
+    const executarEm = new Date(agora.getTime() + espalhamentoDoPosVenda(`${cand.contato_id}:${cand.pedido_id}:${roteiro}`))
+    const feito = await sql.begin(async (tx) => {
+      const [linha] = await tx<{ id: string }[]>`
+        INSERT INTO agente_retorno (tenant_id, id, conversa_id, canal_id, motivo, executar_em, estado, tentativa, texto, criado_em,
+                                    pedido_id, roteiro, template_id, automacao_id)
+        VALUES (${tid}, gen_random_uuid(), ${cand.conversa_id}, ${cand.canal_id}, 'pos_venda', ${executarEm}, 'pendente', 1, ${pronto}, ${agora},
+                ${cand.pedido_id}, ${roteiro}, ${templateId}, ${a.id})
+        ON CONFLICT DO NOTHING
+        RETURNING id`
+      if (!linha) return false
+      await tx`INSERT INTO automacao_execucao (tenant_id, automacao_id, contato_id)
+               VALUES (${tid}, ${a.id}, ${cand.contato_id})
+               ON CONFLICT (tenant_id, automacao_id, contato_id) DO UPDATE SET executado_em = now()`
+      return true
+    })
+    if (feito) agendados += 1
+  }
+  return agendados
 }
 
 /** contato_ids que casam o gatilho e ainda NÃO foram atendidos por esta regra. */
@@ -247,12 +347,20 @@ async function enviarDaAutomacao(
 
 /** Roda TODAS as automações ativas de UM tenant. Devolve quantas ações executou. */
 export async function executarNoTenant(sql: Sql, tid: string, agora: Date): Promise<number> {
-  void agora
   const regras = await sql<Automacao[]>`
-    SELECT id, nome, gatilho, gatilho_param, acao, acao_param
+    SELECT id, nome, gatilho, gatilho_param, acao, acao_param, criado_em
       FROM automacao WHERE tenant_id = ${tid} AND ativa`
   let total = 0
   for (const a of regras) {
+    // Pós-venda (G3): por PEDIDO, agendando a ativa do agente — caminho próprio.
+    if (a.gatilho === 'pedido_efetivado') {
+      if (a.acao !== 'agente_envia') continue
+      const n = await agendarPosVenda(sql, tid, a, agora)
+      total += n
+      if (n > 0) await sql`UPDATE automacao SET ultima_execucao_em = now() WHERE tenant_id = ${tid} AND id = ${a.id}`
+      continue
+    }
+    if (a.acao === 'agente_envia') continue
     let ids = await candidatos(sql, tid, a)
 
     // ⚠️ `recebe_automacoes` é um opt-out DIFERENTE da lista de bloqueio: é o

@@ -1,0 +1,150 @@
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # ⚠️ IP REAL do visitante. Só a borda do Railway alcança este nginx, e ela ACRESCENTA o IP que viu ao
+    #    fim do X-Forwarded-For; tudo antes disso foi escrito pelo cliente. Com `real_ip_recursive off`,
+    #    `$remote_addr` vira o ÚLTIMO valor (o da borda). Os proxies abaixo mandam esse IP à API em
+    #    `X-Geracrm-Ip-Cliente`, junto de `X-Geracrm-Proxy` (segredo `PROXY_SEGREDO`, o MESMO nos serviços
+    #    console e API do Railway; este arquivo é template: o entrypoint do nginx:alpine substitui só
+    #    as variáveis de ambiente definidas, como PROXY_SEGREDO). `proxy_set_header` SUBSTITUI o valor que o
+    #    cliente mandou com o mesmo nome, então o cliente não injeta esses dois cabeçalhos. A API só confia
+    #    no IP quando o segredo confere (`apps/api/src/plugins/ip-cliente.ts`); sem PROXY_SEGREDO na API,
+    #    ignora e usa o IP do nginx (1 salto).
+    set_real_ip_from 0.0.0.0/0;
+    set_real_ip_from ::/0;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive off;
+
+    # ⚠️ Anti-clickjacking: NENHUMA página do console entra em iframe de terceiro (o console é logado —
+    #    um iframe invisível sobre um botão "ganhe um prêmio" clicaria por você). A única exceção é o
+    #    formulário público, no location próprio mais abaixo.
+    # ⚠️ `add_header` NÃO herda para um location que declare o seu: todo location com add_header próprio
+    #    REPETE estas quatro linhas.
+    add_header X-Frame-Options "DENY" always;
+    add_header Content-Security-Policy "frame-ancestors 'none'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # ⚠️ SSE do tempo real: sem buffering e com timeout longo, senão o nginx
+    #    segura os eventos e a tela nunca atualiza. Prefixo mais específico que
+    #    /v1, então ganha o match.
+    location /v1/eventos {
+        proxy_pass https://geracrm-api-production.up.railway.app;
+        proxy_set_header Host geracrm-api-production.up.railway.app;
+        proxy_ssl_server_name on;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Geracrm-Ip-Cliente $remote_addr;
+        proxy_set_header X-Geracrm-Proxy "${PROXY_SEGREDO}";
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        chunked_transfer_encoding off;
+    }
+
+    # ⚠️ A API é proxyada na MESMA origem do console — o browser fala só com o
+    #    console, então não há CORS e o `/v1` relativo do app continua valendo.
+    #    O `Authorization: Bearer` do Cognito é repassado (nginx encaminha headers).
+    location /v1 {
+        # Upload de arquivo do contato (15 MB) e do formulário (20 MB): o padrão do nginx (1 MB) cortava.
+        client_max_body_size 25m;
+        proxy_pass https://geracrm-api-production.up.railway.app;
+        proxy_set_header Host geracrm-api-production.up.railway.app;
+        proxy_ssl_server_name on;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Geracrm-Ip-Cliente $remote_addr;
+        proxy_set_header X-Geracrm-Proxy "${PROXY_SEGREDO}";
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ⚠️ Landing page PÚBLICA do anúncio (AQ-44). Sem esta location a URL cairia
+    #    no `location /` e o lead receberia o index.html do console — uma tela de
+    #    login em vez da página que o anúncio prometeu.
+    #    Fica na MESMA origem de propósito: o `fetch` da página chama
+    #    `/publico/lp/:chave/sessao` relativo, então não há CORS.
+    location /publico {
+        # Formulário público com anexos: a API limita a 20 MB no total e responde 413 tipificado.
+        client_max_body_size 25m;
+        proxy_pass https://geracrm-api-production.up.railway.app;
+        proxy_set_header Host geracrm-api-production.up.railway.app;
+        proxy_ssl_server_name on;
+        # ⚠️ O limite de taxa da rota pública separa tráfego por IP — sem repassar
+        #    o IP real, todo mundo divide o mesmo balde e o primeiro pico derruba
+        #    a criação de sessão de todos. É o `$remote_addr` já resolvido acima.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Geracrm-Ip-Cliente $remote_addr;
+        proxy_set_header X-Geracrm-Proxy "${PROXY_SEGREDO}";
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ⚠️ Formulário PÚBLICO (F3): `/f/:chave` é rota do Angular fora da casca, e é a ÚNICA página que pode
+    #    entrar em iframe de outro site (?embed=1). O match é EXATO no formato da chave — `/f/qualquer/coisa`
+    #    cai no `location /` com `frame-ancestors 'none'` (e o Angular mostra "indisponível").
+    #    `frame-ancestors *` libera qualquer site; restringir por formulário (coluna `dominios_incorporacao`)
+    #    é evolução documentada no plano.
+    location ~ "^/f/[A-Za-z0-9_-]{16,40}$" {
+        try_files /index.html =404;
+        add_header Cache-Control "no-cache";
+        add_header Content-Security-Policy "frame-ancestors *" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    }
+
+    # ⚠️ Assets com HASH no nome (outputHashing:all): cache longo e imutável — o
+    #    nome muda a cada build, então nunca serve versão velha.
+    location ~* \.(?:js|css|woff2?)$ {
+        try_files $uri =404;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header X-Frame-Options "DENY" always;
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    }
+
+    # ⚠️ index.html SEMPRE revalidado. Sem isto o browser reusa o índice antigo,
+    #    que aponta para os JS antigos — e o usuário vê a UI velha depois do
+    #    deploy (foi a causa do "ícone sumido" e afins). no-cache = revalida antes
+    #    de usar; o deploy novo aparece na hora.
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+        add_header X-Frame-Options "DENY" always;
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    }
+
+    # ⚠️ /saude faz DOIS trabalhos: liveness do Railway (o railway.json é
+    #    compartilhado com a API, então o healthcheckPath é um só) E a versão da
+    #    API que o rodapé do console mostra ({ versao }). Por isso é PROXY para a
+    #    API — e, se a API não responder, cai no "ok" local: o console continua
+    #    vivo para o healthcheck e o rodapé mostra "—" em vez de derrubar o
+    #    serviço junto. Sem o proxy, o rodapé lia "ok" e nunca via a versão.
+    location = /saude {
+        access_log off;
+        proxy_pass https://geracrm-api-production.up.railway.app/saude;
+        proxy_set_header Host geracrm-api-production.up.railway.app;
+        proxy_ssl_server_name on;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 3s;
+        proxy_intercept_errors on;
+        error_page 500 502 503 504 = @saude_local;
+    }
+    location @saude_local {
+        access_log off;
+        add_header Content-Type text/plain;
+        add_header X-Frame-Options "DENY" always;
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        return 200 "ok";
+    }
+
+    # SPA: qualquer rota do Angular (login, contatos, conversas…) cai no index.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

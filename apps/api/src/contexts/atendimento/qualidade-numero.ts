@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Sql } from '../../db/index.js'
+import { algumCanal, canaisDosUsuarios } from '../plataforma/preferencia-notificacao.js'
 import type { EventoMeta, EventoQualidadeMeta } from './canais/meta.js'
 
 /**
@@ -136,14 +137,19 @@ async function notificarQualidade(tx: Sql, canalId: string, titulo: string): Pro
     alvos = (await tx<{ id: string }[]>`
       SELECT id FROM usuario WHERE tenant_id = tenant_atual() AND ativo LIMIT ${TETO_NOTIFICADOS}`).map((u) => u.id)
   }
+  const canais = await canaisDosUsuarios(tx, alvos, 'canal.qualidade')
   for (const usuarioId of alvos) {
+    const c = canais.get(usuarioId)
+    if (!c || !algumCanal(c)) continue // D4: a pessoa desligou este aviso
     await tx`
-      INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, conversa_id)
-      VALUES (tenant_atual(), ${randomUUID()}, ${usuarioId}, 'canal.qualidade', ${titulo}, NULL)`
-    await tx`
-      INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
-      VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${usuarioId},
-              ${JSON.stringify({ usuarioId })}::text::jsonb)`
+      INSERT INTO notificacao (tenant_id, id, usuario_id, tipo, titulo, conversa_id, no_app, email_pendente)
+      VALUES (tenant_atual(), ${randomUUID()}, ${usuarioId}, 'canal.qualidade', ${titulo}, NULL, ${c.app}, ${c.email})`
+    if (c.app) {
+      await tx`
+        INSERT INTO outbox (tenant_id, tipo, agregado, agregado_id, payload)
+        VALUES (tenant_atual(), 'notificacao.nova', 'usuario', ${usuarioId},
+                ${JSON.stringify({ usuarioId })}::text::jsonb)`
+    }
   }
   return alvos.length
 }

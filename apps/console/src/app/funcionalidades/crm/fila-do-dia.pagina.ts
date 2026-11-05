@@ -1,5 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, OnInit } from '@angular/core'
 import { RouterLink } from '@angular/router'
+import { CabecalhoTelaComponente, EstadoComponente, IconeComponente, PaginacaoComponente } from '../../compartilhado/ui/index.js'
 import { FilaDoDiaServico } from './fila-do-dia.servico.js'
 import type { ClienteRfv } from './clientes.servico.js'
 
@@ -16,14 +17,10 @@ import type { ClienteRfv } from './clientes.servico.js'
 @Component({
   selector: 'app-fila-do-dia',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink],
+  imports: [RouterLink, CabecalhoTelaComponente, EstadoComponente, IconeComponente, PaginacaoComponente],
   template: `
-    <header class="cabecalho">
-      <div>
-        <h1>Fila do Dia</h1>
-        <p class="sub">Quem está saindo do próprio ritmo de compra — os mais urgentes primeiro.</p>
-      </div>
-    </header>
+    <ui-cabecalho-tela titulo="Fila do Dia"
+      subtitulo="Quem está saindo do próprio ritmo de compra — os mais urgentes primeiro." />
 
     @switch (servico.estado()) {
       @case ('carregando') {
@@ -32,21 +29,18 @@ import type { ClienteRfv } from './clientes.servico.js'
         </ul>
       }
       @case ('sem_permissao') {
-        <div class="bloco"><h2>Você não tem acesso à fila</h2>
-          <p>Peça a um administrador da sua empresa para liberar este acesso.</p></div>
+        <ui-estado tipo="sem-permissao" titulo="Você não tem acesso à fila"
+          descricao="Peça a um administrador da sua empresa para liberar este acesso." />
       }
       @case ('erro') {
-        <div class="bloco"><h2>Não foi possível montar a fila</h2>
-          <p>{{ servico.erro() }}</p>
-          <button class="btn btn--primario" (click)="servico.carregar()">Tentar de novo</button></div>
+        <ui-estado tipo="erro" titulo="Não foi possível montar a fila" [descricao]="servico.erro() ?? ''">
+          <button class="btn btn--primario" type="button" (click)="servico.carregar()">Tentar de novo</button>
+        </ui-estado>
       }
       @case ('pronto') {
         @if (servico.vazio()) {
-          <div class="bloco">
-            <h2>Ninguém saindo do ritmo hoje 🎉</h2>
-            <p>Nenhum cliente passou do próprio ritmo de compra. Quando alguém passar, aparece aqui —
-               com o porquê e a ação sugerida.</p>
-          </div>
+          <ui-estado titulo="Ninguém saindo do ritmo hoje"
+            descricao="Nenhum cliente passou do próprio ritmo de compra. Quando alguém passar, aparece aqui — com o porquê e a ação sugerida." />
         } @else {
           <ul class="lista">
             @for (c of servico.itens(); track c.id) {
@@ -67,20 +61,15 @@ import type { ClienteRfv } from './clientes.servico.js'
                 <p class="porque">{{ frase(c) }}</p>
 
                 <div class="rodape">
-                  <span class="acao">➜ {{ c.segmento.acao }}</span>
+                  <span class="acao"><ui-icone nome="chevron-right" [tamanho]="14" /> {{ c.segmento.acao }}</span>
                   <span class="num">{{ c.qtdVendas }} compras · {{ reais(c.totalCentavos) }}</span>
                 </div>
               </li>
             }
           </ul>
 
-          @if (servico.temMais()) {
-            <div class="mais">
-              <button class="btn btn--secundario" (click)="servico.carregarMais()" [disabled]="servico.buscandoMais()">
-                {{ servico.buscandoMais() ? 'Carregando…' : 'Ver mais da fila' }}
-              </button>
-            </div>
-          }
+          <ui-paginacao [mostrados]="servico.itens().length" [temMais]="servico.temMais()"
+            [carregando]="servico.buscandoMais()" (mais)="servico.carregarMais()" />
           @if (servico.erro() && !servico.buscandoMais()) {
             <p class="parcial">Não foi possível carregar mais agora. {{ servico.erro() }}</p>
           }
@@ -90,12 +79,6 @@ import type { ClienteRfv } from './clientes.servico.js'
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { margin-bottom: var(--espacamento-5); }
-    h1 { margin: 0; font-size: 20px; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; }
-    .bloco h2 { margin: 0 0 var(--espacamento-2); font-size: 16px; color: var(--texto); }
-    .bloco p { margin: 0 auto var(--espacamento-4); color: var(--texto-secundario); max-width: 46ch; }
     .lista { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }
     /* Cartão: acento lateral da cor do segmento — a urgência salta antes da leitura. */
     .cartao { padding: var(--espacamento-3) var(--espacamento-4);
@@ -111,9 +94,8 @@ import type { ClienteRfv } from './clientes.servico.js'
     .nome:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: 2px; }
     .porque { margin: 0; font-size: 13px; color: var(--texto-secundario); }
     .rodape { display: flex; justify-content: space-between; align-items: center; margin-top: var(--espacamento-3); gap: var(--espacamento-3); }
-    .acao { font-size: 13px; font-weight: 500; color: var(--acao); }
+    .acao { display: inline-flex; align-items: center; gap: var(--espacamento-1); font-size: 13px; font-weight: 500; color: var(--acao); }
     .num { font-family: var(--tipografia-familia-dados); font-size: 12px; color: var(--texto-suave); font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .mais { text-align: center; padding: var(--espacamento-4); }
     .parcial { text-align: center; color: var(--atencao); font-size: 13px; }
   `,
 })

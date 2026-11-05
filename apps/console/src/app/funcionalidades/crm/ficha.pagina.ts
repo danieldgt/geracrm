@@ -1,318 +1,418 @@
-import { Component, ChangeDetectionStrategy, inject, input, effect, signal } from '@angular/core'
+import { Component, ChangeDetectionStrategy, computed, inject, input, effect, signal } from '@angular/core'
 import { DatePipe } from '@angular/common'
 import { Router, RouterLink } from '@angular/router'
 import { rotuloSegmento } from '@geracrm/shared'
 import { FichaServico, type FichaContato } from './ficha.servico.js'
+import { FichaBlocosServico } from './ficha-blocos.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
-import { ConfirmacaoServico, ToastServico } from '../../compartilhado/ui/index.js'
+import { ModulosServico } from '../../nucleo/modulos.servico.js'
+import { AgendaContatoComponente } from '../agenda/agenda-contato.componente.js'
+import { AgendaEventoModalComponente } from '../agenda/agenda-evento-modal.componente.js'
+import { diaIso } from '../agenda/agenda.regras.js'
+import {
+  AbasComponente, BadgeComponente, BotaoComponente, BreadcrumbComponente, CabecalhoTelaComponente, ConfirmacaoServico,
+  EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, PainelComponente, ToastServico, mensagemDeErro,
+  type ItemTrilha,
+} from '../../compartilhado/ui/index.js'
+import { AnonimizarContatoComponente } from './anonimizar-contato.componente.js'
 import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
+import { EtiquetasContatoComponente } from './etiquetas-contato.componente.js'
+import { TarefaModalComponente } from './tarefa-modal.componente.js'
+import { FichaFeedComponente } from './ficha-feed.componente.js'
+import { FichaPerfilCompraComponente } from './ficha-perfil-compra.componente.js'
+import { FichaArquivosComponente } from './ficha-arquivos.componente.js'
+import { FichaPedidosComponente } from './ficha-pedidos.componente.js'
+import { FichaTarefasComponente } from './ficha-tarefas.componente.js'
+import { FichaWhatsappComponente } from './ficha-whatsapp.componente.js'
+import {
+  ABAS_FICHA, acoesVisiveis, camposDeCadastro, camposDeInformacao, estadoDaAcao, selosDaFicha, type IdAcao,
+} from './ficha.regras.js'
 
 /**
- * Ficha do Contato — o cliente 360°.
+ * Ficha do Contato — detalhe no padrão "2 + 1" (coluna larga + lateral de 320 px; 1 coluna em
+ * contêiner < 900 px). O cabeçalho traz selos e ações; a coluna larga traz Perfil de compra e as
+ * abas (Feed, Dados, Pedidos, Tarefas, WhatsApp, Agenda); a lateral traz Informações, Etiquetas,
+ * Arquivos, Contato e Avisos de privacidade.
  *
- * ⚠️ Cada bloco tem seu próprio estado (dados, RFV, vendas, categorias,
- * comentários). Bloco sem dado mostra o porquê — cliente sem venda, itens de
- * venda não importados — em vez de sumir ou aparecer vazio como se fosse bug.
- *
- * O `id` vem da rota (component input binding). Recarrega quando muda.
+ * ⚠️ Cada bloco tem estado próprio (componente próprio): um bloco que falha mostra o erro dele e o
+ * resto da ficha segue. O `id` vem da rota (component input binding); recarrega quando muda.
  */
 @Component({
   selector: 'app-ficha-contato',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, DatePipe, AvisosPrivacidadeComponente],
+  imports: [
+    RouterLink, DatePipe, AnonimizarContatoComponente, AbasComponente, BadgeComponente, BotaoComponente, BreadcrumbComponente, CabecalhoTelaComponente,
+    EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, PainelComponente,
+    AvisosPrivacidadeComponente, EtiquetasContatoComponente, TarefaModalComponente, FichaFeedComponente,
+    FichaPerfilCompraComponente, FichaArquivosComponente, FichaPedidosComponente, FichaTarefasComponente, FichaWhatsappComponente,
+    AgendaContatoComponente, AgendaEventoModalComponente,
+  ],
   template: `
-    <!-- Volta para ONDE a pessoa veio (lista, chat, funil, pedidos) — e para a
-         lista de contatos quando a ficha foi aberta por link direto. -->
-    <a href="/contatos" class="voltar" (click)="voltar($event)">← Voltar</a>
-
     @switch (servico.estado()) {
-      @case ('carregando') { <div class="bloco" aria-busy="true"><div class="esqueleto"></div></div> }
-      @case ('nao_encontrado') { <div class="bloco aviso"><h2>Contato não encontrado</h2>
-        <p>Ele pode ter sido mesclado ou removido.</p></div> }
-      @case ('sem_permissao') { <div class="bloco aviso"><h2>Sem acesso a este contato</h2></div> }
-      @case ('erro') { <div class="bloco aviso"><h2>Não foi possível carregar</h2>
-        <p>{{ servico.erro() }}</p></div> }
+      @case ('carregando') {
+        <ui-breadcrumb [itens]="trilhaCarregando" />
+        <div class="esq" aria-busy="true" aria-label="Carregando a ficha">
+          <ui-esqueleto altura="28px" largura="40%" />
+          <ui-esqueleto altura="120px" />
+          <ui-esqueleto altura="220px" />
+        </div>
+      }
+      @case ('nao_encontrado') {
+        <ui-breadcrumb [itens]="trilhaCarregando" />
+        <ui-estado titulo="Contato não encontrado" descricao="Ele pode ter sido mesclado ou removido." icone="user">
+          <a class="btn btn--secundario" routerLink="/contatos">Voltar para Contatos</a>
+        </ui-estado>
+      }
+      @case ('sem_permissao') {
+        <ui-breadcrumb [itens]="trilhaCarregando" />
+        <ui-estado tipo="sem-permissao" titulo="Sem acesso a este contato" />
+      }
+      @case ('erro') {
+        <ui-breadcrumb [itens]="trilhaCarregando" />
+        <ui-estado tipo="erro" titulo="Não foi possível carregar a ficha" [descricao]="servico.erro() ?? ''">
+          <ui-botao variante="secundario" (click)="recarregar()">Tentar de novo</ui-botao>
+        </ui-estado>
+      }
       @case ('pronto') {
         @if (servico.ficha(); as f) {
+          <ui-cabecalho-tela [titulo]="f.nome" [subtitulo]="subtitulo(f)">
+            <ui-breadcrumb trilha [itens]="trilha()" />
+          </ui-cabecalho-tela>
+
           <div class="grade">
-            <!-- Coluna esquerda: identidade -->
-            <section class="col">
-              <div class="cartao cabecalho">
-                @if (editandoNome()) {
-                  <form class="edit-nome" (submit)="salvarNome($event)">
-                    <input [value]="rascunhoNome()" (input)="rascunhoNome.set($any($event.target).value)" aria-label="Nome" />
-                    <button class="btn btn--primario btn--pequeno" type="submit">Salvar</button>
-                    <button class="btn btn--secundario btn--pequeno" type="button" (click)="editandoNome.set(false)">Cancelar</button>
-                  </form>
-                } @else {
-                  <h1>{{ f.nome }} <button class="lapis" (click)="abrirNome(f.nome)" title="Editar nome">✎</button></h1>
-                }
-                @if (servico.erroEdicao(); as e) { <p class="erro-edit" role="alert">{{ e }}</p> }
-                <!-- Sem beco: da ficha se vai para a conversa, para um pedido novo
-                     e para os pedidos deste cliente — e de lá se volta para cá. -->
-                <div class="acoes-ficha">
-                  <button class="btn btn--primario btn--pequeno" type="button" (click)="abrirConversa(f)"
-                          [disabled]="abrindoConversa()" title="Abrir o chat com este cliente">
-                    {{ abrindoConversa() ? 'Abrindo…' : '💬 Abrir conversa' }}
-                  </button>
-                  <a class="btn btn--secundario btn--pequeno" routerLink="/pedido" [queryParams]="{ contato: f.id }"
-                     title="Montar um pedido para este cliente">🛒 Novo pedido</a>
-                  <a class="btn btn--secundario btn--pequeno" routerLink="/pedidos" [queryParams]="{ contatoId: f.id }"
-                     title="Todos os pedidos deste cliente">🧾 Pedidos</a>
-                  <a class="btn btn--secundario btn--pequeno" routerLink="/tarefas" [queryParams]="{ contatoId: f.id }"
-                     title="Tarefas e follow-ups deste cliente">✅ Tarefas</a>
-                </div>
-                @if (erroConversa(); as e) { <p class="erro-edit" role="alert">{{ e }}</p> }
-                <div class="tags">
-                  @if (f.modalidade) { <span class="tag">{{ f.modalidade }}</span> }
-                  @if (f.qualificado) { <span class="tag ok">Qualificado</span> }
-                  @if (f.metricas; as m) {
-                    <span class="tag rfv" [style.--c]="cor(m.segmento.codigo)">{{ m.segmento.rotulo }}</span>
+            <section class="col" aria-label="Contato">
+              <!-- Cartão-cabeçalho: selos (ordem fixa) e ações. -->
+              <ui-painel>
+                <div class="selos" aria-label="Situação do contato">
+                  @for (s of selos(); track s.id) {
+                    @if (s.codigoRfv) {
+                      <span class="selo-rfv" [style.--c]="'var(--rfv-' + s.codigoRfv + ')'">{{ s.rotulo }}</span>
+                    } @else {
+                      <ui-badge [tom]="s.tom">{{ s.rotulo }}</ui-badge>
+                    }
                   }
                 </div>
-              </div>
+                <div class="acoes">
+                  @for (a of acoes(); track a.id) {
+                    @switch (a.id) {
+                      @case ('editar') { <a class="btn btn--secundario" [routerLink]="['/contato', f.id, 'editar']" [attr.title]="a.dica">{{ a.rotulo }}</a> }
+                      @case ('novo-pedido') { <a class="btn btn--secundario" routerLink="/pedido" [queryParams]="{ contato: f.id }" [attr.title]="a.dica">{{ a.rotulo }}</a> }
+                      @case ('conversar') {
+                        <ui-botao variante="primario" [carregando]="abrindoConversa()" [desabilitado]="a.desabilitada" (click)="agir(f, a.id)">{{ a.rotulo }}</ui-botao>
+                      }
+                      @case ('descartar') {
+                        <ui-botao variante="perigo" [carregando]="qualificando() === a.id" [desabilitado]="a.desabilitada" (click)="agir(f, a.id)">{{ a.rotulo }}</ui-botao>
+                      }
+                      @default {
+                        <ui-botao variante="secundario" [carregando]="qualificando() === a.id" [desabilitado]="a.desabilitada" (click)="agir(f, a.id)">{{ a.rotulo }}</ui-botao>
+                      }
+                    }
+                  }
+                  <app-anonimizar-contato [contatoId]="f.id" (anonimizou)="recarregar()" />
+                </div>
+                @if (dicaDesabilitada(); as d) { <p class="txt-denso dica">{{ d }}</p> }
+                @if (erroAcao(); as e) { <p class="txt-denso erro" role="alert">{{ e }}</p> }
+                @if (modulos.agendaAtiva()) {
+                  <app-agenda-evento-modal [aberto]="modalAgenda()" [contatoId]="f.id" [contatoNome]="f.nome"
+                    [dataInicial]="hoje" (fechar)="modalAgenda.set(false)" />
+                }
+              </ui-painel>
 
-              <div class="cartao">
-                <h3>Contato</h3>
+              <app-ficha-perfil-compra [contatoId]="f.id" />
+
+              <ui-painel>
+                <ui-abas [abas]="abas" [(ativa)]="aba" />
+                <div class="aba-corpo">
+                  @switch (aba()) {
+                    @case ('feed') { <app-ficha-feed [contatoId]="f.id" [versao]="feedVersao()" /> }
+                    @case ('dados') {
+                      <ui-lista-definicao [itens]="cadastro()" [colunas]="2" />
+                      @if (f.endereco; as e) {
+                        <h3 class="txt-rotulo sub">Endereço</h3>
+                        <p class="txt-corpo texto">{{ enderecoTexto(e) }}</p>
+                      }
+                      @if (f.observacoes) {
+                        <h3 class="txt-rotulo sub">Observações do cadastro</h3>
+                        <p class="txt-corpo texto pre">{{ f.observacoes }}</p>
+                      }
+                      <h3 class="txt-rotulo sub">Comportamento de compra</h3>
+                      @if (f.metricas; as m) {
+                        <p class="txt-corpo texto"><strong>{{ m.segmento.rotulo }}</strong>@if (!m.confiavel) { <span class="suave"> · estimado (histórico anterior à carga)</span> }
+                          · {{ m.qtdVendas }} compras @if (m.mediaEntreVendasDias !== null) { · ritmo de {{ arred(m.mediaEntreVendasDias) }} dias }</p>
+                        <p class="txt-corpo acao-rfv">{{ m.segmento.acao }}</p>
+                      } @else {
+                        <p class="txt-corpo suave">Este contato ainda não tem vendas importadas, sem RFV por enquanto.</p>
+                      }
+                      @if (servico.segmentoHistorico().length > 1) {
+                        <h3 class="txt-rotulo sub">Evolução do segmento</h3>
+                        <ol class="trajetoria">
+                          @for (h of servico.segmentoHistorico(); track $index) {
+                            <li><span class="selo-rfv" [style.--c]="'var(--rfv-' + h.segmento + ')'">{{ rotuloSeg(h.segmento) }}</span>
+                              <span class="txt-denso suave">{{ h.capturadoEm | date: 'dd/MM/yy' }}</span></li>
+                          }
+                        </ol>
+                      }
+                      <h3 class="txt-rotulo sub">Categorias mais compradas</h3>
+                      @if (f.categorias.length) {
+                        <ul class="barras">
+                          @for (c of f.categorias; track c.categoria) {
+                            <li>
+                              <span class="rot txt-denso">{{ c.categoria }}</span>
+                              <span class="barra"><i [style.width.%]="pct(c.totalCentavos, f.categorias[0]?.totalCentavos ?? 1)"></i></span>
+                              <span class="txt-dados">{{ reais(c.totalCentavos) }}</span>
+                            </li>
+                          }
+                        </ul>
+                      } @else {
+                        <p class="txt-corpo suave">Sem itens de venda importados. As categorias aparecem quando o detalhe das vendas for sincronizado.</p>
+                      }
+                      <h3 class="txt-rotulo sub">Últimas compras</h3>
+                      @if (f.ultimasVendas.length) {
+                        <ul class="linhas">
+                          @for (v of f.ultimasVendas; track v.id) {
+                            <li [class.cancelada]="v.cancelada">
+                              <span class="txt-dados">{{ data(v.ocorridaEm) }}</span>
+                              <span class="txt-dados val">{{ reais(v.valorCentavos) }}</span>
+                              @if (v.cancelada) { <ui-badge tom="erro">cancelada</ui-badge> }
+                            </li>
+                          }
+                        </ul>
+                      } @else { <p class="txt-corpo suave">Sem compras registradas.</p> }
+                    }
+                    @case ('pedidos') { <app-ficha-pedidos [contatoId]="f.id" /> }
+                    @case ('tarefas') { <app-ficha-tarefas [contatoId]="f.id" [versao]="tarefasVersao()" (nova)="novaTarefa.set(true)" /> }
+                    @case ('whatsapp') { <app-ficha-whatsapp [contatoId]="f.id" (abrir)="abrirConversa(f)" /> }
+                    @case ('agenda') {
+                      @if (modulos.agendaAtiva()) {
+                        <app-agenda-contato [contatoId]="f.id" [contatoNome]="f.nome" />
+                      } @else {
+                        <ui-estado titulo="Agenda ainda não está ligada" descricao="Os compromissos deste contato aparecem aqui quando o módulo Agenda estiver ativo no seu plano." icone="calendar" />
+                      }
+                    }
+                  }
+                </div>
+              </ui-painel>
+            </section>
+
+            <aside class="lateral" aria-label="Informações do contato">
+              <ui-painel>
+                <h3 class="txt-rotulo tit">Informações</h3>
+                <ui-lista-definicao [itens]="informacoes()" [colunas]="1" />
+              </ui-painel>
+
+              <ui-painel>
+                <h3 class="txt-rotulo tit">Etiquetas</h3>
+                <app-etiquetas-contato [contatoId]="f.id" (salvou)="avancarFeed()" />
+              </ui-painel>
+
+              <ui-painel>
+                <app-ficha-arquivos [contatoId]="f.id" (alterou)="avancarFeed()" />
+              </ui-painel>
+
+              <ui-painel>
+                <h3 class="txt-rotulo tit">Contato</h3>
                 @if (f.telefones.length) {
                   <ul class="linhas">
                     @for (t of f.telefones; track t.seq) {
                       <li>
-                        <span class="mono encolhe">{{ t.e164 }}</span>
-                        @if (t.principal) { <span class="mini">principal</span> }
-                        @else { <button class="btn btn--secundario btn--pequeno" (click)="servico.principalTelefone(t.seq)">tornar principal</button> }
-                        @if (t.whatsapp) { <span class="mini wpp">WhatsApp</span> }
-                        <button class="x" (click)="removerTelefone(t)" title="Remover telefone" aria-label="Remover telefone">×</button>
+                        <span class="txt-dados encolhe">{{ t.e164 }}</span>
+                        @if (t.principal) { <ui-badge>principal</ui-badge> }
+                        @else { <button type="button" class="btn btn--secundario btn--pequeno" (click)="servico.principalTelefone(t.seq)">tornar principal</button> }
+                        @if (t.whatsapp) { <ui-badge tom="sucesso">WhatsApp</ui-badge> }
+                        <button type="button" class="x" (click)="removerTelefone(t)" title="Remover telefone" aria-label="Remover telefone">×</button>
                       </li>
                     }
                   </ul>
-                } @else { <p class="vazio-mini">Sem telefone cadastrado.</p> }
+                } @else { <p class="txt-corpo suave">Sem telefone cadastrado.</p> }
                 <form class="add-linha" (submit)="salvarTelefone($event)">
-                  <input [value]="novoTel()" (input)="novoTel.set($any($event.target).value)" placeholder="Novo telefone" inputmode="tel" />
+                  <input [value]="novoTel()" (input)="novoTel.set($any($event.target).value)" placeholder="Novo telefone" inputmode="tel" aria-label="Novo telefone" />
                   <button class="btn btn--secundario btn--pequeno" type="submit" [disabled]="!novoTel().trim()">+ telefone</button>
                 </form>
 
-                <h3>Documentos</h3>
+                <h3 class="txt-rotulo sub">Documentos</h3>
                 @if (f.documentos.length) {
                   <ul class="linhas">
                     @for (d of f.documentos; track d.seq) {
-                      <li><span class="mono encolhe">{{ d.numero }}</span> <span class="mini">{{ d.tipo }}</span>
-                        <button class="x" (click)="removerDocumento(d)" title="Remover documento" aria-label="Remover documento">×</button></li>
+                      <li><span class="txt-dados encolhe">{{ d.numero }}</span> <ui-badge>{{ d.tipo }}</ui-badge>
+                        <button type="button" class="x" (click)="removerDocumento(d)" title="Remover documento" aria-label="Remover documento">×</button></li>
                     }
                   </ul>
                   @if (f.totalDocumentos > f.documentos.length) {
-                    <p class="alerta-mini">⚠️ {{ f.totalDocumentos }} documentos neste contato —
-                       provável fusão de cadastros por telefone repetido.</p>
+                    <p class="txt-denso alerta">{{ f.totalDocumentos }} documentos neste contato, provável fusão de cadastros por telefone repetido.</p>
                   }
-                } @else { <p class="vazio-mini">Sem documento.</p> }
+                } @else { <p class="txt-corpo suave">Sem documento.</p> }
                 <form class="add-linha" (submit)="salvarDocumento($event)">
-                  <select [value]="novoDocTipo()" (change)="novoDocTipo.set($any($event.target).value)">
+                  <select [value]="novoDocTipo()" (change)="novoDocTipo.set($any($event.target).value)" aria-label="Tipo do documento">
                     <option value="cnpj">CNPJ</option><option value="cpf">CPF</option>
                   </select>
-                  <input [value]="novoDoc()" (input)="novoDoc.set($any($event.target).value)" placeholder="Número" inputmode="numeric" />
+                  <input [value]="novoDoc()" (input)="novoDoc.set($any($event.target).value)" placeholder="Número" inputmode="numeric" aria-label="Número do documento" />
                   <button class="btn btn--secundario btn--pequeno" type="submit" [disabled]="!novoDoc().trim()">+ documento</button>
                 </form>
+                @if (servico.erroEdicao(); as e) { <p class="txt-denso erro" role="alert">{{ e }}</p> }
+              </ui-painel>
 
-                @if (f.endereco; as e) {
-                  <h3>Endereço</h3>
-                  <p class="endereco">{{ enderecoTexto(e) }}</p>
-                }
-              </div>
-            </section>
-
-            <!-- Coluna direita: comportamento -->
-            <section class="col">
-              <div class="cartao">
-                <h3>Informações de vendas</h3>
-                @if (f.metricas; as m) {
-                  <dl class="metricas">
-                    <div><dt>Total em vendas</dt><dd class="mono forte">{{ reais(m.totalCentavos) }}</dd></div>
-                    <div><dt>Compras</dt><dd class="mono">{{ m.qtdVendas }}</dd></div>
-                    <div><dt>Ticket médio</dt><dd class="mono">{{ m.ticketMedioCentavos !== null ? reais(m.ticketMedioCentavos) : '—' }}</dd></div>
-                    <div><dt>Dias sem comprar</dt><dd class="mono">{{ m.diasSemComprar ?? '—' }}</dd></div>
-                    <div><dt>Ritmo (média entre compras)</dt><dd class="mono">{{ m.mediaEntreVendasDias !== null ? (arred(m.mediaEntreVendasDias) + ' dias') : '—' }}</dd></div>
-                    <div><dt>Perfil RFV</dt><dd>
-                      <span class="tag rfv" [style.--c]="cor(m.segmento.codigo)">{{ m.segmento.rotulo }}</span>
-                      @if (!m.confiavel) { <span class="mini" title="Histórico anterior à carga">estimado</span> }
-                    </dd></div>
-                  </dl>
-                  <p class="acao-rfv">➜ {{ m.segmento.acao }}</p>
-                } @else {
-                  <p class="vazio-mini">Este contato ainda não tem vendas importadas — sem RFV por enquanto.</p>
-                }
-              </div>
-
-              <!-- Evolução do segmento RFV: a TRAJETÓRIA importa mais que a foto
-                   (skill funil-de-vendas). Só aparece quando há transição (2+). -->
-              @if (servico.segmentoHistorico().length > 1) {
-                <div class="cartao">
-                  <h3>Evolução do segmento</h3>
-                  <ol class="trajetoria">
-                    @for (h of servico.segmentoHistorico(); track $index) {
-                      <li>
-                        <span class="tag rfv" [style.--c]="cor(h.segmento)">{{ rotuloSeg(h.segmento) }}</span>
-                        <span class="mini quando">{{ h.capturadoEm | date: 'dd/MM/yy' }}</span>
-                      </li>
-                    }
-                  </ol>
-                </div>
-              }
-
-              <div class="cartao">
-                <h3>Categorias mais compradas</h3>
-                @if (f.categorias.length) {
-                  <ul class="barras">
-                    @for (c of f.categorias; track c.categoria) {
-                      <li>
-                        <span class="rot">{{ c.categoria }}</span>
-                        <span class="barra"><i [style.width.%]="pct(c.totalCentavos, f.categorias[0]?.totalCentavos ?? 1)"></i></span>
-                        <span class="mono mini">{{ reais(c.totalCentavos) }}</span>
-                      </li>
-                    }
-                  </ul>
-                } @else {
-                  <!-- Honesto: itens de venda vêm do detalhe /vendas/{id}, ainda não importado. -->
-                  <p class="vazio-mini">Sem itens de venda importados — as categorias aparecem quando o
-                     detalhe das vendas for sincronizado.</p>
-                }
-              </div>
-
-              <div class="cartao">
-                <h3>Últimas compras</h3>
-                @if (f.ultimasVendas.length) {
-                  <ul class="linhas">
-                    @for (v of f.ultimasVendas; track v.id) {
-                      <li [class.cancelada]="v.cancelada">
-                        <span class="mono">{{ data(v.ocorridaEm) }}</span>
-                        <span class="mono val">{{ reais(v.valorCentavos) }}</span>
-                        @if (v.cancelada) { <span class="mini can">cancelada</span> }
-                      </li>
-                    }
-                  </ul>
-                } @else { <p class="vazio-mini">Sem compras registradas.</p> }
-              </div>
-
-              <div class="cartao">
-                <h3>Comentários</h3>
-                @if (f.comentarios.length) {
-                  <ul class="coment">
-                    @for (c of f.comentarios; track c.id) {
-                      <li><span class="mini">{{ data(c.criadoEm) }}</span><p>{{ c.texto }}</p></li>
-                    }
-                  </ul>
-                } @else { <p class="vazio-mini">Nenhum comentário ainda.</p> }
-                <form class="add-coment" (submit)="salvarComentario($event)">
-                  <input [value]="novoComent()" (input)="novoComent.set($any($event.target).value)" placeholder="Anotar algo sobre o cliente…" />
-                  <button class="btn btn--secundario btn--pequeno" type="submit" [disabled]="!novoComent().trim()">Anotar</button>
-                </form>
-              </div>
-
-              <!-- Prova LGPD (P4): quando e com que texto o aviso de privacidade foi exibido.
-                   Bloco com estado próprio; sem permissão, some. -->
+              <!-- Prova LGPD (P4): quando e com que texto o aviso foi exibido. Estado próprio; sem permissão, some. -->
               <app-avisos-privacidade [contatoId]="f.id" />
-            </section>
+            </aside>
           </div>
+
+          <app-tarefa-modal [aberto]="novaTarefa()" [contatoId]="f.id" [contatoNome]="f.nome"
+            (fechar)="novaTarefa.set(false)" (criada)="aoCriarTarefa()" />
         }
       }
     }
   `,
   styles: `
-    :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .lapis { border: 0; background: transparent; color: var(--texto-suave); cursor: pointer; font-size: 14px; }
-    .lapis:hover { color: var(--acao); }
-    .edit-nome { display: flex; gap: var(--espacamento-2); align-items: center; }
-    .edit-nome input { flex: 1; padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .erro-edit { color: var(--erro); font-size: 12px; margin: var(--espacamento-1) 0 0; }
+    /* Contêiner de consulta: a ficha vira 1 coluna pela largura do CONTEÚDO (com menu e rail abertos
+       a janela engana), não pela do viewport. */
+    :host { display: block; width: 100%; padding: var(--espacamento-6); container-type: inline-size; }
+    .grade { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--espacamento-4); align-items: start; }
+    @container (max-width: 900px) { .grade { grid-template-columns: minmax(0, 1fr); } }
+    .col, .lateral { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--espacamento-4); min-width: 0; }
+    .esq { display: grid; gap: var(--espacamento-4); margin-top: var(--espacamento-4); }
+    .selos { display: flex; flex-wrap: wrap; align-items: center; gap: var(--espacamento-2); margin-bottom: var(--espacamento-3); }
+    .selo-rfv { font-size: 11px; font-weight: 600; line-height: 1; padding: 3px 8px; border-radius: var(--raio-completo);
+      border: 1px solid var(--c); color: var(--c); white-space: nowrap; }
+    .acoes { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); }
+    .acoes a.btn { text-decoration: none; display: inline-flex; align-items: center; min-height: var(--densidade-alvo-clique-console); }
+    .dica { color: var(--texto-secundario); margin: var(--espacamento-2) 0 0; }
+    .erro { color: var(--erro); margin: var(--espacamento-2) 0 0; }
+    .alerta { color: var(--atencao); margin: var(--espacamento-2) 0 0; }
+    .aba-corpo { padding-top: var(--espacamento-4); min-width: 0; }
+    .sub { margin: var(--espacamento-5) 0 var(--espacamento-2); }
+    .tit { margin: 0 0 var(--espacamento-3); }
+    .texto { margin: 0; color: var(--texto); overflow-wrap: anywhere; }
+    .pre { white-space: pre-wrap; }
+    .suave { color: var(--texto-secundario); margin: 0; }
+    .acao-rfv { margin: var(--espacamento-2) 0 0; font-weight: 500; color: var(--acao); }
     .x { border: 0; background: transparent; color: var(--texto-suave); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
     .x:hover { color: var(--erro); }
-    .add-linha, .add-coment { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-2); }
-    .add-linha input, .add-coment input, .add-linha select { flex: 1; min-width: 0; padding: var(--espacamento-2); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
+    .x:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+    .add-linha { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-2); }
+    .add-linha input, .add-linha select { flex: 1; min-width: 0; padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
+      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
     .add-linha select { flex: 0 0 auto; }
-    .voltar { display: inline-block; margin-bottom: var(--espacamento-4); color: var(--acao); text-decoration: none; font-size: 13px; }
-    .voltar:hover { text-decoration: underline; }
-    .acoes-ficha { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); margin-top: var(--espacamento-3); }
-    .acoes-ficha a.btn { text-decoration: none; display: inline-flex; align-items: center; }
-    /* auto-fit on the CONTENT width, not the viewport: with the menu and the chat rail open the
-       content is narrow long before 760px, and fixed tracks made the columns overlap. */
-    .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: var(--espacamento-4); align-items: start; }
-    .col { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--espacamento-4); min-width: 0; }
-    .cartao { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .cartao h3 { margin: var(--espacamento-3) 0 var(--espacamento-2); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--texto-suave); }
-    .cartao h3:first-child { margin-top: 0; }
-    .cabecalho h1 { margin: 0; font-size: 20px; color: var(--texto); }
-    .tags { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); margin-top: var(--espacamento-2); }
-    .tag { font-size: 12px; padding: 1px var(--espacamento-2); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto-secundario); border: 1px solid var(--borda); }
-    .tag.ok { color: var(--sucesso); border-color: var(--sucesso); }
-    .tag.rfv { color: var(--c); border-color: var(--c); font-weight: 600; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); }
-    .aviso { text-align: center; } .aviso h2 { margin: 0 0 var(--espacamento-2); font-size: 16px; }
-    .esqueleto { height: 200px; background: var(--superficie); border-radius: var(--raio-controle); }
-    .linhas { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-1); }
-    .linhas li { display: flex; align-items: center; gap: var(--espacamento-2); font-size: 13px; color: var(--texto); }
+    .linhas { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }
+    .linhas li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--espacamento-2); font-size: 13px; color: var(--texto); }
     .linhas li.cancelada { color: var(--texto-suave); text-decoration: line-through; }
+    .encolhe { min-width: 0; overflow-wrap: anywhere; }
     .val { margin-left: auto; }
-    .mono { font-family: var(--tipografia-familia-dados); font-variant-numeric: tabular-nums; }
-    .forte { font-size: 16px; font-weight: 600; color: var(--texto); }
-    .mini { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--texto-suave); border: 1px solid var(--borda); border-radius: var(--raio-controle); padding: 0 4px; }
-    .mini.wpp { color: var(--sucesso); border-color: var(--sucesso); }
-    .mini.can { color: var(--erro); border-color: var(--erro); }
-    .vazio-mini { font-size: 13px; color: var(--texto-suave); margin: 0; }
-    .alerta-mini { font-size: 12px; color: var(--atencao); margin: var(--espacamento-2) 0 0; }
-    .endereco { font-size: 13px; color: var(--texto-secundario); margin: 0; }
-    .metricas { display: grid; grid-template-columns: 1fr 1fr; gap: var(--espacamento-3); margin: 0; }
-    .metricas dt { font-size: 11px; color: var(--texto-suave); }
-    .metricas dd { margin: 2px 0 0; font-size: 14px; color: var(--texto); }
-    .acao-rfv { margin: var(--espacamento-3) 0 0; font-size: 13px; font-weight: 500; color: var(--acao); }
-    /* Evolução do segmento: mais recente no topo. */
-    .trajetoria { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--espacamento-2); }
+    .trajetoria { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }
     .trajetoria li { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-2); }
-    .trajetoria .quando { border: 0; }
     .barras { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }
-    .barras li { display: grid; grid-template-columns: 110px 1fr auto; align-items: center; gap: var(--espacamento-2); font-size: 12px; }
+    .barras li { display: grid; grid-template-columns: minmax(80px, 140px) minmax(0, 1fr) auto; align-items: center; gap: var(--espacamento-2); }
     .rot { color: var(--texto-secundario); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .barra { height: 8px; background: var(--superficie); border-radius: var(--raio-completo); overflow: hidden; }
     .barra i { display: block; height: 100%; background: var(--acao); }
-    .coment { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-3); }
-    .coment p { margin: 2px 0 0; font-size: 13px; color: var(--texto); }
-    @media (max-width: 760px) { .grade { grid-template-columns: 1fr; } }
   `,
 })
 export class FichaContatoPagina {
   readonly servico = inject(FichaServico)
+  private readonly blocos = inject(FichaBlocosServico)
   private readonly inbox = inject(InboxServico)
   private readonly router = inject(Router)
   private readonly confirmacao = inject(ConfirmacaoServico)
   private readonly toast = inject(ToastServico)
   readonly id = input.required<string>()
-  readonly abrindoConversa = signal(false)
-  readonly erroConversa = signal<string | null>(null)
 
-  /** Volta pelo histórico; sem histórico (link direto), vai à lista. */
-  voltar(ev: Event): void {
-    ev.preventDefault()
-    if (history.length > 1) history.back()
-    else void this.router.navigateByUrl('/contatos')
+  readonly abas = ABAS_FICHA
+  readonly aba = signal<string>('feed')
+  readonly trilhaCarregando: readonly ItemTrilha[] = [{ rotulo: 'Contatos', rota: '/contatos' }, { rotulo: 'Contato' }]
+
+  readonly modulos = inject(ModulosServico)
+  readonly modalAgenda = signal(false)
+  readonly hoje = diaIso(new Date())
+
+  readonly abrindoConversa = signal(false)
+  readonly qualificando = signal<IdAcao | null>(null)
+  readonly novaTarefa = signal(false)
+  readonly erroAcao = signal<string | null>(null)
+  /** Contadores que mandam o feed e a aba Tarefas recarregarem quando algo muda por fora deles. */
+  readonly feedVersao = signal(0)
+  readonly tarefasVersao = signal(0)
+
+  readonly trilha = computed<readonly ItemTrilha[]>(() => [
+    { rotulo: 'Contatos', rota: '/contatos' }, { rotulo: this.servico.ficha()?.nome ?? 'Contato' },
+  ])
+  readonly selos = computed(() => { const f = this.servico.ficha(); return f ? selosDaFicha(f) : [] })
+  readonly acoes = computed(() => { const f = this.servico.ficha(); return f ? acoesVisiveis(f, this.modulos.agendaAtiva()) : [] })
+  readonly dicaDesabilitada = computed(() => this.acoes().find((a) => a.desabilitada)?.dica ?? null)
+  readonly cadastro = computed(() => { const f = this.servico.ficha(); return f ? camposDeCadastro(f) : [] })
+  readonly informacoes = computed(() => { const f = this.servico.ficha(); return f ? camposDeInformacao(f) : [] })
+
+  // Edição de telefone e documento
+  readonly novoTel = signal('')
+  readonly novoDoc = signal('')
+  readonly novoDocTipo = signal<'cnpj' | 'cpf'>('cnpj')
+
+  constructor() {
+    // ⚠️ `id` vem da rota. effect recarrega ao mudar: navegar de um contato para outro troca o dado
+    //    sem recriar o componente — e volta para a aba Feed.
+    effect(() => {
+      const id = this.id()
+      if (id) { this.servico.vincular(id); this.aba.set('feed'); void this.servico.carregar(id) }
+    })
   }
 
-  /**
-   * Abre (ou cria) a conversa deste contato no rail. A API decide por qual
-   * número — o console só pede "conversar com este contato".
-   */
+  recarregar(): void { void this.servico.carregar(this.id()) }
+  avancarFeed(): void { this.feedVersao.update((v) => v + 1) }
+  subtitulo(f: FichaContato): string {
+    return [f.razaoSocial, f.nomeFantasia && f.nomeFantasia !== f.razaoSocial ? f.nomeFantasia : null].filter(Boolean).join(' · ')
+  }
+
+  /** Despacha as ações do cabeçalho que não são links. */
+  async agir(f: FichaContato, acao: IdAcao): Promise<void> {
+    this.erroAcao.set(null)
+    switch (acao) {
+      case 'conversar': await this.abrirConversa(f); return
+      case 'nova-tarefa': this.novaTarefa.set(true); return
+      case 'agendar': if (this.modulos.agendaAtiva()) this.modalAgenda.set(true); return
+      case 'qualificar': case 'descartar': await this.qualificar(f, acao); return
+      default: return
+    }
+  }
+
+  /** Abre (ou cria) a conversa no rail. A API decide o número; a falha vem tipificada e vai para a tela. */
   async abrirConversa(f: FichaContato): Promise<void> {
     if (this.abrindoConversa()) return
     this.abrindoConversa.set(true)
-    this.erroConversa.set(null)
+    this.erroAcao.set(null)
     try {
-      if (f.telefones.length === 0) {
-        this.erroConversa.set('Este contato não tem telefone — cadastre um acima para conversar.')
-        return
-      }
+      if (f.telefones.length === 0) { this.erroAcao.set('Este contato não tem telefone: cadastre um ao lado para conversar.'); return }
       const r = await this.servico.conversaDoContato(f.id)
-      if (!r.ok) { this.erroConversa.set(r.mensagem); return }
+      if (!r.ok) { this.erroAcao.set(r.mensagem); return }
       await this.inbox.abrir(r.conversaId)
     } finally {
       this.abrindoConversa.set(false)
     }
+  }
+
+  private async qualificar(f: FichaContato, acao: 'qualificar' | 'descartar'): Promise<void> {
+    if (acao === 'descartar') {
+      const ok = await this.confirmacao.confirmar({
+        titulo: 'Descartar este contato?', mensagem: `${f.nome} sai da fila de qualificação. Dá para qualificar de novo depois.`,
+        acao: 'Descartar', perigo: true,
+      })
+      if (!ok) return
+    }
+    this.qualificando.set(acao)
+    try {
+      await this.blocos.qualificar(f.id, estadoDaAcao(acao))
+      this.toast.sucesso(acao === 'qualificar' ? 'Contato qualificado' : 'Contato descartado')
+      await this.servico.carregar(f.id, true)
+      this.avancarFeed()
+    } catch (e) {
+      this.erroAcao.set(mensagemDeErro(e, 'Não foi possível atualizar a qualificação.'))
+    } finally {
+      this.qualificando.set(null)
+    }
+  }
+
+  aoCriarTarefa(): void {
+    this.novaTarefa.set(false)
+    this.tarefasVersao.update((v) => v + 1)
+    this.avancarFeed()
+    this.toast.sucesso('Tarefa criada')
   }
 
   async removerTelefone(t: { seq: number; e164: string }): Promise<void> {
@@ -331,29 +431,6 @@ export class FichaContatoPagina {
     if (await this.servico.removerDocumento(d.seq)) this.toast.sucesso('Documento removido')
   }
 
-  constructor() {
-    // ⚠️ `id` vem da rota (component input binding). effect recarrega ao mudar —
-    //    navegar de um contato para outro troca o dado sem recriar o componente.
-    effect(() => {
-      const id = this.id()
-      if (id) { this.servico.vincular(id); void this.servico.carregar(id) }
-    })
-  }
-
-  // Edição
-  readonly editandoNome = signal(false)
-  readonly rascunhoNome = signal('')
-  readonly novoTel = signal('')
-  readonly novoDoc = signal('')
-  readonly novoDocTipo = signal<'cnpj' | 'cpf'>('cnpj')
-  readonly novoComent = signal('')
-
-  abrirNome(atual: string): void { this.rascunhoNome.set(atual); this.editandoNome.set(true) }
-  async salvarNome(ev: Event): Promise<void> {
-    ev.preventDefault()
-    const nome = this.rascunhoNome().trim()
-    if (nome && await this.servico.editarNome(nome)) this.editandoNome.set(false)
-  }
   async salvarTelefone(ev: Event): Promise<void> {
     ev.preventDefault()
     const t = this.novoTel().trim()
@@ -364,13 +441,7 @@ export class FichaContatoPagina {
     const d = this.novoDoc().trim()
     if (d && await this.servico.addDocumento(this.novoDocTipo(), d)) this.novoDoc.set('')
   }
-  async salvarComentario(ev: Event): Promise<void> {
-    ev.preventDefault()
-    const c = this.novoComent().trim()
-    if (c && await this.servico.addComentario(c)) this.novoComent.set('')
-  }
 
-  cor(codigo: string): string { return `var(--rfv-${codigo})` }
   rotuloSeg(codigo: string): string { return rotuloSegmento(codigo) }
   reais(c: number): string { return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
   arred(n: number): number { return Math.round(n) }
@@ -379,7 +450,7 @@ export class FichaContatoPagina {
   enderecoTexto(e: NonNullable<FichaContato['endereco']>): string {
     return [
       [e.logradouro, e.numero].filter(Boolean).join(', '),
-      e.bairro, [e.cidade, e.uf].filter(Boolean).join('/'), e.cep,
+      e.complemento, e.bairro, [e.cidade, e.uf].filter(Boolean).join('/'), e.cep,
     ].filter(Boolean).join(' · ')
   }
 }

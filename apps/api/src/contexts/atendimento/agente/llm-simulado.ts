@@ -49,6 +49,26 @@ export class LlmSimulado implements PortaLlmFerramentas {
       return fim({ mensagens: ['Claro, vou chamar uma pessoa da equipe para continuar com você. Já aviso aqui.'], confianca: 0.95, fase: 'handoff', handoff: { motivo, resumo: `Cliente pediu: ${texto.slice(0, 200)}` } })
     }
 
+    // 1b. Reunião (C3): escolheu uma opção → confirma (o CÓDIGO confere a escolha); pediu reunião → oferta.
+    if (tem('agendar_reuniao')) {
+      const escolha = t.match(/^(?:a |o |opcao |numero )?([1-3])[.!]?$/)
+      if (escolha) {
+        const r = await chamar('agendar_reuniao', { acao: 'confirmar', dia: null, opcao: Number(escolha[1]) })
+        const s = r.ok ? (r.saida as { situacao?: string; quando?: string; com?: string }) : { situacao: 'erro' }
+        if (s.situacao === 'agendado') return fim({ mensagens: [`Reunião marcada: ${s.quando} com ${s.com}. Até lá!`], confianca: 0.9, fase: 'fechamento' })
+        if (s.situacao === 'modo_seco') return fim({ mensagens: ['Anotei sua escolha. Um vendedor vai confirmar o horário com você.'], confianca: 0.8, fase: 'fechamento' })
+        if (s.situacao !== 'sem_oferta') return fim({ mensagens: ['Não consegui confirmar esse horário. Quer que eu veja outras opções?'], confianca: 0.7, fase: 'proposta' })
+      }
+      if (/\b(reuniao|agendar|marcar uma|visita|conversar com (um|o) vendedor)\b/.test(t)) {
+        const r = await chamar('agendar_reuniao', { acao: 'ofertar', dia: null, opcao: null })
+        const s = r.ok ? (r.saida as { situacao?: string; opcoes?: { n: number; quando: string; com: string }[] }) : { situacao: 'erro' }
+        if (s.situacao === 'ok' && s.opcoes?.length) {
+          return fim({ mensagens: [`Tenho estes horários:\n${s.opcoes.map((o) => `${o.n}) ${o.quando} com ${o.com}`).join('\n')}`, 'Qual fica melhor para você?'], confianca: 0.9, fase: 'proposta' })
+        }
+        return fim({ mensagens: ['Não achei horário livre nos próximos dias. Quer que alguém da equipe combine com você?'], confianca: 0.7, fase: 'descoberta' })
+      }
+    }
+
     // 2. Confirmação / fechar → propõe.
     if (/\b(fecha|fechar|finaliza|pode mandar|manda o resumo|proposta|resumo do pedido|fechado)\b/.test(t) && tem('pedido_propor')) {
       const r = await chamar('pedido_propor', {})

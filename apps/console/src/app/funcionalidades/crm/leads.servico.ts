@@ -7,6 +7,8 @@ export interface CardLead {
   readonly contatoId: string; readonly nome: string; readonly telefone: string | null
   readonly uf: string | null; readonly responsavel: string | null; readonly qtdVendas: number
   readonly ultimoToqueEm: string | null; readonly conversaId: string | null
+  /** "sem_resposta" = descartado pelo sistema no fim da cadência (G5); null = manual ou não descartado. */
+  readonly descarteMotivo?: string | null
 }
 export interface ColunaLead {
   chave: ChaveLead; nome: string; total: number

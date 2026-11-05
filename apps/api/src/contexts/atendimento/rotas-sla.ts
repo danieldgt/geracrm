@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify'
 import { SLA_PADRAO, corpoSlaConfig, type CronometroSla, type EstadoSlaConfig } from '@geracrm/shared'
 import { exigirTenant } from '../../plugins/tenant.js'
+import { exigirNoEscopo } from '../plataforma/escopo.js'
 import { exigirPapel } from '../plataforma/papel.js'
 import { auditar } from '../plataforma/auditoria.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
-import { garantirUsuarioId } from './rotas-fila.js'
+import { atorDaRequisicao } from './rotas-fila.js'
 import { lerContextoSla, respostaHumanaDoAtendimento } from './sla-handoff.js'
 
 /**
@@ -57,7 +58,7 @@ export async function rotasSla(app: FastifyInstance): Promise<void> {
       const ok = await req.comTenant(async (tx) => {
         const antes = await lerContextoSla(tx, req.params.id)
         if (!antes) return false
-        const atorId = await garantirUsuarioId(tx, req)
+        const atorId = await atorDaRequisicao(tx, req)
         await tx`
           INSERT INTO atendimento_sla_config (tenant_id, canal_id, sla_minutos, reatribuicao_minutos, aviso_espera, atualizado_em, atualizado_por)
           VALUES (tenant_atual(), ${req.params.id}, ${c.slaMinutos}, ${c.reatribuicaoMinutos}, ${c.avisoEspera}, now(), ${atorId})
@@ -78,7 +79,7 @@ export async function rotasSla(app: FastifyInstance): Promise<void> {
   )
 
   app.get<{ Params: { id: string } }>(
-    '/v1/conversas/:id/sla', { preHandler: exigirTenant },
+    '/v1/conversas/:id/sla', { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       if (!UUID.test(req.params.id)) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
       const r = await req.comTenant(async (tx) => {

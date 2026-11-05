@@ -1,11 +1,16 @@
-import { Component, ChangeDetectionStrategy, inject, signal, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, computed, inject, signal, OnInit } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
-import { ConfirmacaoServico, ToastServico, mensagemDeErro } from '../../compartilhado/ui/index.js'
+import {
+  CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente, GradeFormComponente,
+  IconeComponente, ModalComponente, PaginacaoComponente, TabelaComponente, ToastServico, mensagemDeErro,
+  type ColunaTabela, type LinhaTabela,
+} from '../../compartilhado/ui/index.js'
 
 interface Lista { readonly id: string; readonly nome: string; readonly descricao: string | null; readonly membros: number }
 interface Membro { readonly id: string; readonly nome: string }
 interface AchadoContato { readonly id: string; readonly nome: string; readonly telefone: string | null }
+interface PaginaListas { readonly itens: Lista[]; readonly proximoCursor?: string | null }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
@@ -16,130 +21,178 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 @Component({
   selector: 'app-listas',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [
+    CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, GradeFormComponente,
+    IconeComponente, ModalComponente, PaginacaoComponente, TabelaComponente,
+  ],
   template: `
-    <header class="cabecalho">
-      <h1 class="txt-titulo">Listas</h1>
-      <p class="sub">Públicos que você monta à mão e reusa — separados dos segmentos automáticos.</p>
-    </header>
+    <ui-cabecalho-tela titulo="Listas"
+      subtitulo="Públicos que você monta à mão e reusa — separados dos segmentos automáticos.">
+      <button type="button" class="btn btn--primario" (click)="criarAberto.set(true)">
+        <ui-icone nome="plus" />Nova lista
+      </button>
+    </ui-cabecalho-tela>
 
     @switch (estado()) {
-      @case ('carregando') { <div class="grade"><div class="col"><div class="esq"></div><div class="esq"></div></div></div> }
-      @case ('sem_permissao') { <div class="bloco"><h2 class="txt-secao">Sem acesso</h2></div> }
-      @case ('erro') { <div class="bloco"><h2 class="txt-secao">Não foi possível carregar</h2><button class="btn btn--secundario" (click)="carregar()">Tentar de novo</button></div> }
+      @case ('carregando') {
+        <div class="grade">
+          <ui-tabela [colunas]="colunasListas" [linhas]="[]" [carregando]="true" />
+        </div>
+      }
+      @case ('sem_permissao') {
+        <ui-estado tipo="sem-permissao" titulo="Sem acesso às listas" descricao="Peça acesso a um administrador." />
+      }
+      @case ('erro') {
+        <ui-estado tipo="erro" titulo="Não foi possível carregar as listas" descricao="Verifique a conexão e tente de novo.">
+          <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
+        </ui-estado>
+      }
       @case ('pronto') {
         <div class="grade">
           <section class="col">
-            <form class="nova" (submit)="criar($event)">
-              <label class="campo rotulado">
-                <span>Nome da lista</span>
-                <input [value]="novoNome()" (input)="novoNome.set($any($event.target).value)" placeholder="Ex.: Feira 2026" />
-              </label>
-              <button class="btn btn--primario" type="submit" [disabled]="criando() || !novoNome().trim()">+</button>
-              @if (erroNova()) { <p class="erro">{{ erroNova() }}</p> }
-            </form>
-            <ul class="listas">
-              @for (l of listas(); track l.id) {
-                <li class="lista" [class.on]="selecionada()?.id === l.id" (click)="abrir(l)">
-                  <span class="l-nome encolhe">{{ l.nome }}</span>
-                  <span class="l-qtd txt-dados">{{ l.membros }}</span>
-                  <button class="x" (click)="excluir(l.id, $event)" title="Excluir lista">×</button>
-                </li>
-              }
-              @if (listas().length === 0) { <li class="vazio">Nenhuma lista ainda.</li> }
-            </ul>
+            <ui-tabela [colunas]="colunasListas" [linhas]="linhasListas()" [selecionados]="marcadas()">
+              <ng-template uiCelula="nome" let-l>
+                <button type="button" class="nome" (click)="abrir(l)">{{ l.nome }}</button>
+              </ng-template>
+              <ng-template uiCelula="acoes" let-l>
+                <button type="button" class="btn btn--secundario btn--pequeno" (click)="excluir(l.id, $event)">Excluir</button>
+              </ng-template>
+              <div uiVazio>
+                <ui-estado titulo="Nenhuma lista ainda"
+                  descricao="Crie uma lista para reunir os contatos que você usa em campanhas.">
+                  <button type="button" class="btn btn--primario" (click)="criarAberto.set(true)">Nova lista</button>
+                </ui-estado>
+              </div>
+            </ui-tabela>
+            @if (listas().length > 0) {
+              <ui-paginacao [mostrados]="listas().length" [temMais]="temMaisListas()" [carregando]="carregandoMais()"
+                (mais)="carregarMaisListas()" />
+            }
           </section>
 
-          <section class="col detalhe">
-            @if (selecionada() === null) {
-              <div class="bloco"><h2 class="txt-secao">Escolha uma lista</h2><p>Selecione à esquerda para ver e adicionar contatos.</p></div>
-            } @else {
+          <section class="col">
+            @if (selecionada(); as sel) {
               <div class="det-topo">
-                <h2 class="txt-secao encolhe">{{ selecionada()!.nome }}</h2>
-                <span class="det-qtd txt-dados">{{ membros().length }}{{ temMais() ? '+' : '' }}</span>
+                <h2 class="txt-secao encolhe">{{ sel.nome }}</h2>
+                <span class="txt-dados">{{ membros().length }}{{ temMais() ? '+' : '' }}</span>
               </div>
 
               <div class="busca">
-                <input [value]="termo()" (input)="buscar($any($event.target).value)" placeholder="Buscar contato para adicionar…" aria-label="Buscar contato" />
+                <ui-campo rotulo="Adicionar contato à lista" placeholder="Buscar por nome ou telefone"
+                  [valor]="termo()" (valorChange)="buscar($event)" />
                 @if (achados().length > 0) {
                   <ul class="achados">
                     @for (a of achados(); track a.id) {
-                      <li (click)="adicionar(a)"><span class="encolhe">{{ a.nome }}</span>@if (a.telefone) { <span class="tel">{{ a.telefone }}</span> }</li>
+                      <li>
+                        <button type="button" class="achado" (click)="adicionar(a)">
+                          <span class="encolhe">{{ a.nome }}</span>
+                          @if (a.telefone) { <span class="tel">{{ a.telefone }}</span> }
+                        </button>
+                      </li>
                     }
                   </ul>
                 }
               </div>
 
-              @if (erroMembros(); as e) { <p class="erro" role="alert">{{ e }} <button class="btn btn--secundario btn--pequeno" (click)="carregarMembros()">Tentar de novo</button></p> }
-              @if (membros().length === 0) {
-                <div class="bloco"><p>Lista vazia. Busque um contato acima para adicionar.</p></div>
-              } @else {
-                <ul class="membros">
-                  @for (m of membros(); track m.id) {
-                    <li><span class="m-nome encolhe">{{ m.nome }}</span>
-                      <button class="x" (click)="remover(m.id)" title="Remover da lista">×</button></li>
-                  }
-                </ul>
-                @if (temMais()) { <button class="btn btn--secundario btn--bloco" (click)="carregarMembros(true)">Carregar mais</button> }
+              @if (erroMembros(); as e) {
+                <p class="erro" role="alert">
+                  {{ e }} <button type="button" class="btn btn--secundario btn--pequeno" (click)="carregarMembros()">Tentar de novo</button>
+                </p>
               }
+
+              <ui-tabela [colunas]="colunasMembros" [linhas]="linhasMembros()">
+                <ng-template uiCelula="acoes" let-m>
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="remover(m.id)">Remover</button>
+                </ng-template>
+                <div uiVazio>
+                  <ui-estado titulo="Lista vazia" descricao="Busque um contato acima para adicionar." />
+                </div>
+              </ui-tabela>
+              @if (membros().length > 0) {
+                <ui-paginacao [mostrados]="membros().length" [temMais]="temMais()" (mais)="carregarMembros(true)" />
+              }
+            } @else {
+              <ui-estado titulo="Escolha uma lista" descricao="Selecione uma lista ao lado para ver e adicionar contatos." />
             }
           </section>
         </div>
       }
     }
+
+    <ui-modal [aberto]="criarAberto()" titulo="Nova lista" largura="p" (fechar)="fecharCriar()">
+      <form id="form-lista" (submit)="criar($event)">
+        <ui-grade-form>
+          <ui-campo class="largo" rotulo="Nome da lista" placeholder="Ex.: Feira 2026" [obrigatorio]="true"
+            [(valor)]="novoNome" [erro]="erroNova()" />
+        </ui-grade-form>
+      </form>
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharCriar()">Cancelar</button>
+        <button type="submit" form="form-lista" class="btn btn--primario" [disabled]="criando()">
+          {{ criando() ? 'Criando…' : 'Criar lista' }}
+        </button>
+      </div>
+    </ui-modal>
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cabecalho { margin-bottom: var(--espacamento-4); }
-    h1 { margin: 0; color: var(--texto); }
-    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); font-size: 14px; }
-    .grade { display: grid; grid-template-columns: 300px 1fr; gap: var(--espacamento-4); align-items: start; }
-    @media (max-width: 720px) { .grade { grid-template-columns: 1fr; } }
-    .col { min-width: 0; }
-    .bloco { padding: var(--espacamento-8); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); text-align: center; color: var(--texto-secundario); }
-    .esq { height: 44px; border-radius: var(--raio-controle); background: var(--superficie); margin-bottom: var(--espacamento-2); }
-    .nova { display: flex; gap: var(--espacamento-2); margin-bottom: var(--espacamento-3); flex-wrap: wrap; align-items: end; }
-    .nova .campo { flex: 1; min-width: 140px; display: flex; flex-direction: column; gap: 4px; }
-    .nova .campo > span { font-size: 12px; font-weight: 500; color: var(--texto-secundario); }
-    .nova input { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .erro { width: 100%; margin: 0; color: var(--erro); font-size: 13px; }
-    .listas { list-style: none; margin: 0; padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
-    .lista { display: flex; align-items: center; gap: var(--espacamento-2); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); cursor: pointer; }
-    .lista:last-child { border-bottom: none; }
-    .lista:hover { background: var(--superficie); }
-    .lista.on { background: var(--acao-suave); box-shadow: inset 3px 0 0 var(--acao); }
-    .l-nome { flex: 1; color: var(--texto); font-size: 14px; }
-    .l-qtd { color: var(--texto-secundario); font-weight: 600; }
-    .vazio { padding: var(--espacamento-6); text-align: center; color: var(--texto-suave); font-size: 13px; }
-    .det-topo { display: flex; align-items: baseline; justify-content: space-between; gap: var(--espacamento-3); margin-bottom: var(--espacamento-3); }
-    .det-topo h2 { margin: 0; }
-    .det-qtd { color: var(--texto-suave); }
-    .busca { position: relative; margin-bottom: var(--espacamento-3); }
-    .busca input { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; }
-    .achados { position: absolute; z-index: 5; left: 0; right: 0; margin: var(--espacamento-1) 0 0; padding: 0; list-style: none; border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie-elevada); box-shadow: var(--elevacao-dropdown); max-height: 240px; overflow: auto; }
-    .achados li { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-2); padding: var(--espacamento-2) var(--espacamento-3); cursor: pointer; }
-    .achados li:hover { background: var(--acao-suave); }
+    .grade { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: var(--espacamento-4); align-items: start;
+      margin-top: var(--espacamento-4); }
+    @media (max-width: 720px) { .grade { grid-template-columns: minmax(0, 1fr); } }
+    .col { min-width: 0; display: grid; gap: var(--espacamento-3); align-content: start; }
+    .nome { padding: 0; border: 0; background: transparent; color: var(--texto); font: inherit; text-align: left; cursor: pointer; }
+    .nome:hover { color: var(--acao); text-decoration: underline; }
+    .det-topo { display: flex; align-items: baseline; justify-content: space-between; gap: var(--espacamento-3); }
+    .det-topo h2 { margin: 0; min-width: 0; }
+    .busca { position: relative; }
+    .achados { position: absolute; z-index: 5; left: 0; right: 0; margin: var(--espacamento-1) 0 0; padding: 0; list-style: none;
+      border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie-elevada);
+      box-shadow: var(--elevacao-dropdown); max-height: 240px; overflow: auto; }
+    .achado { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: var(--espacamento-2);
+      padding: var(--espacamento-2) var(--espacamento-3); border: 0; background: transparent; color: var(--texto); font: inherit;
+      text-align: left; cursor: pointer; }
+    .achado:hover { background: var(--acao-suave); }
     .tel { font-size: 12px; color: var(--texto-suave); }
-    .membros { list-style: none; margin: 0; padding: 0; border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; background: var(--superficie-elevada); }
-    .membros li { display: flex; align-items: center; gap: var(--espacamento-2); padding: var(--espacamento-3) var(--espacamento-4); border-bottom: 1px solid var(--borda); }
-    .membros li:last-child { border-bottom: none; }
-    .m-nome { flex: 1; color: var(--texto); font-size: 14px; }
-    .x { border: 0; background: transparent; color: var(--texto-suave); font-size: 16px; padding: 0 4px; cursor: pointer; flex: none; }
-    .x:hover { color: var(--erro); }
-    .btn--bloco { margin-top: var(--espacamento-2); }
+    .erro { margin: 0; color: var(--erro); font-size: 13px; }
+    .encolhe { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   `,
 })
 export class ListasPagina implements OnInit {
   private readonly http = inject(HttpClient)
   private readonly confirmacao = inject(ConfirmacaoServico)
   private readonly toast = inject(ToastServico)
+
+  protected readonly colunasListas: ColunaTabela[] = [
+    { chave: 'nome', rotulo: 'Lista' },
+    { chave: 'membros', rotulo: 'Membros', alinhamento: 'dir', mono: true, largura: '110px' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '120px' },
+  ]
+  protected readonly colunasMembros: ColunaTabela[] = [
+    { chave: 'nome', rotulo: 'Contato' },
+    { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '120px' },
+  ]
+
   readonly estado = signal<Estado>('carregando')
   readonly listas = signal<readonly Lista[]>([])
+  protected readonly linhasListas = computed(() => this.listas() as unknown as readonly LinhaTabela[])
   readonly erroMembros = signal<string | null>(null)
   readonly selecionada = signal<Lista | null>(null)
+  protected readonly marcadas = computed<ReadonlySet<string>>(() => {
+    const s = this.selecionada()
+    return new Set(s ? [s.id] : [])
+  })
   readonly membros = signal<readonly Membro[]>([])
+  protected readonly linhasMembros = computed(() => this.membros() as unknown as readonly LinhaTabela[])
   readonly temMais = signal(false)
-  readonly novoNome = signal(''); readonly criando = signal(false); readonly erroNova = signal<string | null>(null)
-  readonly termo = signal(''); readonly achados = signal<readonly AchadoContato[]>([])
+  readonly temMaisListas = signal(false)
+  readonly carregandoMais = signal(false)
+  private cursorListas: string | null = null
+  readonly criarAberto = signal(false)
+  readonly novoNome = signal('')
+  readonly criando = signal(false)
+  readonly erroNova = signal<string | null>(null)
+  readonly termo = signal('')
+  readonly achados = signal<readonly AchadoContato[]>([])
   private cursor: string | null = null
   private buscaSeq = 0
 
@@ -148,16 +201,31 @@ export class ListasPagina implements OnInit {
   async carregar(): Promise<void> {
     this.estado.set('carregando')
     try {
-      const r = await firstValueFrom(this.http.get<{ itens: Lista[] }>('/v1/listas'))
+      const r = await firstValueFrom(this.http.get<PaginaListas>('/v1/listas'))
       this.listas.set(r.itens)
+      this.cursorListas = r.proximoCursor ?? null
+      this.temMaisListas.set(this.cursorListas !== null)
       this.estado.set('pronto')
       const sel = this.selecionada()
       if (sel) {
-        const atual = r.itens.find((l) => l.id === sel.id) ?? null
+        // A lista aberta pode estar numa página ainda não carregada: só some se foi excluída.
+        const atual = r.itens.find((l) => l.id === sel.id) ?? sel
         this.selecionada.set(atual)
-        if (atual) await this.carregarMembros()
+        await this.carregarMembros()
       }
     } catch (e) { this.estado.set(e instanceof HttpErrorResponse && e.status === 403 ? 'sem_permissao' : 'erro') }
+  }
+
+  async carregarMaisListas(): Promise<void> {
+    if (!this.cursorListas || this.carregandoMais()) return
+    this.carregandoMais.set(true)
+    try {
+      const r = await firstValueFrom(this.http.get<PaginaListas>(`/v1/listas?cursor=${encodeURIComponent(this.cursorListas)}`))
+      this.listas.set([...this.listas(), ...r.itens])
+      this.cursorListas = r.proximoCursor ?? null
+      this.temMaisListas.set(this.cursorListas !== null)
+    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais listas.')) }
+    finally { this.carregandoMais.set(false) }
   }
 
   abrir(l: Lista): void { this.selecionada.set(l); this.termo.set(''); this.achados.set([]); void this.carregarMembros() }
@@ -179,14 +247,18 @@ export class ListasPagina implements OnInit {
     }
   }
 
+  fecharCriar(): void { if (!this.criando()) this.criarAberto.set(false) }
+
   async criar(ev: Event): Promise<void> {
     ev.preventDefault()
     const nome = this.novoNome().trim()
-    if (this.criando() || !nome) return
+    if (this.criando()) return
+    if (!nome) { this.erroNova.set('Informe o nome da lista.'); return }
     this.criando.set(true); this.erroNova.set(null)
     try {
       await firstValueFrom(this.http.post('/v1/listas', { nome }))
       this.novoNome.set('')
+      this.criarAberto.set(false)
       this.toast.sucesso('Lista criada')
       await this.carregar()
     } catch (e) {

@@ -124,23 +124,29 @@ describe('PLT-05: usar a sessão', () => {
       { tenantId: T_CLI, motivo: 'encadear' })).statusCode).toBe(403)
   })
 
-  it('⚠️ escrever dentro do cliente funciona — o caso que o único global quebrava', async () => {
-    // O staff já existe como usuário no tenant dele, com o MESMO sub que a
-    // sessão vai carregar. Antes da 0081+0082, o `ON CONFLICT (cognito_sub)`
-    // caía nesta linha, o RLS recusava e a rota respondia 500.
+  it('⚠️ a sessão NUNCA grava `usuario` no cliente (revisão D3, C1) — nem lendo, nem escrevendo', async () => {
+    // O staff existe como usuário no tenant DELE, com o MESMO sub que a sessão
+    // carrega. Antes da revisão, a primeira escrita dentro do cliente criava uma
+    // linha com o sub e o e-mail do login do staff — e o admin do cliente,
+    // pelo cadastro de usuários, redefinia a senha da conta do staff.
     await dono`INSERT INTO usuario (tenant_id, id, cognito_sub, nome, email)
                VALUES (${T_STAFF}, ${randomUUID()}, 'staff-sem-sub', 'Staff', 'staff@drezz.com.br')
                ON CONFLICT DO NOTHING`
 
     const { token } = await abrir()
+    // Leituras que antes garantiam a linha (escopo, notificações, eu).
+    expect((await comToken(token, 'GET', '/v1/contatos')).statusCode).toBe(200)
+    expect((await comToken(token, 'GET', '/v1/notificacoes/contador')).statusCode).toBe(200)
+    // Ação que exige um USUÁRIO do cliente como autor/dono → recusa tipificada.
     const r = await comToken(token, 'POST', '/v1/tarefas',
       { titulo: 'Ligar para o cliente', venceEm: '2026-12-01T12:00:00Z' })
-    expect(r.statusCode).toBe(201)
+    expect(r.statusCode).toBe(403)
+    expect(r.json<{ erro: string }>().erro).toBe('acesso.staff_sem_usuario')
 
-    // Duas linhas, mesmo sub, tenants diferentes — o que o schema já queria.
+    // Só a linha do tenant do staff — nada no cliente.
     const linhas = await dono<{ tenant_id: string }[]>`
       SELECT tenant_id FROM usuario WHERE cognito_sub = 'staff-sem-sub' ORDER BY tenant_id`
-    expect(linhas).toHaveLength(2)
+    expect(linhas.map((l) => l.tenant_id)).toEqual([T_STAFF])
   })
 
   it('encerrar mata o acesso na hora', async () => {

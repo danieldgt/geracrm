@@ -100,4 +100,71 @@ describe('Listas (públicos salvos)', () => {
     const r = (await chamar(T, 'GET', '/v1/listas')).json() as { itens: unknown[] }
     expect(r.itens.length).toBe(0)
   })
+
+  it('GET /v1/listas pagina por cursor (nome, id): sem repetir nem pular, e isolado por tenant', async () => {
+    for (let i = 1; i <= 55; i++) await criarLista(T, `Lista ${String(i).padStart(2, '0')}`)
+    await criarLista(OUTRO, 'Lista de B')
+    const vistos: string[] = []
+    let cursor: string | null = null
+    let paginas = 0
+    do {
+      const r = await chamar(T, 'GET', `/v1/listas${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`)
+      const j: { itens: { nome: string }[]; proximoCursor: string | null } = r.json()
+      vistos.push(...j.itens.map((l) => l.nome))
+      cursor = j.proximoCursor
+      paginas++
+    } while (cursor)
+    expect(paginas).toBe(2)
+    expect(vistos).toEqual(Array.from({ length: 55 }, (_, i) => `Lista ${String(i + 1).padStart(2, '0')}`))
+    expect((await chamar(T, 'GET', '/v1/listas?cursor=lixo')).statusCode).toBe(422)
+  })
+})
+
+describe('Listas — busca ?q= no servidor', () => {
+  const nomesDe = async (qs: string, t = T): Promise<string[]> =>
+    ((await chamar(t, 'GET', `/v1/listas${qs}`)).json() as { itens: { nome: string }[] }).itens.map((i) => i.nome).sort()
+
+  it('q casa parte do nome sem caixa; espaços não filtram; o isolamento vale com o filtro', async () => {
+    await criarLista(T, 'Clientes VIP')
+    await criarLista(T, 'vip_antigo')
+    await criarLista(T, 'Atacado 50%')
+    await criarLista(T, 'Revenda')
+    await criarLista(OUTRO, 'Clientes VIP de outro')
+    expect(await nomesDe('?q=vip')).toEqual(['Clientes VIP', 'vip_antigo'])
+    expect(await nomesDe('?q=%20%20')).toEqual(['Atacado 50%', 'Clientes VIP', 'Revenda', 'vip_antigo'])
+    expect(await nomesDe('?q=VIP', OUTRO)).toEqual(['Clientes VIP de outro'])
+  })
+
+  it('escapa % e _ no q: o termo é texto literal, não curinga', async () => {
+    await criarLista(T, 'vip_antigo')
+    await criarLista(T, 'Atacado 50%')
+    await criarLista(T, 'vipxantigo')
+    expect(await nomesDe('?q=_')).toEqual(['vip_antigo'])
+    expect(await nomesDe('?q=_a')).toEqual(['vip_antigo'])
+    expect(await nomesDe('?q=%25')).toEqual(['Atacado 50%'])
+    expect(await nomesDe('?q=%5C')).toEqual([])
+  })
+
+  it('q longo demais → 422 com campos.q', async () => {
+    const r = await chamar(T, 'GET', `/v1/listas?q=${'a'.repeat(101)}`)
+    expect(r.statusCode).toBe(422)
+    expect(r.json()).toMatchObject({ erro: 'busca.invalida', campos: { q: expect.any(String) } })
+  })
+
+  it('cursor e q andam juntos: 55 casam em duas páginas, sem repetir nem pular', async () => {
+    for (let i = 1; i <= 55; i++) await criarLista(T, `Lista ${String(i).padStart(2, '0')}`)
+    await criarLista(T, 'Outra coisa')
+    const vistos: string[] = []
+    let cursor: string | null = null
+    let paginas = 0
+    do {
+      const qs = `?q=LISTA${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
+      const j: { itens: { nome: string }[]; proximoCursor: string | null } = (await chamar(T, 'GET', `/v1/listas${qs}`)).json()
+      vistos.push(...j.itens.map((l) => l.nome))
+      cursor = j.proximoCursor
+      paginas++
+    } while (cursor)
+    expect(paginas).toBe(2)
+    expect(vistos).toEqual(Array.from({ length: 55 }, (_, i) => `Lista ${String(i + 1).padStart(2, '0')}`))
+  })
 })

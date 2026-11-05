@@ -28,7 +28,7 @@ workers/agente.ts (1 s, dono, FOR UPDATE SKIP LOCKED, serial por conversa)
 `agente/pipeline/index.ts` (`PIPELINE_PADRAO`) — a ordem só muda ali:
 
 ```
-modoEfetivo → [portão] → gatilhos → slots → teto(pré) → LLM → [guardrail R$] →
+modoEfetivo → [portão] → gatilhos → slots → teto(pré) → devolução → pós-venda → LLM → [guardrail R$] →
 números → filtro → pergunta → qualidade → envio → teto(pós)
 ```
 
@@ -38,6 +38,7 @@ números → filtro → pergunta → qualidade → envio → teto(pós)
 | gatilhos | `pipeline/gatilhos-entrada.ts` | sem token: opt-out (confirma antes de bloquear; "cancelar pedido" não é opt-out), humano, reclamação/Procon, "é robô?" (1ª fixa, 2ª handoff), áudio, abertura com identificação e aviso de privacidade |
 | slots | `pipeline/slots-do-cliente.ts` | o que o cliente já disse (volume, prazo, orçamento, tipo de compra, CNPJ) vira instrução, nunca dígito |
 | teto | `pipeline/teto-conversa.ts` | teto da sessão antes (handoff com aviso em autônomo) e depois (responde e transfere) |
+| pós-venda | `pipeline/pos-venda.ts` | roteiro aberto pela ativa de pós-venda (`estado_agente.posVenda`, G3) vira instrução: NPS → `registrar_nps`, indicação → `registrar_indicacoes`; só acrescenta |
 | números | `pipeline/numeros-ampliados.ts` | %, quantidade e prazo só com fonte no turno (ferramenta, política, conhecimento, cliente) |
 | filtro | `pipeline/filtro-saida.ts` | frases proibidas com regra de negação + compliance extra do número e do playbook |
 | pergunta | `pipeline/pergunta-repetida.ts` | Jaccard ≥ 0,7 contra a pergunta anterior; troca pela próxima pendente |
@@ -133,6 +134,25 @@ espelha `agente_config.politicas` nos dois sentidos. Capacidade e pendências de
 `GET /v1/agente/conhecimento/capacidades`; "Embutir agora" em `POST …/embutir` (409 quando a
 semântica está desligada). Regras do retrieval na skill `geracrm-catalogo`.
 
+**Prova social** (G3, #100) é o tipo `prova_social` do Conhecimento, com fonte, link, data de apuração,
+número/depoimento, consentimento (obrigatório no depoimento) e **aprovação de admin**
+(`POST …/conhecimento/:id/aprovar`; vetos de afirmação absoluta + filtro base). Editar volta a pendente.
+A busca comum NUNCA devolve prova social; só `consultar_prova_social` (aprovado, publicado, apurado há
+≤ 365 dias), e o número citado conta como fonte só se a ferramenta rodou no mesmo turno.
+
+**Reunião** (C3, 0137/0147): `agendar_reuniao` (`ferramentas/agenda.ts`, porta `AgendaPorta`, real em
+`agenda-ligacao.ts` sobre `crm/reuniao.ts` — o MESMO caso de uso do botão "Agendar reunião" do inbox).
+Só entra no menu com módulo Agenda + chave do número `agente_config.agenda_reunioes` (padrão desligada) +
+número em assistido/autônomo (`agendaNoTurno`, decidido em `ligacoesPadrao`). Propor e confirmar: `ofertar`
+devolve o `texto` das opções montado pelo código (uma oferta por turno) e grava `reuniao_oferta` (só no
+autônomo), que só vira confirmável no pós-envio, se as linhas chegaram ao gateway; `confirmar` só cria se a
+mensagem MAIS RECENTE do cliente escolheu aquela opção (`interpretarEscolhaDeHorario`, conservador: hora
+decide, ordinal só como frase inteira). Etapa `pipeline/reuniao.ts`: hora/data/dia e "marcado" só com fonte
+no turno (registro `ferramentas/agenda-turno.ts`), senão barra. O agente NUNCA transfere carteira. Efeito
+real só no autônomo (`efeitoDaAgenda`). Worker `workers/reuniao-avisos.ts`: H-24/H-2 no período útil
+(expediente ∩ 08–20), desfecho pendente avisa o VENDEDOR, convite para remarcar só com "não compareceu"
+marcado → handoff `reuniao_nao_compareceu`; idempotente por `evento_agenda_aviso`.
+
 ## Playground e auditoria
 
 `POST /v1/canais/:id/agente/simular` roda o agente REAL (ferramentas, catálogo, políticas) numa
@@ -158,7 +178,11 @@ resultado, resposta, confiança, números bloqueados, custo, latência, desfecho
 
 `agente/playbook/`, shared `agente-playbook.ts`, rotas `/v1/agente/playbook/*`. Conteúdo: estilo,
 persona, qualificação, mensagens prontas (inclui `avisoEspera` do SLA), compliance extra (só acrescenta)
-e ações habilitáveis (`catalogo`, `pedido`, `proposta`, `memoria`, `conhecimento`). Transferir, perfil
+e ações habilitáveis (`catalogo`, `pedido`, `proposta`, `memoria`, `conhecimento`, e as do pós-venda G3:
+`nps` → `registrar_nps`, `indicacoes` → `registrar_indicacoes`, `provaSocial` → `consultar_prova_social`;
+as três têm padrão para que versões publicadas antes continuem válidas — `nps`/`provaSocial` ligadas,
+`indicacoes` DESLIGADA, por ser escrita nova na base; NPS e indicação exigem roteiro aberto na sessão,
+indicação com teto de 5 por roteiro e resposta igual para novo/existente). Transferir, perfil
 do cliente, opt-out, humano, identificação, filtro base, números e `pedido_efetivar` ficam sempre
 ligados (`SEMPRE_LIGADAS_PLAYBOOK`). Rascunho → simular (modo seco, memória não grava) → publicar
 (admin, observação ≥ 10, auditoria) → versão imutável; restaurar cria versão nova. **Fato** vai para o
@@ -188,7 +212,22 @@ sombra × humano (sinal a calibrar). Métricas: `GET /v1/agente/sugestoes/metric
 
 ## SLA do handoff (ADR-034)
 
-Todo handoff arma o SLA (`sla-handoff.ts`: `armarSlaDoHandoff`, `rotearHandoff` dono → pool → gestor).
+Todo handoff arma o SLA (`sla-handoff.ts`: `armarSlaDoHandoff`, `rotearHandoff` dono → filial roteada em rodízio → pool → gestor da filial → gestor; a filial sai de `roteamento.ts` `filialDoContato` — G4).
+
+**Roteamento por filial (G4)** — `roteamento.ts`, `rodizio-entrada.ts`, `rotas-roteamento.ts`, shared
+`roteamento-filial.ts`, migration 0136.
+- Filial do contato: gravada no contato → regra por origem → por DDD → padrão do número → filial do número
+  → padrão geral. A regra do número vence a geral; `prioridade` é só ordem de exibição/desempate no
+  mesmo alcance.
+- **Opt-in**: no handoff, a filial só entra se o tenant tiver ≥ 1 regra ativa OU algum número com
+  `rodizio_na_entrada`. Sem isso é o P18 puro, mesmo com `canal_conectado.filial_id`/`contato.filial_id`.
+- Rodízio por filial com ponteiro travado por linha (`rodizio_filial`, finalidade entrada|handoff); a vez
+  do POOL ignora atendimentos roteados por filial.
+- Rodízio na entrada (chave por número, padrão desligado): só lead novo, com telefone principal próprio e
+  sem dono; carteira `automatica`, auditada, `contato.filial_id` carimbado, aviso `carteira.novo_cliente`.
+  ⚠️ O carimbo FICA se a carteira for transferida para outra filial (o contato vale para as duas no
+  escopo até alguém editar a filial no cadastro) — decisão registrada, não bug.
+- Gestor de filial: regras só em números da filial dele; regra geral é do escopo `tudo`.
 Config por número (`GET/PUT /v1/canais/:id/sla`, padrão 30/60 min úteis, aviso de espera ligado);
 `workers/sla.ts` estoura (alerta `sla_handoff_estourado`), libera a reatribuição e manda UMA mensagem de
 espera pelo gateway, filtro e rede de R$. Fila única via `fragmentoNaFila`. Em modo fundador o

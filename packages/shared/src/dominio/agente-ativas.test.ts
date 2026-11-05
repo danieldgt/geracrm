@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  ATIVAS_PADRAO, configAtivas, corpoAtivas, contarVariaveis, lerConfigAtivas, normalizarFeriados, primeiroNome,
+  ATIVAS_PADRAO, REATIVACAO_PADRAO, canalAceitaReativacao, reativacaoAtivas, configAtivas, corpoAtivas, contarVariaveis, lerConfigAtivas, normalizarFeriados, primeiroNome,
   templateDeRetornoCompativel,
 } from './agente-ativas.js'
 
@@ -17,9 +17,10 @@ describe('Config das ativas', () => {
   })
 
   it('o schema da borda recusa semana menor que dia e limite zero', () => {
-    expect(configAtivas.safeParse({ limiteDia: 3, limiteSemana: 2, templateRetorno: null }).success).toBe(false)
-    expect(configAtivas.safeParse({ limiteDia: 0, limiteSemana: 2, templateRetorno: null }).success).toBe(false)
-    expect(configAtivas.safeParse({ limiteDia: 2, limiteSemana: 4, templateRetorno: null }).success).toBe(true)
+    const novos = { descarteAposHoras: 0, reativacao: REATIVACAO_PADRAO }
+    expect(configAtivas.safeParse({ limiteDia: 3, limiteSemana: 2, templateRetorno: null, ...novos }).success).toBe(false)
+    expect(configAtivas.safeParse({ limiteDia: 0, limiteSemana: 2, templateRetorno: null, ...novos }).success).toBe(false)
+    expect(configAtivas.safeParse({ limiteDia: 2, limiteSemana: 4, templateRetorno: null, ...novos }).success).toBe(true)
   })
 
   it('feriados: aceita AAAA-MM-DD e MM-DD, recusa data inválida, deduplica e ordena', () => {
@@ -48,5 +49,57 @@ describe('Template de retorno', () => {
     expect(primeiroNome('5585988887777')).toBe('cliente')
     expect(primeiroNome('  ')).toBe('cliente')
     expect(primeiroNome(null)).toBe('cliente')
+  })
+})
+
+describe('Descarte após a cadência e reativação (G5)', () => {
+  const base = { limiteDia: 2, limiteSemana: 4, templateRetorno: null, feriados: [] as string[] }
+  const reat = (dias: number[], extra = {}) => ({ ativa: true, dias, templateId: null, texto: null, ...extra })
+
+  it('⚠️ padrões: descarte DESLIGADO (0), reativação desligada em 30 e 90 dias, teto de 30 por dia', () => {
+    expect(ATIVAS_PADRAO.descarteAposHoras).toBe(0)
+    expect(ATIVAS_PADRAO.reativacao).toEqual({ ativa: false, dias: [30, 90], templateId: null, texto: null, limiteDia: 30 })
+  })
+
+  it('teto diário da reativação: 1 a 200; ausente (config antiga) cai em 30', () => {
+    expect(reativacaoAtivas.safeParse(reat([30, 90], { limiteDia: 0 })).success).toBe(false)
+    expect(reativacaoAtivas.safeParse(reat([30, 90], { limiteDia: 201 })).success).toBe(false)
+    expect(reativacaoAtivas.safeParse(reat([30, 90], { limiteDia: 1.5 })).success).toBe(false)
+    expect(reativacaoAtivas.parse(reat([30, 90])).limiteDia).toBe(30)
+    expect(lerConfigAtivas({ reativacao: reat([30, 90], { limiteDia: 5 }) }).reativacao.limiteDia).toBe(5)
+  })
+
+  it('reativação só em WhatsApp (oficial e não-oficial)', () => {
+    expect(canalAceitaReativacao('whatsapp_oficial')).toBe(true)
+    expect(canalAceitaReativacao('whatsapp_nao_oficial')).toBe(true)
+    expect(canalAceitaReativacao('instagram')).toBe(false)
+    expect(canalAceitaReativacao('tiktok')).toBe(false)
+  })
+
+  it('dias: crescentes, de 7 a 365, no máximo 3', () => {
+    expect(reativacaoAtivas.safeParse(reat([30, 90])).success).toBe(true)
+    expect(reativacaoAtivas.safeParse(reat([7, 30, 365])).success).toBe(true)
+    expect(reativacaoAtivas.safeParse(reat([90, 30])).success).toBe(false)
+    expect(reativacaoAtivas.safeParse(reat([30, 30])).success).toBe(false)
+    expect(reativacaoAtivas.safeParse(reat([6, 30])).success).toBe(false)
+    expect(reativacaoAtivas.safeParse(reat([30, 366])).success).toBe(false)
+    expect(reativacaoAtivas.safeParse(reat([7, 30, 90, 180])).success).toBe(false)
+    expect(reativacaoAtivas.safeParse(reat([])).success).toBe(false)
+  })
+
+  it('o corpo do PUT aceita sem os campos novos (cliente antigo) e limita as horas do descarte', () => {
+    expect(corpoAtivas.safeParse(base).success).toBe(true)
+    expect(corpoAtivas.safeParse({ ...base, descarteAposHoras: 0 }).success).toBe(true)
+    expect(corpoAtivas.safeParse({ ...base, descarteAposHoras: 721 }).success).toBe(false)
+    expect(corpoAtivas.safeParse({ ...base, descarteAposHoras: -1 }).success).toBe(false)
+  })
+
+  it('leitura tolerante: reativação torta cai no padrão desligada', () => {
+    expect(lerConfigAtivas({ reativacao: { ativa: true, dias: [90, 30] } }).reativacao).toEqual(REATIVACAO_PADRAO)
+    // ⚠️ Sem configuração explícita (ou torta), o descarte fica DESLIGADO.
+    expect(lerConfigAtivas({}).descarteAposHoras).toBe(0)
+    expect(lerConfigAtivas({ descarteAposHoras: 'x' }).descarteAposHoras).toBe(0)
+    expect(lerConfigAtivas({ descarteAposHoras: 72 }).descarteAposHoras).toBe(72)
+    expect(lerConfigAtivas({ reativacao: reat([15, 45], { texto: 'oi' }) }).reativacao).toMatchObject({ ativa: true, dias: [15, 45], texto: 'oi' })
   })
 })
