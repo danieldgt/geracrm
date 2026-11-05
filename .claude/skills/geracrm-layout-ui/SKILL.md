@@ -14,6 +14,8 @@ Ferramenta de operação B2B usada **8h/dia** (inbox denso, kanban, tabelas, CRU
 consistência e clareza valem mais que enfeite. Complementa `geracrm-console-angular` (Angular,
 signals, SSE) e `especificar-telas` (os cinco estados). Direção visual: `docs/identidade-visual.md`
 · ADR-012 · tokens em `packages/design-tokens`.
+Lentes de revisão: `impeccable` (critique, audit, polish e os comandos de refino) e `taste-skill` (capturar, medir
+no navegador, olhar, corrigir) — esta skill vence as duas em conflito.
 
 ## A tese: palco neutro, azul só nos detalhes
 
@@ -196,6 +198,20 @@ Configurações
 - **Listas por cursor**: `ui-paginacao` com "Carregar mais". Sem página numerada, sem "de N páginas". `total`
   só quando a API devolve um total barato.
 - **Celular**: o formulário-página mantém o cartão com margem menor; o rodapé ocupa a largura toda nos botões.
+
+**Tela com abas (menu): uma entrada por tarefa, não por recurso.** Desde 2026-11-05
+(`docs/plano-reorganizacao-console.md`), telas irmãs que respondem à mesma pergunta viram **abas de uma
+entrada do menu**: Configurações, Base de clientes, Públicos, Agenda e tarefas, Aquisição, Automações e
+Cockpit. Para isso, o item ganha `abas` em `nucleo/menu.ts`, e a tela de cada aba entra em `TELAS_REAIS`
+como `'<item>/<aba>'`. `TelaAbasPagina` desenha o título e as abas, e provê `TELA_EMBUTIDA`: o
+`ui-cabecalho-tela` da tela filha esconde o título e mantém as ações, então a filha não muda nada.
+
+- **Antes de criar entrada nova no menu:** a tarefa cabe como aba de uma entrada que já existe? Se cabe, é
+  aba. O teste `menu-reorganizacao.spec.ts` trava o menu em 22 entradas.
+- **Rota que sai do menu vira redirect** em `ROTAS_ANTIGAS`, com a aba no destino. O teste confere que o
+  destino existe.
+- **Aba interna da tela** (Funil, Relatórios, Agente) vai na URL por query param (`?aba=`), com
+  `replaceUrl`, para que favorito e deep link funcionem.
 
 **Qual padrão usar (decisão rápida):**
 
