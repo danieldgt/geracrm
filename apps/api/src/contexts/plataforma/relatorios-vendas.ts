@@ -19,7 +19,8 @@ import { condicaoPedido, type Escopo } from './escopo.js'
  *
  * `percentual` = fatia do valor do grupo no valor total (0..1, 4 casas). Em `produto` a base é a
  * soma dos itens (quantidade x preço da linha), porque um pedido tem vários produtos; nas demais
- * a soma dos grupos é o total do período. `pedidos` em `produto` = pedidos que contêm o produto.
+ * a soma dos grupos é o total do período. `pedidos` em `produto` = pedidos que contêm o produto, e
+ * `quantidade` (só em `produto`) = unidades vendidas, a soma de `pedido_item.quantidade` (até 3 casas).
  *
  * Limites: 100 grupos (os de maior valor; `truncado` avisa). `dia` sai completo e em ordem
  * cronológica (até 366 dias); `dia-semana` sempre completo (1 = segunda ... 7 = domingo).
@@ -35,6 +36,8 @@ export interface ItemVendas {
   readonly valorCentavos: number
   readonly ticketMedioCentavos: number
   readonly percentual: number
+  /** Unidades vendidas — só na dimensão `produto` (nas outras, um pedido mistura produtos e a soma não diz nada). */
+  readonly quantidade?: number
 }
 export interface TotaisVendas { readonly pedidos: number; readonly valorCentavos: number; readonly ticketMedioCentavos: number }
 
@@ -65,7 +68,7 @@ const DIAS_SEMANA: readonly (readonly [string, string])[] = [
   ['1', 'Segunda'], ['2', 'Terça'], ['3', 'Quarta'], ['4', 'Quinta'], ['5', 'Sexta'], ['6', 'Sábado'], ['7', 'Domingo'],
 ]
 
-interface Linha { chave: string; rotulo: string; pedidos: number; valor: string }
+interface Linha { chave: string; rotulo: string; pedidos: number; valor: string; quantidade?: string }
 
 /** Chave e rótulo SQL por dimensão (aliases: pd pedido, c contato, o origem, u vendedor, cc canal). */
 function fragmento(tx: Sql, dim: Exclude<DimensaoVendas, 'produto'>, fuso: string) {
@@ -124,7 +127,8 @@ export async function vendasPorDimensao(
     linhas = await tx<Linha[]>`
       SELECT it.sku_snapshot AS chave, min(it.descricao_snapshot) AS rotulo,
              count(DISTINCT it.pedido_id)::int AS pedidos,
-             sum(round(it.quantidade * it.valor_unitario_centavos))::text AS valor
+             sum(round(it.quantidade * it.valor_unitario_centavos))::text AS valor,
+             sum(it.quantidade)::text AS quantidade
         FROM pedido_item it
        WHERE it.tenant_id = tenant_atual()
          AND it.pedido_id IN (SELECT pd.id ${base})
@@ -176,5 +180,11 @@ export async function vendasPorDimensao(
       }),
     }
   }
-  return { truncado, totais, itens: cortadas.map((l) => montar(l.chave, l.rotulo, l.pedidos, Number(l.valor))) }
+  return {
+    truncado, totais,
+    itens: cortadas.map((l) => {
+      const item = montar(l.chave, l.rotulo, l.pedidos, Number(l.valor))
+      return l.quantidade === undefined ? item : { ...item, quantidade: Number(l.quantidade) }
+    }),
+  }
 }

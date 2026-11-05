@@ -303,12 +303,16 @@ describe('vendas por dimensão', () => {
     expect(cl.itens[0]).toMatchObject({ rotulo: 'Contato 1', valorCentavos: 28000, pedidos: 2 })
     expect(cl.itens.reduce((s: number, i: any) => s + i.valorCentavos, 0)).toBe(63000)
   })
-  it('produto: valor dos itens, pedidos distintos e fatia sobre a soma dos itens', async () => {
+  it('produto: valor dos itens, pedidos distintos, unidades vendidas e fatia sobre a soma dos itens', async () => {
     const r = await vendas(ADM, 'produto')
     expect(r.itens).toEqual([
-      { chave: 'S1', rotulo: 'Camiseta', pedidos: 2, valorCentavos: 30000, ticketMedioCentavos: 15000, percentual: 0.8571 },
-      { chave: 'S2', rotulo: 'Calça', pedidos: 1, valorCentavos: 5000, ticketMedioCentavos: 5000, percentual: 0.1429 },
+      { chave: 'S1', rotulo: 'Camiseta', pedidos: 2, valorCentavos: 30000, ticketMedioCentavos: 15000, percentual: 0.8571, quantidade: 3 },
+      { chave: 'S2', rotulo: 'Calça', pedidos: 1, valorCentavos: 5000, ticketMedioCentavos: 5000, percentual: 0.1429, quantidade: 1 },
     ])
+  })
+  it('quantidade só existe na dimensão produto', async () => {
+    const r = await vendas(ADM, 'cliente')
+    expect(r.itens.every((i: any) => !('quantidade' in i))).toBe(true)
   })
   it('período sem vendas: grupos vazios, totais zerados', async () => {
     const r = await vendas(ADM, 'vendedor', 'inicio=2020-01-01&fim=2020-01-31')
