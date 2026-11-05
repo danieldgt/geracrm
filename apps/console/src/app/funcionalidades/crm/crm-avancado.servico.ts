@@ -1,6 +1,7 @@
 import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
+import { colunaDeFrequencia } from './crm-avancado.regras.js'
 
 export interface CardCliente {
   readonly contatoId: string; readonly nome: string; readonly telefone: string | null
@@ -17,9 +18,12 @@ export interface ColunaCliente {
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
- * CRM Avançado — consolidação da base por nº de pedidos + RFV. Board de LEITURA
- * (colunas de frequência derivadas; sem drag). Ação: Descartar/Reabrir via o
- * endpoint de leads. Colunas paginadas por cursor.
+ * Por nº de pedidos (aba da Base) — board de LEITURA (colunas de frequência
+ * derivadas; sem drag). Colunas paginadas por cursor.
+ *
+ * ⚠️ A API ainda devolve as colunas de qualificação (leads, descartados); a tela
+ * não as mostra — a qualificação mora no Funil. Filtradas ANTES de buscar os
+ * cards, para não pagar a página de uma coluna que ninguém vê.
  */
 @Injectable({ providedIn: 'root' })
 export class CrmAvancadoServico {
@@ -27,13 +31,12 @@ export class CrmAvancadoServico {
 
   readonly estado = signal<Estado>('carregando')
   readonly colunas = signal<readonly ColunaCliente[]>([])
-  readonly erroAcao = signal<string | null>(null)
 
   async carregar(): Promise<void> {
     this.estado.set('carregando')
     try {
       const r = await firstValueFrom(this.http.get<{ colunas: { chave: string; nome: string; total: number }[] }>('/v1/crm-avancado/colunas'))
-      const cols = await Promise.all(r.colunas.map(async (c) => {
+      const cols = await Promise.all(r.colunas.filter((c) => colunaDeFrequencia(c.chave)).map(async (c) => {
         const p = await this.buscar(c.chave, null)
         return { ...c, cards: p.itens, proximoCursor: p.proximoCursor, carregandoMais: false } as ColunaCliente
       }))
@@ -58,17 +61,5 @@ export class CrmAvancadoServico {
       const p = await this.buscar(chave, col.proximoCursor)
       col.cards = [...col.cards, ...p.itens]; col.proximoCursor = p.proximoCursor
     } catch { /* mantém */ } finally { col.carregandoMais = false; this.colunas.set([...this.colunas()]) }
-  }
-
-  /** Descartar (qualificado=false) ou Reabrir (novo) — reusa o endpoint de leads. */
-  async qualificar(contatoId: string, estado: 'descartado' | 'novo'): Promise<void> {
-    try {
-      await firstValueFrom(this.http.post(`/v1/leads/${contatoId}/qualificar`, { estado }))
-      this.erroAcao.set(null)
-      await this.carregar()
-    } catch {
-      this.erroAcao.set('Não foi possível atualizar — recarreguei.')
-      await this.carregar()
-    }
   }
 }

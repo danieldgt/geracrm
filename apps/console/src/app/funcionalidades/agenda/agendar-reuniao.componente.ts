@@ -29,7 +29,9 @@ import {
   imports: [ModalComponente, GradeFormComponente, SelectComponente, CampoComponente, EsqueletoComponente],
   template: `
     @if (modulos.agendaAtiva()) {
-      <button class="acao-btn" type="button" (click)="abrir()" title="Marcar uma reunião com este cliente">Agendar reunião</button>
+      @if (gatilho()) {
+        <button class="acao-btn" type="button" (click)="abrir()" title="Marcar uma reunião com este cliente">Agendar reunião</button>
+      }
     }
     <ui-modal [aberto]="aberto()" titulo="Agendar reunião" largura="m" (fechar)="fechar()">
       @if (erroVendedores()) {
@@ -112,6 +114,10 @@ export class AgendarReuniaoComponente {
   protected readonly modulos = inject(ModulosServico)
 
   readonly conversaId = input.required<string>()
+  /** false = sem botão próprio; quem monta abre por abrir() (menu "⋯" da conversa). */
+  readonly gatilho = input(true)
+  /** Há módulo Agenda: o item "Agendar reunião" pode aparecer no menu de quem monta. */
+  readonly disponivel = computed(() => this.modulos.agendaAtiva())
 
   protected readonly duracoes = OPCOES_DURACAO as OpcaoSelect[]
   protected readonly modalidades = OPCOES_MODALIDADE_REUNIAO as OpcaoSelect[]

@@ -3,6 +3,7 @@ import {
   ChangeDetectionStrategy, Component, Directive, ElementRef, TemplateRef, afterRenderEffect, contentChild, inject,
   input, output, untracked, viewChild,
 } from '@angular/core'
+import { ConfirmacaoServico } from './confirmar.componente.js'
 import { devolverFoco, primeiroAlvoDeFoco, prenderTab } from './foco.js'
 
 export type LarguraModal = 'p' | 'm' | 'g'
@@ -35,6 +36,13 @@ export class ModalRodapeDiretiva {
  *   </ui-modal>
  *
  * Rodapé dentro de bloco de controle (`@if` com vários nós): use `<ng-template uiModalRodape>` em vez de `[rodape]`.
+ *
+ * ⚠️ Dado digitado não se perde por engano: se a pessoa DIGITOU ou mudou um campo no corpo (evento
+ * `input`/`change` — preencher por código não conta), Esc, véu e × PERGUNTAM antes de emitir
+ * `fechar` ("Descartar o que foi digitado?"). O "Cancelar" do rodapé é escolha explícita e fecha
+ * direto; salvar fecha pelo pai (`aberto` = false), sem pergunta. `[sujo]` sobrepõe a detecção:
+ * `true` força a pergunta, `false` desliga (modal cujos campos já gravam sozinhos, como uma
+ * configuração que salva a cada mudança).
  */
 @Component({
   selector: 'ui-modal',
@@ -49,9 +57,9 @@ export class ModalRodapeDiretiva {
              (keydown)="aoTeclar($event)">
           <header class="cab">
             <h2 [id]="idTitulo" class="txt-secao">{{ titulo() }}</h2>
-            <button type="button" class="x" aria-label="Fechar" (click)="fechar.emit()">×</button>
+            <button type="button" class="x" aria-label="Fechar" (click)="pedirFechar()">×</button>
           </header>
-          <div class="corpo"><ng-content /></div>
+          <div class="corpo" (input)="editado = true" (change)="editado = true"><ng-content /></div>
           <footer class="rodape">
             <ng-content select="[rodape]" />
             @if (rodapeModelo(); as m) { <ng-container [ngTemplateOutlet]="m.modelo" /> }
@@ -90,7 +98,13 @@ export class ModalComponente {
   readonly aberto = input(false)
   readonly titulo = input('')
   readonly largura = input<LarguraModal>('m')
+  /** Há dado não salvo? `null` (padrão) = detecta pela digitação no corpo; true/false força. */
+  readonly sujo = input<boolean | null>(null)
+  /** A pessoa digitou ou mudou algum campo desde que o modal abriu. */
+  protected editado = false
   readonly fechar = output<void>()
+  private readonly confirmacao = inject(ConfirmacaoServico)
+  private perguntando = false
   protected readonly rodapeModelo = contentChild(ModalRodapeDiretiva)
 
   protected readonly idTitulo = `ui-modal-titulo-${++serie}`
@@ -104,11 +118,13 @@ export class ModalComponente {
       if (this.aberto() && el) {
         untracked(() => {
           if (!el.contains(document.activeElement)) {
+            if (this.anterior === null) this.editado = false // abriu agora: nada digitado ainda
             this.anterior ??= document.activeElement
             ;(primeiroAlvoDeFoco(el) ?? el).focus()
           }
         })
       } else if (!this.aberto() && this.anterior) {
+        this.editado = false
         const volta = this.anterior
         this.anterior = null
         devolverFoco(volta)
@@ -121,11 +137,28 @@ export class ModalComponente {
   protected soltarNoVeu(e: MouseEvent): void {
     const fechaPeloVeu = this.comecouNoVeu && e.target === e.currentTarget
     this.comecouNoVeu = false
-    if (fechaPeloVeu) this.fechar.emit()
+    if (fechaPeloVeu) void this.pedirFechar()
+  }
+
+  /** Fechar pedido pela pessoa (Esc, véu, ×): com `sujo`, confirma o descarte antes. */
+  protected async pedirFechar(): Promise<void> {
+    if (this.perguntando) return
+    if (this.sujo() ?? this.editado) {
+      this.perguntando = true
+      try {
+        const descartar = await this.confirmacao.confirmar({
+          titulo: 'Descartar o que foi digitado?',
+          mensagem: 'Os dados deste formulário ainda não foram salvos.',
+          acao: 'Descartar', cancelar: 'Continuar editando', perigo: true,
+        })
+        if (!descartar) return
+      } finally { this.perguntando = false }
+    }
+    this.fechar.emit()
   }
 
   protected aoTeclar(e: KeyboardEvent): void {
-    if (e.key === 'Escape') { e.stopPropagation(); this.fechar.emit(); return }
+    if (e.key === 'Escape') { e.stopPropagation(); void this.pedirFechar(); return }
     const el = this.caixa()?.nativeElement
     if (el && prenderTab(el, e, document.activeElement)) { e.preventDefault(); e.stopPropagation() }
   }

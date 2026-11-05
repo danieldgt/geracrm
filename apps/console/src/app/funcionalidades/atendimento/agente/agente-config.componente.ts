@@ -173,39 +173,6 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
               }
             </ui-painel>
 
-            <!-- (a1b) Teto da conta — o kill switch geral (vale para todos os números). -->
-            <ui-painel>
-              <h2 class="txt-secao secao">Teto da conta</h2>
-              <p class="dica topo">O modo mais solto que <strong>qualquer</strong> número pode ter. “Desligado” cala o agente em todos os números de uma vez, sem mexer na configuração de cada um — as mensagens continuam gravadas.</p>
-              @switch (estadoTeto()) {
-                @case ('carregando') { <ui-esqueleto altura="40px" largura="60%" /> }
-                @case ('erro') {
-                  <div class="aviso aviso--erro" role="alert">Não foi possível ler o teto da conta.
-                    <div class="topo-2"><ui-botao variante="secundario" (click)="carregarTeto()">Tentar de novo</ui-botao></div></div>
-                }
-                @case ('pronto') {
-                  @if (teto(); as t) {
-                    <div class="teto">
-                      <label class="campo teto-campo">
-                        <span>Modo máximo da conta</span>
-                        <select [value]="tetoEscolhido()" [disabled]="!t.podeConfigurar || salvandoTeto()"
-                                (change)="tetoEscolhido.set($any($event.target).value)">
-                          @for (m of modos; track m) { <option [value]="m" [selected]="tetoEscolhido() === m">{{ badge(m).rotulo }}</option> }
-                        </select>
-                      </label>
-                      @if (t.podeConfigurar) {
-                        <ui-botao variante="secundario" [carregando]="salvandoTeto()" [desabilitado]="tetoEscolhido() === t.modoMaximo"
-                                  (click)="aplicarTeto()">Aplicar a todos os números</ui-botao>
-                      }
-                    </div>
-                    @if (t.atualizadoEm) {
-                      <p class="dica">Alterado {{ t.atualizadoPor ? 'por ' + t.atualizadoPor + ' ' : '' }}em <span class="txt-dados">{{ dataHora(t.atualizadoEm) }}</span>.</p>
-                    }
-                  }
-                }
-              }
-            </ui-painel>
-
             <!-- (a2) Modelo de IA — o cliente escolhe o modelo; a chave é do servidor e nunca aparece.
                  ⚠️ Carrega à parte do formulário: se a lista falhar, o resto segue editável (parcial). -->
             <ui-painel>
@@ -545,11 +512,58 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
               </details>
             </ui-painel>
 
-            <div class="acoes">
-              <ui-botao tipo="submit" [carregando]="salvando()" [desabilitado]="podeConfigurar() === false">{{ salvando() ? 'Salvando…' : 'Salvar' }}</ui-botao>
+            <!-- ⚠️ UM modelo de salvar para o número (F4): Modo, Recorte e todo o resto
+                 vão JUNTOS no "Salvar" — validação e confirmação digitada (ADR-028) são
+                 do conjunto, e trocar o modo sozinho no clique deixaria o recorte velho
+                 valendo com o modo novo. A barra fica presa no rodapé e diz quando há
+                 alteração não salva, para quem mexe no Modo lá em cima não sair sem salvar. -->
+            <div class="acoes" [class.sujo]="alterado()">
+              @if (alterado()) { <span class="pendente" role="status">Alterações não salvas neste número</span> }
               @if (temErros()) { <span class="msg-erro">Corrija os campos destacados.</span> }
+              <span class="acoes-botoes">
+                @if (alterado()) {
+                  <ui-botao variante="fantasma" [desabilitado]="salvando()" (click)="descartar()">Descartar alterações</ui-botao>
+                }
+                <ui-botao tipo="submit" [carregando]="salvando()" [desabilitado]="podeConfigurar() === false">{{ salvando() ? 'Salvando…' : 'Salvar' }}</ui-botao>
+              </span>
             </div>
           </form>
+
+          <!-- (a1b) Teto da conta — o kill switch geral (vale para todos os números).
+               ⚠️ FORA do formulário do número, de propósito: é outro objeto (a conta),
+               com outra API e confirmação digitada própria — aplica na hora com o
+               botão dele. Dentro do <form>, parecia que o "Salvar" do número o levava. -->
+          <ui-painel class="teto-conta">
+            <h2 class="txt-secao secao">Teto da conta <span class="escopo">vale para todos os números</span></h2>
+            <p class="dica topo">O modo mais solto que <strong>qualquer</strong> número pode ter. “Desligado” cala o agente em todos os números de uma vez, sem mexer na configuração de cada um — as mensagens continuam gravadas.</p>
+            @switch (estadoTeto()) {
+              @case ('carregando') { <ui-esqueleto altura="40px" largura="60%" /> }
+              @case ('erro') {
+                <div class="aviso aviso--erro" role="alert">Não foi possível ler o teto da conta.
+                  <div class="topo-2"><ui-botao variante="secundario" (click)="carregarTeto()">Tentar de novo</ui-botao></div></div>
+              }
+              @case ('pronto') {
+                @if (teto(); as t) {
+                  <div class="teto">
+                    <label class="campo teto-campo">
+                      <span>Modo máximo da conta</span>
+                      <select [value]="tetoEscolhido()" [disabled]="!t.podeConfigurar || salvandoTeto()"
+                              (change)="tetoEscolhido.set($any($event.target).value)">
+                        @for (m of modos; track m) { <option [value]="m" [selected]="tetoEscolhido() === m">{{ badge(m).rotulo }}</option> }
+                      </select>
+                    </label>
+                    @if (t.podeConfigurar) {
+                      <ui-botao variante="secundario" [carregando]="salvandoTeto()" [desabilitado]="tetoEscolhido() === t.modoMaximo"
+                                (click)="aplicarTeto()">Aplicar a todos os números</ui-botao>
+                    }
+                  </div>
+                  @if (t.atualizadoEm) {
+                    <p class="dica">Alterado {{ t.atualizadoPor ? 'por ' + t.atualizadoPor + ' ' : '' }}em <span class="txt-dados">{{ dataHora(t.atualizadoEm) }}</span>.</p>
+                  }
+                }
+              }
+            }
+          </ui-painel>
         }
       }
     }
@@ -610,7 +624,16 @@ type EstadoModelos = 'carregando' | 'pronto' | 'erro'
     .link:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; border-radius: var(--raio-controle); }
     .avancado summary { cursor: pointer; color: var(--texto); }
     .avancado[open] summary { margin-bottom: var(--espacamento-3); }
-    .acoes { display: flex; align-items: center; gap: var(--espacamento-3); flex-wrap: wrap; }
+    /* No celular, a barra fica ACIMA do botão flutuante de conversas (--folga-flutuante, definida pela casca). */
+    .acoes { position: sticky; bottom: var(--folga-flutuante, 0); z-index: 2; display: flex; align-items: center; justify-content: flex-end;
+      gap: var(--espacamento-3); flex-wrap: wrap; padding: var(--espacamento-3) var(--espacamento-4);
+      background: var(--superficie-elevada); border: 1px solid var(--borda); border-radius: var(--raio-painel); }
+    .acoes.sujo { border-color: var(--atencao); }
+    .teto-conta { display: block; margin-top: var(--espacamento-6); }
+    .acoes-botoes { display: flex; gap: var(--espacamento-2); margin-left: auto; }
+    .pendente { color: var(--atencao); font-size: 13px; font-weight: 600; }
+    .escopo { margin-left: var(--espacamento-2); color: var(--texto-secundario); font-size: 13px; font-weight: 400;
+      text-transform: none; letter-spacing: 0; }
     .selo { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; min-width: 0;
       padding: var(--espacamento-2) var(--espacamento-3); margin-bottom: var(--espacamento-3);
       border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--fundo); }
@@ -693,6 +716,13 @@ export class AgenteConfigComponente {
   private readonly errosLocais = computed(() => (this.tentou() ? validarFormulario(this.f()) : {}))
   readonly temErros = computed(() => Object.keys(this.errosLocais()).length > 0 || Object.keys(this.errosServidor()).length > 0)
   readonly avisos = computed(() => avisosDasRegras(this.f().regras))
+  /** Há alteração não salva no número (formulário ou recorte) desde a última carga? */
+  readonly alterado = computed(() => {
+    const c = this.cfg()
+    if (!c) return false
+    return JSON.stringify(this.f()) !== JSON.stringify(formularioDe(c))
+      || JSON.stringify(this.rf()) !== JSON.stringify(recorteParaFormulario((c as ConfigAgente & ModoNaConfig).recorte ?? null))
+  })
   readonly mudouDoPadrao = computed(() => mudouDoPadrao(this.f().regras, this.cfg()?.padroes ?? REGRAS_AGENTE_PADRAO))
 
   // ─── Seletor de modelo (catálogo do tenant; o staff libera, a chave é do servidor) ───
@@ -843,6 +873,16 @@ export class AgenteConfigComponente {
   private limparErro(campo: string): void {
     if (!(campo in this.errosServidor())) return
     this.errosServidor.update((e) => { const n = { ...e }; delete n[campo]; return n })
+  }
+
+  /** Volta o formulário ao que está salvo no número (sem ir ao servidor). */
+  descartar(): void {
+    const c = this.cfg()
+    if (!c) return
+    this.f.set(formularioDe(c))
+    this.rf.set(recorteParaFormulario((c as ConfigAgente & ModoNaConfig).recorte ?? null))
+    this.recorteMexido.set(false)
+    this.tentou.set(false); this.errosServidor.set({}); this.erroGeral.set(null)
   }
 
   async salvar(ev: Event): Promise<void> {

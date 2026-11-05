@@ -57,7 +57,7 @@ type EstadoLista = 'carregando' | 'pronto' | 'erro' | 'sem_permissao'
             <div uiVazio>
               <ui-estado titulo="Nenhum formulário ainda"
                 descricao="Monte um formulário, publique o link e cada resposta vira um contato na sua base.">
-                <a class="btn btn--primario" routerLink="/formularios/novo">+ Novo formulário</a>
+                <a class="btn btn--secundario" routerLink="/formularios/novo">+ Novo formulário</a>
               </ui-estado>
             </div>
           </ui-tabela>

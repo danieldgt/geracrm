@@ -87,7 +87,7 @@ const OPCOES_MODELO: OpcaoSelect[] = [
         }
         @case ('nao_encontrado') {
           <ui-estado titulo="Este anúncio não existe mais" descricao="Ele pode ter sido removido na plataforma ou o link está velho.">
-            <a class="btn btn--secundario" routerLink="/midia">Voltar para a lista</a>
+            <a class="btn btn--secundario" routerLink="/aquisicao/midia">Voltar para a lista</a>
           </ui-estado>
         }
         @case ('sem_permissao') {
@@ -179,7 +179,7 @@ export class AnuncioRoiPagina implements OnInit {
   readonly janela = computed(() => Math.min(90, Math.max(1, Math.trunc(Number(this.janelaTexto())) || 14)))
 
   protected readonly trilha = computed<ItemTrilha[]>(() => [
-    { rotulo: 'Mídia paga', rota: '/midia' },
+    { rotulo: 'Mídia paga', rota: '/aquisicao/midia' },
     { rotulo: this.dados()?.anuncio?.nome ?? 'Anúncio' },
   ])
 

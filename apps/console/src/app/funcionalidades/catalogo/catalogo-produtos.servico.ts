@@ -1,7 +1,7 @@
 import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
-import type { OrigemCatalogo, PerfilPreco, ProdutoEntrada, SkuEntrada } from '@geracrm/shared'
+import { PERFIL_PRECO_PADRAO, type OrigemCatalogo, type PerfilPreco, type ProdutoEntrada, type SkuEntrada } from '@geracrm/shared'
 import { ehStatus, mensagemDeErro, mesclarPagina, queryDeLista } from '../../compartilhado/ui/index.js'
 
 /** Como a API lista/detalha um produto (busca.ts → montarDetalhe). */
@@ -11,7 +11,7 @@ export interface SkuLinha {
   readonly codigoBarras: string | null
   readonly origem: OrigemCatalogo
   readonly ativo: boolean
-  /** Preço do PERFIL pedido na consulta (a lista usa o padrão: atacado). */
+  /** Preço do PERFIL pedido na consulta (o da lista é o perfil escolhido no filtro). */
   readonly precoCentavos: number | null
   readonly saldo: number | null
   readonly saldoEm: string | null
@@ -52,10 +52,12 @@ export class CatalogoProdutosServico {
   readonly busca = signal('')
   readonly origem = signal<FiltroOrigem>('')
   readonly inativos = signal(false)
+  /** Perfil de preço da lista (varejo × atacado). O preço é resolvido na API, nunca aqui (ADR-025). */
+  readonly perfil = signal<PerfilPreco>(PERFIL_PRECO_PADRAO)
 
   private url(cursor: string | null): string {
     return '/v1/catalogo/produtos' + queryDeLista({
-      cursor, busca: this.busca().trim(), origem: this.origem(), inativos: this.inativos() ? '1' : '',
+      cursor, busca: this.busca().trim(), origem: this.origem(), inativos: this.inativos() ? '1' : '', perfil: this.perfil(),
     })
   }
 

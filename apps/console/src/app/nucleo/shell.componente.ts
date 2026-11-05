@@ -9,8 +9,10 @@ import { RouterOutlet, RouterLink, RouterLinkActive, Router, NavigationEnd } fro
 import { filter, firstValueFrom } from 'rxjs'
 import { CelularServico } from './celular.servico.js'
 import {
-  camadaTrilho, conteudoInerte, focoPreso, proximaGaveta, resumoAlertas, separarAlertas, type EventoGaveta,
+  camadaTrilho, conteudoInerte, focoPreso, limitarLarguraTrilho, modoTrilho, proximaGaveta, resumoAlertas, separarAlertas,
+  type EventoGaveta,
 } from './casca.regras.js'
+import type { ModoTrilhoCasca } from '../funcionalidades/atendimento/chat-rail.componente.js'
 import { VERSAO } from './versao.js'
 import { MENU, menuVisivel } from './menu.js'
 import { SinoNotificacoesComponente } from './sino-notificacoes.componente.js'
@@ -82,7 +84,9 @@ import { AuthServico } from './auth.servico.js'
             @for (item of grupo.itens; track item.rota) {
               @if (item.acao === 'rail') {
                 <!-- Conversas: abre/recolhe o chat rail em vez de navegar. -->
-                <button type="button" class="item" [class.ativo]="inbox.railAberto()"
+                <!-- ⚠️ Alternador, não rota: aria-pressed e o ícone aceso — nunca o
+                     .ativo de rota, senão o menu mostra DOIS itens atuais. -->
+                <button type="button" class="item alternador" [attr.aria-pressed]="inbox.railAberto()"
                         [title]="item.rotulo + ' — ' + item.descricao"
                         (click)="inbox.alternarRail(); filtro.set(''); mudarGaveta('navegou')">
                   <span class="icone"><ui-icone [nome]="item.icone" [tamanho]="18" /></span>
@@ -125,14 +129,16 @@ import { AuthServico } from './auth.servico.js'
 
       <!-- Chat rail: o chat é a funcionalidade principal, sempre à mão, ancorado
            À DIREITA (coluna 3, altura total). Recolhido = faixa de avatares;
-           expandido empurra OU sobrepõe (escolha do usuário), com largura
-           redimensionável. Estado no InboxServico, sobrevive à navegação. -->
+           expandido EMPURRA quando a tela ao lado continua com >= 960 px, senão
+           abre como GAVETA (véu, Esc, foco preso) — decidido pela largura em
+           modoTrilho(), não por botão. Estado no InboxServico, sobrevive à navegação. -->
       <!-- ⚠️ Com a gaveta aberta, o resto fica inert: o foco não escapa para
            trás do véu nem por Tab, nem por leitor de tela. O mesmo vale para o
            trilho aberto em tela cheia no celular (topo e conteúdo ficam atrás).
            A camada (z) do trilho depende de estar aberto: recolhido, o botão
            flutuante fica ABAIXO dos modais das telas (casca.regras.ts, CAMADA). -->
-      <app-chat-rail [attr.inert]="gavetaAberta() ? '' : null" [style.--z-trilho]="zTrilho()" />
+      <app-chat-rail [attr.inert]="gavetaAberta() ? '' : null" [style.--z-trilho]="zTrilho()"
+                     [modo]="modoTrilho()" [largura]="larguraTrilho()" />
 
       <!-- Barra superior: ações do usuário no canto direito (padrão de app). -->
       <header class="topo" [attr.inert]="atrasInerte() ? '' : null">
@@ -157,7 +163,7 @@ import { AuthServico } from './auth.servico.js'
         <app-menu-usuario />
       </header>
 
-      <div class="conteudo" [attr.inert]="atrasInerte() ? '' : null">
+      <div class="conteudo" [attr.inert]="conteudoInerte() ? '' : null">
         <!-- ⚠️ Sessão de acesso do staff (PLT-05). Fica no topo do conteúdo, e não
              some: quem está dentro da casa de um cliente precisa LEMBRAR disso a
              cada tela — é o que evita confundir o dado dele com o nosso. -->
@@ -267,6 +273,9 @@ import { AuthServico } from './auth.servico.js'
     button.item { border: 0; background: none; font: inherit; font-size: 14px; width: calc(100% - 2 * var(--espacamento-1)); cursor: pointer; text-align: left; }
     .item:hover { background: var(--superficie-hover); color: var(--texto); }
     .item.ativo { color: var(--marca); background: var(--acao-suave); font-weight: 600; box-shadow: inset 3px 0 0 var(--acao); }
+    /* Conversas abre/recolhe o chat: com ele aberto só o ícone acende — não é a tela atual. */
+    .item.alternador[aria-pressed='true'] { color: var(--texto); }
+    .item.alternador[aria-pressed='true'] .icone { color: var(--acao); }
     .item:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: -2px; }
     .icone { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
     .rotulo { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -350,6 +359,22 @@ export class ShellComponente implements OnInit {
   readonly recolhidaEfetiva = computed(() => !this.celular() && this.recolhida())
   /** Topo e conteúdo ficam inert atrás da gaveta OU do trilho aberto em tela cheia. */
   readonly atrasInerte = computed(() => conteudoInerte(this.celular(), this.gavetaAberta(), this.inbox.railAberto()))
+  /**
+   * Largura da janela — só para decidir empurrar × gaveta do trilho. A casca é
+   * dona da janela; telas continuam por container query.
+   */
+  readonly larguraJanela = signal(typeof innerWidth === 'number' ? innerWidth : 1280)
+  /** Largura do trilho aberto: a da pessoa, limitada pela janela de agora. */
+  readonly larguraTrilho = computed(() => limitarLarguraTrilho(this.inbox.railLargura(), this.larguraJanela()))
+  readonly modoTrilho = computed<ModoTrilhoCasca>(() => this.celular()
+    ? 'tela-cheia'
+    : modoTrilho(this.larguraJanela(), this.recolhidaEfetiva() ? 56 : 250, this.larguraTrilho()))
+  /**
+   * O conteúdo também fica inert com o trilho em GAVETA no desktop (o topo não:
+   * a gaveta abre abaixo dele e sino, conta e tempo real continuam à vista).
+   */
+  readonly conteudoInerte = computed(() => conteudoInerte(
+    this.celular(), this.gavetaAberta(), this.inbox.railAberto(), this.modoTrilho() === 'gaveta'))
   readonly zTrilho = computed(() => camadaTrilho(this.inbox.railAberto()))
   readonly alertasExpandidos = signal(false)
   readonly faixaAlertas = computed(() => separarAlertas(this.alertas.abertos(), this.celular()))
@@ -363,10 +388,18 @@ export class ShellComponente implements OnInit {
   constructor() {
     // A janela cresceu para desktop: a gaveta deixa de existir e fica fechada.
     effect(() => { if (!this.celular()) untracked(() => this.mudarGaveta('virou-desktop')) })
-    // Navegar fecha a gaveta — a pessoa escolheu para onde ir.
+    // Navegar fecha a gaveta — a pessoa escolheu para onde ir. O trilho aberto
+    // como GAVETA também fecha (ex.: "Montar pedido" leva ao pedido, que fica à vista);
+    // empurrando, ele fica: é coluna, convive com a tela.
     this.router.events.pipe(filter((e) => e instanceof NavigationEnd), takeUntilDestroyed())
-      .subscribe(() => this.mudarGaveta('navegou'))
+      .subscribe(() => {
+        this.mudarGaveta('navegou')
+        if (this.inbox.railAberto() && this.modoTrilho() === 'gaveta') this.inbox.fecharRail()
+      })
   }
+
+  @HostListener('window:resize')
+  aoRedimensionar(): void { this.larguraJanela.set(innerWidth) }
 
   @HostListener('document:keydown.escape')
   aoEsc(): void {

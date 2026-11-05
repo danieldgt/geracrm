@@ -1,22 +1,28 @@
 import { Component, ChangeDetectionStrategy, inject, OnInit } from '@angular/core'
+import { TELA_EMBUTIDA } from '../../compartilhado/ui/embutida.js'
 import { CrmAvancadoServico, type CardCliente } from './crm-avancado.servico.js'
 import { CabecalhoTelaComponente, EstadoComponente } from '../../compartilhado/ui/index.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 
 /**
- * CRM Avançado — consolidação da base por nº de pedidos + RFV. Board de LEITURA
- * (sem drag: não se forja uma compra). Card mostra o segmento RFV e permite
- * Descartar/Reabrir e abrir a conversa. Segue geracrm-layout-ui.
+ * Por nº de pedidos — a base por frequência de compra (1º pedido, 2 pedidos, 3+,
+ * representantes) com o segmento RFV no card. Board de LEITURA (sem drag: não
+ * se forja uma compra); o card abre a conversa.
+ *
+ * ⚠️ Desde a reorganização de 2026-11-05 é a aba "Por nº de pedidos" da Base de
+ * clientes (`/base/pedidos`). As colunas Leads e Descartados saíram: são a
+ * QUALIFICAÇÃO, que mora no Funil (aba Qualificação) — com elas aqui havia dois
+ * lugares mudando a mesma coisa. Descartar/Reabrir seguem em Contatos e na ficha.
+ * Segue geracrm-layout-ui.
  */
 @Component({
   selector: 'app-crm-avancado',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { '[class.embutida]': 'embutida' },
   imports: [CabecalhoTelaComponente, EstadoComponente],
   template: `
-    <ui-cabecalho-tela titulo="CRM Avançado"
-      subtitulo="A base inteira por nº de pedidos e segmento RFV — quem esfria aparece de relance." />
-
-    @if (servico.erroAcao(); as e) { <p class="erro-move" role="alert">{{ e }}</p> }
+    <ui-cabecalho-tela titulo="Por nº de pedidos"
+      subtitulo="Clientes por quantas vezes compraram, com o segmento RFV — quem esfria aparece de relance." />
 
     @switch (servico.estado()) {
       @case ('carregando') { <div class="board"><div class="col-esq"></div><div class="col-esq"></div><div class="col-esq"></div></div> }
@@ -61,13 +67,6 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
                         @if (card.ultimaVendaEm) { <span>última {{ diasDe(card.ultimaVendaEm) }}</span> }
                       </span>
                     </button>
-                    <div class="card-acoes">
-                      @if (col.chave === 'descartados') {
-                        <button type="button" class="a-reabrir" (click)="reabrir(card)">Reabrir</button>
-                      } @else {
-                        <button type="button" class="a-descartar" (click)="descartar(card)">Descartar</button>
-                      }
-                    </div>
                   </article>
                 }
                 @if (col.cards.length === 0) { <p class="col-vazia">Vazio</p> }
@@ -99,17 +98,16 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
        O que sobra é a viewport menos a barra da casca. */
     :host { display: flex; flex-direction: column; height: calc(100dvh - var(--altura-barra-topo));
       padding: var(--espacamento-6); overflow: hidden; }
-    .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
+    /* Aba da Base: a tela com abas já ocupa o topo (título + abas); o board fica com o resto. */
+    :host.embutida { height: calc(100dvh - var(--altura-barra-topo) - var(--altura-cabecalho-abas, 132px)); padding-top: var(--espacamento-4); }
     .board { display: flex; gap: var(--espacamento-3); align-items: stretch; flex: 1; min-height: 0; overflow-x: auto; padding-bottom: var(--espacamento-2); }
     .col-esq { width: 300px; height: 200px; border-radius: var(--raio-painel); background: var(--superficie); flex: none; }
     .coluna { width: 300px; flex: none; display: flex; flex-direction: column; min-height: 0;
       background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio-painel); overflow: hidden; }
-    .coluna--leads { border-top: 2px solid var(--texto-suave); }
     .coluna--p1 { border-top: 2px solid var(--acao); }
     .coluna--p2 { border-top: 2px solid var(--acao); }
     .coluna--p3 { border-top: 2px solid var(--sucesso); }
     .coluna--representantes { border-top: 2px solid var(--atencao); }
-    .coluna--descartados { border-top: 2px solid var(--texto-suave); }
     .col-topo { display: flex; align-items: center; justify-content: space-between; padding: var(--espacamento-3) var(--espacamento-4); }
     .col-nome { color: var(--texto); }
     .col-total { font-size: 12px; color: var(--texto-suave); background: var(--fundo); padding: 1px 8px; border-radius: var(--raio-completo); font-variant-numeric: tabular-nums; }
@@ -130,11 +128,6 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
     .card-resp.orfa { color: var(--atencao); }
     .card-valor { font-size: 12px; color: var(--sucesso); font-variant-numeric: tabular-nums; }
     .sub2 { font-size: 11px; color: var(--texto-suave); }
-    .card-acoes { display: flex; gap: 4px; padding: 4px var(--espacamento-3) var(--espacamento-3); }
-    .card-acoes button { flex: 1; padding: 4px 6px; border: 1px solid var(--borda-controle); border-radius: var(--raio-controle);
-      background: var(--superficie); color: var(--texto-secundario); font: inherit; font-size: 11px; cursor: pointer; }
-    .a-descartar:hover { background: var(--erro-suave); color: var(--erro); border-color: var(--erro); }
-    .a-reabrir:hover { background: var(--acao-suave); color: var(--acao); border-color: var(--acao); }
     .col-vazia { margin: var(--espacamento-2) 0; color: var(--texto-suave); font-size: 12px; text-align: center; }
     .mais { margin: 0 var(--espacamento-3) var(--espacamento-3); padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
       border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; font-size: 12px; cursor: pointer; }
@@ -145,12 +138,11 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
 export class CrmAvancadoPagina implements OnInit {
   readonly servico = inject(CrmAvancadoServico)
   private readonly inbox = inject(InboxServico)
+  protected readonly embutida = inject(TELA_EMBUTIDA, { optional: true }) === true
 
   ngOnInit(): void { void this.servico.carregar() }
 
   abrir(card: CardCliente): void { if (card.conversaId) void this.inbox.abrir(card.conversaId) }
-  descartar(card: CardCliente): void { void this.servico.qualificar(card.contatoId, 'descartado') }
-  reabrir(card: CardCliente): void { void this.servico.qualificar(card.contatoId, 'novo') }
 
   cor(codigo: string): string { return `var(--rfv-${codigo})` }
   reais(centavos: number): string { return (centavos / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }

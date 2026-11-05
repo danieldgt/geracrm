@@ -40,3 +40,17 @@ export function mensagemDeErro(e: unknown, padrao: string): string {
 export function ehStatus(e: unknown, status: number): boolean {
   return e instanceof HttpErrorResponse && e.status === status
 }
+
+/**
+ * Erros por CAMPO de um 422 (`{ campos: { nome: '…' } }`), só dos campos que o formulário conhece
+ * — o resto vira a mensagem geral, mostrada inline no corpo do modal (nunca só em toast).
+ */
+export function errosDeCampos(
+  e: unknown, conhecidos: readonly string[], padrao: string,
+): { readonly campos: Readonly<Record<string, string>>; readonly geral: string | null } {
+  const corpo = corpoDoErro(e)
+  const campos: Record<string, string> = {}
+  for (const [k, v] of Object.entries(corpo?.campos ?? {})) if (conhecidos.includes(k) && typeof v === 'string') campos[k] = v
+  const temCampo = Object.keys(campos).length > 0
+  return { campos, geral: temCampo ? null : mensagemDeErro(e, padrao) }
+}

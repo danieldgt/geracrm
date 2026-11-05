@@ -3,15 +3,32 @@ import type { Aba } from '../../compartilhado/ui/index.js'
 
 /** Regras puras da tela de Tarefas e do modal (sem DOM, testadas à parte). */
 
-export type AbaTarefa = 'hoje' | 'atrasadas' | 'abertas' | 'concluidas'
-export type CartaoTarefa = 'pendentes' | 'atrasadas' | 'hoje' | 'semana'
+export type AbaTarefa = 'hoje' | 'atrasadas' | 'semana' | 'abertas' | 'concluidas'
 
 export const ABAS_TAREFA: readonly Aba[] = [
   { id: 'hoje', rotulo: 'Hoje' },
   { id: 'atrasadas', rotulo: 'Atrasadas' },
+  { id: 'semana', rotulo: 'Esta semana' },
   { id: 'abertas', rotulo: 'Abertas' },
   { id: 'concluidas', rotulo: 'Concluídas' },
 ]
+
+/** `GET /v1/tarefas/contadores` — `pendentes` são as abertas. */
+export interface ContadoresTarefa { readonly pendentes: number; readonly atrasadas: number; readonly hoje: number; readonly semana: number }
+
+/**
+ * As abas com a contagem no rótulo ("Atrasadas 3"). ⚠️ A contagem mora na aba, não
+ * em cartões acima dela: dois controles para o mesmo filtro confundem (revisão de
+ * 2026-11-05). Sem contadores (falha ou carregando), as abas ficam sem número.
+ */
+export function abasComContador(c: ContadoresTarefa | null): readonly Aba[] {
+  if (!c) return ABAS_TAREFA
+  const por: Partial<Record<string, number>> = { hoje: c.hoje, atrasadas: c.atrasadas, semana: c.semana, abertas: c.pendentes }
+  return ABAS_TAREFA.map((a) => {
+    const n = por[a.id]
+    return n === undefined ? a : { ...a, contador: n }
+  })
+}
 
 const ROTULO_TIPO: Readonly<Record<TipoTarefa, string>> = {
   ligacao: 'Ligação', whatsapp: 'WhatsApp', reuniao: 'Reunião', email: 'E-mail', visita: 'Visita', outro: 'Outro',
@@ -40,12 +57,7 @@ export function parametrosDaLista(f: FiltrosTarefa, cursor: string | null = null
   }
 }
 
-/** Cartão clicável → filtro: Pendentes = abertas; os demais têm aba/situação própria. */
-export function situacaoDoCartao(c: CartaoTarefa): string {
-  return c === 'pendentes' ? 'abertas' : c
-}
-
-/** A aba "ativa" que corresponde à situação (semana não tem aba: nenhuma fica marcada). */
+/** A aba "ativa" que corresponde à situação (situação sem aba: nenhuma fica marcada). */
 export function abaDaSituacao(situacao: string): string {
   return ABAS_TAREFA.some((a) => a.id === situacao) ? situacao : ''
 }

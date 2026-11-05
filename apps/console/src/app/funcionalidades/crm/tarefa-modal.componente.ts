@@ -4,7 +4,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import {
   CampoComponente, GradeFormComponente, ModalComponente, SelectComponente, SelectPaginadoComponente, ToastServico,
-  mensagemDeErro, queryDeLista, type CarregarOpcoes, type OpcaoPaginada, type OpcaoSelect,
+  mensagemDeErro, queryDeLista, type CarregarOpcoes, type OpcaoPaginada, type OpcaoSelect, focarPrimeiroInvalido,
 } from '../../compartilhado/ui/index.js'
 import { OPCOES_TIPO_TAREFA, errosDoServidor, payloadTarefa, validarTarefa, type ErrosTarefa } from './tarefas.regras.js'
 
@@ -128,7 +128,7 @@ export class TarefaModalComponente {
       // 422 with `campos`: show the message on the offending field; anything else is the general banner.
       const campos = e instanceof HttpErrorResponse && e.status === 422 ? (e.error as { campos?: string[] } | null)?.campos : undefined
       const porCampo = errosDoServidor(campos)
-      if (Object.keys(porCampo).length > 0) this.erros.set(porCampo)
+      if (Object.keys(porCampo).length > 0) { this.erros.set(porCampo); focarPrimeiroInvalido() }
       else this.erroGeral.set(mensagemDeErro(e, 'Não foi possível criar a tarefa.'))
     }
     finally { this.salvando.set(false) }

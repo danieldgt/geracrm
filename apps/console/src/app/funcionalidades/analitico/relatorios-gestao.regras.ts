@@ -13,6 +13,8 @@ export type DimensaoVendas = 'dia' | 'dia-semana' | 'produto' | 'cliente' | 'ori
 export interface ItemVendas {
   readonly chave: string; readonly rotulo: string; readonly pedidos: number
   readonly valorCentavos: number; readonly ticketMedioCentavos: number; readonly percentual: number
+  /** Unidades vendidas — a API manda só na dimensão `produto`. */
+  readonly quantidade?: number
 }
 export interface TotaisVendas { readonly pedidos: number; readonly valorCentavos: number; readonly ticketMedioCentavos: number }
 export interface RespostaVendas {
@@ -174,14 +176,29 @@ type Csv = { colunas: ColunaCsv[]; linhas: Record<string, unknown>[] }
 const reais = (centavos: number): number => centavos / 100
 const pct = (p: number | null): number | null => (p === null ? null : Math.round(p * 10_000) / 100)
 
+/** A coluna "Qtd." só existe quando a API mandou quantidade (dimensão produto). */
+export function temQuantidade(itens: readonly ItemVendas[]): boolean {
+  return itens.some((i) => i.quantidade !== undefined)
+}
+
+/** Quantidade em pt-BR: inteiro sem casas; fracionada (kg, m) com até 3 casas. */
+export function formatarQuantidade(q: number | undefined): string {
+  if (q === undefined || !Number.isFinite(q)) return '—'
+  return q.toLocaleString('pt-BR', { maximumFractionDigits: 3 })
+}
+
 export function csvVendas(itens: readonly ItemVendas[], rotuloGrupo: string): Csv {
+  const comQtd = temQuantidade(itens)
   return {
     colunas: [
-      { chave: 'rotulo', rotulo: rotuloGrupo }, { chave: 'pedidos', rotulo: 'Pedidos' }, { chave: 'valor', rotulo: 'Valor (R$)' },
+      { chave: 'rotulo', rotulo: rotuloGrupo },
+      ...(comQtd ? [{ chave: 'quantidade', rotulo: 'Quantidade' }] : []),
+      { chave: 'pedidos', rotulo: 'Pedidos' }, { chave: 'valor', rotulo: 'Valor (R$)' },
       { chave: 'ticket', rotulo: 'Ticket médio (R$)' }, { chave: 'percentual', rotulo: 'Participação (%)' },
     ],
     linhas: itens.map((i) => ({
-      rotulo: i.rotulo, pedidos: i.pedidos, valor: reais(i.valorCentavos), ticket: reais(i.ticketMedioCentavos), percentual: pct(i.percentual),
+      rotulo: i.rotulo, ...(comQtd ? { quantidade: i.quantidade ?? null } : {}),
+      pedidos: i.pedidos, valor: reais(i.valorCentavos), ticket: reais(i.ticketMedioCentavos), percentual: pct(i.percentual),
     })),
   }
 }

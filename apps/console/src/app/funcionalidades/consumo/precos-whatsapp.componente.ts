@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, effect, inject, input, output, signal, untracked } from '@angular/core'
 import { FormsModule } from '@angular/forms'
-import { CampoComponente, GradeFormComponente, ModalComponente, ToastServico } from '../../compartilhado/ui/index.js'
+import { CampoComponente, GradeFormComponente, ModalComponente, ToastServico, focarPrimeiroInvalido } from '../../compartilhado/ui/index.js'
 import { ConsumoServico } from './consumo.servico.js'
 import { rotuloCategoria } from './consumo.regras.js'
 
@@ -40,7 +40,7 @@ const CATEGORIAS = ['marketing', 'utility', 'authentication', 'service'] as cons
         @if (erroGeral()) { <p class="erro" role="alert">{{ erroGeral() }}</p> }
       </form>
       <div rodape>
-        <button type="button" class="btn btn--secundario" (click)="fechar.emit()">Voltar</button>
+        <button type="button" class="btn btn--secundario" (click)="fechar.emit()">Cancelar</button>
         <button type="submit" form="form-precos" class="btn btn--primario" [disabled]="salvando() || carregando()">
           {{ salvando() ? 'Salvando…' : 'Salvar preços' }}
         </button>
@@ -109,7 +109,7 @@ export class PrecosWhatsappComponente {
     for (const c of CATEGORIAS) precos[c] = p[c] as number
     const r = await this.servico.salvarPrecos(precos, (cambio as number) * 10)
     this.salvando.set(false)
-    if (r) { this.erros.set(r.campos); this.erroGeral.set(r.geral); return }
+    if (r) { this.erros.set(r.campos); this.erroGeral.set(r.geral); focarPrimeiroInvalido(); return }
     this.toast.sucesso('Preços atualizados')
     this.salvo.emit()
     this.fechar.emit()

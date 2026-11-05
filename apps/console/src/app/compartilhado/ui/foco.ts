@@ -39,3 +39,18 @@ export function prenderTab(raiz: HTMLElement, tecla: { key: string; shiftKey: bo
 export function devolverFoco(anterior: Element | null): void {
   if (anterior instanceof HTMLElement && anterior.isConnected) anterior.focus()
 }
+
+/**
+ * Leva o foco ao PRIMEIRO campo com erro (`aria-invalid="true"`) dentro do contêiner — o que a
+ * regra de formulário pede depois de um 422. Espera o próximo quadro, para o `[erro]` já ter
+ * virado atributo no DOM. Sem campo inválido, não mexe no foco.
+ */
+export function focarPrimeiroInvalido(raiz: ParentNode | null = typeof document === 'undefined' ? null : document): void {
+  if (!raiz) return
+  const agendar = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: () => void) => setTimeout(f, 0)
+  agendar(() => {
+    const dialogo = (raiz as Element).querySelector?.('[role="dialog"]') ?? null
+    const alvo = (dialogo ?? raiz).querySelector?.<HTMLElement>('[aria-invalid="true"]')
+    alvo?.focus()
+  })
+}

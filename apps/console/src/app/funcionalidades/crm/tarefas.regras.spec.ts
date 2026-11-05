@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   FILTROS_VAZIOS, abaDaSituacao, errosDoServidor, parametrosDaLista, payloadConcluir, payloadTarefa, rotuloTipoTarefa,
-  situacaoDoCartao, temFiltroAtivo, validarTarefa, venceEmIso, type FormTarefa,
+  abasComContador, temFiltroAtivo, validarTarefa, venceEmIso, type FormTarefa,
 } from './tarefas.regras.js'
 
 const form: FormTarefa = {
@@ -17,15 +17,19 @@ describe('parametrosDaLista', () => {
   })
 })
 
-describe('cartões e abas', () => {
-  it('Pendentes filtra abertas; os outros mantêm o nome', () => {
-    expect(situacaoDoCartao('pendentes')).toBe('abertas')
-    expect(situacaoDoCartao('atrasadas')).toBe('atrasadas')
-    expect(situacaoDoCartao('semana')).toBe('semana')
+describe('abas', () => {
+  it('a contagem vai no rótulo da aba; Abertas usa os pendentes e Concluídas fica sem número', () => {
+    const abas = abasComContador({ pendentes: 5, atrasadas: 2, hoje: 1, semana: 3 })
+    expect(abas.map((a) => [a.id, a.contador])).toEqual([
+      ['hoje', 1], ['atrasadas', 2], ['semana', 3], ['abertas', 5], ['concluidas', undefined],
+    ])
   })
-  it('semana não tem aba', () => {
-    expect(abaDaSituacao('hoje')).toBe('hoje')
-    expect(abaDaSituacao('semana')).toBe('')
+  it('sem contadores, as abas ficam sem número', () => {
+    expect(abasComContador(null).every((a) => a.contador === undefined)).toBe(true)
+  })
+  it('Esta semana tem aba; situação desconhecida não marca nenhuma', () => {
+    expect(abaDaSituacao('semana')).toBe('semana')
+    expect(abaDaSituacao('xyz')).toBe('')
   })
   it('temFiltroAtivo ignora a aba e o contato fixo', () => {
     expect(temFiltroAtivo({ ...FILTROS_VAZIOS, contatoId: 'x' })).toBe(false)

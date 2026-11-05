@@ -29,14 +29,14 @@ function telasRegistradas(): readonly string[] {
   const caminho = resolve(dirname(fileURLToPath(import.meta.url)), 'rotas.ts')
   const texto = readFileSync(caminho, 'utf8')
   const bloco = texto.slice(texto.indexOf('TELAS_REAIS'), texto.indexOf('export const ROTAS'))
-  return [...bloco.matchAll(/^\s{2}'?([a-z0-9-]+)'?:/gm)].map((m) => m[1]!)
+  return [...bloco.matchAll(/^\s{2}'?([a-z0-9/-]+)'?:/gm)].map((m) => m[1]!)
 }
 const TELAS = telasRegistradas()
 
 describe('⚠️ Tela real não pode ficar escondida atrás do placeholder', () => {
   it('todo item com tela registrada está marcado como pronto', () => {
     const escondidas = TELAS
-      .map((rota) => itens.find((i) => i.rota === rota))
+      .map((rota) => itens.find((i) => i.rota === rota.split('/')[0]))
       .filter((i) => i && i.status !== 'pronto')
       .map((i) => `${i!.rota} (${i!.rotulo}) está como '${i!.status}'`)
 
@@ -49,11 +49,20 @@ describe('⚠️ Tela real não pode ficar escondida atrás do placeholder', () 
     ).toEqual([])
   })
 
-  it('todo item marcado pronto tem tela registrada (ou é rail)', () => {
+  it('todo item marcado pronto tem tela registrada (ou é rail) — e cada aba também', () => {
     const prometidas = itens
-      .filter((i) => i.status === 'pronto' && i.acao !== 'rail' && !TELAS.includes(i.rota))
-      .map((i) => `${i.rota} (${i.rotulo})`)
+      .filter((i) => i.status === 'pronto' && i.acao !== 'rail')
+      .flatMap((i) => (i.abas?.length ? i.abas.map((a) => `${i.rota}/${a.rota}`) : [i.rota]))
+      .filter((rota) => !TELAS.includes(rota))
     expect(prometidas, 'Marcadas como prontas, mas sem tela — caem no placebo:\n' + prometidas.join('\n'))
       .toEqual([])
+  })
+})
+
+describe('telas registradas sem entrada no menu', () => {
+  it('toda chave de TELAS_REAIS corresponde a um item (ou aba) do menu', () => {
+    const doMenu = new Set(itens.flatMap((i) => (i.abas?.length ? i.abas.map((a) => `${i.rota}/${a.rota}`) : [i.rota])))
+    const orfas = TELAS.filter((t) => !doMenu.has(t))
+    expect(orfas, 'Tela registrada que nenhum item do menu abre — vira rota morta:\n' + orfas.join('\n')).toEqual([])
   })
 })

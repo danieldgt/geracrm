@@ -80,7 +80,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
             <div uiVazio>
               <ui-estado titulo="Ninguém bloqueado"
                 descricao="Quando um cliente pedir para não receber, bloqueie aqui — ou o webhook de opt-out cuida sozinho.">
-                <button type="button" class="btn btn--primario" (click)="bloqueando.set(true)">Bloquear número</button>
+                <button type="button" class="btn btn--secundario" (click)="bloqueando.set(true)">Bloquear número</button>
               </ui-estado>
             </div>
           </ui-tabela>
@@ -113,6 +113,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
           <ui-campo class="largo" rotulo="Evidência do consentimento do titular" tipo="textarea" [obrigatorio]="true"
             dica="Onde, quando e protocolo. Fica auditado." [(valor)]="evidencia" />
         </ui-grade-form>
+        @if (erroConsentimento(); as e) { <p class="erro-envio" role="alert">{{ e }}</p> }
       </form>
       <div rodape>
         <button type="button" class="btn btn--secundario" (click)="fecharConsentimento()">Cancelar</button>
@@ -217,7 +218,10 @@ export class BloqueiosPagina implements OnInit {
 
   evidenciaOk(): boolean { return evidenciaValida(this.evidencia()) }
 
-  abrirConsentimento(chave: string): void { this.evidencia.set(''); this.consentindo.set(chave) }
+  /** Falha ao registrar fica NO modal (o que foi digitado continua lá), nunca só num toast. */
+  readonly erroConsentimento = signal<string | null>(null)
+
+  abrirConsentimento(chave: string): void { this.evidencia.set(''); this.erroConsentimento.set(null); this.consentindo.set(chave) }
 
   fecharConsentimento(): void { if (!this.registrando()) this.consentindo.set(null) }
 
@@ -226,13 +230,14 @@ export class BloqueiosPagina implements OnInit {
     const chave = this.consentindo()
     if (!chave || this.registrando() || !this.evidenciaOk()) return
     this.registrando.set(true)
+    this.erroConsentimento.set(null)
     try {
       await firstValueFrom(this.http.post(`/v1/bloqueios/${chave}/novo-consentimento`, { origem: 'titular', evidencia: this.evidencia().trim() }))
       this.itens.update((a) => a.filter((b) => b.chave !== chave))
       this.consentindo.set(null)
       this.toast.sucesso('Consentimento registrado; o número foi liberado.')
     } catch (e) {
-      this.toast.erro(mensagemDeErro(e, 'Não foi possível registrar o consentimento.'))
+      this.erroConsentimento.set(mensagemDeErro(e, 'Não foi possível registrar o consentimento.'))
     } finally { this.registrando.set(false) }
   }
 

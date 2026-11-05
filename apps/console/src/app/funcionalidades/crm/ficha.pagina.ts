@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, computed, inject, input, effect, signal } from '@angular/core'
+import { Component, ChangeDetectionStrategy, computed, inject, input, effect, signal, viewChild } from '@angular/core'
 import { DatePipe } from '@angular/common'
 import { Router, RouterLink } from '@angular/router'
 import { rotuloSegmento } from '@geracrm/shared'
@@ -12,7 +12,7 @@ import { diaIso } from '../agenda/agenda.regras.js'
 import {
   AbasComponente, BadgeComponente, BotaoComponente, BreadcrumbComponente, CabecalhoTelaComponente, ConfirmacaoServico,
   EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, PainelComponente, ToastServico, mensagemDeErro,
-  type ItemTrilha,
+  type ItemTrilha, ModalComponente, GradeFormComponente, CampoComponente, SelectComponente
 } from '../../compartilhado/ui/index.js'
 import { AnonimizarContatoComponente } from './anonimizar-contato.componente.js'
 import { AvisosPrivacidadeComponente } from './avisos-privacidade.componente.js'
@@ -23,15 +23,16 @@ import { FichaPerfilCompraComponente } from './ficha-perfil-compra.componente.js
 import { FichaArquivosComponente } from './ficha-arquivos.componente.js'
 import { FichaPedidosComponente } from './ficha-pedidos.componente.js'
 import { FichaTarefasComponente } from './ficha-tarefas.componente.js'
-import { FichaWhatsappComponente } from './ficha-whatsapp.componente.js'
+import { MenuMaisComponente } from '../atendimento/menu-mais.componente.js'
+import type { ItemMenuMais } from '../atendimento/menu-mais.regras.js'
 import {
-  ABAS_FICHA, acoesVisiveis, camposDeCadastro, camposDeInformacao, estadoDaAcao, selosDaFicha, type IdAcao,
+  ABAS_FICHA, acoesVisiveis, camposDeCadastro, camposDeInformacao, estadoDaAcao, selosDaFicha, separarAcoesFicha, type IdAcao,
 } from './ficha.regras.js'
 
 /**
  * Ficha do Contato — detalhe no padrão "2 + 1" (coluna larga + lateral de 320 px; 1 coluna em
  * contêiner < 900 px). O cabeçalho traz selos e ações; a coluna larga traz Perfil de compra e as
- * abas (Feed, Dados, Pedidos, Tarefas, WhatsApp, Agenda); a lateral traz Informações, Etiquetas,
+ * abas (Feed, Dados, Pedidos, Tarefas, Agenda — a conversa abre no chat, pelo "Conversar"); a lateral traz Informações, Etiquetas,
  * Arquivos, Contato e Avisos de privacidade.
  *
  * ⚠️ Cada bloco tem estado próprio (componente próprio): um bloco que falha mostra o erro dele e o
@@ -40,11 +41,11 @@ import {
 @Component({
   selector: 'app-ficha-contato',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
+  imports: [SelectComponente, CampoComponente, GradeFormComponente, ModalComponente, 
     RouterLink, DatePipe, AnonimizarContatoComponente, AbasComponente, BadgeComponente, BotaoComponente, BreadcrumbComponente, CabecalhoTelaComponente,
     EsqueletoComponente, EstadoComponente, ListaDefinicaoComponente, PainelComponente,
     AvisosPrivacidadeComponente, EtiquetasContatoComponente, TarefaModalComponente, FichaFeedComponente,
-    FichaPerfilCompraComponente, FichaArquivosComponente, FichaPedidosComponente, FichaTarefasComponente, FichaWhatsappComponente,
+    FichaPerfilCompraComponente, FichaArquivosComponente, FichaPedidosComponente, FichaTarefasComponente, MenuMaisComponente,
     AgendaContatoComponente, AgendaEventoModalComponente,
   ],
   template: `
@@ -92,24 +93,24 @@ import {
                     }
                   }
                 </div>
+                <!-- Uma ação cheia (Conversar), duas à vista e o resto no "⋯"
+                     (separarAcoesFicha). Antes: 9 botões, 3 cheios em cores diferentes. -->
                 <div class="acoes">
-                  @for (a of acoes(); track a.id) {
+                  @for (a of acoesSeparadas().aVista; track a.id) {
                     @switch (a.id) {
-                      @case ('editar') { <a class="btn btn--secundario" [routerLink]="['/contato', f.id, 'editar']" [attr.title]="a.dica">{{ a.rotulo }}</a> }
-                      @case ('novo-pedido') { <a class="btn btn--secundario" routerLink="/pedido" [queryParams]="{ contato: f.id }" [attr.title]="a.dica">{{ a.rotulo }}</a> }
                       @case ('conversar') {
                         <ui-botao variante="primario" [carregando]="abrindoConversa()" [desabilitado]="a.desabilitada" (click)="agir(f, a.id)">{{ a.rotulo }}</ui-botao>
                       }
-                      @case ('descartar') {
-                        <ui-botao variante="perigo" [carregando]="qualificando() === a.id" [desabilitado]="a.desabilitada" (click)="agir(f, a.id)">{{ a.rotulo }}</ui-botao>
-                      }
-                      @default {
-                        <ui-botao variante="secundario" [carregando]="qualificando() === a.id" [desabilitado]="a.desabilitada" (click)="agir(f, a.id)">{{ a.rotulo }}</ui-botao>
-                      }
+                      @case ('editar') { <a class="btn btn--secundario" [routerLink]="['/contato', f.id, 'editar']" [attr.title]="a.dica">{{ a.rotulo }}</a> }
+                      @case ('novo-pedido') { <a class="btn btn--secundario" routerLink="/pedido" [queryParams]="{ contato: f.id }" [attr.title]="a.dica">{{ a.rotulo }}</a> }
                     }
                   }
-                  <app-anonimizar-contato [contatoId]="f.id" (anonimizou)="recarregar()" />
+                  <app-menu-mais [itens]="itensMenu()" rotulo="Mais ações do contato" (escolher)="aoMenu(f, $event)" />
+                  @if (qualificando()) { <span class="txt-denso trabalhando" role="status">Atualizando a qualificação…</span> }
                 </div>
+                <!-- Só a lógica do "Anonimizar (LGPD)" (papel admin + confirmação digitada);
+                     o gatilho é o item do "⋯", por último. -->
+                <div hidden><app-anonimizar-contato [contatoId]="f.id" (anonimizou)="recarregar()" /></div>
                 @if (dicaDesabilitada(); as d) { <p class="txt-denso dica">{{ d }}</p> }
                 @if (erroAcao(); as e) { <p class="txt-denso erro" role="alert">{{ e }}</p> }
                 @if (modulos.agendaAtiva()) {
@@ -181,7 +182,6 @@ import {
                     }
                     @case ('pedidos') { <app-ficha-pedidos [contatoId]="f.id" /> }
                     @case ('tarefas') { <app-ficha-tarefas [contatoId]="f.id" [versao]="tarefasVersao()" (nova)="novaTarefa.set(true)" /> }
-                    @case ('whatsapp') { <app-ficha-whatsapp [contatoId]="f.id" (abrir)="abrirConversa(f)" /> }
                     @case ('agenda') {
                       @if (modulos.agendaAtiva()) {
                         <app-agenda-contato [contatoId]="f.id" [contatoNome]="f.nome" />
@@ -224,10 +224,8 @@ import {
                     }
                   </ul>
                 } @else { <p class="txt-corpo suave">Sem telefone cadastrado.</p> }
-                <form class="add-linha" (submit)="salvarTelefone($event)">
-                  <input [value]="novoTel()" (input)="novoTel.set($any($event.target).value)" placeholder="Novo telefone" inputmode="tel" aria-label="Novo telefone" />
-                  <button class="btn btn--secundario btn--pequeno" type="submit" [disabled]="!novoTel().trim()">+ telefone</button>
-                </form>
+                <!-- Cadastro curto abre modal (padrão A), com rótulo visível e máscara — não mais campo solto no painel. -->
+                <button type="button" class="btn btn--secundario btn--pequeno add" (click)="abrirAdicionar('telefone')">+ Telefone</button>
 
                 <h3 class="txt-rotulo sub">Documentos</h3>
                 @if (f.documentos.length) {
@@ -241,20 +239,39 @@ import {
                     <p class="txt-denso alerta">{{ f.totalDocumentos }} documentos neste contato, provável fusão de cadastros por telefone repetido.</p>
                   }
                 } @else { <p class="txt-corpo suave">Sem documento.</p> }
-                <form class="add-linha" (submit)="salvarDocumento($event)">
-                  <select [value]="novoDocTipo()" (change)="novoDocTipo.set($any($event.target).value)" aria-label="Tipo do documento">
-                    <option value="cnpj">CNPJ</option><option value="cpf">CPF</option>
-                  </select>
-                  <input [value]="novoDoc()" (input)="novoDoc.set($any($event.target).value)" placeholder="Número" inputmode="numeric" aria-label="Número do documento" />
-                  <button class="btn btn--secundario btn--pequeno" type="submit" [disabled]="!novoDoc().trim()">+ documento</button>
-                </form>
-                @if (servico.erroEdicao(); as e) { <p class="txt-denso erro" role="alert">{{ e }}</p> }
+                <button type="button" class="btn btn--secundario btn--pequeno add" (click)="abrirAdicionar('documento')">+ Documento</button>
+                @if (!adicionando()) { @if (servico.erroEdicao(); as e) { <p class="txt-denso erro" role="alert">{{ e }}</p> } }
               </ui-painel>
 
               <!-- Prova LGPD (P4): quando e com que texto o aviso foi exibido. Estado próprio; sem permissão, some. -->
               <app-avisos-privacidade [contatoId]="f.id" />
             </aside>
           </div>
+
+          <ui-modal [aberto]="adicionando() !== null" largura="p"
+                    [titulo]="adicionando() === 'telefone' ? 'Adicionar telefone' : 'Adicionar documento'" (fechar)="fecharAdicionar()">
+            <form id="form-add-contato" (submit)="salvarAdicionar($event)" novalidate>
+              <ui-grade-form>
+                @if (adicionando() === 'telefone') {
+                  <ui-campo [largo]="true" rotulo="Telefone" mascara="telefone" placeholder="(81) 99999-0000" [obrigatorio]="true"
+                            dica="Com DDD." [valor]="novoTel()" (valorChange)="novoTel.set($event)" />
+                } @else {
+                  <ui-select rotulo="Tipo" [opcoes]="opcoesDoc" [valor]="novoDocTipo()" [obrigatorio]="true"
+                             (valorChange)="novoDocTipo.set($event === 'cpf' ? 'cpf' : 'cnpj')" />
+                  <ui-campo rotulo="Número" [mascara]="novoDocTipo()" [obrigatorio]="true"
+                            [valor]="novoDoc()" (valorChange)="novoDoc.set($event)" />
+                }
+              </ui-grade-form>
+              @if (servico.erroEdicao(); as e) { <p class="txt-denso erro" role="alert">{{ e }}</p> }
+            </form>
+            <div rodape>
+              <button type="button" class="btn btn--secundario" (click)="fecharAdicionar()">Cancelar</button>
+              <button type="submit" form="form-add-contato" class="btn btn--primario"
+                      [disabled]="adicionandoSalvando() || !(adicionando() === 'telefone' ? novoTel() : novoDoc()).trim()">
+                {{ adicionandoSalvando() ? 'Adicionando…' : (adicionando() === 'telefone' ? 'Adicionar telefone' : 'Adicionar documento') }}
+              </button>
+            </div>
+          </ui-modal>
 
           <app-tarefa-modal [aberto]="novaTarefa()" [contatoId]="f.id" [contatoNome]="f.nome"
             (fechar)="novaTarefa.set(false)" (criada)="aoCriarTarefa()" />
@@ -273,7 +290,8 @@ import {
     .selos { display: flex; flex-wrap: wrap; align-items: center; gap: var(--espacamento-2); margin-bottom: var(--espacamento-3); }
     .selo-rfv { font-size: 11px; font-weight: 600; line-height: 1; padding: 3px 8px; border-radius: var(--raio-completo);
       border: 1px solid var(--c); color: var(--c); white-space: nowrap; }
-    .acoes { display: flex; flex-wrap: wrap; gap: var(--espacamento-2); }
+    .acoes { display: flex; flex-wrap: wrap; align-items: center; gap: var(--espacamento-2); }
+    .trabalhando { color: var(--texto-secundario); }
     .acoes a.btn { text-decoration: none; display: inline-flex; align-items: center; min-height: var(--densidade-alvo-clique-console); }
     .dica { color: var(--texto-secundario); margin: var(--espacamento-2) 0 0; }
     .erro { color: var(--erro); margin: var(--espacamento-2) 0 0; }
@@ -288,10 +306,7 @@ import {
     .x { border: 0; background: transparent; color: var(--texto-suave); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
     .x:hover { color: var(--erro); }
     .x:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-    .add-linha { display: flex; gap: var(--espacamento-2); margin-top: var(--espacamento-2); }
-    .add-linha input, .add-linha select { flex: 1; min-width: 0; padding: var(--espacamento-2); border: 1px solid var(--borda-controle);
-      border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
-    .add-linha select { flex: 0 0 auto; }
+    .add { margin-top: var(--espacamento-2); }
     .linhas { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--espacamento-2); }
     .linhas li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--espacamento-2); font-size: 13px; color: var(--texto); }
     .linhas li.cancelada { color: var(--texto-suave); text-decoration: line-through; }
@@ -336,7 +351,27 @@ export class FichaContatoPagina {
   ])
   readonly selos = computed(() => { const f = this.servico.ficha(); return f ? selosDaFicha(f) : [] })
   readonly acoes = computed(() => { const f = this.servico.ficha(); return f ? acoesVisiveis(f, this.modulos.agendaAtiva()) : [] })
-  readonly dicaDesabilitada = computed(() => this.acoes().find((a) => a.desabilitada)?.dica ?? null)
+  readonly acoesSeparadas = computed(() => separarAcoesFicha(this.acoes()))
+  /** Dica só das ações À VISTA (ex.: Conversar sem telefone); a do "⋯" vai no title do item. */
+  readonly dicaDesabilitada = computed(() => this.acoesSeparadas().aVista.find((a) => a.desabilitada)?.dica ?? null)
+  private readonly anonimizar = viewChild(AnonimizarContatoComponente)
+  /** O "⋯": Nova tarefa, Agendar, Qualificar, Descartar e (admin) Anonimizar — destrutivos por último. */
+  readonly itensMenu = computed<readonly ItemMenuMais[]>(() => {
+    const itens: ItemMenuMais[] = this.acoesSeparadas().noMenu.map((a) => ({
+      id: a.id, rotulo: a.rotulo, dica: a.dica, desabilitado: a.desabilitada || this.qualificando() !== null,
+      perigo: a.id === 'descartar',
+    }))
+    if (this.anonimizar()?.admin()) {
+      itens.push({ id: 'anonimizar', rotulo: 'Anonimizar (LGPD)', perigo: true,
+        dica: 'Apaga os dados pessoais deste contato (LGPD). Não tem volta.', desabilitado: this.anonimizar()?.trabalhando() === true })
+    }
+    return itens
+  })
+
+  aoMenu(f: FichaContato, id: string): void {
+    if (id === 'anonimizar') { void this.anonimizar()?.anonimizar(); return }
+    void this.agir(f, id as IdAcao)
+  }
   readonly cadastro = computed(() => { const f = this.servico.ficha(); return f ? camposDeCadastro(f) : [] })
   readonly informacoes = computed(() => { const f = this.servico.ficha(); return f ? camposDeInformacao(f) : [] })
 
@@ -344,6 +379,10 @@ export class FichaContatoPagina {
   readonly novoTel = signal('')
   readonly novoDoc = signal('')
   readonly novoDocTipo = signal<'cnpj' | 'cpf'>('cnpj')
+  /** Modal de adicionar telefone ou documento (cadastro curto, padrão A). */
+  readonly adicionando = signal<'telefone' | 'documento' | null>(null)
+  readonly adicionandoSalvando = signal(false)
+  readonly opcoesDoc = [{ valor: 'cnpj', rotulo: 'CNPJ' }, { valor: 'cpf', rotulo: 'CPF' }]
 
   constructor() {
     // ⚠️ `id` vem da rota. effect recarrega ao mudar: navegar de um contato para outro troca o dado
@@ -436,15 +475,25 @@ export class FichaContatoPagina {
     if (await this.servico.removerDocumento(d.seq)) this.toast.sucesso('Documento removido')
   }
 
-  async salvarTelefone(ev: Event): Promise<void> {
-    ev.preventDefault()
-    const t = this.novoTel().trim()
-    if (t && await this.servico.addTelefone(t)) this.novoTel.set('')
+  abrirAdicionar(tipo: 'telefone' | 'documento'): void {
+    this.novoTel.set(''); this.novoDoc.set(''); this.novoDocTipo.set('cnpj')
+    this.servico.erroEdicao.set(null)
+    this.adicionando.set(tipo)
   }
-  async salvarDocumento(ev: Event): Promise<void> {
+  fecharAdicionar(): void { if (!this.adicionandoSalvando()) this.adicionando.set(null) }
+  /** Erro fica NO modal (o número digitado continua); sucesso fecha e a ficha recarrega. */
+  async salvarAdicionar(ev: Event): Promise<void> {
     ev.preventDefault()
-    const d = this.novoDoc().trim()
-    if (d && await this.servico.addDocumento(this.novoDocTipo(), d)) this.novoDoc.set('')
+    const tipo = this.adicionando()
+    const valor = (tipo === 'telefone' ? this.novoTel() : this.novoDoc()).trim()
+    if (!tipo || !valor || this.adicionandoSalvando()) return
+    this.adicionandoSalvando.set(true)
+    try {
+      const ok = tipo === 'telefone'
+        ? await this.servico.addTelefone(valor)
+        : await this.servico.addDocumento(this.novoDocTipo(), valor)
+      if (ok) this.adicionando.set(null)
+    } finally { this.adicionandoSalvando.set(false) }
   }
 
   rotuloSeg(codigo: string): string { return rotuloSegmento(codigo) }

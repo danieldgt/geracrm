@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  ABAS_FICHA, ORDEM_SELOS, acoesVisiveis, camposDeInformacao, estadoDaAcao, formatarTamanho, itemParaExibicao,
+  ABAS_FICHA, ORDEM_SELOS, acoesVisiveis, separarAcoesFicha, camposDeInformacao, estadoDaAcao, formatarTamanho, itemParaExibicao,
   linhasPerfilDeCompra, mesclarFeed, selosDaFicha, validarArquivo, type DadosFicha, type ItemFeed,
 } from './ficha.regras.js'
 
@@ -49,6 +49,11 @@ describe('acoesVisiveis', () => {
     expect(a.find((x) => x.id === 'conversar')!.dica).toContain('telefone')
     expect(a.find((x) => x.id === 'agendar')).toMatchObject({ desabilitada: true, dica: 'Disponível com o módulo Agenda.' })
     expect(acoesVisiveis(base, true).find((x) => x.id === 'agendar')!.desabilitada).toBe(false)
+  })
+  it('à vista: Conversar, Editar e Novo pedido; o resto vai para o "⋯"', () => {
+    const { aVista, noMenu } = separarAcoesFicha(acoesVisiveis(base))
+    expect(aVista.map((a) => a.id)).toEqual(['conversar', 'editar', 'novo-pedido'])
+    expect(noMenu.map((a) => a.id)).toEqual(['nova-tarefa', 'agendar', 'qualificar', 'descartar'])
   })
   it('a ação vira o estado que a API entende', () => {
     expect(estadoDaAcao('qualificar')).toBe('qualificado')
@@ -117,7 +122,7 @@ describe('arquivos', () => {
 })
 
 describe('abas', () => {
-  it('na ordem do plano: Feed, Dados, Pedidos, Tarefas, WhatsApp, Agenda', () => {
-    expect(ABAS_FICHA.map((a) => a.rotulo)).toEqual(['Feed', 'Dados', 'Pedidos', 'Tarefas', 'WhatsApp', 'Agenda'])
+  it('Feed, Dados, Pedidos, Tarefas, Agenda — sem a aba WhatsApp (o "Conversar" abre o chat)', () => {
+    expect(ABAS_FICHA.map((a) => a.rotulo)).toEqual(['Feed', 'Dados', 'Pedidos', 'Tarefas', 'Agenda'])
   })
 })

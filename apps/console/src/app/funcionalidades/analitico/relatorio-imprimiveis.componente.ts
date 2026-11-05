@@ -29,7 +29,7 @@ import { formatarDuracaoSeg, formatarPercentual, ROTULO_AUTOR, rotuloDoDia } fro
       <div class="nao-imprimir barra">
         <div class="secoes" role="group" aria-label="Quadros do relatório impresso">
           @for (s of secoesTodas; track s) {
-            <button type="button" class="btn btn--pequeno" [class.btn--primario]="ativas().includes(s)" [class.btn--secundario]="!ativas().includes(s)"
+            <button type="button" class="btn btn--pequeno btn--secundario"
                     [attr.aria-pressed]="ativas().includes(s)" (click)="alternar(s)">{{ rotulo(s) }}</button>
           }
         </div>
@@ -84,6 +84,8 @@ import { formatarDuracaoSeg, formatarPercentual, ROTULO_AUTOR, rotuloDoDia } fro
     h1, h2 { margin: 0 0 var(--espacamento-3); color: var(--texto); }
     .barra { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--espacamento-3); }
     .secoes { display: flex; flex-wrap: wrap; gap: var(--espacamento-1); }
+    /* Quadro marcado = selecionado (tinta suave), não botão cheio: o único cheio da barra é Imprimir. */
+    .secoes .btn[aria-pressed='true'] { background: var(--acao-suave); color: var(--acao); border-color: var(--acao); }
     .folha { display: grid; gap: var(--espacamento-4); }
     .cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--espacamento-3); margin-bottom: var(--espacamento-3); }
     .nota { color: var(--texto-secundario); margin: 0 0 var(--espacamento-2); }

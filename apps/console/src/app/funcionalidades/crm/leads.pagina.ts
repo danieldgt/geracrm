@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, OnInit } from '@angular/core'
+import { Component, ChangeDetectionStrategy, inject, input, OnInit } from '@angular/core'
 import { CdkDropListGroup, CdkDropList, CdkDrag, type CdkDragDrop, transferArrayItem } from '@angular/cdk/drag-drop'
 import { LeadsServico, type CardLead, type ChaveLead, type ColunaLead } from './leads.servico.js'
 import { formatarTelefoneBR } from '@geracrm/shared'
@@ -7,17 +7,26 @@ import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { CabecalhoTelaComponente, EstadoComponente, IconeComponente } from '../../compartilhado/ui/index.js'
 
 /**
- * CRM (Leads) — kanban de qualificação do lead novo (eixo negociação/aquisição).
- * Três colunas: Leads / Qualificados / Descartados. Arrastar entre colunas (ou
- * os botões rápidos) muda a qualificação; clicar no card abre a conversa.
+ * Qualificação — kanban do lead novo (eixo negociação/aquisição). Três colunas:
+ * Leads / Qualificados / Descartados. Arrastar entre colunas (ou os botões
+ * rápidos) muda a qualificação; clicar no card abre a conversa.
+ *
+ * ⚠️ Não é mais rota própria: desde a reorganização de 2026-11-05 vive como a
+ * aba "Qualificação" do Funil (`/funil?aba=qualificacao`; `/crm` redireciona).
+ * `embutido` tira o cabeçalho e a altura de tela — o Funil já tem os dois.
+ * O nome do arquivo segue `.pagina.ts` de propósito: os guardas de kanban
+ * (altura-de-tela, cards-nao-esmagam) varrem esse sufixo.
  * Segue geracrm-layout-ui: tokens, 5 estados, sem sobreposição.
  */
 @Component({
   selector: 'app-leads',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { '[class.embutido]': 'embutido()' },
   imports: [CdkDropListGroup, CdkDropList, CdkDrag, CabecalhoTelaComponente, EstadoComponente, IconeComponente],
   template: `
-    <ui-cabecalho-tela titulo="CRM — Leads" subtitulo="Qualifique quem vale o esforço. Arraste o card ou use os botões." />
+    @if (!embutido()) {
+      <ui-cabecalho-tela titulo="Qualificação" subtitulo="Qualifique quem vale o esforço. Arraste o card ou use os botões." />
+    }
 
     @if (servico.erroMove(); as e) { <p class="erro-move" role="alert">{{ e }}</p> }
 
@@ -197,11 +206,15 @@ import { CabecalhoTelaComponente, EstadoComponente, IconeComponente } from '../.
     button { cursor: pointer; }
     .cdk-drag-preview { box-shadow: var(--elevacao-modal); border-radius: var(--raio-controle); }
     .cdk-drag-placeholder { opacity: .4; }
+    /* Embutido no Funil: o host do Funil já tem altura definida e padding; aqui só ocupa o resto. */
+    :host.embutido { height: auto; flex: 1; min-height: 0; padding: 0; }
     .cdk-drop-list-dragging .card:not(.cdk-drag-placeholder) { transition: transform var(--movimento-estado-duracao) var(--movimento-estado-curva); }
-    @media (max-width: 640px) { :host { padding: var(--espacamento-3); } .coluna, .col-esq { width: 260px; } }
+    @media (max-width: 640px) { :host { padding: var(--espacamento-3); } :host.embutido { padding: 0; } .coluna, .col-esq { width: 260px; } }
   `,
 })
 export class LeadsPagina implements OnInit {
+  /** Dentro do Funil (aba Qualificação): sem cabeçalho próprio e sem altura de tela. */
+  readonly embutido = input(false)
   readonly servico = inject(LeadsServico)
   private readonly inbox = inject(InboxServico)
 

@@ -1,7 +1,7 @@
 import type { Type } from '@angular/core'
-import type { Routes } from '@angular/router'
+import type { Route, Routes } from '@angular/router'
 import { ShellComponente } from './nucleo/shell.componente.js'
-import { itensDoMenu } from './nucleo/menu.js'
+import { itensDoMenu, ROTAS_ANTIGAS } from './nucleo/menu.js'
 import { guardaAuth } from './nucleo/auth.guarda.js'
 
 /**
@@ -19,122 +19,126 @@ import { guardaAuth } from './nucleo/auth.guarda.js'
  * menu fica ESCONDIDA atrás do placeholder, sem erro nenhum. Ver `rotas.spec.ts`.
  */
 export const TELAS_REAIS: Record<string, () => Promise<Type<unknown>>> = {
-  conversas: () =>
-    import('./funcionalidades/atendimento/inbox.pagina.js').then((m) => m.InboxPagina),
-  numeros: () =>
-    import('./funcionalidades/atendimento/canais.pagina.js').then((m) => m.CanaisPagina),
-  pedido: () =>
-    import('./funcionalidades/pedido/pedido.pagina.js').then((m) => m.PedidoAssistidoPagina),
-  'fila-do-dia': () =>
-    import('./funcionalidades/crm/fila-do-dia.pagina.js').then((m) => m.FilaDoDiaPagina),
-  contatos: () =>
-    import('./funcionalidades/crm/clientes.pagina.js').then((m) => m.ClientesPagina),
-  integracao: () =>
-    import('./funcionalidades/integracao/conexoes.pagina.js').then((m) => m.ConexoesPagina),
-  auditoria: () =>
-    import('./funcionalidades/plataforma/auditoria.pagina.js').then((m) => m.AuditoriaPagina),
-  bloqueios: () =>
-    import('./funcionalidades/crm/bloqueios.pagina.js').then((m) => m.BloqueiosPagina),
-  'etiquetas-origens': () =>
-    import('./funcionalidades/crm/etiquetas-origens.pagina.js').then((m) => m.EtiquetasOrigensPagina),
-  webhooks: () =>
-    import('./funcionalidades/integracao/webhooks.pagina.js').then((m) => m.WebhooksPagina),
-  importar: () =>
-    import('./funcionalidades/integracao/importacao.pagina.js').then((m) => m.ImportacaoPagina),
-  funil: () =>
-    import('./funcionalidades/crm/funil.pagina.js').then((m) => m.FunilPagina),
-  crm: () =>
-    import('./funcionalidades/crm/leads.pagina.js').then((m) => m.LeadsPagina),
-  'crm-avancado': () =>
-    import('./funcionalidades/crm/crm-avancado.pagina.js').then((m) => m.CrmAvancadoPagina),
-  templates: () =>
-    import('./funcionalidades/atendimento/templates.pagina.js').then((m) => m.TemplatesPagina),
-  cockpit: () =>
-    import('./funcionalidades/gestao/cockpit.pagina.js').then((m) => m.CockpitPagina),
-  'carteira-higienizacao': () =>
-    import('./funcionalidades/gestao/carteira-higienizacao.pagina.js').then((m) => m.CarteiraHigienizacaoPagina),
-  'atendimento-kanban': () =>
-    import('./funcionalidades/atendimento/atendimento-kanban.pagina.js').then((m) => m.AtendimentoKanbanPagina),
-  campanhas: () =>
-    import('./funcionalidades/campanha/campanhas.pagina.js').then((m) => m.CampanhasPagina),
-  consumo: () =>
-    import('./funcionalidades/consumo/consumo.pagina.js').then((m) => m.ConsumoPagina),
-  pedidos: () =>
-    import('./funcionalidades/pedido/pedidos.pagina.js').then((m) => m.PedidosPagina),
-  catalogo: () =>
-    import('./funcionalidades/catalogo/catalogo.pagina.js').then((m) => m.CatalogoPagina),
-  midia: () =>
-    import('./funcionalidades/aquisicao/midia.pagina.js').then((m) => m.MidiaPagina),
-  formularios: () =>
-    import('./funcionalidades/aquisicao/formularios.pagina.js').then((m) => m.FormulariosPagina),
-  segmentos: () =>
-    import('./funcionalidades/crm/segmentos.pagina.js').then((m) => m.SegmentosPagina),
   inicio: () =>
     import('./funcionalidades/painel/inicio.pagina.js').then((m) => m.InicioPagina),
-  usuarios: () =>
-    import('./funcionalidades/acesso/usuarios.pagina.js').then((m) => m.UsuariosPagina),
-  filiais: () =>
-    import('./funcionalidades/acesso/filiais.pagina.js').then((m) => m.FiliaisPagina),
-  tarefas: () =>
+  'fila-do-dia': () =>
+    import('./funcionalidades/crm/fila-do-dia.pagina.js').then((m) => m.FilaDoDiaPagina),
+  'atendimento-kanban': () =>
+    import('./funcionalidades/atendimento/atendimento-kanban.pagina.js').then((m) => m.AtendimentoKanbanPagina),
+  pedidos: () =>
+    import('./funcionalidades/pedido/pedidos.pagina.js').then((m) => m.PedidosPagina),
+  campanhas: () =>
+    import('./funcionalidades/campanha/campanhas.pagina.js').then((m) => m.CampanhasPagina),
+  contatos: () =>
+    import('./funcionalidades/crm/clientes.pagina.js').then((m) => m.ClientesPagina),
+  funil: () =>
+    import('./funcionalidades/crm/funil.pagina.js').then((m) => m.FunilPagina),
+  'agenda-e-tarefas/lista': () =>
     import('./funcionalidades/crm/tarefas.pagina.js').then((m) => m.TarefasPagina),
-  agenda: () =>
+  'agenda-e-tarefas/calendario': () =>
     import('./funcionalidades/agenda/agenda.pagina.js').then((m) => m.AgendaPagina),
-  carteiras: () =>
-    import('./funcionalidades/crm/carteiras.pagina.js').then((m) => m.CarteirasPagina),
+  'base/rfv': () =>
+    import('./funcionalidades/crm/segmentos.pagina.js').then((m) => m.SegmentosPagina),
+  'base/ciclo': () =>
+    import('./funcionalidades/crm/retencao.pagina.js').then((m) => m.RetencaoPagina),
+  'base/pedidos': () =>
+    import('./funcionalidades/crm/crm-avancado.pagina.js').then((m) => m.CrmAvancadoPagina),
+  'base/cashback': () =>
+    import('./funcionalidades/crm/fidelidade.pagina.js').then((m) => m.FidelidadePagina),
+  'base/mercado': () =>
+    import('./funcionalidades/analitico/mercado.pagina.js').then((m) => m.MercadoPagina),
+  'publicos/listas': () =>
+    import('./funcionalidades/crm/listas.pagina.js').then((m) => m.ListasPagina),
+  'publicos/optout': () =>
+    import('./funcionalidades/crm/bloqueios.pagina.js').then((m) => m.BloqueiosPagina),
+  catalogo: () =>
+    import('./funcionalidades/catalogo/catalogo.pagina.js').then((m) => m.CatalogoPagina),
+  agente: () =>
+    import('./funcionalidades/atendimento/agente/agente.pagina.js').then((m) => m.AgentePagina),
+  'aquisicao/midia': () =>
+    import('./funcionalidades/aquisicao/midia.pagina.js').then((m) => m.MidiaPagina),
+  'aquisicao/formularios': () =>
+    import('./funcionalidades/aquisicao/formularios.pagina.js').then((m) => m.FormulariosPagina),
+  'automacoes/regras': () =>
+    import('./funcionalidades/crm/automacoes.pagina.js').then((m) => m.AutomacoesPagina),
+  'automacoes/reguas': () =>
+    import('./funcionalidades/crm/sequencias.pagina.js').then((m) => m.SequenciasPagina),
+  'cockpit/agora': () =>
+    import('./funcionalidades/gestao/cockpit.pagina.js').then((m) => m.CockpitPagina),
+  'cockpit/carteira': () =>
+    import('./funcionalidades/gestao/carteira-higienizacao.pagina.js').then((m) => m.CarteiraHigienizacaoPagina),
   metas: () =>
     import('./funcionalidades/crm/metas.pagina.js').then((m) => m.MetasPagina),
-  listas: () =>
-    import('./funcionalidades/crm/listas.pagina.js').then((m) => m.ListasPagina),
-  bi: () =>
-    import('./funcionalidades/analitico/bi.pagina.js').then((m) => m.BiPagina),
-  performance: () =>
-    import('./funcionalidades/analitico/performance.pagina.js').then((m) => m.PerformancePagina),
   relatorios: () =>
     import('./funcionalidades/analitico/relatorios.pagina.js').then((m) => m.RelatoriosPagina),
-  mercado: () =>
-    import('./funcionalidades/analitico/mercado.pagina.js').then((m) => m.MercadoPagina),
-  mapa: () =>
-    import('./funcionalidades/analitico/mapa.pagina.js').then((m) => m.MapaPagina),
-  retencao: () =>
-    import('./funcionalidades/crm/retencao.pagina.js').then((m) => m.RetencaoPagina),
-  nps: () =>
-    import('./funcionalidades/crm/nps.pagina.js').then((m) => m.NpsPagina),
-  sequencias: () =>
-    import('./funcionalidades/crm/sequencias.pagina.js').then((m) => m.SequenciasPagina),
-  'canal-config': () =>
-    import('./funcionalidades/atendimento/canal-config.pagina.js').then((m) => m.CanalConfigPagina),
-  'agente': () =>
-    import('./funcionalidades/atendimento/agente/agente.pagina.js').then((m) => m.AgentePagina),
-  mensagens: () =>
-    import('./funcionalidades/atendimento/mensagens-enviadas.pagina.js').then((m) => m.MensagensEnviadasPagina),
-  config: () =>
+  auditoria: () =>
+    import('./funcionalidades/plataforma/auditoria.pagina.js').then((m) => m.AuditoriaPagina),
+  'config/empresa': () =>
     import('./funcionalidades/plataforma/config.pagina.js').then((m) => m.ConfigPagina),
+  'config/usuarios': () =>
+    import('./funcionalidades/acesso/usuarios.pagina.js').then((m) => m.UsuariosPagina),
+  'config/filiais': () =>
+    import('./funcionalidades/acesso/filiais.pagina.js').then((m) => m.FiliaisPagina),
+  'config/numeros': () =>
+    import('./funcionalidades/atendimento/canais.pagina.js').then((m) => m.CanaisPagina),
+  'config/atendimento': () =>
+    import('./funcionalidades/atendimento/canal-config.pagina.js').then((m) => m.CanalConfigPagina),
+  'config/templates': () =>
+    import('./funcionalidades/atendimento/templates.pagina.js').then((m) => m.TemplatesPagina),
+  'config/etiquetas': () =>
+    import('./funcionalidades/crm/etiquetas-origens.pagina.js').then((m) => m.EtiquetasOrigensPagina),
+  'config/integracoes': () =>
+    import('./funcionalidades/integracao/conexoes.pagina.js').then((m) => m.ConexoesPagina),
+  'config/webhooks': () =>
+    import('./funcionalidades/integracao/webhooks.pagina.js').then((m) => m.WebhooksPagina),
+  'config/importar': () =>
+    import('./funcionalidades/integracao/importacao.pagina.js').then((m) => m.ImportacaoPagina),
+  'config/faturamento': () =>
+    import('./funcionalidades/consumo/consumo.pagina.js').then((m) => m.ConsumoPagina),
   'clientes-plataforma': () =>
     import('./funcionalidades/plataforma/clientes.pagina.js').then((m) => m.ClientesPlataformaPagina),
-  automacoes: () =>
-    import('./funcionalidades/crm/automacoes.pagina.js').then((m) => m.AutomacoesPagina),
-  fidelidade: () =>
-    import('./funcionalidades/crm/fidelidade.pagina.js').then((m) => m.FidelidadePagina),
-  'catalogo-produtos': () =>
-    import('./funcionalidades/catalogo/catalogo-produtos.pagina.js').then((m) => m.CatalogoProdutosPagina),
 }
 
-const rotasFilhas = itensDoMenu()
+const emConstrucao = () =>
+  import('./compartilhado/em-construcao.pagina.js').then((m) => m.EmConstrucaoPagina)
+
+const rotasFilhas: Routes = itensDoMenu()
   // ⚠️ Item de rail (Conversas) NÃO gera rota — o chat vive na casca como rail.
   .filter((item) => item.acao !== 'rail')
-  .map((item) => {
-  const real = TELAS_REAIS[item.rota]
-  if (item.status === 'pronto' && real) {
-    return { path: item.rota, loadComponent: real }
-  }
-  return {
-    path: item.rota,
-    loadComponent: () =>
-      import('./compartilhado/em-construcao.pagina.js').then((m) => m.EmConstrucaoPagina),
-    // ⚠️ O placeholder lê isto — mesma descrição do menu, sem duplicar.
-    data: { rotulo: item.rotulo, descricao: item.descricao, icone: item.icone, onda: item.onda },
-  }
-})
+  .map((item): Route => {
+    // Tela com abas: a casca das abas + uma rota filha por aba (`/<item>/<aba>`).
+    if (item.abas?.length) {
+      return {
+        path: item.rota,
+        loadComponent: () => import('./compartilhado/tela-abas.pagina.js').then((m) => m.TelaAbasPagina),
+        data: { item },
+        children: [
+          { path: '', pathMatch: 'full', redirectTo: item.abas[0]!.rota },
+          ...item.abas.map((aba): Route => {
+            const real = TELAS_REAIS[`${item.rota}/${aba.rota}`]
+            return real && item.status === 'pronto'
+              ? { path: aba.rota, loadComponent: real }
+              : { path: aba.rota, loadComponent: emConstrucao,
+                  data: { rotulo: aba.rotulo, descricao: item.descricao, icone: item.icone, onda: item.onda } }
+          }),
+        ],
+      }
+    }
+    const real = TELAS_REAIS[item.rota]
+    if (item.status === 'pronto' && real) {
+      return { path: item.rota, loadComponent: real }
+    }
+    return {
+      path: item.rota,
+      loadComponent: emConstrucao,
+      // ⚠️ O placeholder lê isto — mesma descrição do menu, sem duplicar.
+      data: { rotulo: item.rotulo, descricao: item.descricao, icone: item.icone, onda: item.onda },
+    }
+  })
+
+/** Rotas que saíram do menu (reorganização de 2026-11-05) — redirecionam com a aba certa. */
+const rotasAntigas: Routes = Object.entries(ROTAS_ANTIGAS)
+  .map(([de, para]): Route => ({ path: de, pathMatch: 'full', redirectTo: para }))
 
 export const ROTAS: Routes = [
   // Login fica FORA da casca (sem menu) — e sem guard, senão laço infinito.
@@ -241,6 +245,14 @@ export const ROTAS: Routes = [
         loadComponent: () =>
           import('./funcionalidades/campanha/campanha-detalhe.pagina.js').then((m) => m.CampanhaDetalhePagina),
       },
+      // Pedido assistido: saiu do menu (o primário "Novo pedido" de Pedidos leva aqui),
+      // mas a rota fica — catálogo, ficha, funil e chat abrem por ela.
+      {
+        path: 'pedido',
+        loadComponent: () =>
+          import('./funcionalidades/pedido/pedido.pagina.js').then((m) => m.PedidoAssistidoPagina),
+      },
+      ...rotasAntigas,
       ...rotasFilhas,
       // Rota desconhecida volta para a base — não deixa tela órfã.
       { path: '**', redirectTo: 'contatos' },

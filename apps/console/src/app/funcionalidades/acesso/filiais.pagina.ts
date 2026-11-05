@@ -3,7 +3,7 @@ import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } 
 import {
   BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente,
   GradeFormComponente, ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente, ToastServico,
-  codigoDoErro, mensagemDeErro, mesclarPagina, type ColunaTabela, type LinhaTabela, type OpcaoSelect,
+  codigoDoErro, mensagemDeErro, mesclarPagina, type ColunaTabela, type LinhaTabela, type OpcaoSelect, focarPrimeiroInvalido,
 } from '../../compartilhado/ui/index.js'
 import { UFS } from '../crm/contato-form.regras.js'
 import { CORES_FILIAL, chaveDoHex, hexDaCor } from './filiais.cores.js'
@@ -71,7 +71,7 @@ const OPCOES_SITUACAO: OpcaoSelect[] = [{ valor: 'true', rotulo: 'Ativa' }, { va
             <div uiVazio>
               <ui-estado titulo="Nenhuma filial ainda"
                 descricao="Cadastre a matriz e as filiais para dar papéis por unidade.">
-                <button type="button" class="btn btn--primario" (click)="nova()">+ Nova filial</button>
+                <button type="button" class="btn btn--secundario" (click)="nova()">+ Nova filial</button>
               </ui-estado>
             </div>
           </ui-tabela>
@@ -232,7 +232,7 @@ export class FiliaisPagina implements OnInit {
       await this.carregar()
     } catch (err) {
       const m = mapearErroFilial(codigoDoErro(err))
-      if (m?.campo) this.erros.set({ [m.campo]: m.mensagem })
+      if (m?.campo) { this.erros.set({ [m.campo]: m.mensagem }); focarPrimeiroInvalido() }
       else this.erroEnvio.set(m?.mensagem ?? mensagemDeErro(err, 'Não foi possível salvar.'))
     } finally { this.salvando.set(false) }
   }

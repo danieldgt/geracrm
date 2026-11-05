@@ -3,7 +3,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import type { MetricaSlaHandoff } from '@geracrm/shared'
 import {
-  AbasComponente, CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, StatCardComponente,
+  AbasComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, StatCardComponente,
   TabelaComponente, type Aba, type ColunaTabela, type LinhaTabela,
 } from '../../compartilhado/ui/index.js'
 
@@ -31,18 +31,18 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }, { dias: 90, rotulo: '90 dias' }]
 
 /**
- * Performance de atendimento — SLA e tempo de 1ª resposta HUMANA (a contra-métrica
+ * Tempo de resposta (aba Atendimento de Relatórios; era a tela Performance) — SLA e tempo de 1ª resposta HUMANA (a contra-métrica
  * MC-05: a automática de ausência não conta). Agregado sobre `atendimento`.
  * Padrão Lista de leitura: período em abas, indicadores em ui-stat-card e o
  * ranking por atendente em ui-tabela.
  */
 @Component({
-  selector: 'app-performance',
+  selector: 'app-relatorio-performance',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AbasComponente, CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, StatCardComponente, TabelaComponente],
+  imports: [AbasComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, StatCardComponente, TabelaComponente],
   template: `
-    <ui-cabecalho-tela titulo="Performance" subtitulo="Quão rápido a equipe responde de verdade." />
-
+    <h2 class="txt-secao titulo">Tempo de resposta</h2>
+    <p class="txt-corpo sub">Quão rápido a equipe responde de verdade — a resposta automática de ausência não conta.</p>
     <div class="periodo">
       <ui-abas [abas]="abasPeriodo" [ativa]="periodoAtivo()" (ativaChange)="trocar($event)" />
     </div>
@@ -109,7 +109,9 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
     </div>
   `,
   styles: `
-    :host { display: block; width: 100%; padding: var(--espacamento-6); }
+    :host { display: block; min-width: 0; }
+    .titulo { margin: 0; color: var(--texto); }
+    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); }
     .periodo { margin-top: var(--espacamento-3); }
     .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-4); min-width: 0; }
     .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: var(--espacamento-3); }
@@ -119,7 +121,7 @@ const PERIODOS = [{ dias: 7, rotulo: '7 dias' }, { dias: 30, rotulo: '30 dias' }
     .painel h2 { margin: 0 0 var(--espacamento-3); }
   `,
 })
-export class PerformancePagina implements OnInit {
+export class RelatorioPerformanceComponente implements OnInit {
   private readonly http = inject(HttpClient)
   readonly abasPeriodo: readonly Aba[] = PERIODOS.map((p) => ({ id: String(p.dias), rotulo: p.rotulo }))
   readonly estado = signal<Estado>('carregando')

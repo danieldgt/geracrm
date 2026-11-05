@@ -57,30 +57,49 @@ describe('Gaveta fecha ao escolher um item do menu', () => {
   })
 })
 
-describe('Um ‹ por nível no trilho do celular', () => {
-  it('o trilho não desenha ‹ próprio; o cabeçalho dele some no celular', () => {
+describe('Um título só e um ‹ por nível no trilho', () => {
+  it('o trilho não tem cabeçalho próprio nem botão de modo (empurrar × gaveta é pela largura)', () => {
     expect(trilho).not.toContain('voltar-trilho')
-    const celular = trilho.slice(trilho.indexOf('@media (max-width: 719.98px)'))
-    expect(celular).toMatch(/\.cab\s*\{\s*display:\s*none|\.cab\s*\{[^}]*display:\s*none|,\s*\.cab\s*\{\s*display:\s*none/)
+    expect(trilho).not.toContain('class="cab"')
+    expect(trilho).not.toContain('alternarSobrepor')
   })
 
-  it('o ‹ que fecha mora no cabeçalho da lista do inbox, pela regra; o da conversa volta à lista', () => {
-    expect(inbox).toContain('voltarNoCabecalhoDaLista(this.celular(), this.noTrilho())')
+  it('fechar mora no cabeçalho da lista do inbox, pela regra; o ‹ da conversa volta à lista', () => {
+    expect(inbox).toContain('fecharNoCabecalhoDaLista(this.celular(), this.noTrilho())')
     expect(inbox).toMatch(/class="voltar fechar-trilho" \(click\)="servico\.fecharRail\(\)"/)
+    expect(inbox).toMatch(/class="recolher" type="button" \(click\)="servico\.fecharRail\(\)"/)
     expect(inbox).toMatch(/class="voltar" \(click\)="servico\.voltarParaLista\(\)"/)
     expect(trilho).toContain('[noTrilho]="true"')
+  })
+})
+
+describe('Empurrar × gaveta é decidido pela casca, pela largura', () => {
+  it('a casca passa o modo e a largura limitada ao trilho', () => {
+    expect(casca).toContain('[modo]="modoTrilho()" [largura]="larguraTrilho()"')
+    expect(casca).toContain('modoTrilho(this.larguraJanela()')
+  })
+
+  it('"Conversas" no menu é alternador (aria-pressed), nunca o .ativo de rota', () => {
+    expect(casca).toContain('class="item alternador" [attr.aria-pressed]="inbox.railAberto()"')
+    expect(casca).not.toContain('[class.ativo]="inbox.railAberto()"')
   })
 })
 
 describe('Trilho em tela cheia se comporta como diálogo', () => {
   it('⚠️ topo e conteúdo ficam inert com o trilho aberto no celular (não só com a gaveta)', () => {
     expect(casca).toContain('<header class="topo" [attr.inert]="atrasInerte() ? \'\' : null">')
-    expect(casca).toContain('<div class="conteudo" [attr.inert]="atrasInerte() ? \'\' : null">')
+    expect(casca).toContain('<div class="conteudo" [attr.inert]="conteudoInerte() ? \'\' : null">')
     expect(casca).toContain('conteudoInerte(this.celular(), this.gavetaAberta(), this.inbox.railAberto())')
   })
 
-  it('o trilho em tela cheia se anuncia como diálogo modal', () => {
-    expect(trilho).toContain('[attr.role]="telaCheia() ? \'dialog\' : null"')
-    expect(trilho).toContain('[attr.aria-modal]="telaCheia() ? \'true\' : null"')
+  it('⚠️ com o trilho em GAVETA no desktop o conteúdo também fica inert (o topo não)', () => {
+    expect(casca).toContain("this.celular(), this.gavetaAberta(), this.inbox.railAberto(), this.modoTrilho() === 'gaveta')")
+  })
+
+  it('o trilho em tela cheia ou em gaveta se anuncia como diálogo modal, com Esc e foco preso', () => {
+    expect(trilho).toContain('[attr.role]="modal() ? \'dialog\' : null"')
+    expect(trilho).toContain('[attr.aria-modal]="modal() ? \'true\' : null"')
+    expect(trilho).toContain("ev.key === 'Escape'")
+    expect(trilho).toContain('prenderTab(this.painel().nativeElement')
   })
 })

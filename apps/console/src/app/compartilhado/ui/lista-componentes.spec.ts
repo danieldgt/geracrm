@@ -17,7 +17,7 @@ const componentes: { arquivo: string; classe: string; seletor: string; api: RegE
       /carregando = input/, /<table class="tabela"/, /<thead>/, /height: 40px/, /tabular-nums/, /white-space: nowrap/,
       /\[indeterminate\]/, /rolagem-x/, /select="\[uiVazio\]"/] },
   { arquivo: 'filtros.componente.ts', classe: 'FiltrosComponente', seletor: 'ui-filtros',
-    api: [/DEBOUNCE_BUSCA_MS = 300/, /buscar = output/, /aplicar = output/, /limpar = output/, /align-items: end/, /flex-wrap: wrap/,
+    api: [/DEBOUNCE_BUSCA_MS = 300/, /buscar = output/, /aplicar = output/, /limpar = output/, /align-items: end/, /container: filtros \/ inline-size/,
       /\[value\]="termo"/] },
   { arquivo: 'paginacao.componente.ts', classe: 'PaginacaoComponente', seletor: 'ui-paginacao',
     api: [/mostrados = input\.required/, /total = input/, /temMais = input/, /carregando = input/, /mais = output/, /Carregar mais/] },

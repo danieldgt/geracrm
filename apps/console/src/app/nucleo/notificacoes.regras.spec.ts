@@ -17,8 +17,8 @@ describe('notificações — regras puras', () => {
 
   it('abrir leva ao alvo: conversa, tela do assunto ou lugar nenhum', () => {
     expect(alvoDaNotificacao({ tipo: 'mensagem.nova', conversaId: 'c1' })).toEqual({ tipo: 'conversa', conversaId: 'c1' })
-    expect(alvoDaNotificacao({ tipo: 'canal.qualidade', conversaId: null })).toEqual({ tipo: 'rota', rota: '/numeros' })
-    expect(alvoDaNotificacao({ tipo: 'agenda.lembrete', conversaId: null })).toEqual({ tipo: 'rota', rota: '/agenda' })
+    expect(alvoDaNotificacao({ tipo: 'canal.qualidade', conversaId: null })).toEqual({ tipo: 'rota', rota: '/config/numeros' })
+    expect(alvoDaNotificacao({ tipo: 'agenda.lembrete', conversaId: null })).toEqual({ tipo: 'rota', rota: '/agenda-e-tarefas/calendario' })
     expect(alvoDaNotificacao({ tipo: 'tipo.novo', conversaId: null })).toEqual({ tipo: 'nenhum' })
   })
 

@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, ou
 import { MOTIVOS_DESCARTE_CONTATO, type AcaoEmMassaContato } from '@geracrm/shared'
 import {
   CampoComponente, ChipsEtiquetaComponente, GradeFormComponente, ModalComponente, SelectComponente,
-  type OpcaoChip, type OpcaoSelect,
+  type OpcaoChip, type OpcaoSelect, focarPrimeiroInvalido,
 } from '../../compartilhado/ui/index.js'
 import { ClientesServico, ErroAcaoEmMassa, type ResultadoAcaoEmMassa } from './clientes.servico.js'
 import {
@@ -176,7 +176,7 @@ export class ClientesAcaoModalComponente {
       if (e instanceof ErroAcaoEmMassa) {
         const porCampo: Record<string, string> = {}
         for (const c of e.campos) { const k = CAMPO_DO_FORM[c]; if (k) porCampo[k] = e.message }
-        if (Object.keys(porCampo).length > 0) this.erros.set(porCampo)
+        if (Object.keys(porCampo).length > 0) { this.erros.set(porCampo); focarPrimeiroInvalido() }
         else this.erroGeral.set(e.message)
       } else this.erroGeral.set('Não foi possível aplicar a ação.')
     }

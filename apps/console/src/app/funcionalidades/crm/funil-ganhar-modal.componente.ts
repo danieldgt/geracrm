@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http'
 import { Router } from '@angular/router'
 import { firstValueFrom } from 'rxjs'
 import {
-  BotaoComponente, CampoComponente, GradeFormComponente, ModalComponente, SelectComponente, ToastServico, type OpcaoSelect,
+  BotaoComponente, CampoComponente, GradeFormComponente, ModalComponente, SelectComponente, ToastServico, type OpcaoSelect, focarPrimeiroInvalido,
 } from '../../compartilhado/ui/index.js'
 import { FunilServico, type Card } from './funil.servico.js'
 import { ContatoFormServico } from './contato-form.servico.js'
@@ -206,7 +206,7 @@ export class FunilGanharModalComponente {
     if (!r.ok) {
       const t = tratarFalhaDeAcao(r.status, r.corpo, r.mensagem)
       const m = r.status === 422 ? mapearErrosGanho(r.corpo) : { campos: {}, pedido: null, geral: null }
-      this.erros.set(m.campos); this.erroPedido.set(m.pedido)
+      this.erros.set(m.campos); this.erroPedido.set(m.pedido); focarPrimeiroInvalido()
       const temCampo = Object.keys(m.campos).length > 0 || m.pedido !== null
       this.erroGeral.set(m.geral ?? (temCampo ? null : t.mensagemModal))
       if (t.toast) this.toast.erro(t.toast)

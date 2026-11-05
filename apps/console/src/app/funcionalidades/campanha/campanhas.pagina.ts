@@ -64,7 +64,7 @@ const OPCOES_ESTADO: OpcaoSelect[] = [
               } @else {
                 <ui-estado titulo="Nenhuma campanha ainda"
                   descricao="Monte a primeira: escolha o número, o público e veja o custo antes de enviar.">
-                  <a class="btn btn--primario" routerLink="/campanhas/nova">+ Nova campanha</a>
+                  <a class="btn btn--secundario" routerLink="/campanhas/nova">+ Nova campanha</a>
                 </ui-estado>
               }
             </div>

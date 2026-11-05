@@ -80,7 +80,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
             <div uiVazio>
               <ui-estado titulo="Nenhum webhook"
                 descricao="Adicione uma URL https para começar a receber os eventos.">
-                <button type="button" class="btn btn--primario" (click)="novoAberto.set(true)">Novo webhook</button>
+                <button type="button" class="btn btn--secundario" (click)="novoAberto.set(true)">Novo webhook</button>
               </ui-estado>
             </div>
           </ui-tabela>

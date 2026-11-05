@@ -4,7 +4,7 @@ import { Router, RouterLink } from '@angular/router'
 import {
   BotaoComponente, BreadcrumbComponente, CabecalhoTelaComponente, CampoComponente, EsqueletoComponente,
   EstadoComponente, FormPaginaComponente, GradeFormComponente, SecaoFormComponente, SelectComponente,
-  ToastServico, type ItemTrilha, type OpcaoSelect,
+  ToastServico, type ItemTrilha, type OpcaoSelect, focarPrimeiroInvalido,
 } from '../../compartilhado/ui/index.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { ClientesServico } from './clientes.servico.js'
@@ -296,7 +296,7 @@ export class ContatoFormPagina implements OnInit {
     const id = this.id()
     const r = id ? await this.servico.atualizar(id, corpo) : await this.servico.criar(corpo)
     this.salvando.set(null)
-    if (!r.ok) { this.erros.set(r.campos); this.erroGeral.set(r.geral); return }
+    if (!r.ok) { this.erros.set(r.campos); this.erroGeral.set(r.geral); focarPrimeiroInvalido(); return }
 
     if (id) {
       this.toast.sucesso('Contato atualizado.')

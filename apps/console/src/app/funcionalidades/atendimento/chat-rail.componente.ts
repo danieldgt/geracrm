@@ -1,19 +1,31 @@
-import { Component, ChangeDetectionStrategy, inject, OnInit, OnDestroy, computed } from '@angular/core'
+import {
+  Component, ChangeDetectionStrategy, ElementRef, inject, input, OnInit, OnDestroy, computed, effect, untracked, viewChild,
+} from '@angular/core'
 import { SlicePipe } from '@angular/common'
 import { IconeComponente } from '../../compartilhado/ui/icone.componente.js'
+import { devolverFoco, prenderTab } from '../../compartilhado/ui/foco.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { InboxPagina } from './inbox.pagina.js'
-import { CelularServico } from '../../nucleo/celular.servico.js'
-import { rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.js'
+import { rotuloBotaoConversas, rotuloContador, type ModoTrilho } from '../../nucleo/casca.regras.js'
+
+/** Como a casca pediu o trilho: as duas formas do desktop (`modoTrilho`) ou a tela cheia do celular. */
+export type ModoTrilhoCasca = ModoTrilho | 'tela-cheia'
 
 /**
  * Rail do CHAT — a funcionalidade principal, sempre à mão, ancorado À DIREITA.
  *
  * Montado uma vez pela casca (shell). Recolhido: faixa fina de avatares na borda
- * direita. Expandido: o inbox completo. O usuário controla, e o serviço persiste:
- *  · LARGURA — arrasta a borda esquerda do painel (puxador);
- *  · MODO — botão alterna EMPURRAR o conteúdo (padrão) × SOBREPOR (overlay).
+ * direita. Expandido: o inbox completo. A pessoa ajusta a LARGURA arrastando a
+ * borda esquerda (puxador); o serviço persiste.
+ *
+ * ⚠️ Empurrar × gaveta NÃO é escolha da pessoa (o antigo botão ⧉/⇥ saiu): a casca
+ * decide pela largura (`modoTrilho`). Empurra quando a tela ao lado continua com
+ * >= 960 px; senão abre como GAVETA abaixo da barra do topo, com véu, Esc que
+ * fecha e devolve o foco, e foco preso — nunca esmaga a tela nem cobre o topo.
+ *
+ * ⚠️ Um título só: o trilho não tem cabeçalho próprio. "Conversas" e o botão que
+ * recolhe moram no cabeçalho da lista do inbox (`fecharNoCabecalhoDaLista`).
  *
  * ⚠️ Dono do ciclo persistente (antes no InboxPagina): carrega a lista uma vez,
  * conecta o SSE (idempotente) e ESCUTA mensagens a sessão inteira — avisa de
@@ -25,12 +37,16 @@ import { rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [InboxPagina, SlicePipe, IconeComponente],
   template: `
-    <div class="rail" [class.aberto]="servico.railAberto()"
-         [class.sobrepor]="servico.railAberto() && servico.railSobrepor()"
-         [style.--rail-w]="servico.railLargura() + 'px'"
-         [attr.role]="telaCheia() ? 'dialog' : null" [attr.aria-modal]="telaCheia() ? 'true' : null"
-         [attr.aria-label]="telaCheia() ? 'Conversas' : null">
-      @if (servico.railAberto()) {
+    @if (gaveta()) {
+      <!-- Véu da gaveta: clique fecha (a pessoa desistiu), como no modal. -->
+      <div class="veu-trilho" aria-hidden="true" (click)="fecharComFoco()"></div>
+    }
+    <div #painel class="rail" [class.aberto]="servico.railAberto()" [class.gaveta]="gaveta()"
+         [style.--rail-w]="largura() + 'px'" tabindex="-1"
+         [attr.role]="modal() ? 'dialog' : null" [attr.aria-modal]="modal() ? 'true' : null"
+         [attr.aria-label]="modal() ? 'Conversas' : null"
+         (keydown)="aoTeclar($event)">
+      @if (servico.railAberto() && modo() !== 'tela-cheia') {
         <!-- Puxador de redimensionamento na BORDA ESQUERDA do painel. -->
         <div class="puxador" (pointerdown)="iniciarResize($event)"
              title="Arraste para redimensionar" role="separator" aria-label="Redimensionar chat"></div>
@@ -46,8 +62,8 @@ import { rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.
         </button>
         <div class="avs">
           @for (c of servico.conversas() | slice:0:16; track c.id) {
-            <button class="av" [style.background]="corAvatar(c.id)"
-                    (click)="servico.abrir(c.id)" [title]="c.nome" [class.nao-lida]="c.naoLida">
+            <button class="av" (click)="servico.abrir(c.id)" [title]="c.nome" [attr.aria-label]="'Abrir conversa com ' + c.nome"
+                    [class.nao-lida]="c.naoLida">
               {{ iniciais(c.nome) }}
               @if (c.naoLida) { <span class="pino" aria-hidden="true"></span> }
             </button>
@@ -55,23 +71,8 @@ import { rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.
         </div>
         <span class="conex" [attr.data-estado]="eventos.estado()" [title]="'Conexão: ' + eventos.estado()"></span>
       } @else {
-        <!-- EXPANDIDO: cabeçalho (modo + recolher) + inbox completo.
-             Celular: o cabeçalho some (seria um segundo "Conversas"); o ‹ que
-             fecha mora no cabeçalho da lista do inbox, e o ‹ da conversa volta
-             à lista — um por nível (voltarNoCabecalhoDaLista). -->
-        <div class="cab">
-          <span class="cab-tit">Conversas</span>
-          <span class="cab-acoes">
-            <button class="modo" (click)="servico.alternarSobrepor()"
-                    [attr.aria-pressed]="servico.railSobrepor()"
-                    [title]="servico.railSobrepor()
-                      ? 'Sobrepondo o conteúdo — clique para empurrar'
-                      : 'Empurrando o conteúdo — clique para sobrepor'">
-              {{ servico.railSobrepor() ? '⧉' : '⇥' }}
-            </button>
-            <button class="recolher" (click)="servico.fecharRail()" title="Recolher chat" aria-label="Recolher chat">›</button>
-          </span>
-        </div>
+        <!-- EXPANDIDO: o inbox completo. Sem cabeçalho próprio (seria um
+             segundo "Conversas"): fechar mora no cabeçalho da lista. -->
         <app-inbox class="corpo" [noTrilho]="true" />
       }
     </div>
@@ -79,12 +80,15 @@ import { rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.
   styles: [`
     :host { display: block; height: 100%; }
     .rail { position: relative; height: 100%; display: flex; flex-direction: column; align-items: stretch;
-            background: var(--superficie); border-left: 1px solid var(--borda);
-            width: 66px; box-shadow: -4px 0 24px rgb(31 26 22 / .04); }
+            background: var(--superficie); border-left: 1px solid var(--borda); width: 66px; }
+    .rail:focus { outline: none; }
     .rail.aberto { width: var(--rail-w); }
-    /* Overlay: painel flutua sobre o conteúdo (o host colapsa, o conteúdo ocupa tudo). */
-    .rail.aberto.sobrepor { position: fixed; top: 0; right: 0; height: 100vh; z-index: 60;
-                            box-shadow: -10px 0 34px rgb(31 26 22 / .16); }
+    /* GAVETA (desktop sem espaço para empurrar): flutua sobre o conteúdo, ABAIXO
+       da barra do topo — sino, conta e tempo real continuam à vista. */
+    .rail.aberto.gaveta { position: fixed; top: var(--altura-barra-topo); right: 0; bottom: 0; height: auto; z-index: 60;
+                          box-shadow: var(--elevacao-modal); }
+    .veu-trilho { position: fixed; top: var(--altura-barra-topo); right: 0; bottom: 0; left: 0; z-index: 59;
+                  background: var(--fundo-sobreposicao, rgb(0 0 0 / .4)); }
 
     /* Puxador de redimensionamento. */
     .puxador { position: absolute; left: -3px; top: 0; bottom: 0; width: 8px; cursor: ew-resize;
@@ -97,44 +101,31 @@ import { rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.
                 background: transparent; cursor: pointer; font-size: 20px; color: var(--texto-secundario); }
     .topo-btn:hover { background: var(--superficie-hover); }
     .badge { position: absolute; top: 6px; right: 10px; min-width: 16px; height: 16px; padding: 0 4px;
-             border-radius: 999px; background: var(--acao); color: var(--acao-texto);
+             border-radius: var(--raio-completo); background: var(--acao); color: var(--acao-texto);
              font-size: 10px; font-weight: 700; line-height: 16px; }
     .avs { flex: 1; overflow-y: auto; display: flex; flex-direction: column; align-items: center;
            gap: 8px; padding: 10px 0; }
-    .av { position: relative; width: 42px; height: 42px; border-radius: 50%; border: 0; cursor: pointer;
-          color: #fff; font-size: 14px; font-weight: 600; display: grid; place-items: center; flex: none; }
+    /* Avatar neutro: palco neutro, a cor fica para o estado (não lida = anel de ação). */
+    .av { position: relative; width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--borda); cursor: pointer;
+          background: var(--superficie-selecionada); color: var(--texto); font-size: 14px; font-weight: 600;
+          display: grid; place-items: center; flex: none; }
+    .av:hover { background: var(--superficie-hover); }
+    .av:focus-visible, .topo-btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .av.nao-lida { box-shadow: 0 0 0 2px var(--acao); }
     .pino { position: absolute; top: -1px; right: -1px; width: 11px; height: 11px; border-radius: 50%;
             background: var(--acao); box-shadow: 0 0 0 2px var(--superficie); }
     .conex { align-self: center; width: 8px; height: 8px; border-radius: 50%; margin: 8px 0;
              background: var(--texto-suave); }
-    .conex[data-estado="conectado"] { background: #25d366; }
+    .conex[data-estado="conectado"] { background: var(--sucesso); }
     .conex[data-estado="reconectando"], .conex[data-estado="conectando"] { background: var(--atencao); }
     .conex[data-estado="offline"] { background: var(--erro); }
 
     /* Expandido */
-    .cab { height: 40px; display: flex; align-items: center; justify-content: space-between;
-           padding: 0 6px 0 14px; border-bottom: 1px solid var(--borda); background: var(--superficie); }
-    .cab-tit { font-size: 13px; font-weight: 600; color: var(--texto-secundario); text-transform: uppercase; letter-spacing: .05em; }
-    .cab-acoes { display: flex; align-items: center; gap: 2px; }
-    .modo, .recolher { border: 0; background: transparent; color: var(--texto-secundario); cursor: pointer;
-                       line-height: 1; padding: 5px 8px; border-radius: var(--raio-controle); }
-    .modo { font-size: 15px; }
-    .modo[aria-pressed="true"] { color: var(--marca); background: var(--acao-suave); }
-    .recolher { font-size: 22px; }
-    .modo:hover, .recolher:hover { background: var(--superficie-hover); color: var(--texto); }
     .corpo { flex: 1; min-height: 0; display: block; }
 
-    /* Em tela estreita, expandido SEMPRE sobrepõe (não esmaga o conteúdo). */
-    @media (max-width: 900px) {
-      .rail.aberto { position: fixed; top: 0; right: 0; height: 100vh; z-index: 60;
-                     width: min(var(--rail-w), 100vw); box-shadow: -10px 0 34px rgb(31 26 22 / .16); }
-    }
-    .topo-btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
-
     /* Celular (< 720px; corte em casca.regras.ts): recolhido = botão flutuante
-       redondo no canto com o contador; aberto = tela inteira. Sem puxador nem
-       modo (não há o que empurrar). */
+       redondo no canto com o contador; aberto = tela inteira. Sem puxador (não
+       há o que empurrar). */
     @media (max-width: 719.98px) {
       .rail:not(.aberto) { position: fixed; right: var(--espacamento-4); bottom: var(--espacamento-4); z-index: 60;
                            width: 56px; height: 56px; border: 1px solid var(--borda); border-radius: var(--raio-completo);
@@ -142,21 +133,51 @@ import { rotuloBotaoConversas, rotuloContador } from '../../nucleo/casca.regras.
       .rail:not(.aberto) .avs, .rail:not(.aberto) .conex { display: none; }
       .topo-btn { height: 100%; border-bottom: 0; border-radius: var(--raio-completo); }
       .badge { top: -4px; right: -4px; min-width: 20px; height: 20px; line-height: 20px; font-size: 11px; }
-      .rail.aberto, .rail.aberto.sobrepor { position: fixed; inset: 0; width: 100vw; height: 100dvh; z-index: 60;
-                                            border-left: 0; }
-      .puxador, .cab { display: none; }
+      .rail.aberto, .rail.aberto.gaveta { position: fixed; inset: 0; width: 100vw; height: 100dvh; z-index: 60;
+                                          border-left: 0; }
+      .veu-trilho, .puxador { display: none; }
     }
   `],
 })
 export class ChatRailComponente implements OnInit, OnDestroy {
   readonly servico = inject(InboxServico)
   readonly eventos = inject(EventosServico)
-  readonly celular = inject(CelularServico)
+  /** Decidido pela casca (`modoTrilho` no desktop; 'tela-cheia' no celular). */
+  readonly modo = input<ModoTrilhoCasca>('empurrar')
+  /** Largura do trilho aberto, já limitada pela janela (`limitarLarguraTrilho`). */
+  readonly largura = input<number>(420)
+
   readonly contador = computed(() => rotuloContador(this.servico.naoLidasTotal()))
   readonly rotuloBotao = computed(() => rotuloBotaoConversas(this.servico.naoLidasTotal()))
-  /** Celular com o trilho aberto: ocupa a tela e se comporta como diálogo (o resto fica inert na casca). */
-  readonly telaCheia = computed(() => this.celular.celular() && this.servico.railAberto())
+  /** Aberto por cima do conteúdo no desktop (véu, Esc, foco preso). */
+  readonly gaveta = computed(() => this.servico.railAberto() && this.modo() === 'gaveta')
+  /** Aberto como diálogo: gaveta no desktop ou tela cheia no celular (o resto fica inert na casca). */
+  readonly modal = computed(() => this.servico.railAberto() && this.modo() !== 'empurrar')
+
+  private readonly painel = viewChild.required<ElementRef<HTMLElement>>('painel')
+  /** Quem tinha o foco quando o trilho abriu como diálogo — recebe o foco de volta ao fechar. */
+  #origem: Element | null = null
   private cancelarEscuta?: () => void
+
+  constructor() {
+    // Abriu como diálogo → o foco entra no painel; fechou → volta a quem abriu.
+    effect(() => {
+      const modal = this.modal()
+      untracked(() => {
+        if (modal) {
+          this.#origem = document.activeElement
+          requestAnimationFrame(() => {
+            const p = this.painel().nativeElement
+            if (!p.contains(document.activeElement)) p.focus()
+          })
+        } else if (this.#origem) {
+          const o = this.#origem
+          this.#origem = null
+          devolverFoco(o)
+        }
+      })
+    })
+  }
 
   ngOnInit(): void {
     void this.servico.carregar()
@@ -170,6 +191,25 @@ export class ChatRailComponente implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.cancelarEscuta?.()
+  }
+
+  fecharComFoco(): void { this.servico.fecharRail() }
+
+  /**
+   * Como diálogo: Esc fecha (o effect devolve o foco) e o Tab fica preso no painel.
+   * ⚠️ Esc dentro de um modal ou menu do próprio inbox é DELE (fecha só aquilo).
+   */
+  aoTeclar(ev: KeyboardEvent): void {
+    if (!this.modal()) return
+    const alvo = ev.target as Element | null
+    if (ev.key === 'Escape') {
+      if (ev.defaultPrevented || alvo?.closest('[role="dialog"]:not(.rail), [role="menu"], .emoji-panel')) return
+      ev.preventDefault()
+      this.servico.fecharRail()
+      return
+    }
+    if (alvo?.closest('[role="dialog"]:not(.rail)')) return
+    if (prenderTab(this.painel().nativeElement, ev, document.activeElement)) ev.preventDefault()
   }
 
   /** Arrasta a borda esquerda: largura = borda direita da viewport − ponteiro. */
@@ -187,13 +227,6 @@ export class ChatRailComponente implements OnInit, OnDestroy {
     alvo.addEventListener('pointerup', soltar)
   }
 
-  // Avatar: iniciais + cor estável por id (mesmo esquema do inbox).
-  private readonly CORES = ['#6a4bb6', '#00786b', '#2a6fc9', '#b0417a', '#4e37a8', '#00747f', '#3a8f45', '#c0552b', '#5d6d7e', '#9c5b23']
-  corAvatar(id: string): string {
-    let h = 0
-    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
-    return this.CORES[h % this.CORES.length]!
-  }
   iniciais(nome: string): string {
     const p = (nome || '?').trim().split(/\s+/)
     const a = p[0]?.[0] ?? ''

@@ -41,7 +41,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     } @else if (!modulos.agendaAtiva()) {
       <ui-estado titulo="Agenda desligada"
         descricao="Um administrador liga a Agenda em Configurações › Módulos.">
-        <a class="btn btn--secundario" routerLink="/config">Abrir Configurações</a>
+        <a class="btn btn--secundario" routerLink="/config/empresa">Abrir Configurações</a>
       </ui-estado>
     } @else {
       <div class="barra">

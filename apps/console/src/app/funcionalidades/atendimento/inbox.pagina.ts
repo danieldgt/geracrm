@@ -1,6 +1,6 @@
 import { Component, ChangeDetectionStrategy, inject, input, OnDestroy, computed, signal, viewChild, effect, untracked, ElementRef } from '@angular/core'
 import { FormsModule } from '@angular/forms'
-import { RouterLink } from '@angular/router'
+import { Router, RouterLink } from '@angular/router'
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { formatarProtocolo, parsearProtocolo, type SugestaoVigente } from '@geracrm/shared'
@@ -17,7 +17,9 @@ import { AcoesConversaComponente } from './acoes-conversa.componente.js'
 import { AgendarReuniaoComponente } from '../agenda/agendar-reuniao.componente.js'
 import { CONDUCOES } from '../../nucleo/devolucao.regras.js'
 import { CelularServico } from '../../nucleo/celular.servico.js'
-import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
+import { fecharNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
+import { MenuMaisComponente } from './menu-mais.componente.js'
+import type { ItemMenuMais } from './menu-mais.regras.js'
 
 /**
  * Inbox — visual inspirado no WhatsApp (tema escuro, bolhas, avatares).
@@ -28,21 +30,22 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
  */
 @Component({
   selector: 'app-inbox',
-  imports: [FormsModule, RouterLink, BotaoComponente, EstadoComponente, FiltrosComponente, IconeComponente, CanalSimboloComponente, SlaCronometroComponente, AcoesConversaComponente, AgendarReuniaoComponente],
+  imports: [FormsModule, RouterLink, BotaoComponente, EstadoComponente, FiltrosComponente, IconeComponente, CanalSimboloComponente, SlaCronometroComponente, AcoesConversaComponente, AgendarReuniaoComponente, MenuMaisComponente],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="wa" [class.tem-conversa]="servico.selecionadaId()">
       <!-- ───────── Lista ───────── -->
       <aside class="lista">
+        <!-- ⚠️ Um título só: o trilho não tem cabeçalho próprio. Fechar mora aqui
+             (fecharNoCabecalhoDaLista): ‹ à esquerda no celular (tela cheia; com a
+             conversa em largura total a lista some e o ‹ do topo da conversa volta
+             para cá — um ‹ por nível), › à direita no desktop. -->
         <header class="barra">
-          @if (voltarDaLista() === 'fechar-trilho') {
-            <!-- Celular: o trilho ocupa a tela e não tem cabeçalho próprio; este
-                 ‹ fecha. Com a conversa em largura total a lista some, e o ‹
-                 do topo da conversa volta para cá — um ‹ por nível. -->
+          @if (fecharTrilho() === 'voltar-celular') {
             <button class="voltar fechar-trilho" (click)="servico.fecharRail()" title="Fechar conversas"
                     aria-label="Fechar conversas">‹</button>
           }
-          <span class="titulo">Conversas</span>
+          <h2 class="titulo">Conversas</h2>
           @if (rotuloConexao()) {
             <!-- Esta bolinha é a conexão da TELA com o servidor (SSE), não o
                  estado do WhatsApp. O title existe porque, num inbox de WhatsApp,
@@ -51,6 +54,10 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                   title="Atualizações em tempo real desta tela. Não indica o estado do WhatsApp.">
               {{ rotuloConexao() }}
             </span>
+          }
+          @if (fecharTrilho() === 'recolher-desktop') {
+            <button class="recolher" type="button" (click)="servico.fecharRail()" title="Recolher conversas"
+                    aria-label="Recolher conversas"><ui-icone nome="chevron-right" [tamanho]="18" /></button>
           }
         </header>
 
@@ -61,7 +68,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
           <div class="canal-caido" role="alert">
             <strong><ui-icone nome="alert-triangle" [tamanho]="14" /> {{ c.nome || 'Número' }} desconectado</strong>
             <span>Mensagens não são enviadas nem recebidas por este número.</span>
-            <a routerLink="/numeros">Reconectar por QR →</a>
+            <a routerLink="/config/numeros">Reconectar por QR →</a>
           </div>
         }
 
@@ -119,7 +126,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                   <button class="item" [class.ativo]="servico.selecionadaId() === c.id"
                           (click)="servico.abrir(c.id)">
                     <span class="av-wrap">
-                      <span class="avatar" [style.background]="corAvatar(c.id)">{{ iniciais(c.nome) }}</span>
+                      <span class="avatar" aria-hidden="true">{{ iniciais(c.nome) }}</span>
                       <app-canal-simbolo class="canal-badge" [tipo]="c.canalTipo" [tam]="16" />
                     </span>
                     <span class="col">
@@ -172,29 +179,33 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                                   descricao="Volte à lista e tente abrir de novo." /> }
           @case ('pronto') {
             @if (servico.thread(); as t) {
+              <!-- ⚠️ O NOME tem prioridade: à vista ficam só o nome (+ estado da
+                   janela e SLA), UM primário (Assumir, ou o selo de quem atende)
+                   e o pedido como botão-ícone. Agendar, devolver e reatribuir
+                   moram no "⋯" (C3 de docs/plano-reorganizacao-console.md). -->
               <header class="topo">
                 <!-- Só no modo estreito (lista OU diálogo): volta para a lista. -->
                 <button class="voltar" (click)="servico.voltarParaLista()" title="Voltar às conversas" aria-label="Voltar às conversas">‹</button>
-                <span class="avatar" [style.background]="corAvatar(t.id)">{{ iniciais(t.nome) }}</span>
+                <span class="avatar" aria-hidden="true">{{ iniciais(t.nome) }}</span>
                 <span class="topo-col">
                   <span class="nome-linha">
                     <!-- Sem beco: o nome leva à ficha do contato (cliente 360°). -->
                     <a class="nome nome-link" [routerLink]="['/contato', t.contatoId]"
-                       title="Abrir a ficha do contato">{{ t.nome }}</a>
+                       [title]="t.nome + ' — abrir a ficha do contato'">{{ t.nome }}</a>
                     <app-canal-simbolo [tipo]="t.canalTipo" [tam]="18" />
                   </span>
-                  <span class="sub" [attr.data-estado]="t.exigeJanela24h ? t.janela.estado : 'aberta'">{{ subConversa(t) }}</span>
+                  <span class="sub-linha">
+                    <span class="sub" [attr.data-estado]="t.exigeJanela24h ? t.janela.estado : 'aberta'" [title]="subConversa(t)">{{ subConversa(t) }}</span>
+                    <app-sla-cronometro class="sla-topo" [conversaId]="t.id" [compacto]="true" /><!-- P18: SLA do handoff (some sem SLA armado) -->
+                  </span>
                 </span>
                 <div class="topo-acoes">
                   <a class="pedido-btn" routerLink="/pedido" [queryParams]="{ conversa: t.id }"
-                     title="Montar um pedido para este cliente"><ui-icone nome="shopping-cart" [tamanho]="14" /> Montar pedido</a>
-                  <app-acoes-conversa [conversaId]="t.id" [atendimento]="t.atendimento" /><!-- G1: devolver ao agente / reatribuir -->
-                  <app-agendar-reuniao [conversaId]="t.id" /><!-- C3: só com o módulo Agenda ligado -->
-                  <app-sla-cronometro [conversaId]="t.id" /><!-- P18: SLA do handoff (some sem SLA armado) -->
+                     title="Montar um pedido para este cliente" aria-label="Montar pedido"><ui-icone nome="shopping-cart" [tamanho]="16" /><span class="rot">Pedido</span></a>
                   @if (t.atendimento && t.atendimento.estado !== 'na_fila') {
-                    <span class="atend-badge" [title]="'Atendimento ' + protocoloFmt(t.atendimento.protocolo)">
+                    <span class="atend-badge" [title]="'Atendimento ' + protocoloFmt(t.atendimento.protocolo) + ' · ' + (t.atendimento.atendenteNome || 'em atendimento')">
                       @if (t.atendimento.protocolo) { <b class="proto">{{ protocoloFmt(t.atendimento.protocolo) }}</b> }
-                      <ui-icone nome="user" [tamanho]="14" /> {{ t.atendimento.atendenteNome || 'Em atendimento' }}
+                      <ui-icone nome="user" [tamanho]="14" /><span class="rot">{{ t.atendimento.atendenteNome || 'Em atendimento' }}</span>
                     </span>
                   } @else {
                     <!-- ⚠️ Ausente não assume: assumir CALA o agente naquela
@@ -203,12 +214,16 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
                          fica visível e explicado, não some — sumir deixaria a
                          pessoa procurando o que ela sabe que existia. -->
                     <button class="assumir-btn" type="button" (click)="servico.assumir(t.id)"
-                            [disabled]="presenca.ausente()"
+                            [disabled]="presenca.ausente()" aria-label="Assumir"
                             [title]="presenca.ausente()
                               ? 'Você está marcado como ausente — marque-se disponível para assumir'
-                              : 'Assumir este atendimento'">Assumir</button>
+                              : 'Assumir este atendimento'"><ui-icone nome="user" [tamanho]="16" /><span class="rot">Assumir</span></button>
                   }
+                  <app-menu-mais [itens]="itensMenuConversa()" rotulo="Mais ações da conversa" (escolher)="aoMenuConversa($event, t)" />
                 </div>
+                <!-- Sem botões próprios: só os modais. O "⋯" acima abre cada um. -->
+                <app-acoes-conversa [conversaId]="t.id" [atendimento]="t.atendimento" [gatilho]="false" /><!-- G1: devolver ao agente / reatribuir -->
+                <app-agendar-reuniao [conversaId]="t.id" [gatilho]="false" /><!-- C3: só com o módulo Agenda ligado -->
               </header>
 
               <!-- Presença (INB-18): evita dois atendentes no mesmo cliente. -->
@@ -482,7 +497,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
       display: block; height: calc(100dvh - var(--altura-barra-topo)); min-height: 0; color: var(--wa-text);
       /* ⚠️ O inbox reage à PRÓPRIA largura (é filho do rail redimensionável),
          não à da janela — container query em vez de @media. */
-      container-type: inline-size;
+      container: inbox / inline-size;
     }
     .wa {
       /* Lista com largura FIXA (~300px) e o diálogo cresce com o resto — assim o
@@ -502,15 +517,20 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     /* ── Lista ── */
     .lista { display: flex; flex-direction: column; background: var(--wa-sidebar); border-right: 1px solid var(--wa-line); min-height: 0; }
     .barra { height: 56px; display: flex; align-items: center; gap: 10px; padding: 0 16px; background: var(--wa-panel); }
-    .titulo { font-size: 16px; font-weight: 600; }
+    .titulo { margin: 0; font-size: 16px; font-weight: 600; }
+    .recolher { margin-left: auto; flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border: 0;
+      border-radius: var(--raio-controle); background: transparent; color: var(--wa-sec); cursor: pointer; }
+    .conexao + .recolher { margin-left: 0; }
+    .recolher:hover { background: var(--wa-hover); color: var(--wa-text); }
+    .recolher:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .canal-caido { display: flex; flex-direction: column; gap: 2px; margin: var(--espacamento-2); padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--erro); border-radius: var(--raio-controle); background: var(--erro-suave, transparent); font-size: 12px; color: var(--texto); }
     .canal-caido span { color: var(--texto-secundario); }
     .canal-caido a { color: var(--marca); text-decoration: none; font-weight: 600; }
     .conexao { margin-left: auto; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
     .conexao::before { content: '●'; margin-right: 4px; }
-    .conexao[data-estado='conectado'] { color: #14e39c; }
-    .conexao[data-estado='conectando'], .conexao[data-estado='reconectando'] { color: #e0b341; }
-    .conexao[data-estado='offline'] { color: #ff6b5e; }
+    .conexao[data-estado='conectado'] { color: var(--sucesso); }
+    .conexao[data-estado='conectando'], .conexao[data-estado='reconectando'] { color: var(--atencao); }
+    .conexao[data-estado='offline'] { color: var(--erro); }
 
     .filtros-lista { margin: var(--espacamento-2); }
     .abas-wrap { flex: 1 1 100%; display: grid; gap: var(--espacamento-1); min-width: 0; }
@@ -519,12 +539,14 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .abas button { flex: 1; padding: 7px 8px; border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-size: 13px; background: var(--wa-panel); color: var(--wa-sec); display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
     .abas button.ativa { background: var(--wa-hover); color: var(--wa-text); font-weight: 600; }
         .abas.conducao button { font-size: 12px; padding: 4px 8px; }
-    .abas .cont { background: var(--wa-green); color: #04231d; font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 999px; min-width: 18px; text-align: center; }
+    .abas .cont { background: var(--wa-green); color: var(--acao-texto); font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 999px; min-width: 18px; text-align: center; }
     .itens { flex: 1; overflow-y: auto; min-height: 0; }
     .item { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: none; border: 0; border-bottom: 1px solid var(--wa-line); cursor: pointer; text-align: left; color: inherit; }
     .item:hover { background: var(--wa-hover); }
     .item.ativo { background: var(--wa-hover); }
-    .avatar { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 15px; font-weight: 600; }
+    /* Avatar neutro (palco neutro): a cor fica para estado — não lida, janela, ação. */
+    .avatar { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+      background: var(--superficie-selecionada); color: var(--texto); border: 1px solid var(--borda); font-size: 15px; font-weight: 600; }
     /* Selo de canal no canto do avatar (multicanal). */
     .av-wrap { flex: none; position: relative; display: inline-grid; }
     .canal-badge { position: absolute; bottom: -3px; right: -3px; box-shadow: 0 0 0 2px var(--wa-sidebar, var(--superficie)); border-radius: 6px; }
@@ -539,32 +561,50 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .nao-lida { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--wa-green); }
     .ponto-janela { flex: none; width: 8px; height: 8px; border-radius: 50%; }
     .ponto-janela[data-estado='aberta'] { background: var(--wa-green); }
-    .ponto-janela[data-estado='terminando'] { background: #e0b341; }
+    .ponto-janela[data-estado='terminando'] { background: var(--janela-terminando); }
     .ponto-janela[data-estado='fechada'] { background: transparent; }
     .proto-busca { color: var(--wa-green); font-weight: 600; justify-content: flex-start; gap: 6px; }
     .proto-busca .proto { color: var(--wa-green); font-variant-numeric: tabular-nums; }
     .esqueleto { height: 44px; margin: 10px 14px; border-radius: 8px; background: linear-gradient(90deg, var(--wa-panel), var(--wa-hover), var(--wa-panel)); background-size: 200% 100%; animation: brilho 1.3s infinite; }
     @keyframes brilho { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
     .aviso { padding: 24px 18px; color: var(--wa-sec); font-size: 13px; text-align: center; }
-    .aviso button { margin-top: 10px; padding: 6px 12px; border: 0; border-radius: 6px; background: var(--wa-green); color: #04231d; font-weight: 600; cursor: pointer; }
+    .aviso button { margin-top: 10px; padding: 6px 12px; border: 0; border-radius: 6px; background: var(--wa-green); color: var(--acao-texto); font-weight: 600; cursor: pointer; }
 
     /* ── Conversa ── */
-    .conversa { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--wa-chat); position: relative; }
+    .conversa { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--wa-chat); position: relative;
+      container: conversa / inline-size; }
+    /* Conversa estreita: os rótulos dos botões do topo viram só ícone (aria-label já diz o nome). */
+    @container conversa (max-width: 520px) {
+      .topo .pedido-btn .rot { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+      .assumir-btn, .pedido-btn { padding: 7px 9px; }
+      .atend-badge { max-width: 120px; }
+    }
     /* leve textura no fundo do chat */
     .conversa::before { content: ''; position: absolute; inset: 0; opacity: .04; pointer-events: none;
       background-image: radial-gradient(var(--wa-text) 1px, transparent 1px); background-size: 22px 22px; }
     .placeholder { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; color: var(--wa-sec); text-align: center; padding: 24px; }
 
-    .topo { min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 6px 16px; background: var(--wa-panel); z-index: 1; }
+    /* z 3: o menu "⋯" abre por cima das mensagens (que estão em z 1). */
+    .topo { min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 6px 16px; background: var(--wa-panel); z-index: 3; }
     .topo .avatar { width: 40px; height: 40px; font-size: 14px; }
-    .topo-col { display: flex; flex-direction: column; flex: 1 1 112px; min-width: 96px; }
+    .topo-col { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+    .sub-linha { display: flex; align-items: center; gap: var(--espacamento-2); min-width: 0; }
+    .sub-linha .sub { flex: 0 1 auto; min-width: 0; }
+    .sla-topo { flex: none; }
     .nome-linha { display: flex; align-items: center; gap: 7px; min-width: 0; }
-    .topo-acoes { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 8px; min-width: 0; }
-    .assumir-btn { border: 0; background: var(--wa-green); color: #04231d; font-weight: 600; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }
-    .pedido-btn { font-size: 12px; color: var(--wa-text); background: rgba(255,255,255,.1); padding: 6px 12px; border-radius: 999px; text-decoration: none; white-space: nowrap; }
-    .pedido-btn:hover { background: rgba(255,255,255,.18); }
-    .atend-badge { font-size: 12px; color: var(--wa-text); background: rgba(255,255,255,.1); padding: 5px 10px; border-radius: 999px; }
-    .atend-badge .proto { color: #14e39c; margin-right: 4px; font-variant-numeric: tabular-nums; }
+    .topo-acoes { margin-left: auto; flex: none; display: flex; align-items: center; gap: var(--espacamento-2); }
+    .assumir-btn { display: inline-flex; align-items: center; gap: var(--espacamento-1); border: 0; background: var(--acao); color: var(--acao-texto);
+      font: inherit; font-weight: 600; font-size: 13px; padding: 7px 14px; border-radius: var(--raio-controle); cursor: pointer; white-space: nowrap; }
+    .assumir-btn:hover:not(:disabled) { background: var(--acao-hover); }
+    .assumir-btn:focus-visible, .pedido-btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
+    .pedido-btn { display: inline-flex; align-items: center; gap: var(--espacamento-1); font-size: 13px; color: var(--wa-text);
+      border: 1px solid var(--borda-controle); background: transparent; padding: 6px 10px; border-radius: var(--raio-controle);
+      text-decoration: none; white-space: nowrap; }
+    .pedido-btn:hover { background: var(--wa-hover); }
+    .atend-badge { display: inline-flex; align-items: center; gap: var(--espacamento-1); max-width: 220px; font-size: 12px; color: var(--wa-text);
+      background: var(--wa-hover); border: 1px solid var(--wa-line); padding: 5px 10px; border-radius: var(--raio-completo); white-space: nowrap; }
+    .atend-badge .rot { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .atend-badge .proto { color: var(--sucesso); margin-right: 4px; font-variant-numeric: tabular-nums; }
     .topo-col .nome { font-size: 15px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nome-link { color: inherit; text-decoration: none; }
     .nome-link:hover, .nome-link:focus-visible { text-decoration: underline; outline: none; }
@@ -572,8 +612,8 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .sub { font-size: 12px; color: var(--wa-sec); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .presenca { padding: 6px 16px; font-size: 12px; color: var(--wa-text); background: var(--acao-suave); border-bottom: 1px solid var(--wa-line); }
     .sub[data-estado='aberta'] { color: var(--wa-green); }
-    .sub[data-estado='terminando'] { color: #e0b341; }
-    .sub[data-estado='fechada'] { color: #ff6b5e; }
+    .sub[data-estado='terminando'] { color: var(--atencao); }
+    .sub[data-estado='fechada'] { color: var(--erro); }
 
     .msgs { flex: 1; overflow-y: auto; min-height: 0; padding: 16px 8%; display: flex; flex-direction: column; gap: 3px; z-index: 1; }
     .sem-msg { text-align: center; color: var(--wa-sec); font-size: 13px; margin: auto; }
@@ -582,9 +622,9 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .sep span { background: var(--wa-panel); color: var(--wa-sec); font-size: 11px; padding: 5px 12px; border-radius: 8px; text-transform: uppercase; letter-spacing: .03em; }
     .bolha { position: relative; max-width: 65%; align-self: flex-start; background: var(--wa-in); color: var(--wa-text);
       padding: 6px 9px 8px; border-radius: 8px; border-top-left-radius: 0; font-size: 14.2px; line-height: 1.35;
-      box-shadow: 0 1px 0 rgba(0,0,0,.2); word-wrap: break-word; }
+      border: 1px solid var(--wa-line); word-wrap: break-word; }
     .bolha.saliente { align-self: flex-end; background: var(--wa-out); border-top-left-radius: 8px; border-top-right-radius: 0; }
-    .bolha.falhou { outline: 1px solid #ff6b5e; }
+    .bolha.falhou { outline: 1px solid var(--erro); }
     .txt { white-space: pre-wrap; }
     .msg-img { max-width: 260px; max-height: 340px; border-radius: 6px; display: block; cursor: pointer; }
     .legenda-img { display: block; margin-top: 4px; }
@@ -594,10 +634,10 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .card-tit { font-weight: 600; margin-bottom: 4px; }
     .card-res { font-size: 13px; opacity: .85; margin-bottom: 8px; white-space: pre-wrap; }
     .card-opcoes { display: flex; gap: 8px; margin-top: 6px; }
-    .card-btn { flex: 1; padding: 7px 10px; border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-weight: 600; background: var(--wa-green); color: #04231d; }
-    .card-btn.recusar { background: rgba(255,255,255,.15); color: var(--wa-text); }
+    .card-btn { flex: 1; padding: 7px 10px; border: 0; border-radius: 8px; cursor: pointer; font: inherit; font-weight: 600; background: var(--wa-green); color: var(--acao-texto); }
+    .card-btn.recusar { background: var(--wa-hover); color: var(--wa-text); border: 1px solid var(--wa-line); }
     .card-resolvido { margin-top: 6px; font-size: 13px; font-weight: 600; }
-    .card-acao[data-estado='recusado'] .card-resolvido { color: #ff9a8e; }
+    .card-acao[data-estado='recusado'] .card-resolvido { color: var(--erro); }
     .enviar.gravando { background: var(--erro); color: var(--texto-invertido); animation: pulsa 1s infinite; }
     @keyframes pulsa { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
     .meta { float: right; margin: 6px 0 -2px 8px; display: inline-flex; align-items: center; gap: 3px; }
@@ -609,23 +649,23 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     .bolha.apagada { opacity: .9; }
     .apagada .txt.apagada-txt { text-decoration: line-through; opacity: .55; }
     .apagada-img { opacity: .4; filter: grayscale(.6); }
-    .apg-badge { font-size: 10px; color: #ff9a8e; font-style: italic; margin-right: 4px; }
+    .apg-badge { font-size: 10px; color: var(--erro); font-style: italic; margin-right: 4px; }
     /* Menu de opções da bolha */
     .menu-btn { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; display: grid; place-items: center; padding: 0; border: 0; background: var(--wa-hover); color: var(--wa-sec); cursor: pointer; font-size: 11px; line-height: 1; opacity: .55; border-radius: 50%; }
     .bolha:hover .menu-btn { opacity: 1; }
     .menu-btn:hover { background: var(--wa-line); color: var(--wa-text); }
-    .menu { position: absolute; top: 20px; right: 4px; z-index: 5; background: var(--wa-panel); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.45); overflow: hidden; min-width: 150px; }
+    .menu { position: absolute; top: 20px; right: 4px; z-index: 5; background: var(--wa-panel); border-radius: 8px; box-shadow: var(--elevacao-dropdown); border: 1px solid var(--wa-line); overflow: hidden; min-width: 150px; }
     .menu button { display: block; width: 100%; text-align: left; padding: 9px 14px; border: 0; background: none; color: var(--wa-text); font: inherit; font-size: 13.5px; cursor: pointer; }
     .menu button:hover { background: var(--wa-hover); }
     .edicao { display: flex; align-items: center; gap: 6px; }
-    .edicao input { flex: 1; min-width: 160px; padding: 6px 8px; border: 0; border-radius: 6px; background: rgba(0,0,0,.25); color: var(--wa-text); font: inherit; }
+    .edicao input { flex: 1; min-width: 160px; padding: 6px 8px; border: 0; border-radius: 6px; background: var(--wa-chat); border: 1px solid var(--borda-controle); color: var(--wa-text); font: inherit; }
     .edicao button { border: 0; width: 26px; height: 26px; border-radius: 50%; cursor: pointer; }
-    .ed-ok { background: var(--wa-green); color: #04231d; }
+    .ed-ok { background: var(--wa-green); color: var(--acao-texto); }
     .ed-x { background: var(--wa-hover); color: var(--wa-text); }
 
     /* ── Composer ── */
     .composer { position: relative; min-height: 56px; display: flex; align-items: flex-end; gap: 10px; padding: 8px 16px; background: var(--wa-panel); flex-wrap: wrap; z-index: 1; }
-    .emoji-panel { position: absolute; left: 12px; bottom: 60px; width: min(360px, 80%); max-height: 240px; overflow-y: auto; padding: 8px; background: var(--wa-panel); border: 1px solid var(--wa-line); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.5); display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; z-index: 6; }
+    .emoji-panel { position: absolute; left: 12px; bottom: 60px; width: min(360px, 80%); max-height: 240px; overflow-y: auto; padding: 8px; background: var(--wa-panel); border: 1px solid var(--wa-line); border-radius: 10px; box-shadow: var(--elevacao-dropdown); display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; z-index: 6; }
     .emoji { border: 0; background: none; cursor: pointer; font-size: 20px; padding: 4px; border-radius: 6px; line-height: 1; }
     .emoji:hover { background: var(--wa-hover); }
     .ic { flex: none; width: 34px; height: 34px; border: 0; border-radius: 50%; background: none; color: var(--wa-sec); font-size: 20px; cursor: pointer; }
@@ -642,22 +682,22 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
       min-height: 41px; font-family: inherit; }
     .entrada::placeholder { color: var(--wa-sec); }
     .entrada:focus { outline: none; }
-    .enviar { flex: none; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--wa-green); color: #04231d; font-size: 16px; cursor: pointer; display: grid; place-items: center; }
+    .enviar { flex: none; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--wa-green); color: var(--acao-texto); font-size: 16px; cursor: pointer; display: grid; place-items: center; }
     .enviar:disabled { background: var(--wa-hover); color: var(--wa-sec); cursor: default; }
-    .fechada { flex: 1; font-size: 13px; color: #e0b341; text-align: center; }
+    .fechada { flex: 1; font-size: 13px; color: var(--atencao); text-align: center; }
     /* ⚠️ Faixa de LEITURA, não de erro: âmbar como a ausência do menu, nunca o
        vermelho de falha. Quem se marcou ausente não errou nada. */
     .so-acompanhando { flex: 1; display: flex; align-items: center; justify-content: center;
-      flex-wrap: wrap; gap: 10px; padding: 6px 4px; font-size: 13px; color: #e0b341; text-align: center; }
+      flex-wrap: wrap; gap: 10px; padding: 6px 4px; font-size: 13px; color: var(--atencao); text-align: center; }
     .so-acompanhando strong { font-weight: 600; }
     .sa-txt { min-width: 0; }
-    .sa-btn { flex: none; border: 1px solid #e0b341; background: transparent; color: #e0b341;
+    .sa-btn { flex: none; border: 1px solid var(--atencao); background: transparent; color: var(--atencao);
       font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer; }
-    .sa-btn:hover:not(:disabled) { background: #e0b34122; }
+    .sa-btn:hover:not(:disabled) { background: var(--atencao-suave); }
     .sa-btn:disabled { opacity: .6; cursor: default; }
     .sa-btn:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .assumir-btn:disabled { opacity: .5; cursor: default; }
-    .erro-envio { width: 100%; margin: 0; font-size: 12px; color: #ff6b5e; }
+    .erro-envio { width: 100%; margin: 0; font-size: 12px; color: var(--erro); }
 
     /* ── Sugestão do agente (P13) — acento IA, gravidade por token, nunca cor solta ── */
     .sug { z-index: 1; padding: var(--espacamento-2) 16px 0; background: var(--wa-panel); border-top: 1px solid var(--wa-line);
@@ -705,7 +745,7 @@ import { voltarNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
     /* Rail estreito: uma coluna só. Sem conversa aberta → lista; com conversa →
        diálogo em largura total + botão "voltar". Assim o diálogo nunca fica
        espremido, mesmo num painel estreito. Baseado na largura do PRÓPRIO inbox. */
-    @container (max-width: 680px) {
+    @container inbox (max-width: 680px) {
       .wa { grid-template-columns: 1fr; }
       .lista { border-right: 0; }
       .conversa { display: none; }
@@ -720,8 +760,30 @@ export class InboxPagina implements OnDestroy {
   readonly eventos = inject(EventosServico)
   /** Montado pelo trilho de conversas (e não pela rota /conversas). */
   readonly noTrilho = input(false)
-  /** ‹ do cabeçalho da lista: só no celular, onde o trilho é tela cheia e fecha por aqui. */
-  readonly voltarDaLista = computed(() => voltarNoCabecalhoDaLista(this.celular(), this.noTrilho()))
+  /** Fechar o trilho mora no cabeçalho da lista: ‹ no celular, › no desktop; fora do trilho, nada. */
+  readonly fecharTrilho = computed(() => fecharNoCabecalhoDaLista(this.celular(), this.noTrilho()))
+  private readonly router = inject(Router)
+  private readonly acoesConversa = viewChild(AcoesConversaComponente)
+  private readonly agendarReuniao = viewChild(AgendarReuniaoComponente)
+  /** O "⋯" da conversa: só o que está disponível agora (módulo, papel, estado do atendimento). */
+  readonly itensMenuConversa = computed<readonly ItemMenuMais[]>(() => {
+    const acoes = this.acoesConversa()
+    const itens: ItemMenuMais[] = []
+    if (this.agendarReuniao()?.disponivel()) itens.push({ id: 'agendar', rotulo: 'Agendar reunião', dica: 'Marcar uma reunião com este cliente' })
+    if (acoes?.mostrarDevolver()) itens.push({ id: 'devolver', rotulo: 'Devolver ao agente', dica: 'Devolver a conversa ao agente' })
+    if (acoes?.mostrarReatribuir()) itens.push({ id: 'reatribuir', rotulo: 'Reatribuir', dica: 'Passar o atendimento para outra pessoa' })
+    itens.push({ id: 'ficha', rotulo: 'Abrir a ficha do contato' })
+    return itens
+  })
+
+  aoMenuConversa(id: string, t: Thread): void {
+    switch (id) {
+      case 'agendar': void this.agendarReuniao()?.abrir(); return
+      case 'devolver': this.acoesConversa()?.abrirDevolver(); return
+      case 'reatribuir': void this.acoesConversa()?.abrirReatribuir(); return
+      case 'ficha': void this.router.navigate(['/contato', t.contatoId]); return
+    }
+  }
   private readonly celular = inject(CelularServico).celular
   /**
    * ⚠️ O MESMO estado de presença do menu do usuário, não uma cópia. Quem se
@@ -1143,13 +1205,8 @@ export class InboxPagina implements OnDestroy {
     return (um.direcao === 'saliente' ? 'Você: ' : '') + um.texto
   }
 
-  // Avatar: iniciais + cor estável por id.
-  private readonly CORES = ['#6a4bb6', '#00786b', '#2a6fc9', '#b0417a', '#4e37a8', '#00747f', '#3a8f45', '#c0552b', '#5d6d7e', '#9c5b23']
-  corAvatar(id: string): string {
-    let h = 0
-    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
-    return this.CORES[h % this.CORES.length]!
-  }
+  // Avatar: iniciais (fundo neutro, por token).
+
   iniciais(nome: string): string {
     const p = (nome || '?').trim().split(/\s+/)
     const a = p[0]?.[0] ?? ''

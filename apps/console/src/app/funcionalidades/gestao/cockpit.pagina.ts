@@ -292,10 +292,10 @@ export class CockpitPagina implements OnInit {
   }
 
   protected selecionar(card: CardCockpit, grupo: string | null, faixa: FaixaAguardando | null): void {
-    // "Sem próximo passo" tem tela própria (D2): agendar, descartar ou transferir em lote.
+    // "Sem próximo passo" é a aba vizinha (Higienização da carteira): agendar, descartar ou transferir em lote.
     if (card === 'semProximoPasso') {
       const r = grupo === null ? null : recorteDoGrupo(this.agrupar(), grupo)
-      void this.router.navigate(['/carteira-higienizacao'], {
+      void this.router.navigate(['/cockpit/carteira'], {
         queryParams: { ...(r?.vendedorId ? { vendedorId: r.vendedorId } : {}), ...(r?.filialId ? { filialId: r.filialId } : {}) },
       })
       return

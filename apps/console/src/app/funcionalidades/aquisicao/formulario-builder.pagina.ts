@@ -305,7 +305,7 @@ export class FormularioBuilderPagina implements OnInit {
   protected readonly chavePublica = signal('')
   protected readonly aba = signal('construtor')
   protected readonly abas = computed<Aba[]>(() => [{ id: 'construtor', rotulo: 'Construtor' }, { id: 'respostas', rotulo: 'Respostas' }])
-  protected readonly trilha = computed(() => [{ rotulo: 'Formulários', rota: '/formularios' }, { rotulo: this.nome() || 'Novo formulário' }])
+  protected readonly trilha = computed(() => [{ rotulo: 'Formulários', rota: '/aquisicao/formularios' }, { rotulo: this.nome() || 'Novo formulário' }])
 
   // Configurações
   protected readonly nome = signal('')

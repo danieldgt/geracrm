@@ -5,6 +5,8 @@ export const DEBOUNCE_BUSCA_MS = 300
 
 /**
  * Cartão de filtros do padrão Lista: busca (debounce 300 ms) + controles projetados + Filtrar/Limpar.
+ * Os controles projetados viram células de uma grade que se ajusta à largura do cartão; um
+ * `ui-filtro-periodo` projetado ocupa a linha inteira (o `:host` dele pede isso).
  * `buscar` dispara com o texto já com debounce. Enter e o botão Filtrar disparam `aplicar` na hora —
  * e só `aplicar`: o texto vai por `buscar` se ainda não tinha sido entregue (nunca em duplicidade).
  */
@@ -34,20 +36,30 @@ export const DEBOUNCE_BUSCA_MS = 300
     </form>
   `,
   styles: `
-    :host { display: block; }
-    .filtros { display: flex; flex-wrap: wrap; align-items: end; gap: var(--espacamento-3);
+    /* ⚠️ Responde à PRÓPRIA largura (container), não à janela: com o chat aberto ao
+       lado, a tela encolhe sem a janela mudar. A busca ocupa a linha; os filtros
+       projetados entram numa grade que preenche as colunas; Filtrar e Limpar andam juntos. */
+    :host { display: block; container: filtros / inline-size; }
+    .filtros { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(176px, 100%), 1fr));
+      align-items: end; gap: var(--espacamento-3);
       padding: var(--espacamento-4); background: var(--superficie); border: 1px solid var(--borda);
       border-radius: var(--raio-painel); }
-    .busca { flex: 1 1 240px; min-width: 0; }
+    .busca { grid-column: 1 / -1; min-width: 0; }
     .entrada { position: relative; display: block; }
     .lupa { position: absolute; left: var(--espacamento-3); top: 50%; transform: translateY(-50%); color: var(--texto-suave); pointer-events: none; }
     .entrada input { width: 100%; padding-left: calc(var(--espacamento-3) * 2 + 16px); }
     .compacto { padding: var(--espacamento-3); gap: var(--espacamento-2); }
-    .compacto .busca { flex: 1 1 100%; }
     .so-leitor { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
       clip-path: inset(50%); white-space: nowrap; border: 0; }
-    .botoes { display: flex; gap: var(--espacamento-2); }
-    @media (max-width: 640px) { .botoes { width: 100%; } .botoes .btn { flex: 1; } }
+    .botoes { display: flex; flex-wrap: nowrap; gap: var(--espacamento-2); justify-self: start; }
+    .botoes .btn { white-space: nowrap; }
+    /* Largo: a busca divide a linha com os primeiros filtros. */
+    @container filtros (min-width: 900px) { .busca { grid-column: span 2; } }
+    /* Estreito: os botões ganham a linha toda, meio a meio. */
+    @container filtros (max-width: 480px) {
+      .botoes { grid-column: 1 / -1; justify-self: stretch; }
+      .botoes .btn { flex: 1; }
+    }
   `,
 })
 export class FiltrosComponente {

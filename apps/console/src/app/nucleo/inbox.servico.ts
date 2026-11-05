@@ -221,13 +221,12 @@ export class InboxServico {
   // principal e vive SEMPRE montado na casca: recolhido = faixa de avatares;
   // expandido = inbox completo. Estado no serviço p/ sobreviver à navegação.
   //
-  // ⚠️ Dois eixos configuráveis pelo usuário, PERSISTIDOS:
-  //  · sobrepor: expandido EMPURRA o conteúdo (false) ou SOBREPÕE em overlay (true);
-  //  · largura: quantos px o painel ocupa (o usuário arrasta a borda).
+  // ⚠️ A LARGURA é da pessoa (arrasta a borda) e é PERSISTIDA. Empurrar ×
+  // gaveta não é: a casca decide pela largura da janela (casca.regras.ts,
+  // `modoTrilho`) — o antigo modo "sobrepor" escolhido à mão saiu.
   private static readonly LARG_MIN = 320
   private static readonly LARG_MAX = 1600
   readonly railAberto = signal(false)
-  readonly railSobrepor = signal(localStorage.getItem('geracrm.rail.sobrepor') === '1')
   readonly railLargura = signal(this.larguraSalva())
   readonly naoLidasTotal = computed(() => this.conversas().filter((c) => c.naoLida).length)
 
@@ -241,11 +240,6 @@ export class InboxServico {
   abrirRail(): void { this.railAberto.set(true) }
   fecharRail(): void { this.railAberto.set(false); this.pararPresenca() }
   alternarRail(): void { if (this.railAberto()) this.fecharRail(); else this.abrirRail() }
-  alternarSobrepor(): void {
-    const v = !this.railSobrepor()
-    this.railSobrepor.set(v)
-    localStorage.setItem('geracrm.rail.sobrepor', v ? '1' : '0')
-  }
   /** Redimensiona (arrastar a borda); grava a proporção escolhida. */
   definirLargura(px: number): void {
     const v = Math.min(InboxServico.LARG_MAX, Math.max(InboxServico.LARG_MIN, Math.round(px)))

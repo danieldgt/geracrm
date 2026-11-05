@@ -109,7 +109,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         @case ('pronto') {
           @if (itens().length === 0) {
             <ui-estado titulo="Nenhuma empresa ainda" descricao="A primeira empresa cadastrada aparece aqui.">
-              <button type="button" class="btn btn--primario" (click)="abrirNova()">Nova empresa</button>
+              <button type="button" class="btn btn--secundario" (click)="abrirNova()">Nova empresa</button>
             </ui-estado>
           } @else {
             <ui-tabela [colunas]="colunas" [linhas]="linhas()" [rotuloLinha]="rotuloLinha">
@@ -146,7 +146,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     </div>
 
     <!-- Cadastro de empresa (M): campos com rótulo visível; erro no campo, não em toast. -->
-    <ui-modal [aberto]="novaAberta()" titulo="Nova empresa" largura="g" (fechar)="fecharNova()">
+    <ui-modal [aberto]="novaAberta()" titulo="Nova empresa" largura="g" [sujo]="false" (fechar)="fecharNova()">
       <form id="form-nova-empresa" (submit)="cadastrar($event)">
         <ui-grade-form>
           <ui-campo class="largo" rotulo="Nome da empresa" placeholder="Confecção Exemplo Ltda" [obrigatorio]="true"

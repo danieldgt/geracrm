@@ -59,7 +59,7 @@ interface TabelaPreco {
           @if (servico.vazio()) {
             <ui-estado titulo="Nenhum ERP conectado"
               descricao="Conecte seu ERP para trazer a base de clientes e o histórico de compras. É o que faz a recompra e o RFV funcionarem desde o primeiro dia.">
-              <button type="button" class="btn btn--primario" (click)="abrirNovo()">Conectar meu ERP</button>
+              <button type="button" class="btn btn--secundario" (click)="abrirNovo()">Conectar meu ERP</button>
             </ui-estado>
           } @else {
             <ui-tabela [colunas]="colunas" [linhas]="linhas()">
@@ -128,7 +128,7 @@ interface TabelaPreco {
 
               <div uiVazio>
                 <ui-estado titulo="Nenhum ERP conectado" descricao="Conecte seu ERP para começar.">
-                  <button type="button" class="btn btn--primario" (click)="abrirNovo()">Conectar meu ERP</button>
+                  <button type="button" class="btn btn--secundario" (click)="abrirNovo()">Conectar meu ERP</button>
                 </ui-estado>
               </div>
             </ui-tabela>

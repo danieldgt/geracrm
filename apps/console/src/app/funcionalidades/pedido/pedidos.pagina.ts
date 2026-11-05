@@ -6,12 +6,13 @@ import { firstValueFrom } from 'rxjs'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import {
   ToastServico, mensagemDeErro, mesclarPagina, formatarReais,
-  CabecalhoTelaComponente, StatCardComponente, FiltrosComponente, FiltroPeriodoComponente, SelectComponente, TabelaComponente,
+  CabecalhoTelaComponente, AbasComponente, FiltrosComponente, FiltroPeriodoComponente, TabelaComponente,
   CelulaDiretiva, PaginacaoComponente, ModalComponente, ListaDefinicaoComponente, BadgeComponente,
   EstadoComponente, EsqueletoComponente, PainelComponente,
-  type ColunaTabela, type LinhaTabela, type OpcaoSelect, type TomStat, IconeComponente } from '../../compartilhado/ui/index.js'
+  type ColunaTabela, type LinhaTabela, IconeComponente } from '../../compartilhado/ui/index.js'
 import {
-  rotuloDoEstado, tomDoEstado, variacaoDaGrade, formatarDataHora, indicadoresDosContadores, montarQueryPedidos, type ContadoresPedidos,
+  rotuloDoEstado, tomDoEstado, variacaoDaGrade, formatarDataHora, indicadoresDosContadores, montarQueryPedidos, abasDeEstado,
+  ABA_TODOS, type ContadoresPedidos,
 } from './pedidos.regras.js'
 
 interface PedidoItem {
@@ -33,18 +34,8 @@ interface PedidoDetalhe {
 }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
-/** Estados que a API filtra (`?estado=`). O primeiro, vazio, é "todos". */
-const FILTROS = [
-  { chave: '', rotulo: 'Todos' },
-  { chave: 'rascunho', rotulo: 'Rascunhos' },
-  { chave: 'aguardando_confirmacao', rotulo: 'Aguardando SIM' },
-  { chave: 'confirmado', rotulo: 'Confirmados' },
-  { chave: 'efetivado', rotulo: 'No ERP' },
-  { chave: 'falhou', rotulo: 'Falharam' },
-]
-
 /**
- * Lista de pedidos no padrão de lista (cabeçalho, cards, filtros, tabela, cursor) com
+ * Lista de pedidos no padrão de lista (cabeçalho, abas de estado com contagem, filtros, tabela, cursor) com
  * um detalhe em modal ao clicar em Ver. Filtro por estado e por cliente vão ao servidor
  * (cursor); a busca por texto só vale para o que já está carregado. Segue geracrm-layout-ui
  * (5 estados como ramos explícitos, tokens, responsivo, sem sobreposição).
@@ -54,12 +45,15 @@ const FILTROS = [
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     NgTemplateOutlet, RouterLink,
-    CabecalhoTelaComponente, StatCardComponente, FiltrosComponente, FiltroPeriodoComponente, SelectComponente, TabelaComponente,
+    CabecalhoTelaComponente, AbasComponente, FiltrosComponente, FiltroPeriodoComponente, TabelaComponente,
     CelulaDiretiva, PaginacaoComponente, ModalComponente, ListaDefinicaoComponente, BadgeComponente,
     EstadoComponente, EsqueletoComponente, PainelComponente, IconeComponente,
   ],
   template: `
-    <ui-cabecalho-tela titulo="Pedidos" subtitulo="Todos os pedidos por estado, vinculados ao cliente. Clique em Ver para abrir os detalhes." />
+    <!-- O pedido assistido saiu do menu: "Novo pedido" é a entrada (plano de reorganização). -->
+    <ui-cabecalho-tela titulo="Pedidos" subtitulo="Rascunhos, aguardando confirmação, efetivados e os que falharam no ERP.">
+      <a class="btn btn--primario" routerLink="/pedido">Novo pedido</a>
+    </ui-cabecalho-tela>
 
     @if (contatoFiltro(); as c) {
       <p class="chip-filtro">Só os pedidos de um cliente ·
@@ -67,14 +61,11 @@ const FILTROS = [
         <a routerLink="/pedidos">ver todos</a></p>
     }
 
-    <div class="cartoes">
-      @for (c of cartoes(); track c.rotulo) {
-        <ui-stat-card [valor]="c.valor" [rotulo]="c.rotulo" [tom]="c.tom" />
-      }
-    </div>
+    <!-- Estado como abas, com a contagem do servidor no rótulo — no lugar dos cartões que repetiam o filtro. -->
+    <ui-abas class="estados" [abas]="abasEstado()" [ativa]="filtro() || ABA_TODOS" (ativaChange)="trocarAba($event)" />
+    @if (valorNoErp(); as v) { <p class="resumo txt-denso">Orçamentos no ERP neste filtro: <span class="txt-dados">{{ v }}</span></p> }
 
     <ui-filtros placeholder="Buscar: cliente, nome, nº ERP ou código" (buscar)="buscar($event)" (aplicar)="aplicar()" (limpar)="limparFiltros()">
-      <ui-select rotulo="Estado" placeholder="Todos os estados" [opcoes]="opcoesEstado" [valor]="filtro()" (valorChange)="trocar($event)" />
       <ui-filtro-periodo [(inicio)]="inicio" [(fim)]="fim" (aplicar)="carregar()" />
     </ui-filtros>
 
@@ -118,7 +109,7 @@ const FILTROS = [
           <ui-badge [tom]="tomDoEstado(p.estado)">{{ rotuloDoEstado(p.estado) }}</ui-badge>
         </ng-template>
         <ng-template uiCelula="itens" let-p>
-          {{ p.itens }} {{ p.itens === 1 ? 'item' : 'itens' }} · {{ p.totalPecas }} pç
+          <span class="nowrap txt-dados">{{ p.itens }} {{ p.itens === 1 ? 'item' : 'itens' }} · {{ p.totalPecas }} pç</span>
         </ng-template>
         <ng-template uiCelula="total" let-p>
           {{ reais(p.totalCentavos) }}
@@ -131,8 +122,8 @@ const FILTROS = [
         </ng-template>
         <div uiVazio>
           @if (itens().length === 0 && !temFiltro()) {
-            <ui-estado titulo="Nenhum pedido ainda" icone="🧾" descricao="Monte um pedido pela conversa ou pelo Pedido Assistido.">
-              <a class="btn btn--primario btn--pequeno" routerLink="/pedido">Abrir o Pedido Assistido</a>
+            <ui-estado titulo="Nenhum pedido ainda" icone="🧾" descricao="O pedido nasce na conversa ou aqui, pela grade do catálogo.">
+              <a class="btn btn--secundario btn--pequeno" routerLink="/pedido">Novo pedido</a>
             </ui-estado>
           } @else {
             <ui-estado titulo="Nenhum pedido bate com a busca" icone="🔍" descricao="Mude a busca ou amplie o período." />
@@ -252,8 +243,9 @@ const FILTROS = [
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
     .chip-filtro { margin: 0 0 var(--espacamento-4); font-size: 12px; color: var(--texto-secundario); }
     .chip-filtro a { color: var(--acao); }
-    .cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--espacamento-3);
-      margin-bottom: var(--espacamento-4); }
+    .estados { margin-bottom: var(--espacamento-3); }
+    .resumo { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); }
+    .nowrap { white-space: nowrap; }
     .corpo { margin-top: var(--espacamento-4); }
     .cliente { color: var(--acao); text-decoration: none; }
     .cliente:hover { text-decoration: underline; }
@@ -325,7 +317,7 @@ export class PedidosPagina implements OnInit {
     { chave: 'criadoEm', rotulo: 'Criado em', mono: true, largura: '150px' },
     { chave: 'acao', rotulo: '', alinhamento: 'dir', largura: '90px' },
   ]
-  readonly opcoesEstado: OpcaoSelect[] = FILTROS.filter((f) => f.chave !== '').map((f) => ({ valor: f.chave, rotulo: f.rotulo }))
+  protected readonly ABA_TODOS = ABA_TODOS
 
   readonly estado = signal<Estado>('carregando')
   readonly itens = signal<readonly PedidoItem[]>([])
@@ -349,16 +341,13 @@ export class PedidosPagina implements OnInit {
   /** Linhas da tabela: o que o servidor devolveu para a busca, o período e o estado. */
   readonly linhas = computed<LinhaTabela[]>(() => this.itens().map((p) => ({ ...p })))
 
-  /** Cards: totais do SERVIDOR (todo o filtro, não só a página). Sem contadores mostram traço, nunca zero. */
-  readonly cartoes = computed<{ rotulo: string; valor: string | number; tom: TomStat }[]>(() => {
+  /** Abas de estado: contagem do SERVIDOR (todo o filtro, não só a página); sem contadores, sem número. */
+  readonly abasEstado = computed(() => abasDeEstado(this.contadores()))
+  /** Valor dos orçamentos efetivados no filtro — linha discreta, só quando há valor. */
+  readonly valorNoErp = computed(() => {
     const c = this.contadores()
     const i = c ? indicadoresDosContadores(c) : null
-    return [
-      { rotulo: 'Orçamentos no ERP', valor: i ? i.efetivados : '—', tom: 'sucesso' },
-      { rotulo: 'Valor no ERP', valor: i ? formatarReais(i.valorEfetivadoCentavos) : '—', tom: 'acao' },
-      { rotulo: 'Rascunhos', valor: i ? i.rascunhos : '—', tom: 'neutro' },
-      { rotulo: 'Falharam', valor: i ? i.falharam : '—', tom: i && i.falharam > 0 ? 'erro' : 'neutro' },
-    ]
+    return i && i.valorEfetivadoCentavos > 0 ? `${i.efetivados} · ${formatarReais(i.valorEfetivadoCentavos)}` : null
   })
 
   constructor() {
@@ -387,6 +376,7 @@ export class PedidosPagina implements OnInit {
   variacao(g: Record<string, string> | null | undefined): string { return variacaoDaGrade(g) }
 
   trocar(f: string): void { this.filtro.set(f); void this.carregar() }
+  trocarAba(id: string): void { this.trocar(id === ABA_TODOS ? '' : id) }
 
   buscar(texto: string): void {
     if (texto.trim() === this.termo().trim()) return

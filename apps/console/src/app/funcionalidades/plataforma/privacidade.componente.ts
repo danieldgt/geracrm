@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { textoAvisoPrivacidade } from '@geracrm/shared'
 import {
-  CampoComponente, GradeFormComponente, PainelComponente, ToastServico,
+  CampoComponente, GradeFormComponente, PainelComponente, ToastServico, focarPrimeiroInvalido,
 } from '../../compartilhado/ui/index.js'
 import { AnonimizacoesComponente } from './anonimizacoes.componente.js'
 import { mensagemFalhaAoSalvar } from './config.regras.js'
@@ -77,6 +77,7 @@ type Estado = 'carregando' | 'pronto' | 'erro'
             @if (!leitura()) {
               <div class="acoes">
                 <button class="btn btn--primario" type="submit" [disabled]="salvando()">{{ salvando() ? 'Salvando…' : 'Salvar privacidade' }}</button>
+                @if (erroGeral(); as e) { <span class="erro txt-denso" role="alert">{{ e }}</span> }
               </div>
             }
           </form>
@@ -94,7 +95,8 @@ type Estado = 'carregando' | 'pronto' | 'erro'
     .previa { display: grid; gap: var(--espacamento-1); padding: var(--espacamento-3); border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); min-width: 0; }
     .previa-texto { margin: 0; color: var(--texto); overflow-wrap: anywhere; }
     .opcao { display: flex; align-items: center; gap: var(--espacamento-2); margin-top: var(--espacamento-4); color: var(--texto); }
-    .acoes { display: flex; align-items: center; gap: var(--espacamento-3); margin-top: var(--espacamento-4); }
+    .acoes { display: flex; align-items: center; flex-wrap: wrap; gap: var(--espacamento-3); margin-top: var(--espacamento-4); }
+    .erro { color: var(--erro); }
   `,
 })
 export class PrivacidadeComponente implements OnInit {
@@ -110,6 +112,8 @@ export class PrivacidadeComponente implements OnInit {
   readonly lgpd = signal<LgpdForm>(FORM_LGPD_VAZIO)
   readonly erros = signal<ErrosForm>({})
   readonly salvando = signal(false)
+  /** Falha ao salvar: inline no painel, nunca só num toast. */
+  readonly erroGeral = signal<string | null>(null)
   readonly previa = computed(() => textoAvisoPrivacidade({ url: this.url(), textoPadrao: this.texto() }))
   #marca = ''
 
@@ -129,6 +133,7 @@ export class PrivacidadeComponente implements OnInit {
   mudar(campo: 'dpoNome' | 'dpoEmail' | 'retencaoMeses' | 'textoConsentimento', valor: string): void {
     this.lgpd.update((f) => ({ ...f, [campo]: valor }))
     this.erros.set({})
+    this.erroGeral.set(null)
   }
 
   mudarConsentimento(valor: boolean): void { this.lgpd.update((f) => ({ ...f, exigirConsentimentoWhatsapp: valor })) }
@@ -146,14 +151,16 @@ export class PrivacidadeComponente implements OnInit {
     if (this.salvando() || this.leitura()) return
     const corpo = corpoDaLgpd(this.lgpd())
     const locais = errosDoCorpo(corpo)
-    if (Object.keys(locais).length > 0) { this.erros.set(locais); this.toast.erro(resumoDosErros(locais)); return }
+    this.erroGeral.set(null)
+    if (Object.keys(locais).length > 0) { this.erros.set(locais); this.erroGeral.set(resumoDosErros(locais)); focarPrimeiroInvalido(); return }
     this.salvando.set(true)
     try {
       await firstValueFrom(this.http.patch('/v1/config/empresa', corpo))
     } catch (e) {
       // ⚠️ Preserva o que foi digitado: só a mensagem muda.
       const doServidor = errosDoServidor(e)
-      if (doServidor) { this.erros.set(doServidor); this.toast.erro(resumoDosErros(doServidor)) } else this.toast.erro(mensagemFalhaAoSalvar(e))
+      if (doServidor) { this.erros.set(doServidor); this.erroGeral.set(resumoDosErros(doServidor)); focarPrimeiroInvalido() }
+      else this.erroGeral.set(mensagemFalhaAoSalvar(e))
       this.salvando.set(false)
       return
     }
@@ -171,7 +178,7 @@ export class PrivacidadeComponente implements OnInit {
       this.toast.sucesso('Privacidade salva.')
     } catch (e) {
       // Os dados de LGPD já foram; o aviso não — dizer isso, e não "erro ao salvar" genérico.
-      this.toast.erro(`Dados de LGPD salvos, mas o aviso não: ${mensagemFalhaAoSalvar(e)}`)
+      this.erroGeral.set(`Dados de LGPD salvos, mas o aviso não: ${mensagemFalhaAoSalvar(e)}`)
     } finally { this.salvando.set(false) }
   }
 

@@ -5,7 +5,7 @@ import { firstValueFrom } from 'rxjs'
 import {
   BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, FiltroPeriodoComponente,
   IconeComponente, ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente,
-  type ColunaTabela, type LinhaTabela, type OpcaoSelect,
+  type ColunaTabela, type LinhaTabela, type OpcaoSelect, GradeFormComponente
 } from '../../compartilhado/ui/index.js'
 
 interface Conta {
@@ -91,7 +91,7 @@ const OPCOES_MODO_LP: OpcaoSelect[] = [
 @Component({
   selector: 'app-midia',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
+  imports: [GradeFormComponente, 
     BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente,
     FiltroPeriodoComponente, IconeComponente, ModalComponente, PaginacaoComponente, RouterLink, SelectComponente, TabelaComponente,
   ],
@@ -260,7 +260,8 @@ const OPCOES_MODO_LP: OpcaoSelect[] = [
 
     <!-- Conectar conta de anúncio: modal de cadastro (M). -->
     <ui-modal [aberto]="contaAberta()" titulo="Conectar conta de anúncio" largura="m" (fechar)="fecharConta()">
-      <form id="form-conta" class="campos" (submit)="conectar($event)">
+      <form id="form-conta" (submit)="conectar($event)">
+        <ui-grade-form>
         <ui-select rotulo="Plataforma" [opcoes]="opcoesPlataforma" [valor]="novaPlataforma()" (valorChange)="novaPlataforma.set($event)" />
         <ui-campo rotulo="ID da conta" placeholder="997-075-4431" [obrigatorio]="true" [valor]="novoIdExterno()"
           (valorChange)="novoIdExterno.set($event)" />
@@ -268,6 +269,7 @@ const OPCOES_MODO_LP: OpcaoSelect[] = [
           (valorChange)="novoNome.set($event)" />
         <ui-campo rotulo="Moeda" placeholder="BRL" dica="Três letras. Não muda depois de conectar." [valor]="novaMoeda()"
           (valorChange)="novaMoeda.set($event.toUpperCase())" />
+        </ui-grade-form>
         @if (erroConectar(); as e) { <p class="erro-texto" role="alert">{{ e }}</p> }
       </form>
       <div rodape>
@@ -280,16 +282,18 @@ const OPCOES_MODO_LP: OpcaoSelect[] = [
 
     <!-- Nova landing page: modal de cadastro (M). O modo decide quem começa a conversa. -->
     <ui-modal [aberto]="lpAberta()" titulo="Nova landing page" largura="m" (fechar)="fecharLp()">
-      <form id="form-lp" class="campos" (submit)="criarLp($event)">
-        <ui-select rotulo="Modo" [opcoes]="opcoesModoLp" [valor]="lpModo()" (valorChange)="setLpModo($event)"
+      <form id="form-lp" (submit)="criarLp($event)">
+        <ui-grade-form>
+        <ui-select [largo]="true" rotulo="Modo" [opcoes]="opcoesModoLp" [valor]="lpModo()" (valorChange)="setLpModo($event)"
           [dica]="lpModo() === 'inbound_wa' ? 'O lead escreve primeiro: a janela de 24h nasce aberta e dá para responder sem template.' : 'Nós iniciamos a conversa: fora da janela de 24h só um template aprovado abre o contato.'" />
         <ui-campo rotulo="Nome interno" placeholder="Uniformes — PE" [obrigatorio]="true" [valor]="lpNome()" (valorChange)="lpNome.set($event)" />
         <ui-campo rotulo="Título da página" placeholder="Uniformes para a sua equipe" [obrigatorio]="true" [valor]="lpTitulo()"
           (valorChange)="lpTitulo.set($event)" />
         @if (lpModo() === 'inbound_wa') {
-          <ui-campo rotulo="WhatsApp de destino" placeholder="55 81 99999-8888" dica="Com DDI e DDD." [valor]="lpTelefone()"
+          <ui-campo [largo]="true" rotulo="WhatsApp de destino" placeholder="55 81 99999-8888" dica="Com DDI e DDD." [valor]="lpTelefone()"
             (valorChange)="lpTelefone.set($event)" />
         }
+        </ui-grade-form>
         @if (erroLp(); as e) { <p class="erro-texto" role="alert">{{ e }}</p> }
       </form>
       <div rodape>
@@ -305,7 +309,6 @@ const OPCOES_MODO_LP: OpcaoSelect[] = [
     ui-filtro-periodo { display: block; }
     .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-5); min-width: 0; }
     .bloco-secao { display: grid; gap: var(--espacamento-3); min-width: 0; }
-    .campos { display: grid; gap: var(--espacamento-3); min-width: 0; }
     .total { margin: 0; color: var(--texto-secundario); }
     .dica { margin: 0; color: var(--texto-suave); }
     .suave { color: var(--texto-suave); font-size: 12px; }

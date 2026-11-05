@@ -16,6 +16,8 @@ export class EstadoBuscaPaginada {
   readonly carregando = signal(false)
   readonly temMais = signal(false)
   readonly falhou = signal(false)
+  /** A busca do termo atual já respondeu — só então "Nada encontrado." é verdade (e não um debounce em curso). */
+  readonly buscou = signal(false)
 
   private termo = ''
   private cursor: string | null = null
@@ -32,12 +34,14 @@ export class EstadoBuscaPaginada {
     this.geracao += 1
     this.itens.set([])
     this.temMais.set(false)
+    this.buscou.set(false)
     await this.buscarPagina(true)
   }
 
   /** Digitação: espera `debounceMs` sem novas teclas antes de ir ao servidor. */
   digitar(termo: string): void {
     this.cancelarTimer()
+    this.buscou.set(false)
     this.timer = setTimeout(() => { this.timer = null; void this.iniciar(termo) }, this.debounceMs)
   }
 
@@ -81,7 +85,7 @@ export class EstadoBuscaPaginada {
       this.falhou.set(true)
       if (substituir) this.temMais.set(false)
     } finally {
-      if (minha === this.geracao) this.carregando.set(false)
+      if (minha === this.geracao) { this.carregando.set(false); this.buscou.set(true) }
     }
   }
 }
@@ -100,4 +104,15 @@ export function rotuloDoValor(
   if (!valor) return ''
   return itens.find((o) => o.valor === valor)?.rotulo
     ?? (injetada && injetada.valor === valor ? injetada.rotulo : '')
+}
+
+/** Mínimo de caracteres para a lista abrir sozinha ao digitar (abrir pela seta ignora o mínimo). */
+export const MINIMO_BUSCA = 2
+
+/**
+ * A lista abre ao digitar só com o mínimo de caracteres. Focar ou clicar no campo NÃO abre:
+ * uma lista vazia ("Nada encontrado.") ao focar cobre o campo seguinte e não diz nada.
+ */
+export function abreAoDigitar(termo: string, minimo = MINIMO_BUSCA): boolean {
+  return termo.trim().length >= Math.max(0, minimo)
 }

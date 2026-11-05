@@ -1,9 +1,13 @@
 /**
  * Regras PURAS do panorama e dos filtros do board do funil (B1) — sem DOM, sem HTTP.
- * A URL é a fonte da verdade: visão, agrupamento e filtros vivem nos query params, para compartilhar o link.
+ * A URL é a fonte da verdade: visão (`?aba=`), agrupamento e filtros vivem nos query params, para compartilhar o link.
  */
 
-export type Visao = 'panorama' | 'board'
+/**
+ * As abas do Funil. `qualificacao` é o kanban de leads (Leads · Qualificados · Descartados), que era a tela
+ * "CRM (Leads)" e virou aba aqui na reorganização de 2026-11-05 — `/crm` redireciona para `?aba=qualificacao`.
+ */
+export type Visao = 'panorama' | 'board' | 'qualificacao'
 export type Agrupar = 'filial' | 'vendedor'
 
 export interface FiltrosBoard {
@@ -35,10 +39,15 @@ export function lerQueryParams(p: Params): EstadoDaUrl {
   const filtros = { ...FILTROS_VAZIOS } as Record<keyof FiltrosBoard, string>
   for (const k of CHAVES) filtros[k] = (p[PARAM_DE[k]] ?? '').trim()
   return {
-    visao: p['visao'] === 'board' ? 'board' : 'panorama',
+    visao: lerVisao(p['aba'] ?? p['visao']),
     agrupar: p['agrupar'] === 'vendedor' ? 'vendedor' : 'filial',
     filtros,
   }
+}
+
+/** `?aba=` (e o antigo `?visao=`, de links salvos antes da reorganização) -> visão; desconhecido = panorama. */
+function lerVisao(v: string | null | undefined): Visao {
+  return v === 'board' || v === 'qualificacao' ? v : 'panorama'
 }
 
 /**
@@ -47,7 +56,9 @@ export function lerQueryParams(p: Params): EstadoDaUrl {
  */
 export function paraQueryParams(e: EstadoDaUrl): Record<string, string | null> {
   const r: Record<string, string | null> = {
-    visao: e.visao === 'board' ? 'board' : null,
+    aba: e.visao === 'panorama' ? null : e.visao,
+    // O param antigo sai da URL ao navegar: um só nome para a aba.
+    visao: null,
     agrupar: e.agrupar === 'vendedor' ? 'vendedor' : null,
   }
   for (const k of CHAVES) r[PARAM_DE[k]] = e.filtros[k].trim() || null

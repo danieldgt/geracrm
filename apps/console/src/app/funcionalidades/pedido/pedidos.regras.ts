@@ -78,3 +78,32 @@ export function montarQueryPedidos(f: {
   if (f.cursor) p.set('cursor', f.cursor)
   return p
 }
+
+/** Estados que a lista filtra (`?estado=`), na ordem das abas. A chave vazia é "Todos". */
+export const ESTADOS_FILTRO: readonly { readonly chave: string; readonly rotulo: string }[] = [
+  { chave: '', rotulo: 'Todos' },
+  { chave: 'rascunho', rotulo: 'Rascunhos' },
+  { chave: 'aguardando_confirmacao', rotulo: 'Aguardando SIM' },
+  { chave: 'confirmado', rotulo: 'Confirmados' },
+  { chave: 'efetivado', rotulo: 'No ERP' },
+  { chave: 'falhou', rotulo: 'Falharam' },
+]
+
+/** Id da aba "Todos" (aba não aceita id vazio). */
+export const ABA_TODOS = 'todos'
+
+/**
+ * Abas de estado com a contagem do SERVIDOR no rótulo — substituem os cartões de contagem, que
+ * repetiam o filtro (plano de reorganização, F3). Sem contadores, a aba fica sem número (nunca um
+ * zero falso); "Todos" usa o total.
+ */
+export function abasDeEstado(
+  c: ContadoresPedidos | null,
+): { readonly id: string; readonly rotulo: string; readonly contador?: number }[] {
+  return ESTADOS_FILTRO.map((f) => {
+    const id = f.chave || ABA_TODOS
+    if (!c) return { id, rotulo: f.rotulo }
+    const contador = f.chave ? (c.porEstado[f.chave]?.quantidade ?? 0) : c.total
+    return { id, rotulo: f.rotulo, contador }
+  })
+}

@@ -76,19 +76,6 @@ export function acaoVoltar(temConversaAberta: boolean): AcaoVoltar {
 }
 
 /**
- * Onde mora o ‹ no celular: UM por nível, nunca dois na tela.
- * - lista à vista → ‹ no cabeçalho da LISTA do inbox, que FECHA o trilho;
- * - conversa aberta em largura total → o ‹ do topo da conversa (o do próprio
- *   inbox) volta à lista, e o cabeçalho da lista some junto com a lista.
- * O trilho não desenha ‹ próprio no celular (o cabeçalho dele nem aparece:
- * seria um segundo "Conversas"). No desktop o trilho fecha pelo ›.
- */
-export function voltarNoCabecalhoDaLista(celular: boolean, dentroDoTrilho: boolean): AcaoVoltar | null {
-  // Fora do trilho (a rota /conversas aberta direto) não há trilho a fechar.
-  return celular && dentroDoTrilho ? 'fechar-trilho' : null
-}
-
-/**
  * Camadas (z-index) da casca no celular, em relação aos modais das telas.
  *
  * ⚠️ Os modais das telas (fundo escuro + painel) usam de 40 para cima. O botão
@@ -111,12 +98,63 @@ export function camadaTrilho(aberto: boolean): number {
 }
 
 /**
- * O que fica `inert` atrás de algo que se comporta como modal no celular: a
- * gaveta do menu aberta OU o trilho de conversas aberto em tela cheia. Sem
- * isso o Tab leva o foco para botões escondidos atrás.
+ * O que fica `inert` atrás de algo que se comporta como modal: a gaveta do menu
+ * aberta, o trilho de conversas aberto em tela cheia (celular) OU o trilho aberto
+ * como gaveta sobre o conteúdo (desktop sem espaço para empurrar). Sem isso o Tab
+ * leva o foco para botões escondidos atrás.
  */
-export function conteudoInerte(celular: boolean, gavetaAberta: boolean, trilhoAberto: boolean): boolean {
-  return gavetaAberta || (celular && trilhoAberto)
+export function conteudoInerte(
+  celular: boolean, gavetaAberta: boolean, trilhoAberto: boolean, trilhoEmGaveta = false,
+): boolean {
+  return gavetaAberta || (trilhoAberto && (celular || trilhoEmGaveta))
+}
+
+// ─── Trilho de conversas no desktop: empurrar ou gaveta ───────────────────────
+
+/**
+ * Largura mínima que a TELA ao lado do chat precisa manter para o trilho poder
+ * empurrar. Abaixo disso filtros, cartões e tabelas quebram (visto a 657 px em
+ * /pedidos: filtros em 4 linhas, cartão órfão, célula em 3 linhas).
+ */
+export const CONTEUDO_MIN_EMPURRAR = 960
+
+/** Largura mínima do trilho aberto e a folga que ele sempre deixa à esquerda como gaveta. */
+export const TRILHO_MIN = 320
+export const TRILHO_FOLGA_GAVETA = 64
+
+/**
+ * Como o trilho aberto se comporta no desktop — decidido pela LARGURA, não por
+ * botão: empurra quando a tela ao lado continua com >= 960 px; senão abre como
+ * gaveta por cima (véu, Esc, foco preso), sem esmagar a tela.
+ */
+export type ModoTrilho = 'empurrar' | 'gaveta'
+
+export function modoTrilho(larguraJanela: number, larguraLateral: number, larguraTrilho: number): ModoTrilho {
+  return larguraJanela - larguraLateral - larguraTrilho >= CONTEUDO_MIN_EMPURRAR ? 'empurrar' : 'gaveta'
+}
+
+/**
+ * A largura salva (arrastada pela pessoa noutra janela) nunca passa da janela
+ * atual: a gaveta sempre deixa uma faixa do conteúdo à vista, e nunca fica
+ * abaixo do mínimo legível.
+ */
+export function limitarLarguraTrilho(salva: number, larguraJanela: number): number {
+  const teto = Math.max(TRILHO_MIN, larguraJanela - TRILHO_FOLGA_GAVETA)
+  return Math.round(Math.min(Math.max(salva, TRILHO_MIN), teto))
+}
+
+/**
+ * Onde mora o botão que fecha o trilho, no cabeçalho da lista do inbox (o trilho
+ * não tem cabeçalho próprio — seria um segundo "Conversas"):
+ * - celular: ‹ à esquerda (fecha a tela cheia);
+ * - desktop dentro do trilho: › à direita ("Recolher conversas");
+ * - fora do trilho: nenhum.
+ */
+export type FecharTrilho = 'voltar-celular' | 'recolher-desktop'
+
+export function fecharNoCabecalhoDaLista(celular: boolean, dentroDoTrilho: boolean): FecharTrilho | null {
+  if (!dentroDoTrilho) return null
+  return celular ? 'voltar-celular' : 'recolher-desktop'
 }
 
 export interface AlertaResumo {

@@ -87,7 +87,7 @@ const MAX_RENOVACOES = 9
           @if (servico.vazio()) {
             <ui-estado titulo="Nenhum número conectado"
               descricao="Conecte um número oficial (Meta) ou não-oficial (PlugZapi) para começar a conversar.">
-              <button type="button" class="btn btn--primario" (click)="abrir()">Conectar meu primeiro número</button>
+              <button type="button" class="btn btn--secundario" (click)="abrir()">Conectar meu primeiro número</button>
             </ui-estado>
           } @else {
             <!-- Saúde da frota (EP-03): o que exige olho agora. -->
@@ -150,7 +150,7 @@ const MAX_RENOVACOES = 9
                     <p class="pausado">
                       <ui-icone nome="alert-triangle" [tamanho]="14" /><strong>Disparo pausado</strong>{{ c.pausadoMotivo ? ' — ' + c.pausadoMotivo : '' }}
                       <span class="pausado-ok">Respostas em conversas abertas continuam saindo normalmente.</span>
-                      <a routerLink="/canal-config">Retomar em Configuração do canal</a>
+                      <a routerLink="/config/atendimento" [queryParams]="{ canal: c.id }">Retomar em Atendimento</a>
                     </p>
                   }
                   <!-- Ativas suspensas (qualidade do número caiu, P11): o que para é
@@ -201,12 +201,14 @@ const MAX_RENOVACOES = 9
                   <!-- ⚠️ Editar e Remover existem porque cadastro errado era
                        PERMANENTE: detectar sem oferecer o conserto é meio caminho. -->
                   <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrirEdicao(c)">Editar</button>
+                  <!-- Horário, ausência e SLA do número moram em Configurações → Atendimento. -->
+                  <a class="btn btn--fantasma btn--pequeno" routerLink="/config/atendimento" [queryParams]="{ canal: c.id }">Atendimento</a>
                   <button type="button" class="btn btn--perigo btn--pequeno" (click)="pedirRemocao(c)">Remover</button>
                 </span>
               </ng-template>
               <div uiVazio>
                 <ui-estado titulo="Nenhum número conectado" descricao="Conecte um número para começar a conversar.">
-                  <button type="button" class="btn btn--primario" (click)="abrir()">Conectar número</button>
+                  <button type="button" class="btn btn--secundario" (click)="abrir()">Conectar número</button>
                 </ui-estado>
               </div>
             </ui-tabela>

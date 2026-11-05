@@ -42,8 +42,9 @@ const MENSAGENS_PERIODO: Readonly<Record<string, string>> = {
 }
 
 /**
- * Início v2 — o negócio no período escolhido (padrão: mês atual no fuso do tenant). Saudação, período livre,
- * quatro cartões que levam à tela de origem, pedidos por mês, qualificação, ranking, contatos recentes e
+ * Início v2 — o RESUMO do negócio no período escolhido (padrão: mês atual no fuso do tenant). Título-substantivo
+ * com a saudação no subtítulo, período livre, quatro cartões que levam à tela de origem, pedidos por mês,
+ * qualificação, os 5 maiores vendedores (o ranking completo mora em Relatórios → Vendedores), contatos recentes e
  * próximas tarefas. Cada bloco tem o seu vazio; a tela inteira tem carregando, erro e sem permissão.
  * Segue geracrm-layout-ui (tokens, responsivo, sem cor literal).
  */
@@ -55,7 +56,7 @@ const MENSAGENS_PERIODO: Readonly<Record<string, string>> = {
     EstadoComponente, FiltroPeriodoComponente, PainelComponente, StatCardComponente, TabelaComponente,
   ],
   template: `
-    <ui-cabecalho-tela [titulo]="saudacao()" subtitulo="Como o negócio está no período." />
+    <ui-cabecalho-tela titulo="Início" [subtitulo]="saudacao() + '. Como o negócio está no período.'" />
 
     <div class="filtros">
       <ui-filtro-periodo [(inicio)]="inicio" [(fim)]="fim" (aplicar)="carregar()" />
@@ -91,7 +92,7 @@ const MENSAGENS_PERIODO: Readonly<Record<string, string>> = {
             <a class="cartao" routerLink="/pedidos" aria-label="Pedidos efetivados no período: ver pedidos">
               <ui-stat-card [valor]="p.pedidos.quantidade" [rotulo]="rotuloPedidos()" tom="sucesso" />
             </a>
-            <a class="cartao" routerLink="/tarefas" aria-label="Tarefas pendentes: ver tarefas">
+            <a class="cartao" routerLink="/agenda-e-tarefas/lista" aria-label="Tarefas pendentes: ver tarefas">
               <ui-stat-card [valor]="p.tarefas.pendentes" [rotulo]="rotuloTarefas()" [tom]="p.tarefas.atrasadas > 0 ? 'atencao' : 'neutro'" />
             </a>
             <a class="cartao" routerLink="/relatorios" aria-label="Conversão no período: ver relatórios">
@@ -128,19 +129,21 @@ const MENSAGENS_PERIODO: Readonly<Record<string, string>> = {
             </ui-painel>
           </div>
 
-          <ui-painel>
-            <h2 class="txt-secao">Ranking de vendedores</h2>
-            <p class="txt-denso suave">Top 10 por valor de pedidos efetivados no período.</p>
-            @if (p.ranking.length === 0) {
-              <ui-estado tipo="vazio" titulo="Sem pedidos efetivados no período" descricao="O ranking aparece quando houver pedidos efetivados." />
-            } @else {
-              <ui-tabela [colunas]="colunasRanking" [linhas]="linhasRanking()" [chaveLinha]="chaveLinha">
-                <ng-template uiCelula="valor" let-l>{{ reais(l.valorCentavos) }}</ng-template>
-              </ui-tabela>
-            }
-          </ui-painel>
-
           <div class="grade">
+            <!-- Resumo do ranking: os 5 primeiros. O ranking completo, com comparativo, mora em Relatórios. -->
+            <ui-painel>
+              <h2 class="txt-secao">Vendedores</h2>
+              <p class="txt-denso suave">Os 5 maiores por valor efetivado no período.</p>
+              @if (p.ranking.length === 0) {
+                <ui-estado tipo="vazio" titulo="Sem pedidos efetivados no período" descricao="O ranking aparece quando houver pedidos efetivados." />
+              } @else {
+                <ui-tabela [colunas]="colunasRanking" [linhas]="linhasRanking()" [chaveLinha]="chaveLinha">
+                  <ng-template uiCelula="valor" let-l>{{ reais(l.valorCentavos) }}</ng-template>
+                </ui-tabela>
+              }
+              <a class="ver-mais txt-denso" routerLink="/relatorios" [queryParams]="{ relatorio: 'vendedores' }">Ver o ranking completo em Relatórios</a>
+            </ui-painel>
+
             <ui-painel>
               <h2 class="txt-secao">Contatos recentes</h2>
               @if (p.contatosRecentes.length === 0) {
@@ -160,11 +163,11 @@ const MENSAGENS_PERIODO: Readonly<Record<string, string>> = {
             <ui-painel>
               <h2 class="txt-secao">Próximas tarefas</h2>
               @if (p.proximasTarefas.length === 0) {
-                <ui-estado tipo="vazio" titulo="Nenhuma tarefa aberta" descricao="Agende um follow-up em Tarefas." />
+                <ui-estado tipo="vazio" titulo="Nenhuma tarefa aberta" descricao="Agende um follow-up em Agenda e tarefas." />
               } @else {
                 <ul class="lista">
                   @for (t of p.proximasTarefas; track t.id) {
-                    <li><a routerLink="/tarefas" class="item">
+                    <li><a routerLink="/agenda-e-tarefas/lista" class="item">
                       <span class="nome">{{ t.titulo }}@if (t.contatoNome) { <span class="suave"> · {{ t.contatoNome }}</span> }</span>
                       <span class="meta txt-denso" [class.atrasada]="atrasada(t.venceEm)">{{ quando(t.venceEm) }}</span>
                     </a></li>
@@ -202,6 +205,8 @@ const MENSAGENS_PERIODO: Readonly<Record<string, string>> = {
     .nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .meta { flex: none; color: var(--texto-suave); }
     .meta.atrasada { color: var(--erro); }
+    .ver-mais { display: inline-block; margin-top: var(--espacamento-3); color: var(--acao); text-decoration: none; }
+    .ver-mais:hover { text-decoration: underline; }
   `,
 })
 export class InicioPagina implements OnInit {
@@ -248,7 +253,7 @@ export class InicioPagina implements OnInit {
     { chave: 'valor', rotulo: 'Valor', alinhamento: 'dir' },
   ]
   protected readonly linhasRanking = computed<LinhaTabela[]>(() =>
-    (this.d()?.ranking ?? []).map((r, i) => ({ ...r, posicao: i + 1 })))
+    (this.d()?.ranking ?? []).slice(0, 5).map((r, i) => ({ ...r, posicao: i + 1 })))
   protected readonly chaveLinha = (l: LinhaTabela): string => String(l['usuarioId'] ?? 'sem-vendedor')
 
   ngOnInit(): void {

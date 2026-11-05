@@ -4,7 +4,7 @@ import { RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import {
-  AbasComponente, type Aba, BadgeComponente, CabecalhoTelaComponente, CelulaDiretiva, EstadoComponente, PaginacaoComponente,
+  AbasComponente, type Aba, BadgeComponente, CelulaDiretiva, EstadoComponente, PaginacaoComponente,
   TabelaComponente, type ColunaTabela, type LinhaTabela,
 } from '../../compartilhado/ui/index.js'
 
@@ -24,21 +24,19 @@ const ABAS: Aba[] = [
 const STATUS_ROTULO: Record<string, string> = { pendente: 'pendente', enviada: 'enviada', entregue: 'entregue', lida: 'lida', falhou: 'falhou' }
 
 /**
- * Mensagens Enviadas — log das salientes: para quem, o quê (preview), quando,
+ * Mensagens enviadas (Relatórios → WhatsApp; era a tela Mensagens Enviadas) — log das salientes: para quem, o quê (preview), quando,
  * quem enviou e o status. ⚠️ Mídia mostra rótulo, nunca o blob. Cursor.
  * Segue geracrm-layout-ui (5 estados, tokens, responsivo, sem cor literal).
  */
 @Component({
-  selector: 'app-mensagens-enviadas',
+  selector: 'app-relatorio-enviadas',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AbasComponente, BadgeComponente, CabecalhoTelaComponente, CelulaDiretiva, DatePipe, EstadoComponente,
+    AbasComponente, BadgeComponente, CelulaDiretiva, DatePipe, EstadoComponente,
     PaginacaoComponente, RouterLink, TabelaComponente,
   ],
   template: `
-    <ui-cabecalho-tela titulo="Mensagens enviadas"
-      subtitulo="Tudo o que saiu: individual e em massa, com status de entrega." />
-
+    <p class="txt-corpo sub">Tudo o que saiu, individual e em massa, com o status de entrega.</p>
     <ui-abas [abas]="abas" [ativa]="aba()" (ativaChange)="trocar($event)" />
 
     <div class="corpo">
@@ -85,7 +83,8 @@ const STATUS_ROTULO: Record<string, string> = { pendente: 'pendente', enviada: '
     </div>
   `,
   styles: `
-    :host { display: block; width: 100%; padding: var(--espacamento-6); }
+    :host { display: block; min-width: 0; }
+    .sub { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); }
     .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-2); min-width: 0; }
     .prev { display: block; max-width: 48ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .contato { color: var(--acao); text-decoration: none; }
@@ -93,7 +92,7 @@ const STATUS_ROTULO: Record<string, string> = { pendente: 'pendente', enviada: '
     .sem { color: var(--texto-suave); }
   `,
 })
-export class MensagensEnviadasPagina implements OnInit {
+export class RelatorioEnviadasComponente implements OnInit {
   private readonly http = inject(HttpClient)
   readonly abas = ABAS
   protected readonly colunas: ColunaTabela[] = [

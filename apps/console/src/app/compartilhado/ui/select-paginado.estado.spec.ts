@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
-import { EstadoBuscaPaginada, moverAtivo, rotuloDoValor, type PaginaOpcoes } from './select-paginado.estado.js'
+import { abreAoDigitar, EstadoBuscaPaginada, moverAtivo, rotuloDoValor, type PaginaOpcoes } from './select-paginado.estado.js'
 
 const pagina = (n: number, temMais: boolean): PaginaOpcoes => ({
   itens: [{ valor: `v${n}a`, rotulo: `Item ${n}a` }, { valor: `v${n}b`, rotulo: `Item ${n}b` }],
@@ -100,5 +100,29 @@ describe('teclado e opcaoInjetada', () => {
     expect(rotuloDoValor('x1', [{ valor: 'x1', rotulo: 'Da lista' }], inj)).toBe('Da lista')
     expect(rotuloDoValor('outro', [], inj)).toBe('')
     expect(rotuloDoValor(null, [], inj)).toBe('')
+  })
+})
+
+describe('quando a lista abre (F8: nada de "Nada encontrado." ao focar)', () => {
+  it('ao digitar, só com 2+ caracteres (espaço não conta)', () => {
+    expect(abreAoDigitar('')).toBe(false)
+    expect(abreAoDigitar('a')).toBe(false)
+    expect(abreAoDigitar(' a ')).toBe(false)
+    expect(abreAoDigitar('an')).toBe(true)
+    expect(abreAoDigitar('a', 1)).toBe(true)
+    expect(abreAoDigitar('', 0)).toBe(true)
+  })
+
+  it('"buscou" só fica verdadeiro quando a busca do termo atual responde (o debounce não conta)', async () => {
+    vi.useFakeTimers()
+    try {
+      const e = new EstadoBuscaPaginada(() => async () => ({ itens: [], proximoCursor: null }))
+      e.digitar('ana')
+      expect(e.buscou()).toBe(false)
+      await vi.advanceTimersByTimeAsync(300)
+      expect(e.buscou()).toBe(true)
+      e.digitar('anab')
+      expect(e.buscou()).toBe(false)
+    } finally { vi.useRealTimers() }
   })
 })

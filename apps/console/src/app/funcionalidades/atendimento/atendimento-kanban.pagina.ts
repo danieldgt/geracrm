@@ -85,7 +85,8 @@ import { SlaCronometroComponente } from './sla-cronometro.componente.js'
     }
 
     <!-- Configuração do fluxo: CRUD de etapas por empresa. -->
-    <ui-modal [aberto]="config()" titulo="Fluxo de atendimento" largura="m" (fechar)="fecharConfig()">
+    <!-- Cada mudança da lista grava na hora: só a "Nova etapa" digitada e não adicionada conta como não salva. -->
+    <ui-modal [aberto]="config()" titulo="Fluxo de atendimento" largura="m" [sujo]="!!novoNome().trim()" (fechar)="fecharConfig()">
       <p class="cfg-dica">As etapas viram colunas do painel. Uma empresa monta um fluxo simples ou completo — o tipo <b>Encerrado</b> fecha o atendimento ao receber o card.</p>
       @if (servico.erroConfig(); as e) { <p class="cfg-erro" role="alert">{{ e }}</p> }
 

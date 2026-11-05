@@ -85,8 +85,9 @@ describe('modal', () => {
   const veu = { }
   const novo = (): Aberto & { emitiu: ReturnType<typeof vi.fn> } => {
     const emitiu = vi.fn()
-    const ctx = { comecouNoVeu: false, fechar: { emit: emitiu } }
     const proto = ModalComponente.prototype as unknown as Aberto
+    const ctx: Record<string, unknown> = { comecouNoVeu: false, fechar: { emit: emitiu }, sujo: () => null, editado: false, perguntando: false }
+    ctx['pedirFechar'] = (...a: unknown[]) => proto['pedirFechar']!.call(ctx, ...a)
     return {
       emitiu,
       marcarVeu: (e) => proto['marcarVeu']!.call(ctx, e),
@@ -94,6 +95,35 @@ describe('modal', () => {
     }
   }
   const ev = (alvo: object) => ({ target: alvo, currentTarget: veu })
+
+  it('com dado digitado (sujo), fechar pergunta antes; "Continuar editando" mantém aberto', async () => {
+    const proto = ModalComponente.prototype as unknown as Aberto
+    const emitiu = vi.fn()
+    const confirmar = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const ctx = { sujo: () => true, editado: false, perguntando: false, fechar: { emit: emitiu }, confirmacao: { confirmar } }
+    await proto['pedirFechar']!.call(ctx)
+    expect(confirmar).toHaveBeenCalledTimes(1)
+    expect(emitiu).not.toHaveBeenCalled()
+    await proto['pedirFechar']!.call(ctx)
+    expect(emitiu).toHaveBeenCalledTimes(1)
+  })
+
+  it('sem [sujo], a pergunta vem da digitação no corpo; [sujo]=false desliga', async () => {
+    const proto = ModalComponente.prototype as unknown as Aberto
+    const confirmar = vi.fn().mockResolvedValue(false)
+    const emitiu = vi.fn()
+    const auto = { sujo: () => null, editado: true, perguntando: false, fechar: { emit: emitiu }, confirmacao: { confirmar } }
+    await proto['pedirFechar']!.call(auto)
+    expect(confirmar).toHaveBeenCalledTimes(1)
+    expect(emitiu).not.toHaveBeenCalled()
+    const limpo = { ...auto, editado: false }
+    await proto['pedirFechar']!.call(limpo)
+    expect(emitiu).toHaveBeenCalledTimes(1)
+    const desligado = { ...auto, sujo: () => false }
+    await proto['pedirFechar']!.call(desligado)
+    expect(confirmar).toHaveBeenCalledTimes(1)
+    expect(emitiu).toHaveBeenCalledTimes(2)
+  })
 
   it('mousedown no véu + mouseup no véu fecha', () => {
     const m = novo()

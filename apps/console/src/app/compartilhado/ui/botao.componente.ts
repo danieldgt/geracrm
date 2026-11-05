@@ -2,7 +2,13 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core'
 
 /**
  * Botão do bloco 1 (R-12). ⚠️ Cor SÓ de token — nunca `#hex` (lint anti-cor).
- * Variantes: primário (ação), secundário (borda), perigo, fantasma (texto).
+ *
+ * Três papéis, e só um cheio por área (skill impeccable, piso):
+ *  · primário — cheio, cor de ação. UM por cabeçalho, rodapé de modal ou cartão;
+ *  · secundário — contorno neutro (Cancelar, Editar, Exportar). Mesmo desenho do `.btn--secundario` global;
+ *  · perigo — cheio em `--erro`: SÓ o botão que confirma o destrutivo (rodapé do modal "Excluir…").
+ *    Na barra de ações de uma tela, o destrutivo é secundário ou fica no menu "⋯", nunca cheio;
+ *  · fantasma — texto, para ação terciária dentro de linha.
  */
 @Component({
   selector: 'ui-botao',
@@ -28,11 +34,12 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core'
     button[data-variante='primario'] { background: var(--acao); color: var(--acao-texto); }
     button[data-variante='primario']:hover:not(:disabled) { background: var(--acao-hover); }
     button[data-variante='primario']:active:not(:disabled) { background: var(--acao-pressionada); }
-    button[data-variante='secundario'] { background: var(--fundo); color: var(--texto); border-color: var(--borda-controle); }
-    button[data-variante='secundario']:hover:not(:disabled) { background: var(--superficie-elevada); }
-    button[data-variante='perigo'] { background: var(--erro); color: var(--acao-texto); }
-    button[data-variante='fantasma'] { background: transparent; color: var(--acao); }
-    button[data-variante='fantasma']:hover:not(:disabled) { background: var(--superficie-elevada); }
+    button[data-variante='secundario'] { background: var(--superficie-elevada); color: var(--texto); border-color: var(--borda-controle); }
+    button[data-variante='secundario']:hover:not(:disabled) { background: var(--superficie-hover); }
+    button[data-variante='perigo'] { background: var(--erro); color: var(--acao-texto); border-color: var(--erro); }
+    button[data-variante='perigo']:hover:not(:disabled) { filter: brightness(1.08); }
+    button[data-variante='fantasma'] { background: transparent; color: var(--texto-secundario); }
+    button[data-variante='fantasma']:hover:not(:disabled) { background: var(--superficie-hover); color: var(--texto); }
     button:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .spin { width: 14px; height: 14px; border-radius: var(--raio-completo);
       border: 2px solid currentColor; border-top-color: transparent; animation: gira .7s linear infinite; }

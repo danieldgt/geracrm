@@ -5,13 +5,13 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import {
   AbasComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente,
-  FiltrosComponente, ModalComponente, PaginacaoComponente, SelectComponente, StatCardComponente, TabelaComponente,
+  FiltrosComponente, ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente,
   ToastServico, mensagemDeErro, mesclarPagina, queryDeLista, type ColunaTabela, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
 import { TarefaModalComponente } from './tarefa-modal.componente.js'
 import {
-  ABAS_TAREFA, FILTROS_VAZIOS, OPCOES_TIPO_TAREFA, abaDaSituacao, parametrosDaLista, payloadConcluir, rotuloTipoTarefa,
-  situacaoDoCartao, temFiltroAtivo, type CartaoTarefa,
+  FILTROS_VAZIOS, OPCOES_TIPO_TAREFA, abaDaSituacao, abasComContador, parametrosDaLista, payloadConcluir, rotuloTipoTarefa,
+  temFiltroAtivo, type ContadoresTarefa,
 } from './tarefas.regras.js'
 
 interface Tarefa {
@@ -26,19 +26,19 @@ interface Tarefa {
   readonly contato: string | null
   readonly responsavel: string | null
 }
-interface Contadores { readonly pendentes: number; readonly atrasadas: number; readonly hoje: number; readonly semana: number }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
- * Tarefas de follow-up — padrão Lista. Cartões (clicáveis = filtro) · abas · filtros · tabela ·
- * paginação por cursor. "Atrasada" é derivada no servidor, no fuso do tenant.
+ * Tarefas de follow-up — padrão Lista. Abas (com a contagem no rótulo) · filtros · tabela ·
+ * paginação por cursor. "Atrasada" é derivada no servidor, no fuso do tenant. É a aba
+ * "Tarefas" de Agenda e tarefas.
  */
 @Component({
   selector: 'app-tarefas',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     DatePipe, RouterLink, AbasComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente,
-    FiltrosComponente, ModalComponente, PaginacaoComponente, SelectComponente, StatCardComponente, TabelaComponente,
+    FiltrosComponente, ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente,
     TarefaModalComponente,
   ],
   template: `
@@ -46,20 +46,12 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
       <button type="button" class="btn btn--primario" (click)="modalNova.set(true)">+ Nova tarefa</button>
     </ui-cabecalho-tela>
 
-    <div class="cartoes">
-      @for (c of cartoes; track c.chave) {
-        <button type="button" class="cartao-btn" [class.ativo]="situacao() === c.situacao" (click)="irParaCartao(c.chave)">
-          <ui-stat-card [valor]="valorCartao(c.chave)" [rotulo]="c.rotulo" [tom]="c.tom" />
-        </button>
-      }
-    </div>
-
-    <ui-abas [abas]="abas" [ativa]="abaAtiva()" (ativaChange)="trocarAba($event)" />
+    <ui-abas [abas]="abas()" [ativa]="abaAtiva()" (ativaChange)="trocarAba($event)" />
 
     @if (contatoId(); as cid) {
       <p class="chip-filtro">
         Tarefas de <a [routerLink]="['/contato', cid]">{{ contatoNome() ?? 'um contato' }}</a>
-        · <a routerLink="/tarefas" (click)="limparContato()">limpar</a>
+        · <a routerLink="/agenda-e-tarefas/lista" (click)="limparContato()">limpar</a>
       </p>
     }
 
@@ -107,9 +99,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
           </ng-template>
           <div uiVazio>
             <ui-estado titulo="Nada por aqui"
-              [descricao]="temFiltro() ? 'Nenhuma tarefa com esses filtros. Ajuste a busca ou limpe os filtros.' : 'Sem tarefas nesta aba. Crie uma com + Nova tarefa.'">
-              <button type="button" class="btn btn--primario" (click)="modalNova.set(true)">+ Nova tarefa</button>
-            </ui-estado>
+              [descricao]="temFiltro() ? 'Nenhuma tarefa com esses filtros. Ajuste a busca ou limpe os filtros.' : 'Sem tarefas nesta aba.'" />
           </div>
         </ui-tabela>
         @if (estado() === 'pronto') {
@@ -125,9 +115,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     <ui-modal [aberto]="!!concluindoId()" titulo="Concluir tarefa" largura="p" (fechar)="concluindoId.set(null)">
       <form id="form-concluir" (submit)="concluir($event)">
         <ui-campo rotulo="Resultado" tipo="textarea" placeholder="O que aconteceu? (opcional)" [(valor)]="resultado" />
+        @if (erroConcluir(); as e) { <p class="erro-modal" role="alert">{{ e }}</p> }
       </form>
       <div rodape>
-        <button type="button" class="btn btn--secundario" (click)="concluindoId.set(null)">Voltar</button>
+        <button type="button" class="btn btn--secundario" (click)="concluindoId.set(null)">Cancelar</button>
         <button type="submit" form="form-concluir" class="btn btn--primario" [disabled]="concluindo()">
           {{ concluindo() ? 'Concluindo…' : 'Concluir tarefa' }}
         </button>
@@ -136,11 +127,9 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
   `,
   styles: `
     :host { display: block; width: 100%; padding: var(--espacamento-6); }
-    .cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--espacamento-3); margin-bottom: var(--espacamento-4); }
-    .cartao-btn { padding: 0; border: 2px solid transparent; border-radius: var(--raio-painel); background: transparent; text-align: left; cursor: pointer; font: inherit; color: inherit; min-width: 0; }
-    .cartao-btn.ativo { border-color: var(--acao); }
     ui-filtros { display: block; margin: var(--espacamento-3) 0; }
     ui-tabela { display: block; }
+    .erro-modal { margin: var(--espacamento-3) 0 0; color: var(--erro); font-size: 13px; }
     .chip-filtro { display: inline-flex; align-items: center; gap: var(--espacamento-1); margin: 0 0 var(--espacamento-3); padding: var(--espacamento-1) var(--espacamento-3); border: 1px solid var(--acao); border-radius: var(--raio-completo); background: var(--acao-suave); color: var(--texto); font-size: 12px; }
     .chip-filtro a, .link { color: var(--acao); text-decoration: none; }
     .chip-filtro a:hover, .link:hover { text-decoration: underline; }
@@ -157,14 +146,7 @@ export class TarefasPagina implements OnInit {
   private readonly confirmacao = inject(ConfirmacaoServico)
   private readonly toast = inject(ToastServico)
 
-  protected readonly abas = ABAS_TAREFA
   protected readonly tipos: OpcaoSelect[] = OPCOES_TIPO_TAREFA.map((o) => ({ valor: o.valor, rotulo: o.rotulo }))
-  protected readonly cartoes: readonly { chave: CartaoTarefa; rotulo: string; situacao: string; tom: 'acao' | 'erro' | 'atencao' | 'sucesso' }[] = [
-    { chave: 'pendentes', rotulo: 'Pendentes', situacao: 'abertas', tom: 'acao' },
-    { chave: 'atrasadas', rotulo: 'Atrasadas', situacao: 'atrasadas', tom: 'erro' },
-    { chave: 'hoje', rotulo: 'Hoje', situacao: 'hoje', tom: 'atencao' },
-    { chave: 'semana', rotulo: 'Esta semana', situacao: 'semana', tom: 'sucesso' },
-  ]
   protected readonly colunas: readonly ColunaTabela[] = [
     { chave: 'contato', rotulo: 'Contato' },
     { chave: 'tipo', rotulo: 'Tipo' },
@@ -179,10 +161,11 @@ export class TarefasPagina implements OnInit {
   protected readonly linhas = computed(() => this.itens() as unknown as Record<string, unknown>[])
   protected readonly proximoCursor = signal<string | null>(null)
   protected readonly carregandoMais = signal(false)
-  protected readonly contadores = signal<Contadores | null>(null)
+  protected readonly contadores = signal<ContadoresTarefa | null>(null)
+  protected readonly abas = computed(() => abasComContador(this.contadores()))
   protected readonly equipe = signal<OpcaoSelect[]>([])
 
-  // Filtros (a aba e os cartões mexem em `situacao`).
+  // Filtros (a aba mexe em `situacao`).
   protected readonly situacao = signal(FILTROS_VAZIOS.situacao)
   protected readonly busca = signal('')
   protected readonly tipo = signal('')
@@ -203,6 +186,8 @@ export class TarefasPagina implements OnInit {
   protected readonly modalNova = signal(false)
   protected readonly concluindoId = signal<string | null>(null)
   protected readonly concluindo = signal(false)
+  /** Falha ao concluir fica no modal (o resultado digitado continua lá). */
+  protected readonly erroConcluir = signal<string | null>(null)
   protected readonly resultado = signal('')
 
   ngOnInit(): void {
@@ -214,13 +199,8 @@ export class TarefasPagina implements OnInit {
   }
 
   protected rotulo = rotuloTipoTarefa
-  protected valorCartao(c: CartaoTarefa): string {
-    const k = this.contadores()
-    return k ? String(k[c]) : '—'
-  }
 
   protected trocarAba(id: string): void { this.situacao.set(id); void this.carregar() }
-  protected irParaCartao(c: CartaoTarefa): void { this.situacao.set(situacaoDoCartao(c)); void this.carregar() }
   protected buscar(texto: string): void { this.busca.set(texto); void this.carregar() }
   protected limparFiltros(): void {
     this.busca.set(''); this.tipo.set(''); this.responsavelId.set(''); this.de.set(''); this.ate.set('')
@@ -240,8 +220,8 @@ export class TarefasPagina implements OnInit {
   }
 
   private async carregarContadores(): Promise<void> {
-    try { this.contadores.set(await firstValueFrom(this.http.get<Contadores>('/v1/tarefas/contadores'))) }
-    catch { /* cartões ficam com "—"; não derrubam a lista */ }
+    try { this.contadores.set(await firstValueFrom(this.http.get<ContadoresTarefa>('/v1/tarefas/contadores'))) }
+    catch { /* as abas ficam sem número; não derrubam a lista */ }
   }
 
   protected async carregar(): Promise<void> {
@@ -271,19 +251,20 @@ export class TarefasPagina implements OnInit {
 
   protected aoCriar(): void { this.modalNova.set(false); void this.carregar() }
 
-  protected abrirConcluir(id: string): void { this.resultado.set(''); this.concluindoId.set(id) }
+  protected abrirConcluir(id: string): void { this.resultado.set(''); this.erroConcluir.set(null); this.concluindoId.set(id) }
 
   protected async concluir(ev: Event): Promise<void> {
     ev.preventDefault()
     const id = this.concluindoId()
     if (!id || this.concluindo()) return
     this.concluindo.set(true)
+    this.erroConcluir.set(null)
     try {
       await firstValueFrom(this.http.post(`/v1/tarefas/${id}/concluir`, payloadConcluir(this.resultado())))
       this.toast.sucesso('Tarefa concluída')
       this.concluindoId.set(null)
       await this.carregar()
-    } catch (e) { this.toast.erro(mensagemDeErro(e, 'Não foi possível concluir a tarefa.')) }
+    } catch (e) { this.erroConcluir.set(mensagemDeErro(e, 'Não foi possível concluir a tarefa.')) }
     finally { this.concluindo.set(false) }
   }
 

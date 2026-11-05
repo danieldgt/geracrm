@@ -17,6 +17,14 @@ describe('filtros <-> query params', () => {
     expect(lerQueryParams({ visao: 'x', agrupar: 'y' })).toMatchObject({ visao: 'panorama', agrupar: 'filial' })
   })
 
+  it('a aba vem de ?aba= (qualificação incluída); ?visao= antigo ainda abre o board', () => {
+    expect(lerQueryParams({ aba: 'qualificacao' }).visao).toBe('qualificacao')
+    expect(lerQueryParams({ aba: 'board' }).visao).toBe('board')
+    expect(lerQueryParams({ visao: 'board' }).visao).toBe('board')
+    expect(lerQueryParams({ aba: 'x' }).visao).toBe('panorama')
+    expect(paraQueryParams(lerQueryParams({ aba: 'qualificacao' }))).toMatchObject({ aba: 'qualificacao', visao: null })
+  })
+
   it('ida e volta preserva o estado', () => {
     const e = lerQueryParams({ visao: 'board', agrupar: 'vendedor', q: 'ana', etiquetaId: 'e1' })
     const params = paraQueryParams(e)
@@ -26,7 +34,7 @@ describe('filtros <-> query params', () => {
 
   it('o padrão e os filtros vazios saem da URL (null remove o param)', () => {
     expect(paraQueryParams(lerQueryParams({}))).toEqual({
-      visao: null, agrupar: null, q: null, vendedorId: null, filialId: null, etiquetaId: null, origemId: null,
+      aba: null, visao: null, agrupar: null, q: null, vendedorId: null, filialId: null, etiquetaId: null, origemId: null,
     })
   })
 

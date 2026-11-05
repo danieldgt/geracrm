@@ -2,7 +2,7 @@ import { Component, ChangeDetectionStrategy, computed, effect, inject, input, si
 import { DatePipe } from '@angular/common'
 import {
   BadgeComponente, BotaoComponente, CampoComponente, ConfirmacaoServico, EsqueletoComponente, EstadoComponente,
-  PainelComponente, ToastServico, mesclarPagina,
+  ModalComponente, ModalRodapeDiretiva, PainelComponente, ToastServico, focarPrimeiroInvalido, mesclarPagina,
 } from '../../../compartilhado/ui/index.js'
 import { ehSemPermissao } from './agente.servico.js'
 import { errosDoServidor } from './agente.regras.js'
@@ -41,7 +41,10 @@ interface Importado extends TextoExtraido { readonly nome: string }
 @Component({
   selector: 'app-agente-conhecimento',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, BadgeComponente, BotaoComponente, CampoComponente, ConhecimentoHistoricoComponente, EsqueletoComponente, EstadoComponente, PainelComponente],
+  imports: [
+    DatePipe, BadgeComponente, BotaoComponente, CampoComponente, ConhecimentoHistoricoComponente, EsqueletoComponente, EstadoComponente,
+    ModalComponente, ModalRodapeDiretiva, PainelComponente,
+  ],
   template: `
     <div class="conhecimento">
 
@@ -77,14 +80,14 @@ interface Importado extends TextoExtraido { readonly nome: string }
         </div>
       </ui-painel>
 
-      <!-- (b) Formulário criar/editar — painel que abre; preserva o texto digitado. -->
+      <!-- (b) Formulário criar/editar — MODAL (padrão M, decisão de 2026-11-05).
+           O formulário mora no componente (signal form), não no modal: fechar sem
+           salvar pergunta antes de descartar o que foi digitado (biblioteca §5B.9). -->
+      <!-- O pai já confirma o descarte comparando com o original (pedirFechar): sem pergunta dupla. -->
+      <ui-modal [aberto]="form() !== null" [titulo]="tituloForm()" largura="g" [sujo]="false" (fechar)="pedirFechar()">
       @if (form(); as f) {
-        <ui-painel>
-          <form class="form" (submit)="salvar($event)" novalidate>
-            <div class="form-cab">
-              <h2 class="txt-secao secao">{{ f.id ? 'Editar documento' : 'Novo documento' }}</h2>
-              @if (espelhoEmEdicao()) { <ui-badge tom="info">espelha a Configuração</ui-badge> }
-            </div>
+          <form id="form-documento" class="form" (submit)="salvar($event)" novalidate>
+            @if (espelhoEmEdicao()) { <div><ui-badge tom="info">espelha a Configuração</ui-badge></div> }
             @if (erroGeral(); as g) { <div class="aviso aviso--erro" role="alert">{{ g }}</div> }
 
             <ui-campo rotulo="Título" [valor]="f.titulo" (valorChange)="mudar('titulo', $event)" [erro]="erroDe('titulo')"
@@ -198,14 +201,14 @@ interface Importado extends TextoExtraido { readonly nome: string }
               </label>
             }
 
-            <div class="acoes">
-              <ui-botao tipo="submit" [carregando]="salvando()">{{ salvando() ? 'Salvando…' : 'Salvar' }}</ui-botao>
-              <ui-botao variante="fantasma" [desabilitado]="salvando()" (click)="fecharForm()">Cancelar</ui-botao>
-              @if (temErros()) { <span class="msg-erro">Corrija os campos destacados.</span> }
-            </div>
           </form>
-        </ui-painel>
+          <ng-template uiModalRodape>
+            @if (temErros()) { <span class="msg-erro rodape-erro">Corrija os campos destacados.</span> }
+            <ui-botao variante="secundario" [desabilitado]="salvando()" (click)="pedirFechar()">Cancelar</ui-botao>
+            <ui-botao tipo="submit" form="form-documento" [carregando]="salvando()">{{ salvando() ? 'Salvando…' : 'Salvar' }}</ui-botao>
+          </ng-template>
       }
+      </ui-modal>
 
       <!-- (b2) Histórico de um documento (P9) — painel que abre acima da lista. -->
       @if (historico(); as h) {
@@ -369,8 +372,7 @@ interface Importado extends TextoExtraido { readonly nome: string }
     .aviso-inline { margin: 0; display: flex; gap: var(--espacamento-2); flex-wrap: wrap; }
 
     .form { display: grid; gap: var(--espacamento-3); grid-template-columns: minmax(0, 1fr); min-width: 0; }
-    .form-cab { display: flex; align-items: center; gap: var(--espacamento-2); flex-wrap: wrap; }
-    .form-cab .secao { margin: 0; }
+    .rodape-erro { margin-right: auto; align-self: center; }
     .grade-2 { display: grid; gap: var(--espacamento-3); grid-template-columns: 1fr 1fr; min-width: 0; }
     .grade-2 > * { min-width: 0; }
     .campo input, .campo select, .campo textarea { font: inherit; width: 100%; min-height: var(--densidade-alvo-clique-console); }
@@ -727,14 +729,37 @@ export class AgenteConhecimentoComponente {
     this.abrirForm(formularioDe(d))
   }
 
+  /** O formulário como abriu — para saber se há o que perder ao fechar. */
+  private readonly formOriginal = signal<FormularioDocumento | null>(null)
+  readonly tituloForm = computed(() => {
+    const f = this.form()
+    if (!f) return ''
+    if (f.tipo === 'prova_social') return f.id ? 'Editar prova social' : 'Nova prova social'
+    return f.id ? 'Editar documento' : 'Novo documento'
+  })
+
+  /** Esc, véu, × e Cancelar: com algo digitado (ou arquivo importado), pergunta antes de descartar. */
+  async pedirFechar(): Promise<void> {
+    if (this.salvando()) return
+    const mexeu = JSON.stringify(this.form()) !== JSON.stringify(this.formOriginal())
+      || this.importado() !== null || this.notaVersao().trim() !== ''
+    if (mexeu && !(await this.confirmacao.confirmar({
+      titulo: 'Descartar o que foi digitado?', mensagem: 'As alterações deste documento não foram salvas.',
+      acao: 'Descartar', cancelar: 'Continuar editando', perigo: true,
+    }))) return
+    this.fecharForm()
+  }
+
   private abrirForm(f: FormularioDocumento): void {
     this.form.set(f)
+    this.formOriginal.set(f)
     this.tentou.set(false); this.errosServidor.set({}); this.erroGeral.set(null)
     this.importado.set(null); this.erroImportar.set(null); this.notaVersao.set('')
   }
 
   fecharForm(): void {
     this.form.set(null)
+    this.formOriginal.set(null)
     this.tentou.set(false); this.errosServidor.set({}); this.erroGeral.set(null)
     this.importado.set(null); this.erroImportar.set(null)
   }
@@ -805,7 +830,9 @@ export class AgenteConhecimentoComponente {
     if (!f || this.salvando()) return
     this.tentou.set(true); this.errosServidor.set({}); this.erroGeral.set(null)
     if (Object.keys(validarDocumento(f)).length > 0 || this.erroNota()) {
-      this.toast.erro('Corrija os campos destacados antes de salvar.')
+      // Inline, no topo do formulário, e o foco vai ao primeiro campo marcado (nunca só um toast).
+      this.erroGeral.set('Corrija os campos destacados antes de salvar.')
+      focarPrimeiroInvalido()
       return
     }
     this.salvando.set(true)
@@ -827,8 +854,8 @@ export class AgenteConhecimentoComponente {
       if (r.status === 404) { this.erroGeral.set('Este documento não existe mais. Feche o formulário e recarregue a lista.'); return }
       const mapeado = errosDoServidor(r.erro)
       this.errosServidor.set(mapeado.campos)
-      this.erroGeral.set(mapeado.geral)
-      this.toast.erro(mapeado.geral ?? 'Não foi possível salvar — veja os campos destacados.')
+      this.erroGeral.set(mapeado.geral ?? 'Não foi possível salvar — veja os campos destacados.')
+      focarPrimeiroInvalido()
     } finally { this.salvando.set(false) }
   }
 

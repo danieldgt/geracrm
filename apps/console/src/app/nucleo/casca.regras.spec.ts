@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   acaoVoltar, CAMADA, camadaTrilho, conteudoInerte, ehCelular, focoPreso, LARGURA_CELULAR, MQ_CELULAR,
-  proximaGaveta, resumoAlertas, rotuloBotaoConversas, rotuloContador, separarAlertas, voltarNoCabecalhoDaLista,
+  proximaGaveta, resumoAlertas, rotuloBotaoConversas, rotuloContador, separarAlertas,
+  CONTEUDO_MIN_EMPURRAR, TRILHO_MIN, fecharNoCabecalhoDaLista, limitarLarguraTrilho, modoTrilho,
 } from './casca.regras.js'
 
 describe('Corte celular × desktop', () => {
@@ -86,20 +87,6 @@ describe('Voltar do trilho no celular', () => {
   })
 })
 
-describe('Um ‹ só por nível no celular', () => {
-  it('dado celular, então o cabeçalho da lista tem o ‹ que FECHA o trilho', () => {
-    expect(voltarNoCabecalhoDaLista(true, true)).toBe('fechar-trilho')
-  })
-
-  it('dado o inbox aberto como rota (fora do trilho), então não — não há trilho a fechar', () => {
-    expect(voltarNoCabecalhoDaLista(true, false)).toBeNull()
-  })
-
-  it('dado desktop, então não (o trilho fecha pelo ›)', () => {
-    expect(voltarNoCabecalhoDaLista(false, true)).toBeNull()
-  })
-})
-
 describe('Camadas do trilho × modais das telas', () => {
   it('⚠️ dado trilho recolhido (botão flutuante), então fica ABAIXO de qualquer modal de tela', () => {
     expect(camadaTrilho(false)).toBeLessThan(CAMADA.modal)
@@ -121,7 +108,7 @@ describe('Conteúdo inerte atrás do que se comporta como modal', () => {
     expect(conteudoInerte(true, false, true)).toBe(true)
   })
 
-  it('dado trilho aberto no desktop, então não (o trilho é coluna, não modal)', () => {
+  it('dado trilho aberto empurrando no desktop, então não (o trilho é coluna, não modal)', () => {
     expect(conteudoInerte(false, false, true)).toBe(false)
   })
 
@@ -150,5 +137,46 @@ describe('Faixa de alertas', () => {
     expect(resumoAlertas(1, false)).toBe('1 alerta')
     expect(resumoAlertas(3, false)).toBe('3 alertas')
     expect(resumoAlertas(2, true)).toBe('2 outros alertas')
+  })
+})
+
+describe('Trilho de conversas no desktop: empurrar ou gaveta (pela largura, sem botão)', () => {
+  it('dado janela larga, quando a tela ao lado fica com 960 px ou mais, então empurra', () => {
+    // 1920 − 250 (menu) − 700 (trilho) = 970
+    expect(modoTrilho(1920, 250, 700)).toBe('empurrar')
+    expect(modoTrilho(250 + 700 + CONTEUDO_MIN_EMPURRAR, 250, 700)).toBe('empurrar')
+  })
+
+  it('⚠️ dado 1667 px com trilho de 760, quando sobraria 657 px, então abre como gaveta (não esmaga a tela)', () => {
+    expect(modoTrilho(1667, 250, 760)).toBe('gaveta')
+  })
+
+  it('dado o menu recolhido (56 px), então sobra mais e pode empurrar', () => {
+    expect(modoTrilho(1440, 250, 420)).toBe('gaveta')
+    expect(modoTrilho(1440, 56, 420)).toBe('empurrar')
+  })
+
+  it('a largura salva nunca passa da janela nem fica abaixo do mínimo', () => {
+    expect(limitarLarguraTrilho(1600, 1000)).toBe(936)
+    expect(limitarLarguraTrilho(500, 1440)).toBe(500)
+    expect(limitarLarguraTrilho(100, 1440)).toBe(TRILHO_MIN)
+    expect(limitarLarguraTrilho(900, 300)).toBe(TRILHO_MIN)
+  })
+})
+
+describe('Fechar o trilho mora no cabeçalho da lista (um título só)', () => {
+  it('celular: ‹ que fecha; desktop no trilho: › que recolhe; fora do trilho: nada', () => {
+    expect(fecharNoCabecalhoDaLista(true, true)).toBe('voltar-celular')
+    expect(fecharNoCabecalhoDaLista(false, true)).toBe('recolher-desktop')
+    expect(fecharNoCabecalhoDaLista(false, false)).toBeNull()
+    expect(fecharNoCabecalhoDaLista(true, false)).toBeNull()
+  })
+})
+
+describe('Trilho em gaveta no desktop deixa o conteúdo inerte', () => {
+  it('aberto como gaveta → inerte; aberto empurrando → não; fechado → não', () => {
+    expect(conteudoInerte(false, false, true, true)).toBe(true)
+    expect(conteudoInerte(false, false, true, false)).toBe(false)
+    expect(conteudoInerte(false, false, false, true)).toBe(false)
   })
 })

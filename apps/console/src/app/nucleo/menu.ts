@@ -12,13 +12,24 @@
 
 export type StatusTela = 'pronto' | 'construcao'
 
+/**
+ * Aba de uma tela com abas (`TelaAbasPagina`). A rota da aba é `/<item>/<aba>` e
+ * a tela que ela carrega fica em `TELAS_REAIS['<item>/<aba>']` (rotas.ts).
+ */
+export interface AbaMenu {
+  readonly rota: string
+  readonly rotulo: string
+  readonly modulo?: 'agenda'
+  readonly soGestao?: boolean
+}
+
 export interface ItemMenu {
   readonly rota: string
   readonly rotulo: string
   readonly icone: string // nome de ícone Lucide (ui-icone)
   readonly status: StatusTela
   readonly onda: string
-  /** Descrição do "job" da tela — vira o subtítulo, inclusive no placeholder. */
+  /** O "job" da tela, em uma frase do lado de quem usa — vira o subtítulo. Sem código de requisito. */
   readonly descricao: string
   /** 'rail' = não gera rota; o item abre/recolhe o chat rail (Conversas). */
   readonly acao?: 'rail'
@@ -26,6 +37,11 @@ export interface ItemMenu {
   readonly modulo?: 'agenda'
   /** Só aparece para a gestão (gestor/supervisor/admin) — higiene de interface; a API responde 403. */
   readonly soGestao?: boolean
+  /**
+   * Tela com abas: telas irmãs que respondem à mesma pergunta viram abas de UMA
+   * entrada do menu (docs/plano-reorganizacao-console.md). A primeira aba é o padrão.
+   */
+  readonly abas?: readonly AbaMenu[]
 }
 
 export interface GrupoMenu {
@@ -41,138 +57,125 @@ export interface GrupoMenu {
   readonly soStaff?: boolean
 }
 
+/**
+ * O menu: uma entrada por TAREFA, não por recurso do backend. Reorganizado em
+ * 2026-11-05 (docs/plano-reorganizacao-console.md): de 50 entradas para 21, com
+ * as telas irmãs como abas. Rota antiga não quebra: ver `ROTAS_ANTIGAS`.
+ */
 export const MENU: readonly GrupoMenu[] = [
   {
     titulo: null,
     itens: [
       { rota: 'inicio', rotulo: 'Início', icone: 'house', status: 'pronto', onda: 'O1',
-        descricao: 'Como o negócio está hoje, em 3 segundos: vendas, ticket, ranking, top produtos.' },
-      { rota: 'mercado', rotulo: 'Visão de Mercado', icone: 'globe', status: 'pronto', onda: 'O1',
-        descricao: 'Sobreposição de origens (catálogo × WhatsApp × ERP) e distribuição RFV.' },
-      { rota: 'catalogo', rotulo: 'Catálogo', icone: 'package', status: 'pronto', onda: 'O1',
-        descricao: 'Produtos e SKUs com grade cor × tamanho, saldo e preço.' },
-      { rota: 'catalogo-produtos', rotulo: 'Cadastro de Produtos', icone: 'tag', status: 'pronto', onda: 'O4',
-        descricao: 'Cadastre produtos, variações, preços e saldo à mão — convive com o que vem do ERP.' },
+        descricao: 'Como o negócio está no período: vendas, tarefas e quem precisa de atenção.' },
+      { rota: 'conversas', rotulo: 'Conversas', icone: 'message-circle', status: 'pronto', onda: 'O1', acao: 'rail',
+        descricao: 'O inbox: responder, vender e não perder a janela de 24h.' },
     ],
   },
   {
     titulo: 'Atendimento',
     itens: [
-      { rota: 'conversas', rotulo: 'Conversas', icone: 'message-circle', status: 'pronto', onda: 'O1', acao: 'rail',
-        descricao: 'O inbox: responder, vender e não perder a janela de 24h.' },
-      { rota: 'pedido', rotulo: 'Pedido Assistido', icone: 'shopping-cart', status: 'pronto', onda: 'O1',
-        descricao: 'O tira-pedido pela grade do catálogo — o pedido nasce na conversa.' },
-      { rota: 'pedidos', rotulo: 'Pedidos', icone: 'receipt', status: 'pronto', onda: 'O2',
-        descricao: 'Todos os pedidos: rascunho, efetivado, falhou — por estado.' },
+      { rota: 'fila-do-dia', rotulo: 'Fila do Dia', icone: 'star', status: 'pronto', onda: 'O1',
+        descricao: 'Com quem falar agora e por quê.' },
       { rota: 'atendimento-kanban', rotulo: 'Painel de Atendimentos', icone: 'kanban', status: 'pronto', onda: 'O2',
-        descricao: 'Kanban dos atendimentos por etapa — fluxo configurável por empresa. A visão do gestor.' },
-      { rota: 'numeros', rotulo: 'Meus Números', icone: 'smartphone', status: 'pronto', onda: 'O0',
-        descricao: 'Conectar números oficiais (Meta) e não-oficiais (PlugZapi); saúde da frota.' },
-      { rota: 'templates', rotulo: 'Templates (HSM)', icone: 'file-text', status: 'pronto', onda: 'O0',
-        descricao: 'Catálogo de templates aprovados na Meta — o que reabre a janela.' },
+        descricao: 'Os atendimentos por etapa — o fluxo é configurável por empresa.' },
+      { rota: 'pedidos', rotulo: 'Pedidos', icone: 'receipt', status: 'pronto', onda: 'O2',
+        descricao: 'Rascunhos, aguardando confirmação, efetivados e os que falharam no ERP.' },
       { rota: 'campanhas', rotulo: 'Campanhas', icone: 'megaphone', status: 'pronto', onda: 'O3',
-        descricao: 'Disparo em massa com ROI honesto (vendas 3/7/14 dias).' },
-      { rota: 'consumo', rotulo: 'Consumo', icone: 'line-chart', status: 'pronto', onda: 'F2',
-        descricao: 'Quanto custaram WhatsApp, IA e transcrição no mês' },
-      { rota: 'mensagens', rotulo: 'Mensagens Enviadas', icone: 'send', status: 'pronto', onda: 'O1',
-        descricao: 'Log de envios individuais e em massa.' },
-      { rota: 'listas', rotulo: 'Listas', icone: 'list', status: 'pronto', onda: 'O3',
-        descricao: 'Públicos de campanha, respeitando opt-out e bloqueio.' },
-      { rota: 'performance', rotulo: 'Performance', icone: 'timer', status: 'pronto', onda: 'O2',
-        descricao: 'SLA, tempo de primeira resposta (humana), a contra-métrica MC-05.' },
-      { rota: 'canal-config', rotulo: 'Config. do Canal', icone: 'settings', status: 'pronto', onda: 'O1',
-        descricao: 'Horário de atendimento, mensagem de ausência, assinatura.' },
-      { rota: 'agente', rotulo: 'Agente vendedor', icone: 'bot', status: 'pronto', onda: 'O4',
-        descricao: 'Vende no WhatsApp com o catálogo e as políticas da loja — sombra, assistido ou autônomo, com auditoria por turno.' },
+        descricao: 'Disparo em massa com o retorno medido em vendas de 3, 7 e 14 dias.' },
     ],
   },
   {
     titulo: 'Vendas',
     itens: [
-      { rota: 'fila-do-dia', rotulo: 'Fila do Dia', icone: 'star', status: 'pronto', onda: 'O1',
-        descricao: 'Com quem falar AGORA e por quê — a predição explicável (RFV-10).' },
-      { rota: 'bloqueios', rotulo: 'Opt-out / Bloqueios', icone: 'ban', status: 'pronto', onda: 'O1',
-        descricao: 'Quem pediu para não receber. O envio já respeita — aqui você gerencia a lista.' },
       { rota: 'contatos', rotulo: 'Contatos', icone: 'users', status: 'pronto', onda: 'O1',
-        descricao: 'A base de clientes com o RFV humanizado.' },
-      { rota: 'crm', rotulo: 'CRM (Leads)', icone: 'magnet', status: 'pronto', onda: 'O1',
-        descricao: 'Kanban de qualificação: Leads, Qualificados e Descartados.' },
-      { rota: 'crm-avancado', rotulo: 'CRM Avançado', icone: 'trophy', status: 'pronto', onda: 'O1',
-        descricao: 'Clientes por número de pedidos e segmento RFV.' },
-      { rota: 'funil', rotulo: 'Funil de Vendas', icone: 'filter', status: 'pronto', onda: 'O2',
-        descricao: 'Etapas e taxa de conversão.' },
-      { rota: 'carteiras', rotulo: 'Vendedores e Carteiras', icone: 'briefcase', status: 'pronto', onda: 'O1',
-        descricao: 'Quem é dono de qual cliente (sem sobreposição de vigência).' },
-      { rota: 'tarefas', rotulo: 'Tarefas', icone: 'check-square', status: 'pronto', onda: 'O1',
-        descricao: 'Agenda de follow-up: agendadas, vencidas, concluídas.' },
-      { rota: 'agenda', rotulo: 'Agenda', icone: 'calendar', status: 'pronto', onda: 'O5', modulo: 'agenda',
-        descricao: 'Reuniões, ligações e visitas com clientes — o calendário do time (módulo opcional).' },
-      { rota: 'sequencias', rotulo: 'Sequências', icone: 'repeat', status: 'pronto', onda: 'O2',
-        descricao: 'Cadências automáticas de contato.' },
-      { rota: 'metas', rotulo: 'Metas', icone: 'target', status: 'pronto', onda: 'O2',
-        descricao: 'Objetivos por período e por vendedor.' },
-      { rota: 'mapa', rotulo: 'Mapa de Clientes', icone: 'map', status: 'pronto', onda: 'O3',
-        descricao: 'Distribuição geográfica da base.' },
-      { rota: 'nps', rotulo: 'NPS', icone: 'bar-chart-3', status: 'pronto', onda: 'O3',
-        descricao: 'Satisfação do cliente.' },
+        descricao: 'Todos os contatos, dos que mais compram aos que ainda não compraram.' },
+      { rota: 'funil', rotulo: 'Funil', icone: 'filter', status: 'pronto', onda: 'O2',
+        descricao: 'Oportunidades por etapa, a qualificação dos leads e o panorama por vendedor.' },
+      { rota: 'agenda-e-tarefas', rotulo: 'Agenda e tarefas', icone: 'check-square', status: 'pronto', onda: 'O1',
+        descricao: 'Follow-ups e compromissos com clientes.',
+        abas: [
+          { rota: 'lista', rotulo: 'Tarefas' },
+          { rota: 'calendario', rotulo: 'Calendário', modulo: 'agenda' },
+        ] },
+      { rota: 'base', rotulo: 'Base de clientes', icone: 'puzzle', status: 'pronto', onda: 'O2',
+        descricao: 'Onde cada cliente está no ciclo de recompra — e quantos dá para alcançar.',
+        abas: [
+          { rota: 'rfv', rotulo: 'Segmentos RFV' },
+          { rota: 'ciclo', rotulo: 'Ciclo de recompra' },
+          { rota: 'pedidos', rotulo: 'Por nº de pedidos' },
+          { rota: 'cashback', rotulo: 'Cashback' },
+          { rota: 'mercado', rotulo: 'Alcance' },
+        ] },
+      { rota: 'publicos', rotulo: 'Públicos', icone: 'list', status: 'pronto', onda: 'O3',
+        descricao: 'Listas de envio e quem pediu para não receber.',
+        abas: [
+          { rota: 'listas', rotulo: 'Listas' },
+          { rota: 'optout', rotulo: 'Opt-out e bloqueios' },
+        ] },
     ],
   },
   {
-    titulo: 'Recompra & Retenção',
+    titulo: 'Catálogo e IA',
     itens: [
-      { rota: 'retencao', rotulo: 'Retenção', icone: 'refresh-cw', status: 'pronto', onda: 'O2',
-        descricao: 'Funil de recompra — quem está indo embora e como trazer de volta.' },
-      { rota: 'fidelidade', rotulo: 'Fidelidade / Cashback', icone: 'gift', status: 'pronto', onda: 'O2',
-        descricao: 'Saldo lido do ERP; a alavancagem é nossa (ADR-020).' },
-      { rota: 'segmentos', rotulo: 'Segmentos RFV', icone: 'puzzle', status: 'pronto', onda: 'O2',
-        descricao: 'Construtor de segmento por recência, frequência e valor.' },
+      { rota: 'catalogo', rotulo: 'Catálogo', icone: 'package', status: 'pronto', onda: 'O1',
+        descricao: 'Produtos com grade cor × tamanho, saldo e preço — do ERP e cadastrados à mão.' },
+      { rota: 'agente', rotulo: 'Agente vendedor', icone: 'bot', status: 'pronto', onda: 'O4',
+        descricao: 'Vende no WhatsApp com o catálogo e as políticas da loja — com auditoria por turno.' },
     ],
   },
   {
-    titulo: 'Aquisição',
+    titulo: 'Crescimento',
     itens: [
-      { rota: 'midia', rotulo: 'Mídia paga', icone: 'megaphone', status: 'pronto', onda: 'O4',
-        descricao: 'Custo e leads por anúncio — quanto cada peça trouxe, e a que preço.' },
-      { rota: 'formularios', rotulo: 'Formulários', icone: 'file-text', status: 'pronto', onda: 'F3',
-        descricao: 'Formulários públicos que criam contatos' },
-    ],
-  },
-  {
-    titulo: 'Integrações',
-    itens: [
-      { rota: 'integracao', rotulo: 'ERP (Conexões)', icone: 'plug', status: 'pronto', onda: 'O0',
-        descricao: 'Conectar, testar e ver as capacidades do ERP.' },
-      { rota: 'sincronizacao', rotulo: 'Sincronização', icone: 'refresh-cw', status: 'construcao', onda: 'O0',
-        descricao: 'Cargas, conciliação e conflitos de identidade.' },
-      { rota: 'webhooks', rotulo: 'Webhooks de saída', icone: 'link', status: 'pronto', onda: 'O1',
-        descricao: 'Receba nossos eventos no seu sistema — assinados, com retry.' },
-      { rota: 'importar', rotulo: 'Importar dados', icone: 'upload', status: 'pronto', onda: 'H1', soGestao: true,
-        descricao: 'Traga contatos, vendas e tarefas de uma planilha — com simulação antes.' },
+      { rota: 'aquisicao', rotulo: 'Aquisição', icone: 'magnet', status: 'pronto', onda: 'O4',
+        descricao: 'De onde vêm os leads: anúncios pagos e formulários públicos.',
+        abas: [
+          { rota: 'midia', rotulo: 'Mídia paga' },
+          { rota: 'formularios', rotulo: 'Formulários' },
+        ] },
+      { rota: 'automacoes', rotulo: 'Automações', icone: 'workflow', status: 'pronto', onda: 'O2',
+        descricao: 'Regras que agem sozinhas e réguas de contato em passos.',
+        abas: [
+          { rota: 'regras', rotulo: 'Regras' },
+          { rota: 'reguas', rotulo: 'Réguas de contato' },
+        ] },
     ],
   },
   {
     titulo: 'Gestão',
     itens: [
       { rota: 'cockpit', rotulo: 'Cockpit', icone: 'bar-chart-3', status: 'pronto', onda: 'D1', soGestao: true,
-        descricao: 'SLA, esquecidos, reuniões e quem está sem próximo passo — agora' },
-      { rota: 'carteira-higienizacao', rotulo: 'Higienização da carteira', icone: 'filter', status: 'pronto', onda: 'D2', soGestao: true,
-        descricao: 'Quem está sem próximo passo — agende, descarte ou transfira em lote' },
-      { rota: 'bi', rotulo: 'Painéis (BI)', icone: 'line-chart', status: 'pronto', onda: 'O2',
-        descricao: 'Vendas, ranking, top produtos, exportações.' },
-      { rota: 'relatorios', rotulo: 'Relatórios', icone: 'bar-chart-3', status: 'pronto', onda: 'E1',
-        descricao: 'Contatos por origem, etapa, vendedor e dia da semana' },
-      { rota: 'automacoes', rotulo: 'Automações', icone: 'workflow', status: 'pronto', onda: 'O2',
-        descricao: 'Gatilhos e ações automáticas.' },
-      { rota: 'etiquetas-origens', rotulo: 'Etiquetas e origens', icone: 'tag', status: 'pronto', onda: 'O2',
-        descricao: 'Etiquetas coloridas e origens dos contatos.' },
-      { rota: 'usuarios', rotulo: 'Usuários', icone: 'users', status: 'pronto', onda: 'D3',
-        descricao: 'Quem acessa o sistema, com que papel e em qual filial' },
-      { rota: 'filiais', rotulo: 'Filiais', icone: 'building-2', status: 'pronto', onda: 'D3',
-        descricao: 'Matriz e filiais da empresa' },
+        descricao: 'SLA, esquecidos e quem está sem próximo passo — agora.',
+        abas: [
+          { rota: 'agora', rotulo: 'Agora' },
+          { rota: 'carteira', rotulo: 'Higienização da carteira' },
+        ] },
+      { rota: 'metas', rotulo: 'Metas', icone: 'target', status: 'pronto', onda: 'O2',
+        descricao: 'Objetivos por período e por vendedor.' },
+      { rota: 'relatorios', rotulo: 'Relatórios', icone: 'line-chart', status: 'pronto', onda: 'E1',
+        descricao: 'Vendas, contatos, atendimento e WhatsApp — com período livre e CSV.' },
       { rota: 'auditoria', rotulo: 'Auditoria', icone: 'search', status: 'pronto', onda: 'O1',
-        descricao: 'Quem fez o quê e quando — assunção, edição e remoção de mensagens.' },
-      { rota: 'config', rotulo: 'Configurações Gerais', icone: 'wrench', status: 'pronto', onda: 'O1',
-        descricao: 'Empresa, usuários, papéis.' },
+        descricao: 'Quem fez o quê e quando.' },
+    ],
+  },
+  {
+    titulo: null,
+    itens: [
+      { rota: 'config', rotulo: 'Configurações', icone: 'settings', status: 'pronto', onda: 'O1',
+        descricao: 'Empresa, equipe, números, integrações e faturamento.',
+        abas: [
+          { rota: 'empresa', rotulo: 'Empresa' },
+          { rota: 'usuarios', rotulo: 'Usuários' },
+          { rota: 'filiais', rotulo: 'Filiais' },
+          { rota: 'numeros', rotulo: 'Números' },
+          { rota: 'atendimento', rotulo: 'Atendimento' },
+          { rota: 'templates', rotulo: 'Templates' },
+          { rota: 'etiquetas', rotulo: 'Etiquetas e origens' },
+          { rota: 'integracoes', rotulo: 'ERP' },
+          { rota: 'webhooks', rotulo: 'Webhooks' },
+          { rota: 'importar', rotulo: 'Importar', soGestao: true },
+          { rota: 'faturamento', rotulo: 'Consumo' },
+        ] },
     ],
   },
   {
@@ -184,6 +187,47 @@ export const MENU: readonly GrupoMenu[] = [
     ],
   },
 ]
+
+/**
+ * Rotas que saíram do menu na reorganização de 2026-11-05 → onde a tela mora agora.
+ *
+ * ⚠️ Nada quebra: favorito, link de notificação e `routerLink` antigo caem no
+ * destino certo (aba incluída). Destino com `?` leva a aba interna da tela.
+ * Testado em `menu-reorganizacao.spec.ts` (todo destino existe no menu).
+ */
+export const ROTAS_ANTIGAS: Readonly<Record<string, string>> = {
+  bi: '/relatorios?relatorio=vendas',
+  mapa: '/relatorios?relatorio=contatos&dim=uf',
+  performance: '/relatorios?relatorio=atendimento',
+  nps: '/relatorios?relatorio=atendimento',
+  mensagens: '/relatorios?relatorio=enviadas',
+  mercado: '/base/mercado',
+  segmentos: '/base/rfv',
+  retencao: '/base/ciclo',
+  'crm-avancado': '/base/pedidos',
+  fidelidade: '/base/cashback',
+  crm: '/funil?aba=qualificacao',
+  listas: '/publicos/listas',
+  bloqueios: '/publicos/optout',
+  tarefas: '/agenda-e-tarefas/lista',
+  agenda: '/agenda-e-tarefas/calendario',
+  sequencias: '/automacoes/reguas',
+  midia: '/aquisicao/midia',
+  formularios: '/aquisicao/formularios',
+  'carteira-higienizacao': '/cockpit/carteira',
+  'catalogo-produtos': '/catalogo',
+  'canal-config': '/config/atendimento',
+  numeros: '/config/numeros',
+  usuarios: '/config/usuarios',
+  filiais: '/config/filiais',
+  templates: '/config/templates',
+  'etiquetas-origens': '/config/etiquetas',
+  integracao: '/config/integracoes',
+  sincronizacao: '/config/integracoes',
+  webhooks: '/config/webhooks',
+  importar: '/config/importar',
+  consumo: '/config/faturamento',
+}
 
 /** Achata o menu para gerar as rotas. */
 export function itensDoMenu(): ItemMenu[] {
@@ -199,6 +243,21 @@ export function menuVisivel(
   gestao = false,
 ): readonly GrupoMenu[] {
   return menu
-    .map((g) => ({ ...g, itens: g.itens.filter((i) => (!i.modulo || modulosAtivos[i.modulo] === true) && (!i.soGestao || gestao)) }))
+    .map((g) => ({ ...g, itens: g.itens.filter((i) => visivel(i, modulosAtivos, gestao)) }))
     .filter((g) => g.itens.length > 0)
+}
+
+/** As abas que a pessoa vê numa tela com abas (mesma regra de módulo e de gestão do menu). */
+export function abasVisiveis(
+  item: Pick<ItemMenu, 'abas'>, modulosAtivos: Readonly<Partial<Record<NonNullable<ItemMenu['modulo']>, boolean>>>,
+  gestao = false,
+): readonly AbaMenu[] {
+  return (item.abas ?? []).filter((a) => visivel(a, modulosAtivos, gestao))
+}
+
+function visivel(
+  i: { readonly modulo?: 'agenda'; readonly soGestao?: boolean },
+  modulosAtivos: Readonly<Partial<Record<'agenda', boolean>>>, gestao: boolean,
+): boolean {
+  return (!i.modulo || modulosAtivos[i.modulo] === true) && (!i.soGestao || gestao)
 }

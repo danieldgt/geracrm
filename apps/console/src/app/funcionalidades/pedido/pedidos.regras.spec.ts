@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  rotuloDoEstado, tomDoEstado, variacaoDaGrade, indicadoresDosContadores, montarQueryPedidos,
+  rotuloDoEstado, tomDoEstado, variacaoDaGrade, indicadoresDosContadores, montarQueryPedidos, abasDeEstado, ABA_TODOS,
 } from './pedidos.regras.js'
 
 describe('pedidos: rótulo e tom por estado', () => {
@@ -56,5 +56,20 @@ describe('pedidos: query do servidor', () => {
     expect(montarQueryPedidos({ inicio: '2026-11-01' }).has('inicio')).toBe(false)
     const p = montarQueryPedidos({ inicio: '2026-11-01', fim: '2026-11-03', cursor: 'abc' })
     expect(p.get('inicio')).toBe('2026-11-01'); expect(p.get('fim')).toBe('2026-11-03'); expect(p.get('cursor')).toBe('abc')
+  })
+})
+
+describe('pedidos: abas de estado com a contagem no rótulo', () => {
+  it('sem contadores, nenhuma aba mostra número (nunca zero falso)', () => {
+    const abas = abasDeEstado(null)
+    expect(abas[0]).toEqual({ id: ABA_TODOS, rotulo: 'Todos' })
+    expect(abas.every((a) => a.contador === undefined)).toBe(true)
+  })
+
+  it('com contadores: Todos = total, estado ausente = 0', () => {
+    const abas = abasDeEstado({ porEstado: { falhou: { quantidade: 2, valorCentavos: 100 } }, total: 9, valorTotalCentavos: 100 })
+    expect(abas.find((a) => a.id === ABA_TODOS)?.contador).toBe(9)
+    expect(abas.find((a) => a.id === 'falhou')?.contador).toBe(2)
+    expect(abas.find((a) => a.id === 'rascunho')?.contador).toBe(0)
   })
 })

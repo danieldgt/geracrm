@@ -1,5 +1,4 @@
 import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core'
-import { RouterLink } from '@angular/router'
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import {
@@ -18,17 +17,21 @@ interface Mercado {
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
- * Visão de Mercado — a fotografia da base: tamanho, o quanto é acionável
- * (WhatsApp, telefone, ERP, opt-out) e onde está no RFV. Leitura pura.
+ * Alcance (era "Visão de Mercado") — a fotografia da base: tamanho, o quanto é
+ * acionável (WhatsApp, telefone, ERP, opt-out) e de onde veio. Leitura pura.
+ *
+ * ⚠️ Desde 2026-11-05 é a aba "Alcance" da Base de clientes (`/base/mercado`). A
+ * distribuição por RFV saiu daqui: é a aba vizinha (Segmentos RFV), e mostrar a
+ * mesma tabela em duas abas da mesma tela era só repetição.
  * Padrão Lista de leitura: indicadores em ui-stat-card e as distribuições em
  * ui-tabela com barra de proporção na célula.
  */
 @Component({
   selector: 'app-mercado',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, RouterLink, StatCardComponente, TabelaComponente],
+  imports: [CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, StatCardComponente, TabelaComponente],
   template: `
-    <ui-cabecalho-tela titulo="Visão de Mercado" subtitulo="Sua base em números: tamanho, alcance e composição." />
+    <ui-cabecalho-tela titulo="Alcance" subtitulo="Sua base em números: tamanho, quanto dá para alcançar e de onde veio." />
 
     <div class="corpo">
       @switch (estado()) {
@@ -77,21 +80,6 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                   }
                 </section>
 
-                <section class="painel" aria-labelledby="titulo-rfv">
-                  <h2 class="txt-secao" id="titulo-rfv">Onde estão no RFV</h2>
-                  <ui-tabela [colunas]="colunasRfv" [linhas]="linhasRfv()" [chaveLinha]="chaveRfv">
-                    <ng-template uiCelula="segmento" let-s>
-                      <span class="segmento"><span class="ponto" aria-hidden="true" [style.background]="cor(s.codigo)"></span>{{ s.rotulo }}</span>
-                    </ng-template>
-                    <ng-template uiCelula="contatos" let-s>
-                      <span class="barra-val">
-                        <span class="l-barra" aria-hidden="true"><span class="l-fill" [style.width.%]="pct(s.contatos, maxRfv())" [style.background]="cor(s.codigo)"></span></span>
-                        <span class="l-val txt-dados">{{ s.contatos }}</span>
-                      </span>
-                    </ng-template>
-                  </ui-tabela>
-                  <a class="mais-link" routerLink="/segmentos">Ver segmentos em detalhe →</a>
-                </section>
               </div>
             }
           }
@@ -109,13 +97,9 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .painel { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie-elevada); min-width: 0; }
     .painel h2 { margin: 0 0 var(--espacamento-3); }
     .barra-val { display: flex; align-items: center; gap: var(--espacamento-2); min-width: 120px; }
-    .segmento { display: inline-flex; align-items: center; gap: var(--espacamento-2); font-size: 13px; color: var(--texto); }
-    .ponto { width: 8px; height: 8px; border-radius: var(--raio-completo); flex: none; }
     .l-barra { flex: 1; height: 4px; border-radius: var(--raio-completo); background: var(--superficie); overflow: hidden; }
     .l-fill { display: block; height: 100%; background: var(--acao); }
     .l-val { color: var(--texto-secundario); font-size: 12px; min-width: 32px; text-align: right; }
-    .mais-link { display: inline-block; margin-top: var(--espacamento-3); font-size: 13px; color: var(--acao); text-decoration: none; }
-    .mais-link:hover { text-decoration: underline; }
     .corte { margin: var(--espacamento-2) 0 0; font-size: 12px; color: var(--texto-suave); }
   `,
 })
@@ -128,24 +112,14 @@ export class MercadoPagina implements OnInit {
     { chave: 'origem', rotulo: 'Origem' },
     { chave: 'contatos', rotulo: 'Contatos' },
   ]
-  protected readonly colunasRfv: readonly ColunaTabela[] = [
-    { chave: 'segmento', rotulo: 'Segmento' },
-    { chave: 'contatos', rotulo: 'Contatos' },
-  ]
   protected readonly linhasOrigem = computed<LinhaTabela[]>(() => (this.d()?.porOrigem ?? []).map((o) => ({
     origem: this.rotuloOrigem(o.origem), chaveOrigem: o.origem, contatos: o.contatos,
   })))
-  protected readonly linhasRfv = computed<LinhaTabela[]>(() => (this.d()?.rfv ?? []).map((s) => ({
-    segmento: s.rotulo, codigo: s.codigo, contatos: s.contatos,
-  })))
   protected readonly chaveOrigem = (l: LinhaTabela): string => String(l['chaveOrigem'])
-  protected readonly chaveRfv = (l: LinhaTabela): string => String(l['codigo'])
 
   ngOnInit(): void { void this.carregar() }
   pct(n: number, total: number): number { return total > 0 ? Math.round((n / total) * 100) : 0 }
-  cor(codigo: string): string { return `var(--rfv-${codigo})` }
   maxOrigem(): number { return Math.max(1, ...(this.d()?.porOrigem.map((o) => o.contatos) ?? [])) }
-  maxRfv(): number { return Math.max(1, ...(this.d()?.rfv.map((s) => s.contatos) ?? [])) }
 
   cobertura(m: Mercado): { chave: string; rotulo: string; n: number; tom: TomStat }[] {
     return [

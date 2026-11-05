@@ -34,11 +34,6 @@ export type TarefaDoContato = {
   readonly responsavel: string | null
   readonly resultado: string | null
 }
-export interface ResumoWhatsapp {
-  readonly conversa: { readonly id: string; readonly canal: string; readonly ultimaMensagemEm: string | null } | null
-  readonly mensagens: readonly { id: string; direcao: string; tipo: string; criadoEm: string; resumo: string }[]
-}
-
 /**
  * Leituras e escritas dos BLOCOS da ficha. Sem estado de propósito: cada bloco da tela guarda o seu
  * (carregando/erro/pronto), então um bloco que falha não derruba a ficha. Tudo por cursor.
@@ -82,9 +77,6 @@ export class FichaBlocosServico {
   tarefas(id: string, cursor: string | null): Promise<{ itens: TarefaDoContato[]; proximoCursor: string | null }> {
     return firstValueFrom(this.http.get<{ itens: TarefaDoContato[]; proximoCursor: string | null }>(
       `/v1/tarefas${queryDeLista({ contatoId: id, cursor })}`))
-  }
-  whatsapp(id: string): Promise<ResumoWhatsapp> {
-    return firstValueFrom(this.http.get<ResumoWhatsapp>(`/v1/contatos/${id}/whatsapp`))
   }
   qualificar(id: string, estado: 'qualificado' | 'descartado'): Promise<unknown> {
     return firstValueFrom(this.http.post(`/v1/leads/${id}/qualificar`, { estado }))

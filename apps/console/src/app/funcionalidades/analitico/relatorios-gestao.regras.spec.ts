@@ -3,7 +3,7 @@ import { paraCsv } from '../../compartilhado/ui/csv.js'
 import { escalarBarras } from './relatorio-dimensao.regras.js'
 import {
   barrasDeFaixas, barrasDeMensagens, barrasDeVendas, csvConversao, csvOperacional, csvVendas, csvVendedores, csvWhatsapp,
-  formatarDias, formatarDuracaoSeg, formatarPercentual, formatarVariacao, mensagemDoErro, nomeDaFaixa, rotuloDoDia,
+  formatarDias, formatarDuracaoSeg, formatarPercentual, formatarQuantidade, formatarVariacao, temQuantidade, mensagemDoErro, nomeDaFaixa, rotuloDoDia,
   tendenciaDe, variacaoPct, type ItemVendas, type RespostaOperacional,
 } from './relatorios-gestao.regras.js'
 
@@ -86,6 +86,24 @@ describe('linhas de CSV', () => {
     expect(csv.colunas[0]).toEqual({ chave: 'rotulo', rotulo: 'Produto' })
     expect(csv.linhas).toEqual([{ rotulo: 'Camiseta', pedidos: 2, valor: 300, ticket: 150, percentual: 85.71 }])
     expect(paraCsv(csv.colunas, csv.linhas)).toContain('Camiseta;2;300;150;85,71')
+  })
+  it('vendas por produto: a coluna Quantidade entra logo depois do produto (e só quando a API mandou)', () => {
+    const itens: ItemVendas[] = [
+      { chave: 'a', rotulo: 'Camiseta', pedidos: 2, valorCentavos: 30000, ticketMedioCentavos: 15000, percentual: 0.8571, quantidade: 3 },
+      { chave: 'b', rotulo: 'Tecido', pedidos: 1, valorCentavos: 5000, ticketMedioCentavos: 5000, percentual: 0.1429, quantidade: 1.5 },
+    ]
+    expect(temQuantidade(itens)).toBe(true)
+    const csv = csvVendas(itens, 'Produto')
+    expect(csv.colunas.map((c) => c.chave)).toEqual(['rotulo', 'quantidade', 'pedidos', 'valor', 'ticket', 'percentual'])
+    expect(paraCsv(csv.colunas, csv.linhas)).toContain('Camiseta;3;2;300;150;85,71')
+    expect(paraCsv(csv.colunas, csv.linhas)).toContain('Tecido;1,5;1;50;50;14,29')
+  })
+  it('quantidade formatada em pt-BR; ausente vira traço', () => {
+    expect(formatarQuantidade(3)).toBe('3')
+    expect(formatarQuantidade(1.5)).toBe('1,5')
+    expect(formatarQuantidade(1234.125)).toBe('1.234,125')
+    expect(formatarQuantidade(undefined)).toBe('—')
+    expect(temQuantidade([{ chave: 'x', rotulo: 'X', pedidos: 1, valorCentavos: 1, ticketMedioCentavos: 1, percentual: 1 }])).toBe(false)
   })
   it('conversão: faixas e vendedores no mesmo arquivo, média nula vira célula vazia', () => {
     const csv = csvConversao(

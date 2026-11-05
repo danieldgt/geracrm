@@ -50,9 +50,9 @@ export type AlvoNotificacao =
   | { readonly tipo: 'nenhum' }
 
 const ROTA_POR_TIPO: Readonly<Record<string, string>> = {
-  'agenda.lembrete': '/agenda',
-  'canal.qualidade': '/numeros',
-  'agente.orcamento': '/consumo',
+  'agenda.lembrete': '/agenda-e-tarefas/calendario',
+  'canal.qualidade': '/config/numeros',
+  'agente.orcamento': '/config/faturamento',
 }
 
 /** "Abrir leva ao alvo": a conversa (no chat) quando há; senão a tela do assunto; senão fica onde está. */

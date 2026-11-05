@@ -31,7 +31,8 @@ const SEGMENTOS: Ref[] = [
   { id: 'semi-perdido', nome: 'Semi Perdido' }, { id: 'hibernando', nome: 'Hibernando' }, { id: 'perdido', nome: 'Perdido' },
 ]
 const GAT_ROTULO: Readonly<Record<string, string>> = ROTULO_GATILHO_AUTOMACAO
-const ACAO_ROTULO: Readonly<Record<string, string>> = ROTULO_ACAO_AUTOMACAO
+// "Sequência" virou "Régua de contato" na tela (Automações → Réguas); o código do domínio segue `aplicar_sequencia`.
+const ACAO_ROTULO: Readonly<Record<string, string>> = { ...ROTULO_ACAO_AUTOMACAO, aplicar_sequencia: 'Aplicar régua de contato' }
 /** Mesmo teto do servidor — mensagem longa no WhatsApp não é lida. */
 const MAX_TEXTO = MAX_TEXTO_AUTOMACAO
 interface TemplateRef { readonly id: string; readonly nome: string; readonly statusMeta: string }
@@ -49,7 +50,7 @@ interface TemplateRef { readonly id: string; readonly nome: string; readonly sta
     ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente,
   ],
   template: `
-    <ui-cabecalho-tela titulo="Automações"
+    <ui-cabecalho-tela titulo="Regras"
       subtitulo="Quando um cliente cruzar uma condição, o sistema cria a tarefa. Mensagem ao cliente só nas ações que dizem isso — e pelas mesmas regras de envio.">
       <button type="button" class="btn btn--secundario" (click)="rodar()" [disabled]="rodando()">
         <ui-icone nome="refresh-cw" />{{ rodando() ? 'Rodando…' : 'Rodar agora' }}
@@ -103,7 +104,7 @@ interface TemplateRef { readonly id: string; readonly nome: string; readonly sta
             </ng-template>
             <div uiVazio>
               <ui-estado titulo="Nenhuma automação ainda" descricao="Crie a primeira regra: quando o cliente cruzar uma condição, o sistema faz a ação.">
-                <button type="button" class="btn btn--primario" (click)="abrirNova()">Nova regra</button>
+                <button type="button" class="btn btn--secundario" (click)="abrirNova()">Nova regra</button>
               </ui-estado>
             </div>
           </ui-tabela>
@@ -156,7 +157,7 @@ interface TemplateRef { readonly id: string; readonly nome: string; readonly sta
                 <label class="chk"><input type="checkbox" [checked]="paraDono()" (change)="paraDono.set($any($event.target).checked)" /> para o dono da carteira</label>
               }
               @case ('aplicar_sequencia') {
-                <ui-select rotulo="Sequência" placeholder="Escolha…" [opcoes]="opcoesSequencias()" [valor]="sequenciaId()" (valorChange)="sequenciaId.set($event)" />
+                <ui-select rotulo="Régua de contato" placeholder="Escolha…" [opcoes]="opcoesSequencias()" [valor]="sequenciaId()" (valorChange)="sequenciaId.set($event)" />
               }
               @case ('adicionar_lista') {
                 <ui-select rotulo="Lista" placeholder="Escolha…" [opcoes]="opcoesListas()" [valor]="listaId()" (valorChange)="listaId.set($event)" />
@@ -310,7 +311,7 @@ export class AutomacoesPagina implements OnInit {
       : `NPS ≤ ${g['notaMax'] ?? 6}`
     const faz =
       a.acao === 'criar_tarefa' ? `criar tarefa “${ap['titulo'] ?? a.nome}”`
-      : a.acao === 'aplicar_sequencia' ? `aplicar uma sequência`
+      : a.acao === 'aplicar_sequencia' ? `aplicar uma régua de contato`
       : a.acao === 'enviar_mensagem' ? `enviar mensagem ao cliente`
       : `adicionar a uma lista`
     return `Quando ${quando} → ${faz}`
@@ -328,7 +329,7 @@ export class AutomacoesPagina implements OnInit {
       const [seq, lis] = await Promise.all([this.todasAsPaginas('/v1/sequencias'), this.todasAsPaginas('/v1/listas')])
       this.sequencias.set(seq); this.listas.set(lis)
     } catch (e) {
-      this.erroRefs.set(mensagemDeErro(e, 'Não foi possível carregar as sequências e listas para o seletor.'))
+      this.erroRefs.set(mensagemDeErro(e, 'Não foi possível carregar as réguas e listas para o seletor.'))
     }
     // Templates à parte: sem eles o pós-venda ainda funciona por texto (parcial, não quebra o resto).
     try {
@@ -401,7 +402,7 @@ export class AutomacoesPagina implements OnInit {
   async criar(ev: Event): Promise<void> {
     ev.preventDefault()
     if (this.salvando() || !this.nome().trim()) return
-    if (this.acao() === 'aplicar_sequencia' && !this.sequenciaId()) { this.erroForm.set('Escolha a sequência.'); return }
+    if (this.acao() === 'aplicar_sequencia' && !this.sequenciaId()) { this.erroForm.set('Escolha a régua.'); return }
     if (this.acao() === 'enviar_mensagem' && !this.texto().trim()) { this.erroForm.set('Escreva a mensagem que vai ser enviada.'); return }
     if (this.acao() === 'adicionar_lista' && !this.listaId()) { this.erroForm.set('Escolha a lista.'); return }
     let gatilhoParam: object = this.montarGatilhoParam()
@@ -421,7 +422,7 @@ export class AutomacoesPagina implements OnInit {
       await this.carregar()
     } catch (e) {
       // ⚠️ A API devolve a frase com a ação corretiva (ex.: "Escreva a mensagem…").
-      this.erroForm.set(mensagemDeErro(e, ehStatus(e, 422) ? 'Confira a sequência/lista escolhida.' : 'Não foi possível criar a regra.'))
+      this.erroForm.set(mensagemDeErro(e, ehStatus(e, 422) ? 'Confira a régua ou a lista escolhida.' : 'Não foi possível criar a regra.'))
     } finally { this.salvando.set(false) }
   }
 

@@ -33,11 +33,13 @@ type Aberto = 'nenhum' | 'devolver' | 'reatribuir'
   imports: [ModalComponente, GradeFormComponente, CampoComponente, SelectComponente],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    @if (mostrarDevolver()) {
+    <!-- Com gatilho=false (cabeçalho da conversa) os botões moram no menu "⋯" de
+         quem monta este componente, que chama abrirDevolver()/abrirReatribuir(). -->
+    @if (gatilho() && mostrarDevolver()) {
       <button class="acao-btn" type="button" (click)="abrirDevolver()"
               title="Devolver a conversa ao agente">Devolver ao agente</button>
     }
-    @if (mostrarReatribuir()) {
+    @if (gatilho() && mostrarReatribuir()) {
       <button class="acao-btn" type="button" (click)="abrirReatribuir()"
               title="Passar o atendimento para outra pessoa">Reatribuir</button>
     }
@@ -127,6 +129,8 @@ export class AcoesConversaComponente {
 
   readonly motivos = MOTIVOS_DEVOLUCAO
   readonly teto = TETO_TEXTO
+  /** false = sem botões próprios; quem monta abre pelos métodos (menu "⋯" da conversa). */
+  readonly gatilho = input(true)
   readonly mostrarDevolver = computed(() => podeDevolver(this.atendimento(), this.presenca.gestao()))
   readonly mostrarReatribuir = computed(() => podeReatribuir(this.atendimento(), this.presenca.gestao()))
 

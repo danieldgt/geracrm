@@ -1,6 +1,8 @@
 import { Component, ChangeDetectionStrategy, computed, inject, signal, OnInit } from '@angular/core'
 import { SlicePipe } from '@angular/common'
 import { ActivatedRoute, RouterLink } from '@angular/router'
+import { BreadcrumbComponente } from '../../compartilhado/ui/breadcrumb.componente.js'
+import type { ItemTrilha } from '../../compartilhado/ui/breadcrumb.regras.js'
 import { PedidoServico, type ProdutoCatalogo, type SkuCatalogo } from './pedido.servico.js'
 import { InboxServico } from '../../nucleo/inbox.servico.js'
 import {
@@ -24,9 +26,12 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     SlicePipe, RouterLink, CabecalhoTelaComponente, CampoComponente, IconeComponente, ModalComponente, SelectComponente,
+    BreadcrumbComponente,
   ],
   template: `
-    <ui-cabecalho-tela titulo="Pedido Assistido" subtitulo="Monte o pedido pela grade do catálogo. O rascunho não se perde.">
+    <!-- Saiu do menu: chega por "Novo pedido" em Pedidos (ou pela conversa, ficha, catálogo, funil). -->
+    <ui-cabecalho-tela titulo="Novo pedido" subtitulo="Monte o pedido pela grade do catálogo. O rascunho não se perde.">
+      <ui-breadcrumb trilha [itens]="trilha" />
       <span class="degradado" title="Saldo ao vivo entra na próxima etapa">
         <ui-icone nome="alert-triangle" [tamanho]="14" /> saldo ao vivo do ERP: próxima etapa · preço: tabela padrão do ERP
       </span>
@@ -253,7 +258,7 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
     <!-- Nome do rascunho: novo ou renomear (substitui o prompt do navegador). -->
     <ui-modal [aberto]="modalNome() !== null" [titulo]="modalNome() === 'renomear' ? 'Renomear rascunho' : 'Novo rascunho'"
               largura="p" (fechar)="fecharNome()">
-      <ui-campo rotulo="Nome do rascunho" placeholder="Ex.: Reposição" [valor]="nomeRascunho()" (valorChange)="nomeRascunho.set($event)" />
+      <ui-campo rotulo="Nome do rascunho" placeholder="Ex.: Reposição" [obrigatorio]="modalNome() === 'renomear'" [valor]="nomeRascunho()" (valorChange)="nomeRascunho.set($event)" />
       <div rodape>
         <button type="button" class="btn btn--secundario" (click)="fecharNome()">Cancelar</button>
         <button type="button" class="btn btn--primario" (click)="confirmarNome()"
@@ -345,6 +350,7 @@ import { PERFIL_PRECO_PADRAO, type PerfilPreco } from '@geracrm/shared'
   `,
 })
 export class PedidoAssistidoPagina implements OnInit {
+  protected readonly trilha: readonly ItemTrilha[] = [{ rotulo: 'Pedidos', rota: '/pedidos' }, { rotulo: 'Novo pedido' }]
   readonly servico = inject(PedidoServico)
   private readonly route = inject(ActivatedRoute)
   private readonly inbox = inject(InboxServico)

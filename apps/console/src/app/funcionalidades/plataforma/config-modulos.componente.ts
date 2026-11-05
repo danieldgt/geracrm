@@ -29,6 +29,7 @@ import { mensagemFalhaAoSalvar } from './config.regras.js'
           <span class="estado txt-denso">{{ modulos.agendaAtiva() ? 'Ligado' : 'Desligado' }}</span>
         </label>
       </div>
+      @if (erro(); as e) { <p class="erro txt-denso" role="alert">{{ e }}</p> }
     </ui-painel>
   `,
   styles: `
@@ -41,6 +42,7 @@ import { mensagemFalhaAoSalvar } from './config.regras.js'
     .desc { color: var(--texto-secundario); }
     .chave { display: inline-flex; align-items: center; gap: var(--espacamento-2); min-height: var(--densidade-alvo-clique-console); }
     .estado { color: var(--texto-secundario); }
+    .erro { margin: var(--espacamento-3) 0 0; color: var(--erro); }
   `,
 })
 export class ConfigModulosComponente {
@@ -50,6 +52,8 @@ export class ConfigModulosComponente {
 
   readonly leitura = input(true)
   readonly mexendo = signal(false)
+  /** Falha ao ligar/desligar fica no painel (a chave já voltou ao que o servidor tem). */
+  readonly erro = signal<string | null>(null)
 
   async alternar(modulo: ModuloId, caixa: HTMLInputElement): Promise<void> {
     const ligar = caixa.checked
@@ -63,12 +67,13 @@ export class ConfigModulosComponente {
     })
     if (!ok) { caixa.checked = !ligar; return }
     this.mexendo.set(true)
+    this.erro.set(null)
     try {
       await this.modulos.definir(modulo, ligar)
       this.toast.sucesso(ligar ? 'Agenda ligada.' : 'Agenda desligada.')
     } catch (e) {
       caixa.checked = !ligar
-      this.toast.erro(mensagemFalhaAoSalvar(e))
+      this.erro.set(mensagemFalhaAoSalvar(e))
     } finally { this.mexendo.set(false) }
   }
 }

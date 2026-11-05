@@ -21,7 +21,8 @@ import { itemParaExibicao, mesclarFeed, type ItemFeed } from './ficha.regras.js'
       <ui-campo rotulo="Adicionar observação" tipo="textarea" [largo]="true" placeholder="Anote algo sobre este contato"
                 [(valor)]="texto" [erro]="erroObs()" />
       <div class="obs-acoes">
-        <ui-botao variante="primario" [carregando]="salvando()" [desabilitado]="!texto().trim()" (click)="anotar($event)">Adicionar observação</ui-botao>
+        <!-- Secundário: a ação cheia da ficha é "Conversar"; uma só por área. -->
+        <ui-botao variante="secundario" [carregando]="salvando()" [desabilitado]="!texto().trim()" (click)="anotar($event)">Adicionar observação</ui-botao>
       </div>
     </form>
 

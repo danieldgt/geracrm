@@ -264,7 +264,7 @@ const OPCOES_ESTADO_DEST: OpcaoSelect[] = [
           (valorChange)="digitado.set($event)" [erro]="erroIniciarCampo()" autocomplete="off" />
         @if (erroIniciar(); as e) { <p class="erro" role="alert">{{ e }}</p> }
       <ng-template uiModalRodape>
-          <button type="button" class="btn btn--secundario" (click)="fecharIniciar()">Voltar</button>
+          <button type="button" class="btn btn--secundario" (click)="fecharIniciar()">Cancelar</button>
           <button type="button" class="btn btn--primario" [disabled]="!confereNome() || iniciando()" (click)="iniciar()">
             {{ iniciando() ? 'Iniciando…' : 'Iniciar campanha' }}
           </button>

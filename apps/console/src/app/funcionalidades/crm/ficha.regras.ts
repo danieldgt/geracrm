@@ -107,6 +107,20 @@ export function acoesVisiveis(f: Pick<DadosFicha, 'qualificado' | 'telefones'>, 
   return acoes
 }
 
+/**
+ * A barra de ações da ficha: UMA ação cheia (Conversar) e duas secundárias à vista
+ * (Editar, Novo pedido); o resto vai para o menu "⋯" (Nova tarefa, Agendar,
+ * Qualificar, Descartar — destrutivo por último). Antes eram 9 botões numa linha,
+ * 3 cheios em cores diferentes.
+ */
+export const ACOES_A_VISTA: readonly IdAcao[] = ['conversar', 'editar', 'novo-pedido']
+
+export function separarAcoesFicha(acoes: readonly AcaoFicha[]): { readonly aVista: AcaoFicha[]; readonly noMenu: AcaoFicha[] } {
+  const aVista = ACOES_A_VISTA.map((id) => acoes.find((a) => a.id === id)).filter((a): a is AcaoFicha => !!a)
+  const noMenu = acoes.filter((a) => !ACOES_A_VISTA.includes(a.id))
+  return { aVista, noMenu }
+}
+
 /** Estado enviado ao endpoint de qualificação para cada ação. */
 export const estadoDaAcao = (id: 'qualificar' | 'descartar'): 'qualificado' | 'descartado' =>
   id === 'qualificar' ? 'qualificado' : 'descartado'
@@ -240,6 +254,5 @@ export const ABAS_FICHA = [
   { id: 'dados', rotulo: 'Dados' },
   { id: 'pedidos', rotulo: 'Pedidos' },
   { id: 'tarefas', rotulo: 'Tarefas' },
-  { id: 'whatsapp', rotulo: 'WhatsApp' },
   { id: 'agenda', rotulo: 'Agenda' },
 ] as const

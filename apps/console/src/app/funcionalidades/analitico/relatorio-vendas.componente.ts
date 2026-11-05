@@ -11,7 +11,7 @@ import { BarrasHorizontaisComponente } from './barras-horizontais.componente.js'
 import { CarregadorRelatorio } from './carregador-relatorio.js'
 import { RelatorioMolduraComponente } from './relatorio-moldura.componente.js'
 import {
-  barrasDeVendas, csvVendas, formatarPercentual, type DimensaoVendas, type RespostaVendas,
+  barrasDeVendas, csvVendas, formatarPercentual, formatarQuantidade, temQuantidade, type DimensaoVendas, type RespostaVendas,
 } from './relatorios-gestao.regras.js'
 
 interface ConfigVendas { readonly chave: DimensaoVendas; readonly aba: string; readonly titulo: string; readonly coluna: string }
@@ -61,6 +61,7 @@ const DIMENSOES: readonly ConfigVendas[] = [
         <ui-botao-csv [colunas]="csv().colunas" [linhas]="csv().linhas" [arquivo]="arquivoCsv()" />
       </div>
       <ui-tabela [colunas]="colunas()" [linhas]="linhas()" [chaveLinha]="chaveLinha">
+        <ng-template uiCelula="quantidade" let-l>{{ qtd(l['quantidade']) }}</ng-template>
         <ng-template uiCelula="valor" let-l>{{ reais(l['valorCentavos']) }}</ng-template>
         <ng-template uiCelula="ticket" let-l>{{ reais(l['ticketMedioCentavos']) }}</ng-template>
         <ng-template uiCelula="participacao" let-l>{{ pct(l['percentual']) }}</ng-template>
@@ -92,6 +93,8 @@ export class RelatorioVendasComponente {
   protected readonly arquivoCsv = computed(() => `vendas-por-${this.dimensao()}-${this.c.inicio()}-a-${this.c.fim()}`)
   protected readonly colunas = computed<ColunaTabela[]>(() => [
     { chave: 'rotulo', rotulo: this.config().coluna },
+    // Unidades vendidas: só em Produto (a API não manda nas outras dimensões).
+    ...(temQuantidade(this.itens()) ? [{ chave: 'quantidade', rotulo: 'Qtd.', alinhamento: 'dir', mono: true } satisfies ColunaTabela] : []),
     { chave: 'pedidos', rotulo: 'Pedidos', alinhamento: 'dir' },
     { chave: 'valor', rotulo: 'Valor', alinhamento: 'dir' },
     { chave: 'ticket', rotulo: 'Ticket médio', alinhamento: 'dir' },
@@ -110,5 +113,6 @@ export class RelatorioVendasComponente {
   protected trocar(id: string): void { this.dimensao.set(id as DimensaoVendas) }
   protected reais(v: unknown): string { return formatarReais(Number(v)) }
   protected pct(v: unknown): string { return formatarPercentual(Number(v)) }
+  protected qtd(v: unknown): string { return formatarQuantidade(typeof v === 'number' ? v : undefined) }
   protected carregar(): Promise<void> { return this.c.carregar() }
 }

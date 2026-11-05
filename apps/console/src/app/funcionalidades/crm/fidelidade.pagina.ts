@@ -55,12 +55,12 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
               @if (f.motivo === 'sem_conector') {
                 <ui-estado titulo="Fidelidade indisponível: nenhum ERP conectado"
                   descricao="O saldo de fidelidade é lido do ERP. Quando você conectar um que forneça esse recurso, os saldos aparecem aqui automaticamente.">
-                  <a class="btn btn--primario" routerLink="/integracao">Conectar um ERP</a>
+                  <a class="btn btn--primario" routerLink="/config/integracoes">Conectar um ERP</a>
                 </ui-estado>
               } @else {
                 <ui-estado titulo="Fidelidade indisponível neste ERP"
                   descricao="O ERP conectado não fornece saldo de fidelidade. Nada é gerido por aqui: o saldo mora no ERP. Se trocar para um conector com esse recurso, os saldos passam a aparecer.">
-                  <a class="btn btn--secundario" routerLink="/integracao">Ver conexões</a>
+                  <a class="btn btn--secundario" routerLink="/config/integracoes">Ver conexões</a>
                 </ui-estado>
               }
             } @else if (f.resumo; as r) {

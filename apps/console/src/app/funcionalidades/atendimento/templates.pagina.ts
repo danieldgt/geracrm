@@ -3,7 +3,7 @@ import { TemplatesServico, type CorpoTemplate, type ItemTemplate } from './templ
 import {
   BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente,
   IconeComponente, ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente, ToastServico,
-  type ColunaTabela, type LinhaTabela,
+  type ColunaTabela, type LinhaTabela, GradeFormComponente
 } from '../../compartilhado/ui/index.js'
 import { OPCOES_CAMPO_MAPEAMENTO, mapeamentoParaSalvar, variaveisDoTemplate, variaveisSemCampo } from './templates.regras.js'
 
@@ -36,7 +36,7 @@ const ERRO_CRIAR: Record<string, string> = {
 @Component({
   selector: 'app-templates',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
+  imports: [GradeFormComponente, 
     BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, IconeComponente,
     ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente,
   ],
@@ -109,7 +109,7 @@ const ERRO_CRIAR: Record<string, string> = {
           <div uiVazio>
             <ui-estado titulo="Nenhum template ainda"
               descricao="Crie o primeiro — ele nasce como rascunho até a Meta aprovar.">
-              <button type="button" class="btn btn--primario" (click)="abrirNovo()">Novo template</button>
+              <button type="button" class="btn btn--secundario" (click)="abrirNovo()">Novo template</button>
             </ui-estado>
           </div>
         </ui-tabela>
@@ -121,8 +121,8 @@ const ERRO_CRIAR: Record<string, string> = {
     <!-- Criar e editar (nova versão): modal de cadastro. Nome e categoria travam depois de criado. -->
     <ui-modal [aberto]="rascunho() !== null" [titulo]="tituloForm()" largura="m" (fechar)="fechar()">
       @if (rascunho(); as r) {
-        <div class="campos">
-          @if (erroForm(); as e) { <p class="erro-texto" role="alert">{{ e }}</p> }
+        @if (erroForm(); as e) { <p class="erro-texto" role="alert">{{ e }}</p> }
+        <ui-grade-form>
           <ui-campo rotulo="Nome (identificador na Meta)" placeholder="reposicao_mensal"
             dica="Minúsculas, números e _. Não muda depois de criado." [obrigatorio]="true"
             [desabilitado]="!!r.id" [valor]="r.nome" (valorChange)="setNome($event)" />
@@ -131,14 +131,14 @@ const ERRO_CRIAR: Record<string, string> = {
           <ui-campo rotulo="Cabeçalho (opcional)" placeholder="Novidades" [valor]="r.header"
             (valorChange)="atualizar({ header: $event })" />
           <!-- Chaves de variável em atributo estático viram interpolação do Angular: por isso o binding. -->
-          <ui-campo tipo="textarea" rotulo="Corpo" [placeholder]="'Olá {{1}}, chegou reposição do que você compra.'"
+          <ui-campo tipo="textarea" [largo]="true" rotulo="Corpo" [placeholder]="'Olá {{1}}, chegou reposição do que você compra.'"
             [dica]="'Variáveis posicionais: {{1}}, {{2}}… Até 1024 caracteres.'" [obrigatorio]="true"
             [valor]="r.body" (valorChange)="atualizar({ body: $event })" />
           <ui-campo rotulo="Rodapé (opcional)" placeholder="Sua loja" [valor]="r.footer"
             (valorChange)="atualizar({ footer: $event })" />
-          <ui-campo rotulo="Botões (opcional)" placeholder="Ver ofertas, Falar com vendedor"
+          <ui-campo [largo]="true" rotulo="Botões (opcional)" placeholder="Ver ofertas, Falar com vendedor"
             dica="Até 3, separados por vírgula." [valor]="r.botoes" (valorChange)="atualizar({ botoes: $event })" />
-        </div>
+        </ui-grade-form>
       }
       <div rodape>
         <button type="button" class="btn btn--secundario" (click)="fechar()" [disabled]="salvando()">Cancelar</button>
@@ -150,7 +150,7 @@ const ERRO_CRIAR: Record<string, string> = {
     </ui-modal>
 
     <!-- Mapeamento {{n}} → campo do contato. Cada escolha salva na hora (como antes). -->
-    <ui-modal [aberto]="itemMapeando() !== null" [titulo]="tituloMapa()" largura="p" (fechar)="fecharMapa()">
+    <ui-modal [aberto]="itemMapeando() !== null" [titulo]="tituloMapa()" largura="p" [sujo]="false" (fechar)="fecharMapa()">
       @if (itemMapeando(); as t) {
         <p class="explica">Escolha de qual campo do contato sai cada variável. Cada escolha é salva na hora.</p>
         @if (erroMapa(); as e) { <p class="erro-texto" role="alert">{{ e }}</p> }
@@ -173,7 +173,6 @@ const ERRO_CRIAR: Record<string, string> = {
       border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie); color: var(--texto-secundario); font-size: 12px; }
     .nota b { color: var(--texto); font-weight: 600; }
     .erro-texto { margin: 0; color: var(--erro); font-size: 13px; }
-    .campos { display: grid; gap: var(--espacamento-3); min-width: 0; }
     .tpl-nome { display: block; color: var(--texto); font-family: var(--tipografia-familia-dados); font-size: 13px; overflow-wrap: anywhere; }
     .suave { color: var(--texto-suave); }
     .rejeicao { display: flex; align-items: flex-start; gap: var(--espacamento-1); margin: var(--espacamento-1) 0 0; font-size: 12px; color: var(--erro); }

@@ -60,7 +60,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
               <div uiVazio>
                 <ui-estado titulo="Nenhuma lista ainda"
                   descricao="Crie uma lista para reunir os contatos que você usa em campanhas.">
-                  <button type="button" class="btn btn--primario" (click)="criarAberto.set(true)">Nova lista</button>
+                  <button type="button" class="btn btn--secundario" (click)="criarAberto.set(true)">Nova lista</button>
                 </ui-estado>
               </div>
             </ui-tabela>

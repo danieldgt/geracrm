@@ -4,7 +4,7 @@ import {
   BadgeComponente, CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente,
   FiltrosComponente, GradeFormComponente, ModalComponente, PaginacaoComponente, SelectComponente, TabelaComponente,
   ToastServico, codigoDoErro, mensagemDeErro, mesclarPagina,
-  type ColunaTabela, type LinhaTabela, type OpcaoSelect,
+  type ColunaTabela, type LinhaTabela, type OpcaoSelect, focarPrimeiroInvalido,
 } from '../../compartilhado/ui/index.js'
 import { digitosDaMascara } from '../../compartilhado/ui/mascaras.js'
 import { FiliaisServico } from './filiais.servico.js'
@@ -89,7 +89,7 @@ const MAX_PAGINAS_FILIAIS = 10
                 </ui-estado>
               } @else {
                 <ui-estado titulo="Nenhum usuário ainda" descricao="Convide a equipe para dar acesso ao sistema.">
-                  <button type="button" class="btn btn--primario" (click)="novo()">+ Novo usuário</button>
+                  <button type="button" class="btn btn--secundario" (click)="novo()">+ Novo usuário</button>
                 </ui-estado>
               }
             </div>
@@ -160,7 +160,7 @@ const MAX_PAGINAS_FILIAIS = 10
       <div rodape>
         <button type="button" class="btn btn--secundario" (click)="fecharSenha()">Cancelar</button>
         <button type="submit" form="form-senha" class="btn btn--primario" [disabled]="salvandoSenha()">
-          {{ salvandoSenha() ? 'Salvando…' : 'Redefinir' }}
+          {{ salvandoSenha() ? 'Salvando…' : 'Redefinir senha' }}
         </button>
       </div>
     </ui-modal>
@@ -373,7 +373,7 @@ export class UsuariosPagina implements OnInit {
   /** Erro tipificado vai para o campo; o que não tem campo vai para a faixa do modal. */
   private tratarErro(err: unknown, padrao: string): void {
     const m = mapearErroUsuario(codigoDoErro(err))
-    if (m?.campo) this.erros.set({ [m.campo]: m.mensagem })
+    if (m?.campo) { this.erros.set({ [m.campo]: m.mensagem }); focarPrimeiroInvalido() }
     else this.erroEnvio.set(m?.mensagem ?? mensagemDeErro(err, padrao))
   }
 

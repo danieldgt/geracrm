@@ -80,7 +80,7 @@ import {
       }
       @case ('erro') {
         <ui-estado tipo="erro" titulo="Não foi possível carregar os contatos" [descricao]="servico.erro() ?? ''">
-          <button type="button" class="btn btn--primario" (click)="servico.carregar()">Tentar de novo</button>
+          <button type="button" class="btn btn--secundario" (click)="servico.carregar()">Tentar de novo</button>
         </ui-estado>
       }
       @default {
@@ -131,7 +131,7 @@ import {
             } @else {
               <ui-estado titulo="Nenhum contato ainda"
                 descricao="Importe um CSV, conecte seu ERP ou comece uma conversa: os contatos aparecem nesta lista.">
-                <button type="button" class="btn btn--primario" (click)="abrirImport()">Importar CSV</button>
+                <button type="button" class="btn btn--secundario" (click)="abrirImport()">Importar CSV</button>
               </ui-estado>
             }
           </div>
@@ -161,13 +161,18 @@ import {
       </p>
       <p class="import-ajuda">
         Tem endereço, origem, etiquetas, vendedor, vendas ou tarefas? Use o
-        <a routerLink="/importar" (click)="importAberto.set(false)">assistente de importação</a>:
+        <a routerLink="/config/importar" (click)="importAberto.set(false)">assistente de importação</a>:
         ele simula antes de gravar, deixa você associar as colunas e confere o resultado.
       </p>
-      <input class="import-arquivo" type="file" accept=".csv,text/csv" (change)="arquivoCsv($event)" [disabled]="servico.importando()" />
-      <textarea class="import-texto" placeholder="nome,telefone,cnpj&#10;Zé,81998617049,11222333000181"
-                [ngModel]="csvTexto()" (ngModelChange)="csvTexto.set($event)" rows="6"
-                [disabled]="servico.importando()"></textarea>
+      <!-- Rótulo visível em cada controle: o placeholder do texto só mostra o formato. -->
+      <label class="campo import-campo"><span>Arquivo CSV</span>
+        <input class="import-arquivo" type="file" accept=".csv,text/csv" (change)="arquivoCsv($event)" [disabled]="servico.importando()" />
+      </label>
+      <label class="campo import-campo"><span>Ou cole o conteúdo do CSV</span>
+        <textarea class="import-texto" placeholder="nome,telefone,cnpj&#10;Zé,81998617049,11222333000181"
+                  [ngModel]="csvTexto()" (ngModelChange)="csvTexto.set($event)" rows="6"
+                  [disabled]="servico.importando()"></textarea>
+      </label>
       @if (servico.erroImport(); as e) { <p class="erro-form" role="alert">{{ e }}</p> }
       @if (servico.resultadoImport(); as r) {
         <div class="import-resultado" role="status">
@@ -211,7 +216,8 @@ import {
     .rodape ui-paginacao { flex: 1 1 auto; }
     .parcial { text-align: center; color: var(--atencao); font-size: 13px; }
     .import-ajuda { margin: 0 0 var(--espacamento-3); font-size: 13px; color: var(--texto-secundario); }
-    .import-arquivo { display: block; margin-bottom: var(--espacamento-3); }
+    .import-campo { margin-bottom: var(--espacamento-3); }
+    .import-arquivo { display: block; }
     .import-texto { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle); border-radius: var(--raio-controle); background: var(--fundo); color: var(--texto); font-family: var(--tipografia-familia-dados); font-size: 12px; resize: vertical; }
     .import-resultado { margin-top: var(--espacamento-3); font-size: 13px; color: var(--texto-secundario); }
     .import-resultado strong { color: var(--texto); }

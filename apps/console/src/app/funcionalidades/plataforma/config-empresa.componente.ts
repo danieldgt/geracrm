@@ -3,7 +3,7 @@ import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import { UFS } from '@geracrm/shared'
 import {
-  CampoComponente, GradeFormComponente, PainelComponente, SelectComponente, ToastServico, type OpcaoSelect,
+  CampoComponente, GradeFormComponente, PainelComponente, SelectComponente, ToastServico, focarPrimeiroInvalido, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
 import { mensagemFalhaAoSalvar } from './config.regras.js'
 import {
@@ -64,6 +64,8 @@ const OPCOES_UF: OpcaoSelect[] = UFS.map((u) => ({ valor: u, rotulo: u }))
         @if (!leitura()) {
           <div class="acoes">
             <button class="btn btn--primario" type="submit" [disabled]="salvando()">{{ salvando() ? 'Salvando…' : 'Salvar empresa' }}</button>
+            <!-- Erro fica no painel, ao lado do botão (nunca só num toast que some). -->
+            @if (erroGeral(); as e) { <span class="erro txt-denso" role="alert">{{ e }}</span> }
           </div>
         }
       </form>
@@ -74,7 +76,8 @@ const OPCOES_UF: OpcaoSelect[] = UFS.map((u) => ({ valor: u, rotulo: u }))
     h2 { margin: 0 0 var(--espacamento-1); }
     .dica { margin: 0 0 var(--espacamento-4); color: var(--texto-secundario); }
     .plano { display: flex; flex-direction: column; gap: var(--espacamento-1); justify-content: flex-end; min-width: 0; }
-    .acoes { display: flex; align-items: center; gap: var(--espacamento-3); margin-top: var(--espacamento-4); }
+    .acoes { display: flex; align-items: center; flex-wrap: wrap; gap: var(--espacamento-3); margin-top: var(--espacamento-4); }
+    .erro { color: var(--erro); }
   `,
 })
 export class ConfigEmpresaComponente {
@@ -91,6 +94,8 @@ export class ConfigEmpresaComponente {
   readonly form = signal<EmpresaForm>(formDaEmpresa({} as EmpresaLida))
   readonly erros = signal<ErrosForm>({})
   readonly salvando = signal(false)
+  /** Falha ao salvar: inline no painel. O resumo dos campos com erro, ou a mensagem da API. */
+  readonly erroGeral = signal<string | null>(null)
   #marca = ''
 
   constructor() {
@@ -109,6 +114,7 @@ export class ConfigEmpresaComponente {
   mudar(campo: keyof EmpresaForm, valor: string): void {
     this.form.update((f) => ({ ...f, [campo]: valor }))
     if (Object.keys(this.erros()).length > 0) this.erros.set({})
+    this.erroGeral.set(null)
   }
 
   async salvar(ev: Event): Promise<void> {
@@ -116,7 +122,8 @@ export class ConfigEmpresaComponente {
     if (this.salvando() || this.leitura()) return
     const corpo = corpoDaEmpresa(this.form())
     const locais = errosDoCorpo(corpo)
-    if (Object.keys(locais).length > 0) { this.erros.set(locais); this.toast.erro(resumoDosErros(locais)); return }
+    this.erroGeral.set(null)
+    if (Object.keys(locais).length > 0) { this.erros.set(locais); this.erroGeral.set(resumoDosErros(locais)); focarPrimeiroInvalido(); return }
     this.salvando.set(true)
     try {
       await firstValueFrom(this.http.patch('/v1/config/empresa', corpo))
@@ -125,7 +132,8 @@ export class ConfigEmpresaComponente {
       this.salvou.emit({ ...this.empresa(), ...this.valoresSalvos() })
     } catch (e) {
       const doServidor = errosDoServidor(e)
-      if (doServidor) { this.erros.set(doServidor); this.toast.erro(resumoDosErros(doServidor)) } else this.toast.erro(mensagemFalhaAoSalvar(e))
+      if (doServidor) { this.erros.set(doServidor); this.erroGeral.set(resumoDosErros(doServidor)); focarPrimeiroInvalido() }
+      else this.erroGeral.set(mensagemFalhaAoSalvar(e))
     } finally { this.salvando.set(false) }
   }
 

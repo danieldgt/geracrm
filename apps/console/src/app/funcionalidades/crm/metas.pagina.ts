@@ -62,7 +62,7 @@ const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'O
         @case ('pronto') {
           @if (itens().length === 0) {
             <ui-estado titulo="Sem metas neste mês" descricao="Defina uma meta — da equipe ou de um vendedor.">
-              <button type="button" class="btn btn--primario" (click)="novaAberta.set(true)">Nova meta</button>
+              <button type="button" class="btn btn--secundario" (click)="novaAberta.set(true)">Nova meta</button>
             </ui-estado>
           } @else {
             <ui-tabela [colunas]="colunas" [linhas]="linhas()">

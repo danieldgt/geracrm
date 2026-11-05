@@ -63,7 +63,7 @@ const OPCOES_COR: OpcaoSelect[] = CORES_ETIQUETA.map((c) => ({ valor: c, rotulo:
             <div uiVazio>
               <ui-estado titulo="Nenhuma etiqueta ainda"
                 descricao="Crie etiquetas como VIP ou Quente para filtrar e marcar seus contatos.">
-                <button type="button" class="btn btn--primario" (click)="novo()">+ Nova etiqueta</button>
+                <button type="button" class="btn btn--secundario" (click)="novo()">+ Nova etiqueta</button>
               </ui-estado>
             </div>
           </ui-tabela>
@@ -95,7 +95,7 @@ const OPCOES_COR: OpcaoSelect[] = CORES_ETIQUETA.map((c) => ({ valor: c, rotulo:
             <div uiVazio>
               <ui-estado titulo="Nenhuma origem ainda"
                 descricao="Cadastre de onde seus contatos vêm: Site, Indicação, Feira, Instagram...">
-                <button type="button" class="btn btn--primario" (click)="novo()">+ Nova origem</button>
+                <button type="button" class="btn btn--secundario" (click)="novo()">+ Nova origem</button>
               </ui-estado>
             </div>
           </ui-tabela>

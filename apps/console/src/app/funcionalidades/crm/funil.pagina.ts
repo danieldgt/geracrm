@@ -22,6 +22,7 @@ import { FunilGanharModalComponente } from './funil-ganhar-modal.componente.js'
 import { FunilPerderModalComponente } from './funil-perder-modal.componente.js'
 import { FunilTransferirModalComponente } from './funil-transferir-modal.componente.js'
 import { FunilNovaOportunidadeModalComponente } from './funil-nova-oportunidade-modal.componente.js'
+import { LeadsPagina } from './leads.pagina.js'
 import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, type TipoEtapa } from './funil-acoes.regras.js'
 
 /**
@@ -36,20 +37,30 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
   imports: [
     CdkDropListGroup, CdkDropList, CdkDrag, RouterLink, FormsModule, IconeComponente, AbasComponente, EstadoComponente, FiltrosComponente,
     CabecalhoTelaComponente, CampoComponente, ModalComponente, SelectComponente, SelectPaginadoComponente, FunilPanoramaComponente, TarefaModalComponente, FunilGanharModalComponente,
-    FunilPerderModalComponente, FunilTransferirModalComponente, FunilNovaOportunidadeModalComponente,
+    FunilPerderModalComponente, FunilTransferirModalComponente, FunilNovaOportunidadeModalComponente, LeadsPagina,
   ],
   template: `
-    <ui-cabecalho-tela titulo="Funil de vendas" subtitulo="Arraste o card conforme a relação com o cliente evolui.">
+    <!-- ⚠️ Um primário só (Nova oportunidade). Métricas é alternador (aria-pressed), não segundo primário,
+         e só existe no Board — é lá que o painel aparece. -->
+    <ui-cabecalho-tela titulo="Funil"
+      subtitulo="Oportunidades por etapa, a qualificação dos leads e o panorama por vendedor.">
+      @if (visao() === 'board') {
+        <button class="btn btn--secundario" type="button" [attr.aria-pressed]="mostrarMetricas()" (click)="alternarMetricas()">
+          <ui-icone nome="line-chart" [tamanho]="14" /> {{ mostrarMetricas() ? 'Ocultar métricas' : 'Métricas' }}
+        </button>
+      }
+      @if (visao() !== 'qualificacao') {
+        <button class="btn btn--secundario" type="button" (click)="abrirConfig()"><ui-icone nome="settings" [tamanho]="14" /> Configurar funil</button>
+      }
       <button class="btn btn--primario" type="button" (click)="novaOportunidade.set(true)">Nova oportunidade</button>
-      <button class="btn" type="button" [class.btn--primario]="mostrarMetricas()" [class.btn--secundario]="!mostrarMetricas()" (click)="alternarMetricas()">
-        <ui-icone nome="line-chart" [tamanho]="14" /> {{ mostrarMetricas() ? 'Ocultar métricas' : 'Métricas' }}
-      </button>
-      <button class="btn btn--secundario" type="button" (click)="abrirConfig()"><ui-icone nome="settings" [tamanho]="14" /> Configurar funil</button>
     </ui-cabecalho-tela>
 
     <ui-abas class="abas-visao" [abas]="abasVisao" [ativa]="visao()" (ativaChange)="mudarVisao($any($event))" />
 
-    @if (visao() === 'panorama') {
+    @if (visao() === 'qualificacao') {
+      <!-- Era a tela "CRM (Leads)": o mesmo kanban, com arrastar e Qualificar/Descartar/Reabrir. -->
+      <app-leads class="qualificacao" [embutido]="true" />
+    } @else if (visao() === 'panorama') {
       <app-funil-panorama [agrupar]="agrupar()" [estado]="servico.estadoPanorama()" [cartoes]="cartoes()"
         [truncado]="servico.panoramaTruncado()" (trocarAgrupar)="trocarAgrupar($event)"
         (abrir)="abrirGrupo($event)" (tentarDeNovo)="servico.carregarPanorama(agrupar())" />
@@ -140,7 +151,7 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
       }
       @case ('erro') {
         <ui-estado tipo="erro" titulo="Não foi possível carregar o funil" descricao="Nenhuma oportunidade foi alterada; tente de novo.">
-          <button class="btn btn--primario" type="button" (click)="servico.carregar()">Tentar de novo</button>
+          <button class="btn btn--secundario" type="button" (click)="servico.carregar()">Tentar de novo</button>
         </ui-estado>
       }
       @case ('pronto') {
@@ -211,7 +222,8 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
       (fechar)="novaOportunidade.set(false)" />
 
     <!-- Configuração das raias: a empresa monta o próprio funil. -->
-    <ui-modal [aberto]="configAberta()" titulo="Raias do funil" largura="m" (fechar)="fecharConfig()">
+    <!-- Cada mudança grava na hora; só o nome digitado e não adicionado conta como não salvo. -->
+    <ui-modal [aberto]="configAberta()" titulo="Raias do funil" largura="m" [sujo]="!!novoNome().trim() || !!novoMotivo().trim()" (fechar)="fecharConfig()">
       <p class="cfg-dica">
         As raias viram as colunas do quadro. <b>Aberto</b> é negociação em andamento;
         <b>Ganho</b> encerra com sucesso; <b>Perdido</b> encerra e pede o motivo.
@@ -242,7 +254,7 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
       <div class="cfg-novo">
         <ui-campo rotulo="Nova raia" placeholder="Nome da raia" [valor]="novoNome()" (valorChange)="novoNome.set($event)" />
         <ui-select rotulo="Tipo" [opcoes]="opcoesTipoRaia" [valor]="novoTipo()" (valorChange)="novoTipo.set(tipoValido($event))" />
-        <button type="button" class="btn btn--primario" (click)="criarEtapa()" [disabled]="!novoNome().trim()">Adicionar raia</button>
+        <button type="button" class="btn btn--secundario" (click)="criarEtapa()" [disabled]="!novoNome().trim()">Adicionar raia</button>
       </div>
 
       <h3 class="cfg-sub txt-rotulo">Motivos de perda</h3>
@@ -259,7 +271,7 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
       </ul>
       <div class="cfg-novo cfg-novo--motivo">
         <ui-campo rotulo="Novo motivo" placeholder="Nome do motivo" [valor]="novoMotivo()" (valorChange)="novoMotivo.set($event)" />
-        <button type="button" class="btn btn--primario" (click)="criarMotivo()" [disabled]="!novoMotivo().trim()">Adicionar motivo</button>
+        <button type="button" class="btn btn--secundario" (click)="criarMotivo()" [disabled]="!novoMotivo().trim()">Adicionar motivo</button>
       </div>
       <div rodape>
         <button type="button" class="btn btn--secundario" (click)="fecharConfig()">Fechar</button>
@@ -298,6 +310,7 @@ import { decidirAcaoAoSoltar, itensDoMenu, proximoItemDoMenu, type AcaoDoCard, t
     .mp-chip { font-size: 12px; padding: 2px 8px; border-radius: var(--raio-completo); background: var(--erro-suave); color: var(--erro); }
     .dica-m { margin: var(--espacamento-3) 0 0; font-size: 11px; color: var(--texto-suave); }
     .abas-visao { margin-bottom: var(--espacamento-4); }
+    .qualificacao { flex: 1; min-height: 0; }
     .filtros-board { margin-bottom: var(--espacamento-3); }
     .resumo-filtros { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); }
     .erro-move { margin: 0 0 var(--espacamento-3); color: var(--erro); font-size: 13px; }
@@ -417,7 +430,7 @@ export class FunilPagina implements OnInit {
   readonly etiquetaInjetada = signal<OpcaoPaginada | null>(null)
   readonly origemInjetada = signal<OpcaoPaginada | null>(null)
   protected readonly abasVisao: readonly Aba[] = [
-    { id: 'panorama', rotulo: 'Panorama' }, { id: 'board', rotulo: 'Board' },
+    { id: 'panorama', rotulo: 'Panorama' }, { id: 'board', rotulo: 'Oportunidades' }, { id: 'qualificacao', rotulo: 'Qualificação' },
   ]
 
   protected readonly carregarEtiquetas: CarregarOpcoes = async (cursor, termo) => {
@@ -459,6 +472,8 @@ export class FunilPagina implements OnInit {
     this.carregouUmaVez = true
     this.estadoUrl.set(novo)
     this.rascunho.set(novo.filtros)
+    // Qualificação: o kanban de leads carrega sozinho (LeadsPagina embutida).
+    if (novo.visao === 'qualificacao') return
     if (novo.visao === 'panorama') {
       if (primeira || antigo.visao !== 'panorama' || antigo.agrupar !== novo.agrupar) void this.servico.carregarPanorama(novo.agrupar)
       return

@@ -1,35 +1,36 @@
 import { Component, ChangeDetectionStrategy, computed, inject, signal, OnInit } from '@angular/core'
+import { FormsModule } from '@angular/forms'
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import {
   CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, ConfirmacaoServico, EstadoComponente, GradeFormComponente,
-  IconeComponente, ModalComponente, PaginacaoComponente, TabelaComponente, ToastServico, ehStatus, mensagemDeErro,
-  mesclarPagina, queryDeLista, type ColunaTabela, type LinhaTabela,
+  IconeComponente, ModalComponente, PaginacaoComponente, SelectPaginadoComponente, TabelaComponente, ToastServico, ehStatus,
+  mensagemDeErro, mesclarPagina, queryDeLista, type CarregarOpcoes, type ColunaTabela, type LinhaTabela, type OpcaoPaginada,
 } from '../../compartilhado/ui/index.js'
 
 interface Sequencia { readonly id: string; readonly nome: string; readonly objetivo: string | null; readonly ativa: boolean; readonly passos: number }
 interface Passo { readonly seq: number; readonly offsetDias: number; readonly titulo: string; readonly descricao: string | null }
-interface AchadoContato { readonly id: string; readonly nome: string }
 interface Pagina { readonly itens: Sequencia[]; readonly proximoCursor: string | null }
 type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 
 /**
- * Sequências (régua de relacionamento) — playbook de toques em coluna dupla
- * (sequências | passos). Aplicar a um contato materializa as Tarefas (D+N).
+ * Réguas de contato (aba de Automações) — playbook de toques em coluna dupla
+ * (réguas | passos). Aplicar a um contato materializa as Tarefas (D+N): é ação
+ * sobre um registro, então abre modal de ação (padrão A) que nomeia a régua.
  * Segue geracrm-layout-ui (5 estados, tokens, responsivo, sem cor literal).
  */
 @Component({
   selector: 'app-sequencias',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, GradeFormComponente,
-    IconeComponente, ModalComponente, PaginacaoComponente, TabelaComponente,
+    CabecalhoTelaComponente, CampoComponente, CelulaDiretiva, EstadoComponente, FormsModule, GradeFormComponente,
+    IconeComponente, ModalComponente, PaginacaoComponente, SelectPaginadoComponente, TabelaComponente,
   ],
   template: `
-    <ui-cabecalho-tela titulo="Sequências"
-      subtitulo="Réguas de relacionamento: um playbook de toques que você aplica a um cliente e vira tarefas.">
+    <ui-cabecalho-tela titulo="Réguas de contato"
+      subtitulo="Um playbook de toques que você aplica a um cliente e vira tarefas.">
       <button type="button" class="btn btn--primario" (click)="criarAberto.set(true)">
-        <ui-icone nome="plus" />Nova sequência
+        <ui-icone nome="plus" />Nova régua
       </button>
     </ui-cabecalho-tela>
 
@@ -40,10 +41,10 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
         </div>
       }
       @case ('sem_permissao') {
-        <ui-estado tipo="sem-permissao" titulo="Sem acesso às sequências" descricao="Peça acesso a um administrador." />
+        <ui-estado tipo="sem-permissao" titulo="Sem acesso às réguas" descricao="Peça acesso a um administrador." />
       }
       @case ('erro') {
-        <ui-estado tipo="erro" titulo="Não foi possível carregar as sequências" descricao="Verifique a conexão e tente de novo.">
+        <ui-estado tipo="erro" titulo="Não foi possível carregar as réguas" descricao="Verifique a conexão e tente de novo.">
           <button type="button" class="btn btn--secundario" (click)="carregar()">Tentar de novo</button>
         </ui-estado>
       }
@@ -59,9 +60,9 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                 <button type="button" class="btn btn--secundario btn--pequeno" (click)="excluir(l, $event)">Excluir</button>
               </ng-template>
               <div uiVazio>
-                <ui-estado titulo="Nenhuma sequência ainda"
-                  descricao="Crie uma sequência de toques, como pós-venda ou reativação, e aplique a clientes.">
-                  <button type="button" class="btn btn--primario" (click)="criarAberto.set(true)">Nova sequência</button>
+                <ui-estado titulo="Nenhuma régua ainda"
+                  descricao="Crie uma régua de toques, como pós-venda ou reativação, e aplique a clientes.">
+                  <button type="button" class="btn btn--secundario" (click)="criarAberto.set(true)">Nova régua</button>
                 </ui-estado>
               </div>
             </ui-tabela>
@@ -73,10 +74,18 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
             @if (sel(); as s) {
               <div class="det-topo">
                 <h2 class="txt-secao encolhe">{{ s.nome }}</h2>
-                <button type="button" class="btn btn--primario btn--pequeno" (click)="abrirPasso()">
-                  <ui-icone nome="plus" />Novo passo
-                </button>
+                <span class="det-acoes">
+                  <button type="button" class="btn btn--secundario btn--pequeno" (click)="abrirPasso()">
+                    <ui-icone nome="plus" />Novo passo
+                  </button>
+                  <button type="button" class="btn btn--primario btn--pequeno" (click)="abrirAplicar()"
+                    [disabled]="passos().length === 0"
+                    [title]="passos().length === 0 ? 'Adicione ao menos um passo antes de aplicar' : 'Criar as tarefas desta régua para um cliente'">
+                    Aplicar a um cliente…
+                  </button>
+                </span>
               </div>
+              @if (msg(); as m) { <p [class.ok]="m.ok" [class.erro]="!m.ok" [attr.role]="m.ok ? 'status' : 'alert'">{{ m.texto }}</p> }
 
               @if (erroPassos()) { <p class="erro" role="alert">{{ erroPassos() }}</p> }
               <ui-tabela [colunas]="colunasPassos" [linhas]="linhasPassos()" [chaveLinha]="chaveDoPasso">
@@ -93,42 +102,42 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
                 </div>
               </ui-tabela>
 
-              <div class="aplicar">
-                <h3 class="txt-secao">Aplicar a um cliente</h3>
-                <p class="ap-sub">Cria uma tarefa por passo, com vencimento em D+N a partir de hoje.</p>
-                <div class="busca">
-                  <input [value]="termo()" (input)="buscar($any($event.target).value)" placeholder="Buscar contato…"
-                    aria-label="Buscar contato" [disabled]="passos().length === 0" />
-                  @if (achados().length > 0) {
-                    <ul class="achados">
-                      @for (a of achados(); track a.id) {
-                        <li><button type="button" class="achado" (click)="aplicar(a)">{{ a.nome }}</button></li>
-                      }
-                    </ul>
-                  }
-                </div>
-                @if (erroBusca()) { <p class="erro" role="alert">{{ erroBusca() }}</p> }
-                @if (msg(); as m) { <p [class.ok]="m.ok" [class.erro]="!m.ok" [attr.role]="m.ok ? 'status' : 'alert'">{{ m.texto }}</p> }
-              </div>
             } @else {
-              <ui-estado titulo="Escolha uma sequência" descricao="Selecione uma sequência ao lado para montar os passos e aplicar a um cliente." />
+              <ui-estado titulo="Escolha uma régua" descricao="Selecione uma régua ao lado para montar os passos e aplicar a um cliente." />
             }
           </section>
         </div>
       }
     }
 
-    <ui-modal [aberto]="criarAberto()" titulo="Nova sequência" largura="p" (fechar)="fecharCriar()">
+    <ui-modal [aberto]="aplicarAberto()" titulo="Aplicar a um cliente" largura="p" (fechar)="fecharAplicar()">
+      <form id="form-aplicar" (submit)="aplicar($event)" novalidate>
+        <p class="ap-sub">Régua <strong>{{ sel()?.nome }}</strong>: cria {{ passos().length }} tarefa{{ passos().length === 1 ? '' : 's' }},
+          com vencimento em D+N a partir de hoje.</p>
+        <ui-grade-form>
+          <ui-select-paginado rotulo="Cliente" placeholder="Busque por nome ou telefone" [largo]="true" [obrigatorio]="true"
+            [carregar]="buscarContatos" [erro]="erroAplicar()"
+            [ngModel]="contatoAplicar()" (ngModelChange)="contatoAplicar.set($event ?? '')" name="contato" />
+        </ui-grade-form>
+      </form>
+      <div rodape>
+        <button type="button" class="btn btn--secundario" (click)="fecharAplicar()">Cancelar</button>
+        <button type="submit" form="form-aplicar" class="btn btn--primario" [disabled]="aplicando()">
+          {{ aplicando() ? 'Aplicando…' : 'Aplicar régua' }}
+        </button>
+      </div>
+    </ui-modal>
+    <ui-modal [aberto]="criarAberto()" titulo="Nova régua" largura="p" (fechar)="fecharCriar()">
       <form id="form-sequencia" (submit)="criar($event)">
         <ui-grade-form>
-          <ui-campo class="largo" rotulo="Nome da sequência" placeholder="Ex.: Pós-venda" [obrigatorio]="true"
+          <ui-campo class="largo" rotulo="Nome da régua" placeholder="Ex.: Pós-venda" [obrigatorio]="true"
             [(valor)]="novoNome" [erro]="erroNova()" />
         </ui-grade-form>
       </form>
       <div rodape>
         <button type="button" class="btn btn--secundario" (click)="fecharCriar()">Cancelar</button>
         <button type="submit" form="form-sequencia" class="btn btn--primario" [disabled]="criando()">
-          {{ criando() ? 'Criando…' : 'Criar sequência' }}
+          {{ criando() ? 'Criando…' : 'Criar régua' }}
         </button>
       </div>
     </ui-modal>
@@ -136,7 +145,7 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     <ui-modal [aberto]="passoAberto()" titulo="Novo passo" largura="p" (fechar)="fecharPasso()">
       <form id="form-passo" (submit)="addPasso($event)">
         <ui-grade-form>
-          <ui-campo rotulo="Dia (D+N)" tipo="number" dica="Dias depois de aplicar a sequência." [obrigatorio]="true"
+          <ui-campo rotulo="Dia (D+N)" tipo="number" dica="Dias depois de aplicar a régua." [obrigatorio]="true"
             [valor]="pOffset().toString()" (valorChange)="pOffset.set(+$event)" />
           <ui-campo rotulo="O que fazer" placeholder="Ex.: Ligar para confirmar o pedido" [obrigatorio]="true"
             [(valor)]="pTitulo" [erro]="erroPasso()" />
@@ -160,23 +169,12 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
     .nome:hover { color: var(--acao); text-decoration: underline; }
     .det-topo { display: flex; align-items: center; justify-content: space-between; gap: var(--espacamento-3); }
     .det-topo h2 { margin: 0; min-width: 0; }
+    .det-acoes { display: inline-flex; flex-wrap: wrap; gap: var(--espacamento-2); justify-content: flex-end; }
     .ps-tit { color: var(--texto); }
     .ps-desc { display: block; color: var(--texto-suave); font-size: 12px; }
     .erro { margin: 0; color: var(--erro); font-size: 13px; }
-    .ok { margin: var(--espacamento-3) 0 0; color: var(--sucesso); font-size: 13px; }
-    .aplicar { padding: var(--espacamento-4); border: 1px solid var(--borda); border-radius: var(--raio-painel); background: var(--superficie); }
-    .aplicar h3 { margin: 0; }
-    .ap-sub { margin: var(--espacamento-1) 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
-    .busca { position: relative; }
-    .busca input { width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 1px solid var(--borda-controle);
-      border-radius: var(--raio-controle); background: var(--superficie-elevada); color: var(--texto); font: inherit; }
-    .busca input:disabled { opacity: .6; }
-    .achados { position: absolute; z-index: 5; left: 0; right: 0; margin: var(--espacamento-1) 0 0; padding: 0; list-style: none;
-      border: 1px solid var(--borda); border-radius: var(--raio-controle); background: var(--superficie-elevada);
-      box-shadow: var(--elevacao-dropdown); max-height: 220px; overflow: auto; }
-    .achado { display: block; width: 100%; padding: var(--espacamento-2) var(--espacamento-3); border: 0; background: transparent;
-      color: var(--texto); font: inherit; text-align: left; cursor: pointer; }
-    .achado:hover { background: var(--acao-suave); }
+    .ok { margin: 0; color: var(--sucesso); font-size: 13px; }
+    .ap-sub { margin: 0 0 var(--espacamento-3); color: var(--texto-secundario); font-size: 13px; }
     .encolhe { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   `,
 })
@@ -186,7 +184,7 @@ export class SequenciasPagina implements OnInit {
   private readonly confirmacao = inject(ConfirmacaoServico)
 
   protected readonly colunasSeqs: ColunaTabela[] = [
-    { chave: 'nome', rotulo: 'Sequência' },
+    { chave: 'nome', rotulo: 'Régua' },
     { chave: 'passos', rotulo: 'Passos', alinhamento: 'dir', mono: true, largura: '120px' },
     { chave: 'acoes', rotulo: 'Ações', alinhamento: 'dir', largura: '120px' },
   ]
@@ -214,9 +212,11 @@ export class SequenciasPagina implements OnInit {
   readonly novoNome = signal(''); readonly criando = signal(false); readonly erroNova = signal<string | null>(null)
   readonly passoAberto = signal(false)
   readonly pOffset = signal(7); readonly pTitulo = signal(''); readonly addP = signal(false); readonly erroPasso = signal<string | null>(null)
-  readonly termo = signal(''); readonly achados = signal<readonly AchadoContato[]>([]); readonly erroBusca = signal<string | null>(null)
+  readonly aplicarAberto = signal(false); readonly contatoAplicar = signal(''); readonly aplicando = signal(false)
+  readonly erroAplicar = signal<string | null>(null)
+  /** Nome de cada contato visto na busca — para a mensagem "N tarefas criadas para Fulano". */
+  private readonly nomes = new Map<string, string>()
   readonly msg = signal<{ ok: boolean; texto: string } | null>(null)
-  private buscaSeq = 0
 
   ngOnInit(): void { void this.carregar() }
 
@@ -250,11 +250,11 @@ export class SequenciasPagina implements OnInit {
       this.seqs.update((a) => mesclarPagina(a, r.itens, (s) => s.id))
       this.proximoCursor.set(r.proximoCursor)
     } catch (e) {
-      this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais sequências.'))
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível carregar mais réguas.'))
     } finally { this.carregandoMais.set(false) }
   }
 
-  abrir(s: Sequencia): void { this.sel.set(s); this.msg.set(null); this.termo.set(''); this.achados.set([]); void this.carregarPassos() }
+  abrir(s: Sequencia): void { this.sel.set(s); this.msg.set(null); void this.carregarPassos() }
 
   async carregarPassos(): Promise<void> {
     const s = this.sel(); if (!s) return
@@ -263,7 +263,7 @@ export class SequenciasPagina implements OnInit {
       const r = await firstValueFrom(this.http.get<{ itens: Passo[] }>(`/v1/sequencias/${s.id}/passos`))
       this.passos.set(r.itens)
     } catch (e) {
-      this.erroPassos.set(mensagemDeErro(e, 'Não foi possível carregar os passos. Tente abrir a sequência de novo.'))
+      this.erroPassos.set(mensagemDeErro(e, 'Não foi possível carregar os passos. Tente abrir a régua de novo.'))
     }
   }
 
@@ -285,10 +285,10 @@ export class SequenciasPagina implements OnInit {
       await firstValueFrom(this.http.post('/v1/sequencias', { nome }))
       this.novoNome.set('')
       this.criarAberto.set(false)
-      this.toast.sucesso('Sequência criada')
+      this.toast.sucesso('Régua criada')
       await this.carregar()
     } catch (e) {
-      this.erroNova.set(ehStatus(e, 409) ? 'Já existe uma sequência com esse nome.' : mensagemDeErro(e, 'Não foi possível criar a sequência.'))
+      this.erroNova.set(ehStatus(e, 409) ? 'Já existe uma régua com esse nome.' : mensagemDeErro(e, 'Não foi possível criar a régua.'))
     } finally { this.criando.set(false) }
   }
 
@@ -306,9 +306,9 @@ export class SequenciasPagina implements OnInit {
       await firstValueFrom(this.http.delete(`/v1/sequencias/${s.id}`))
       if (this.sel()?.id === s.id) { this.sel.set(null); this.passos.set([]) }
       this.seqs.update((a) => a.filter((x) => x.id !== s.id))
-      this.toast.sucesso('Sequência excluída')
+      this.toast.sucesso('Régua excluída')
     } catch (e) {
-      this.toast.erro(mensagemDeErro(e, 'Não foi possível excluir a sequência.'))
+      this.toast.erro(mensagemDeErro(e, 'Não foi possível excluir a régua.'))
     }
   }
 
@@ -352,29 +352,34 @@ export class SequenciasPagina implements OnInit {
     }
   }
 
-  async buscar(q: string): Promise<void> {
-    this.termo.set(q); this.msg.set(null); this.erroBusca.set(null)
-    const seq = ++this.buscaSeq
-    if (q.trim().length < 2) { this.achados.set([]); return }
-    try {
-      const r = await firstValueFrom(this.http.get<{ itens: AchadoContato[] }>(`/v1/contatos/busca?q=${encodeURIComponent(q.trim())}`))
-      if (seq === this.buscaSeq) this.achados.set(r.itens)
-    } catch (e) {
-      if (seq === this.buscaSeq) this.erroBusca.set(mensagemDeErro(e, 'A busca de contatos falhou. Tente de novo.'))
-    }
+  protected readonly buscarContatos: CarregarOpcoes = async (_cursor, termo) => {
+    // A busca de contatos devolve os 20 melhores (sem cursor): uma página só.
+    if (termo.trim().length < 2) return { itens: [], proximoCursor: null }
+    const r = await firstValueFrom(this.http.get<{ itens: { id: string; nome: string; telefone: string | null }[] }>(
+      `/v1/contatos/busca${queryDeLista({ q: termo.trim() })}`))
+    for (const c of r.itens) this.nomes.set(c.id, c.nome)
+    const itens: OpcaoPaginada[] = r.itens.map((c) => ({ valor: c.id, rotulo: c.nome, ...(c.telefone ? { dica: c.telefone } : {}) }))
+    return { itens, proximoCursor: null }
   }
 
-  async aplicar(a: AchadoContato): Promise<void> {
-    const s = this.sel(); if (!s) return
-    this.termo.set(''); this.achados.set([])
+  abrirAplicar(): void { this.contatoAplicar.set(''); this.erroAplicar.set(null); this.aplicarAberto.set(true) }
+  fecharAplicar(): void { if (!this.aplicando()) this.aplicarAberto.set(false) }
+
+  async aplicar(ev: Event): Promise<void> {
+    ev.preventDefault()
+    const s = this.sel(); const contatoId = this.contatoAplicar()
+    if (!s || this.aplicando()) return
+    if (!contatoId) { this.erroAplicar.set('Escolha o cliente.'); return }
+    this.aplicando.set(true); this.erroAplicar.set(null)
     try {
-      const r = await firstValueFrom(this.http.post<{ tarefasCriadas: number }>(`/v1/sequencias/${s.id}/aplicar`, { contatoId: a.id }))
+      const r = await firstValueFrom(this.http.post<{ tarefasCriadas: number }>(`/v1/sequencias/${s.id}/aplicar`, { contatoId }))
       const n = r.tarefasCriadas
-      const texto = `${n} tarefa${n === 1 ? '' : 's'} criada${n === 1 ? '' : 's'} para ${a.nome}.`
-      this.msg.set({ ok: true, texto })
-      this.toast.sucesso('Sequência aplicada')
+      const nome = this.nomes.get(contatoId) ?? 'o cliente'
+      this.msg.set({ ok: true, texto: `${n} tarefa${n === 1 ? '' : 's'} criada${n === 1 ? '' : 's'} para ${nome}.` })
+      this.aplicarAberto.set(false)
+      this.toast.sucesso('Régua aplicada')
     } catch (e) {
-      this.msg.set({ ok: false, texto: mensagemDeErro(e, 'Não foi possível aplicar a sequência.') })
-    }
+      this.erroAplicar.set(mensagemDeErro(e, 'Não foi possível aplicar a régua.'))
+    } finally { this.aplicando.set(false) }
   }
 }

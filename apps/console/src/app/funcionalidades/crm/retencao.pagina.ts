@@ -73,7 +73,7 @@ const ORDEM = ['ativo', 'inativo', 'perdido', 'sem_compra']
                   </section>
                 }
               </div>
-              <p class="dica">Quer agir sobre um grupo? Veja os <a routerLink="/segmentos">segmentos RFV</a> ou monte uma <a routerLink="/campanhas">campanha</a>.</p>
+              <p class="dica">Quer agir sobre um grupo? Veja os <a routerLink="/base/rfv">segmentos RFV</a> ou monte uma <a routerLink="/campanhas">campanha</a>.</p>
             }
           }
         }

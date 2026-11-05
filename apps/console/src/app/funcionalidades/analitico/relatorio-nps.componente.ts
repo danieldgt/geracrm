@@ -2,11 +2,11 @@ import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } 
 import { HttpClient, HttpErrorResponse } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
 import {
-  AbasComponente, CabecalhoTelaComponente, CelulaDiretiva, ConfirmacaoServico, EsqueletoComponente, EstadoComponente,
+  AbasComponente, CelulaDiretiva, ConfirmacaoServico, EsqueletoComponente, EstadoComponente,
   GradeFormComponente, IconeComponente, ModalComponente, SelectComponente, TabelaComponente, mensagemDeErro,
   type Aba, type ColunaTabela, type LinhaTabela, type OpcaoSelect,
 } from '../../compartilhado/ui/index.js'
-import { blocoDoAgente, resumoFaixas, temNpsNoPeriodo, textoScore, type BlocoAgenteNps } from './nps.regras.js'
+import { blocoDoAgente, resumoFaixas, temNpsNoPeriodo, textoScore, type BlocoAgenteNps } from '../crm/nps.regras.js'
 
 interface Atendente {
   readonly usuarioId: string; readonly nome: string; readonly total: number
@@ -26,25 +26,28 @@ type Estado = 'carregando' | 'pronto' | 'sem_permissao' | 'erro'
 const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r: '6m' }, { dias: 365, r: '12m' }]
 
 /**
- * NPS por atendente — a nota é pós-conversa e avalia o atendimento, então o
+ * NPS por atendente (aba Atendimento de Relatórios; era a tela NPS) — a nota é pós-conversa e avalia o atendimento, então o
  * painel mostra o score de cada vendedor. Score DERIVADO (%promotores −
  * %detratores). Padrão Lista: cabeçalho, período em abas, ranking em tabela e
  * registro da nota em modal. O bloco do agente fica à parte (G3).
  */
 @Component({
-  selector: 'app-nps',
+  selector: 'app-relatorio-nps',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AbasComponente, CabecalhoTelaComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, GradeFormComponente,
+    AbasComponente, CelulaDiretiva, EsqueletoComponente, EstadoComponente, GradeFormComponente,
     IconeComponente, ModalComponente, SelectComponente, TabelaComponente,
   ],
   template: `
-    <ui-cabecalho-tela titulo="NPS por atendente"
-      subtitulo="A nota é dada depois da conversa e avalia quem atendeu. A do pós-venda feito pelo agente aparece à parte.">
-      <button type="button" class="btn btn--primario" (click)="abrirRegistro()">
+    <div class="cab">
+      <div>
+        <h2 class="txt-secao titulo">NPS por atendente</h2>
+        <p class="txt-corpo sub">A nota é dada depois da conversa e avalia quem atendeu. A do pós-venda feito pelo agente aparece à parte.</p>
+      </div>
+      <button type="button" class="btn btn--secundario" (click)="abrirRegistro()">
         <ui-icone nome="plus" />Registrar nota
       </button>
-    </ui-cabecalho-tela>
+    </div>
 
     <div class="periodo">
       <ui-abas [abas]="abasPeriodo" [ativa]="periodoAtivo()" (ativaChange)="trocar($event)" />
@@ -130,7 +133,7 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
       }
     </div>
 
-    <ui-modal [aberto]="registroAberto()" titulo="Registrar nota de NPS" largura="p" (fechar)="fecharRegistro()">
+    <ui-modal [aberto]="registroAberto()" titulo="Registrar nota de NPS" largura="p" [sujo]="false" (fechar)="fecharRegistro()">
       <form id="form-nps" (submit)="registrar($event)">
         <ui-grade-form>
           <ui-select class="largo" rotulo="Quem atendeu" placeholder="Escolha o atendente" [opcoes]="opcoesEquipe()"
@@ -158,7 +161,10 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
     </ui-modal>
   `,
   styles: `
-    :host { display: block; width: 100%; padding: var(--espacamento-6); }
+    :host { display: block; min-width: 0; }
+    .cab { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--espacamento-4); flex-wrap: wrap; }
+    .titulo { margin: 0; color: var(--texto); }
+    .sub { margin: var(--espacamento-1) 0 0; color: var(--texto-secundario); }
     .periodo { margin-top: var(--espacamento-3); }
     .corpo { margin-top: var(--espacamento-4); display: grid; gap: var(--espacamento-2); min-width: 0; }
     .esqueletos { display: grid; gap: var(--espacamento-2); }
@@ -197,7 +203,7 @@ const PERIODOS = [{ dias: 30, r: '30d' }, { dias: 90, r: '90d' }, { dias: 180, r
     @media (max-width: 640px) { .distribuicao { min-width: 0; flex-wrap: wrap; } }
   `,
 })
-export class NpsPagina implements OnInit {
+export class RelatorioNpsComponente implements OnInit {
   private readonly http = inject(HttpClient)
   private readonly confirmacao = inject(ConfirmacaoServico)
 
