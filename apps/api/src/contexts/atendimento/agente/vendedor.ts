@@ -34,6 +34,8 @@ import { resolverAlertaLlm } from './pipeline/falha-llm.js'
 import { fusoSeguro } from '../../plataforma/fuso.js'
 import { efetivarSeDentroDaAlcada } from '../../pedido/alcada.js'
 import { MAX_TENTATIVAS_TRANSCRICAO } from '../../../workers/transcricao.js'
+import { estadoDaTranscricao } from '../midia/transcricao/estado.js'
+import { transcricaoDoAmbiente } from '../midia/transcricao/fabrica.js'
 import { posVendaPendenteNaConversa } from './pos-venda.js'
 
 /**
@@ -116,6 +118,8 @@ export interface DepsTurno {
   readonly copiloto?: boolean | undefined
   /** Troca etapas do pipeline (testes). Em produção, sempre o padrão. */
   readonly pipeline?: Partial<PipelineDoTurno> | undefined
+  /** Há provedor de transcrição? Padrão: o do ambiente (`GROQ_API_KEY`). */
+  readonly transcreve?: boolean | undefined
 }
 
 /** Resposta que vai para `agente_decisao.resposta`: a do modelo ou a fixa de uma etapa. */
@@ -290,7 +294,7 @@ export async function conduzirTurnoVendedor(tarefa: Tarefa, deps: DepsTurno): Pr
     // Memória de longo prazo do cliente (R3): preferências, objeções, restrições — nunca PII.
     await lerMemoria(tx, conv.contato_id).catch(() => [] as string[]),
     await lerEstado(tx, reuniao.sessao_id),
-    await carregarEntrantes(tx, conversaId, tarefa.mensagens_ids),
+    await carregarEntrantes(tx, conversaId, tarefa.mensagens_ids, deps.transcreve ?? transcricaoDoAmbiente().capacidades.transcreve),
   ] as const)
   if (!lead) return { desfecho: 'silencio', motivo: 'sem_lead' }
 
@@ -833,7 +837,9 @@ async function carregarHistorico(tx: Sql, conversaId: string, falas: number): Pr
  * As mensagens entrantes DESTE turno (as da tarefa), com o estado da
  * transcrição — gatilhos de entrada decidem sobre áudio pendente ou perdido.
  */
-async function carregarEntrantes(tx: Sql, conversaId: string, ids: readonly string[]): Promise<readonly EntranteDoTurno[]> {
+async function carregarEntrantes(
+  tx: Sql, conversaId: string, ids: readonly string[], transcreve: boolean,
+): Promise<readonly EntranteDoTurno[]> {
   if (ids.length === 0) return []
   const linhas = await tx<{ id: string; tipo: string; conteudo: Record<string, unknown> }[]>`
     SELECT id, tipo, conteudo FROM mensagem
@@ -841,11 +847,10 @@ async function carregarEntrantes(tx: Sql, conversaId: string, ids: readonly stri
        AND id = ANY(${[...ids]}::uuid[])
      ORDER BY criado_em`
   return linhas.map((l) => {
-    const audioSemTexto = l.tipo === 'audio' && typeof l.conteudo['transcricao'] !== 'string'
-    const desistiu = Number(l.conteudo['transcricao_tentativas'] ?? 0) >= MAX_TENTATIVAS_TRANSCRICAO
+    const estado = estadoDaTranscricao(l.tipo, l.conteudo, transcreve, MAX_TENTATIVAS_TRANSCRICAO)
     return {
       id: l.id, tipo: l.tipo, texto: textoDaMensagem(l.tipo, l.conteudo),
-      transcricaoPendente: audioSemTexto && !desistiu, transcricaoFalhou: audioSemTexto && desistiu,
+      transcricaoPendente: estado === 'pendente', transcricaoFalhou: estado === 'falhou',
     }
   })
 }
@@ -861,7 +866,7 @@ function horaLocalDe(agora: Date, fuso: string): string {
 export function textoDaMensagem(tipo: string, c: Record<string, unknown>): string {
   const texto = typeof c['texto'] === 'string' ? c['texto'] : ''
   if (tipo === 'texto') return texto
-  if (tipo === 'audio') return typeof c['transcricao'] === 'string' ? `[áudio] ${c['transcricao']}` : '[áudio sem transcrição]'
+  if (tipo === 'audio') return typeof c['transcricao'] === 'string' && c['transcricao'].trim() ? `[áudio] ${c['transcricao']}` : '[áudio sem transcrição]'
   if (tipo === 'imagem') return `[imagem]${typeof c['legenda'] === 'string' ? ` ${c['legenda']}` : ''}`
   return texto || `[${tipo}]`
 }

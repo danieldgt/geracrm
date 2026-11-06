@@ -8,7 +8,7 @@ import { InboxServico, type ItemConversa, type Mensagem, type Thread } from '../
 import { EventosServico } from '../../nucleo/eventos.servico.js'
 import { PresencaServico } from '../../nucleo/presenca.servico.js'
 import { CanalSimboloComponente } from '../../compartilhado/ui/canal-simbolo.componente.js'
-import { BotaoComponente, EstadoComponente, FiltrosComponente, IconeComponente } from '../../compartilhado/ui/index.js'
+import { BotaoComponente, EstadoComponente, FiltrosComponente, IconeComponente, VisualizadorImagemComponente, type ImagemVisualizavel } from '../../compartilhado/ui/index.js'
 import { SugestaoServico } from './sugestao.servico.js'
 import { dicaModo, idadeDaSugestao, motivoSemCopiloto, rotuloModo, seloDaSugestao, tituloDaSugestao } from './sugestao.regras.js'
 import { ConfirmacaoServico } from '../../compartilhado/ui/confirmar.componente.js'
@@ -20,6 +20,7 @@ import { CelularServico } from '../../nucleo/celular.servico.js'
 import { fecharNoCabecalhoDaLista } from '../../nucleo/casca.regras.js'
 import { MenuMaisComponente } from './menu-mais.componente.js'
 import type { ItemMenuMais } from './menu-mais.regras.js'
+import { vistaTranscricao, type VistaTranscricao } from './transcricao.regras.js'
 
 /**
  * Inbox — visual inspirado no WhatsApp (tema escuro, bolhas, avatares).
@@ -30,7 +31,7 @@ import type { ItemMenuMais } from './menu-mais.regras.js'
  */
 @Component({
   selector: 'app-inbox',
-  imports: [FormsModule, RouterLink, BotaoComponente, EstadoComponente, FiltrosComponente, IconeComponente, CanalSimboloComponente, SlaCronometroComponente, AcoesConversaComponente, AgendarReuniaoComponente, MenuMaisComponente],
+  imports: [FormsModule, RouterLink, BotaoComponente, EstadoComponente, FiltrosComponente, IconeComponente, CanalSimboloComponente, SlaCronometroComponente, AcoesConversaComponente, AgendarReuniaoComponente, MenuMaisComponente, VisualizadorImagemComponente],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="wa" [class.tem-conversa]="servico.selecionadaId()">
@@ -252,7 +253,9 @@ import type { ItemMenuMais } from './menu-mais.regras.js'
                        [class.falhou]="m.status === 'falhou'" [class.apagada]="m.apagada">
                     @if (m.apagada) {
                       @if (m.tipo === 'imagem') {
-                        <img class="msg-img apagada-img" [src]="imagemDe(m)" alt="imagem apagada" />
+                        <button type="button" class="msg-img-bt" aria-label="Ampliar imagem apagada" (click)="abrirImagem(m.id, $event)">
+                          <img class="msg-img apagada-img" [src]="imagemDe(m)" alt="imagem apagada" />
+                        </button>
                         @if (legendaDe(m)) { <span class="txt apagada-txt">{{ legendaDe(m) }}</span> }
                       } @else {
                         <span class="txt apagada-txt">{{ texto(m) }}</span>
@@ -270,10 +273,19 @@ import type { ItemMenuMais } from './menu-mais.regras.js'
                       </div>
                     } @else {
                       @if (m.tipo === 'imagem') {
-                        <img class="msg-img" [src]="imagemDe(m)" alt="imagem enviada" />
+                        <button type="button" class="msg-img-bt" aria-label="Ampliar imagem" title="Ampliar" (click)="abrirImagem(m.id, $event)">
+                          <img class="msg-img" [src]="imagemDe(m)" [alt]="legendaDe(m) || (m.direcao === 'saliente' ? 'imagem enviada' : 'imagem recebida')" />
+                        </button>
                         @if (legendaDe(m)) { <span class="txt legenda-img">{{ legendaDe(m) }}</span> }
                       } @else if (m.tipo === 'audio') {
                         <audio class="msg-audio" controls preload="none" [src]="audioDe(m)"></audio>
+                        @switch (transcricaoDe(m)?.tipo) {
+                          @case ('texto') {
+                            <p class="transcricao"><span class="transcricao-rot">Transcrição</span>{{ textoTranscrito(m) }}</p>
+                          }
+                          @case ('transcrevendo') { <p class="transcricao transcricao-aviso" role="status">Transcrevendo o áudio…</p> }
+                          @case ('falhou') { <p class="transcricao transcricao-aviso">Não deu para transcrever este áudio.</p> }
+                        }
                       } @else if (m.tipo === 'acao') {
                         <div class="card-acao" [attr.data-estado]="acaoCampo(m,'estado')">
                           <div class="card-tit"><ui-icone nome="file-text" [tamanho]="14" /> {{ acaoCampo(m,'titulo') }}</div>
@@ -473,6 +485,7 @@ import type { ItemMenuMais } from './menu-mais.regras.js'
         }
       </section>
     </div>
+    <ui-visualizador-imagem [imagens]="imagensDaConversa()" [(abertaId)]="imagemAbertaId" />
   `,
   styles: `
     /* ⚠️ Layout estilo WhatsApp, mas COR pela identidade do app (neutro + azul,
@@ -627,8 +640,13 @@ import type { ItemMenuMais } from './menu-mais.regras.js'
     .bolha.falhou { outline: 1px solid var(--erro); }
     .txt { white-space: pre-wrap; }
     .msg-img { max-width: 260px; max-height: 340px; border-radius: 6px; display: block; cursor: pointer; }
+    .msg-img-bt { display: block; padding: 0; border: 0; background: none; border-radius: 6px; cursor: zoom-in; }
+    .msg-img-bt:focus-visible { outline: 2px solid var(--borda-foco); outline-offset: 2px; }
     .legenda-img { display: block; margin-top: 4px; }
     .msg-audio { display: block; height: 40px; max-width: 260px; }
+    .transcricao { margin: 6px 0 0; max-width: 260px; font-size: 13.5px; line-height: 1.4; white-space: pre-wrap; }
+    .transcricao-rot { display: block; font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--wa-sec); margin-bottom: 2px; }
+    .transcricao-aviso { font-size: 12.5px; font-style: italic; color: var(--wa-sec); }
     /* Card de ação (pedido/orçamento) */
     .card-acao { min-width: 220px; }
     .card-tit { font-weight: 600; margin-bottom: 4px; }
@@ -1024,6 +1042,12 @@ export class InboxPagina implements OnDestroy {
     return `[${m.tipo}]`
   }
 
+  transcricaoDe(m: Mensagem): VistaTranscricao { return vistaTranscricao(m, Date.now()) }
+  textoTranscrito(m: Mensagem): string {
+    const v = this.transcricaoDe(m)
+    return v?.tipo === 'texto' ? v.texto : ''
+  }
+
   imagemDe(m: Mensagem): string {
     const c = m.conteudo as { imagem?: string; dataUrl?: string } | null
     return c?.imagem ?? c?.dataUrl ?? ''
@@ -1135,6 +1159,22 @@ export class InboxPagina implements OnDestroy {
     } catch {
       this.servico.erroEnvio.set('Não foi possível acessar o microfone.')
     }
+  }
+
+  // Imagem ampliada (lightbox): navega entre as imagens já carregadas desta conversa.
+  readonly imagemAbertaId = signal<string | null>(null)
+  readonly imagensDaConversa = computed<readonly ImagemVisualizavel[]>(() =>
+    (this.servico.thread()?.mensagens ?? [])
+      .filter((m) => m.tipo === 'imagem' && this.imagemDe(m) !== '')
+      .map((m) => {
+        const legenda = this.legendaDe(m)
+        return legenda ? { id: m.id, src: this.imagemDe(m), legenda } : { id: m.id, src: this.imagemDe(m) }
+      }))
+
+  abrirImagem(id: string, e: Event): void {
+    e.stopPropagation()
+    this.menuAbertoId.set(null)
+    this.imagemAbertaId.set(id)
   }
 
   // Menu de mensagem (apagar / editar), como no WhatsApp.

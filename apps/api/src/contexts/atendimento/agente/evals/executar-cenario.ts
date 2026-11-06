@@ -363,11 +363,11 @@ export class ExecutorDeCenarios {
       let resultado: ResultadoTurnoVendedor | null = null
       if (turno.viaFila) {
         if (mensagemId) await comTenantServico(i.tenant, (tx) => agendarTurno(tx, { conversaId: ctx.conversaId, canalId: i.canal, mensagemId, agora: new Date(agora.getTime() - 60_000), atrasoMs: 0 }))
-        await processarTarefasDoAgente(this.workerDoTenant as never, { llm, ligacoes: ligacoesPadrao, enviar, agora }, agora)
+        await processarTarefasDoAgente(this.workerDoTenant as never, { llm, ligacoes: ligacoesPadrao, enviar, agora, transcreve: true }, agora)
       } else {
         resultado = await conduzirTurnoVendedor(
           { tenant_id: i.tenant, id: randomUUID(), conversa_id: ctx.conversaId, canal_id: i.canal, mensagens_ids: mensagemId ? [mensagemId] : [], tentativas: 1, executar_em: agora },
-          { llm, ligacoes: ligacoesPadrao, enviar, agora },
+          { llm, ligacoes: ligacoesPadrao, enviar, agora, transcreve: true },
         )
       }
 

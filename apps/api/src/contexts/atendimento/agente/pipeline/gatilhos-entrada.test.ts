@@ -523,11 +523,19 @@ describe('Pedido de humano e ameaça formal', () => {
 describe('Áudio', () => {
   it('dado áudio ainda transcrevendo, então silêncio SEM abrir sessão', async () => {
     await configurar('autonomo')
-    const r = await turno([await mensagemDoCliente('', 'audio', { transcricao_tentativas: 0 })])
+    const r = await turno([await mensagemDoCliente('', 'audio', { transcricao_tentativas: 0 })], { transcreve: true })
     expect(r).toMatchObject({ desfecho: 'silencio', motivo: 'audio_transcrevendo' })
     expect(chamadasLlm).toBe(0)
     expect(enviados).toHaveLength(0)
     expect((await dono`SELECT 1 FROM agente_sessao WHERE tenant_id = ${T}`).length).toBe(0)
+  })
+
+  it('dado áudio e NENHUM provedor de transcrição, então pede texto em vez de esperar para sempre', async () => {
+    await configurar('autonomo')
+    const r = await turno([await mensagemDoCliente('', 'audio', { transcricao_tentativas: 0 })], { transcreve: false })
+    expect(r.desfecho).toBe('respondeu')
+    expect(enviados.at(-1)!.texto).toMatch(/por escrito/)
+    expect(chamadasLlm).toBe(0)
   })
 
   it('dado áudio perdido, então o 1º pede texto e o 2º transfere por audio_sem_transcricao', async () => {
