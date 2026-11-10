@@ -14,6 +14,7 @@ import { comTenantServico } from '../../../db/index.js'
 import { exigirPapel, temPapel } from '../../plataforma/papel.js'
 import { condicaoConversa, conversaNoEscopo, escopoDaRequisicao } from '../../plataforma/escopo.js'
 import { auditar } from '../../plataforma/auditoria.js'
+import { lerCursor, montarCursor } from '../../crm/cursor-criado-em.js'
 import { atorDaRequisicao, garantirUsuarioId } from '../rotas-fila.js'
 import { faltaParaLlmFerramentas, faltaParaReserva } from './fabrica-ferramentas.js'
 import { estadoDoLlm } from './llm-estado.js'
@@ -433,27 +434,25 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { cursor?: string } }>(
     '/v1/agente/sessoes', { preHandler: exigirTenant },
     async (req, reply) => {
-      let curEm: string | null = null, curId: string | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
-        curEm = em; curId = id
-      }
+      // µs preservados: o cursor carrega `coluna::text` (cursor-criado-em.ts).
+      const cur = lerCursor(req.query.cursor)
+      if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
+      const curEm = cur?.em ?? null, curId = cur?.id ?? null
       // ⚠️ Escopo (D3): só sessões de conversas que quem pede enxerga.
       const linhas = await req.comTenant(async (tx) => tx<{
         id: string; conversa_id: string; contato: string | null; estado: string; turnos: number; motivo_saida: string | null
-        iniciada_em: Date; encerrada_em: Date | null; extraido: Record<string, unknown>; descartados: unknown[]
+        iniciada_em: Date; iniciada_em_txt: string; encerrada_em: Date | null; extraido: Record<string, unknown>; descartados: unknown[]
         tokens_entrada: number; tokens_saida: number; fase: string; modo: string | null; slots: Record<string, unknown>; custo_centavos: string
       }[]>`
         SELECT s.id, s.conversa_id, ct.nome AS contato, s.estado, s.turnos, s.motivo_saida,
-               s.iniciada_em, s.encerrada_em, s.extraido, s.descartados, s.tokens_entrada, s.tokens_saida,
+               s.iniciada_em, s.iniciada_em::text AS iniciada_em_txt, s.encerrada_em, s.extraido, s.descartados, s.tokens_entrada, s.tokens_saida,
                s.fase, s.modo, s.slots, s.custo_centavos
           FROM agente_sessao s
           JOIN conversa cv ON cv.tenant_id = s.tenant_id AND cv.id = s.conversa_id
           LEFT JOIN contato ct ON ct.tenant_id = cv.tenant_id AND ct.id = cv.contato_id
          WHERE s.tenant_id = tenant_atual()
            AND ${condicaoConversa(tx, await escopoDaRequisicao(tx, req))}
-           AND ${curEm === null ? tx`true` : tx`(s.iniciada_em, s.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+           AND ${curEm === null ? tx`true` : tx`(s.iniciada_em, s.id) < (${curEm}::text::timestamptz, ${curId}::uuid)`}
          ORDER BY s.iniciada_em DESC, s.id DESC LIMIT ${PAGINA + 1}`)
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
@@ -465,7 +464,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           extraido: l.extraido, descartados: l.descartados, tokens: l.tokens_entrada + l.tokens_saida,
           fase: l.fase, modo: l.modo, slots: l.slots, custoCentavos: Number(l.custo_centavos),
         })),
-        proximoCursor: temMais && ultimo ? Buffer.from(`${ultimo.iniciada_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
+        proximoCursor: temMais && ultimo ? montarCursor(ultimo.iniciada_em_txt, ultimo.id) : null,
       })
     },
   )
@@ -477,12 +476,10 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { cursor?: string; conversaId?: string; canalId?: string } }>(
     '/v1/agente/decisoes', { preHandler: exigirTenant },
     async (req, reply) => {
-      let curEm: string | null = null, curId: string | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
-        curEm = em; curId = id
-      }
+      // µs preservados: o cursor carrega `coluna::text` (cursor-criado-em.ts).
+      const cur = lerCursor(req.query.cursor)
+      if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
+      const curEm = cur?.em ?? null, curId = cur?.id ?? null
       const conversaId = req.query.conversaId && UUID.test(req.query.conversaId) ? req.query.conversaId : null
       const canalId = req.query.canalId && UUID.test(req.query.canalId) ? req.query.canalId : null
       // ⚠️ Escopo (D3): `conversaId` fora do escopo = 404 (como inexistente); a
@@ -498,11 +495,11 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
         id: string; conversa_id: string; canal_id: string; contato: string | null; modo: string; desfecho: string
         portao_motivo: string | null; modelo: string | null; ferramentas: unknown[]; resposta: unknown; confianca: string | null
         handoff_motivo: string | null; numeros_bloqueados: unknown[]; uso: unknown; custo_centavos: string; latencia_ms: number | null
-        rodadas: number; enviada: boolean; erro: string | null; criado_em: Date
+        rodadas: number; enviada: boolean; erro: string | null; criado_em: Date; criado_em_txt: string
       }[]>`
         SELECT d.id, d.conversa_id, d.canal_id, ct.nome AS contato, d.modo, d.desfecho, d.portao_motivo, d.modelo,
                d.ferramentas, d.resposta, d.confianca, d.handoff_motivo, d.numeros_bloqueados, d.uso, d.custo_centavos,
-               d.latencia_ms, d.rodadas, d.enviada, d.erro, d.criado_em
+               d.latencia_ms, d.rodadas, d.enviada, d.erro, d.criado_em, d.criado_em::text AS criado_em_txt
           FROM agente_decisao d
           JOIN conversa cv ON cv.tenant_id = d.tenant_id AND cv.id = d.conversa_id
           LEFT JOIN contato ct ON ct.tenant_id = cv.tenant_id AND ct.id = cv.contato_id
@@ -510,7 +507,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
            AND ${conversaId ? tx`d.conversa_id = ${conversaId}` : tx`true`}
            AND ${canalId ? tx`d.canal_id = ${canalId}` : tx`true`}
            AND ${condicaoConversa(tx, escopo)}
-           AND ${curEm === null ? tx`true` : tx`(d.criado_em, d.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+           AND ${curEm === null ? tx`true` : tx`(d.criado_em, d.id) < (${curEm}::text::timestamptz, ${curId}::uuid)`}
          ORDER BY d.criado_em DESC, d.id DESC LIMIT ${PAGINA + 1}`
       })
       if (r === null) return reply.code(404).send({ erro: 'conversa.nao_encontrada' })
@@ -529,7 +526,7 @@ export async function rotasAgente(app: FastifyInstance): Promise<void> {
           numerosBloqueados: l.numeros_bloqueados, uso: l.uso, custoCentavos: Number(l.custo_centavos),
           latenciaMs: l.latencia_ms, rodadas: l.rodadas, enviada: l.enviada, erro: l.erro, criadoEm: l.criado_em,
         })),
-        proximoCursor: temMais && ultimo ? Buffer.from(`${ultimo.criado_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
+        proximoCursor: temMais && ultimo ? montarCursor(ultimo.criado_em_txt, ultimo.id) : null,
       })
     },
   )

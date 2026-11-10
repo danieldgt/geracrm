@@ -149,6 +149,18 @@ describe('resumirSessao — incremental por âncora', () => {
     expect(resumo).toMatch(/Cliente: e o prazo de entrega\?/)
     expect(resumo).not.toMatch(/tamanho G, umas 10\. Cliente/)
   })
+
+  it('dado âncora com microssegundos, então a mensagem já resumida não volta no resumo seguinte', async () => {
+    // ⚠️ A âncora lida como Date perdia os µs: `(criado_em, id) > (ms, id)` devolvia a
+    //    própria âncora (e as do mesmo ms) como "nova" — o resumo repetia o que já tinha.
+    relogio += 1000
+    const id = randomUUID()
+    const comMicro = `${new Date(relogio).toISOString().slice(0, 23)}456+00`
+    await dono`INSERT INTO mensagem (tenant_id, id, conversa_id, direcao, tipo, conteudo, criado_em)
+               VALUES (${T}, ${id}, ${CONVERSA}, 'entrante', 'texto', '{"texto":"manda a tabela"}'::jsonb, ${comMicro}::text::timestamptz)`
+    expect(await comTenantServico(T, (tx) => resumirSessao(tx, SESSAO))).toMatchObject({ resultado: 'ok', ateMensagemId: id, mensagensNovas: 1 })
+    expect(await comTenantServico(T, (tx) => resumirSessao(tx, SESSAO))).toEqual({ resultado: 'sem_mensagens_novas' })
+  })
 })
 
 describe('resumirSessaoComModelo — modelo fora da transação', () => {

@@ -38,6 +38,14 @@ function dataHoraReal(em: string): boolean {
   return calendarioOk && !Number.isNaN(Date.parse(em))
 }
 
+/**
+ * Cursor opaco a partir do instante como TEXTO do Postgres (`coluna::text`) e do id.
+ * ⚠️ Nunca passe `Date#toISOString()` aqui: corta os µs (ver o topo do arquivo).
+ */
+export function montarCursor(emTexto: string, id: string): string {
+  return Buffer.from(`${emTexto}${SEPARADOR}${id}`).toString('base64url')
+}
+
 /** Corta a página (PAGINA+1 linhas lidas) e monta o próximo cursor. */
 export function paginar<T extends { id: string; criado_em_txt: string }>(
   linhas: readonly T[],
@@ -45,8 +53,14 @@ export function paginar<T extends { id: string; criado_em_txt: string }>(
   const temMais = linhas.length > PAGINA
   const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
   const ultimo = pagina[pagina.length - 1]
-  const proximoCursor = temMais && ultimo
-    ? Buffer.from(`${ultimo.criado_em_txt}${SEPARADOR}${ultimo.id}`).toString('base64url')
-    : null
+  const proximoCursor = temMais && ultimo ? montarCursor(ultimo.criado_em_txt, ultimo.id) : null
   return { pagina, proximoCursor }
+}
+
+/**
+ * Instante avulso vindo do cliente (ex.: `anteriorEm` do histórico): o mesmo formato e a
+ * mesma checagem de calendário do cursor. `null` = inválido (→ 422, nunca 500 no banco).
+ */
+export function lerInstante(bruto: string | undefined): string | null {
+  return bruto && TIMESTAMP.test(bruto) && dataHoraReal(bruto) ? bruto : null
 }
