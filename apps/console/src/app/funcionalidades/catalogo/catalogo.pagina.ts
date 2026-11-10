@@ -13,9 +13,11 @@ import {
   type AtributoForm, type Erros, type ProdutoForm, type SkuForm,
 } from './catalogo-produtos.regras.js'
 import { corClara, montarGrade, saldoDaLinha, type CelulaGrade, type Grade } from './catalogo-grade.regras.js'
+import { descreverBusca, motivoBuscaPorTrecho, type ModoBusca } from './catalogo-busca.regras.js'
 
 const OPCOES_ORIGEM: OpcaoSelect[] = [{ valor: 'manual', rotulo: 'Só manuais' }, { valor: 'erp', rotulo: 'Só do ERP' }]
 const OPCOES_PERFIL: OpcaoSelect[] = [{ valor: 'atacado', rotulo: 'Atacado' }, { valor: 'varejo', rotulo: 'Varejo' }]
+const OPCOES_MODO: OpcaoSelect[] = [{ valor: 'inteligente', rotulo: 'Inteligente' }, { valor: 'trecho', rotulo: 'Por trecho' }]
 
 /**
  * Catálogo — UMA tela para consultar e cadastrar (fusão de "Catálogo" com
@@ -23,6 +25,9 @@ const OPCOES_PERFIL: OpcaoSelect[] = [{ valor: 'atacado', rotulo: 'Atacado' }, {
  * redireciona para cá). Padrão Lista (L) com cadastro em modal (M):
  *
  *  · a lista é paginada por cursor, com busca, origem, perfil de preço e inativos;
+ *  · com texto, a busca é INTELIGENTE por padrão: a mesma do agente (palavras, grafia
+ *    aproximada e significado — ADR-026), ranqueada e com teto; a tela diz como achou,
+ *    se cortou e por que o "significado" está desligado. "Por trecho" volta ao ILIKE;
  *  · "Variações" abre a GRADE cor × tamanho com o saldo (skill grade-cor-tamanho)
  *    e, abaixo, as variações — onde o produto manual cria e edita SKU;
  *  · "Novo produto" e "Editar" abrem em ui-modal;
@@ -52,8 +57,9 @@ const OPCOES_PERFIL: OpcaoSelect[] = [{ valor: 'atacado', rotulo: 'Atacado' }, {
     </ui-cabecalho-tela>
 
     @if (estado() !== 'sem_permissao') {
-      <ui-filtros placeholder="Buscar por referência ou descrição" rotuloBusca="Busca"
-        (buscar)="onBusca($event)" (aplicar)="servico.carregar()" (limpar)="limparFiltros()">
+      <ui-filtros [placeholder]="servico.modo() === 'inteligente' ? 'O que o cliente pediria: camiseta verde G, calça jeans…' : 'Trecho da referência ou da descrição'"
+        rotuloBusca="Busca" (buscar)="onBusca($event)" (aplicar)="servico.carregar()" (limpar)="limparFiltros()">
+        <ui-select rotulo="Tipo de busca" [opcoes]="opcoesModo" [valor]="servico.modo()" (valorChange)="trocarModo($event)" />
         <ui-select rotulo="Origem" placeholder="Todas as origens" [opcoes]="opcoesOrigem" [valor]="servico.origem()"
           (valorChange)="trocarOrigem($event)" />
         <ui-select rotulo="Perfil de preço" [opcoes]="opcoesPerfil" [valor]="servico.perfil()" (valorChange)="trocarPerfil($event)" />
@@ -81,8 +87,14 @@ const OPCOES_PERFIL: OpcaoSelect[] = [{ valor: 'atacado', rotulo: 'Atacado' }, {
           </ui-estado>
         }
         @case ('pronto') {
+          @if (motivoTrecho(); as m) { <p class="info-busca txt-denso" role="status">{{ m }}</p> }
           @if (itens().length === 0) {
-            @if (temFiltro()) {
+            @if (servico.resumoBusca()) {
+              <ui-estado titulo="Nada parecido no catálogo ativo" [descricao]="'Nenhum produto ativo se parece com “' + servico.busca().trim() + '”. Tente outras palavras, ou a busca por trecho.'">
+                <ui-botao variante="secundario" (click)="trocarModo('trecho')">Buscar por trecho</ui-botao>
+              </ui-estado>
+              @for (a of descricaoBusca()?.avisos ?? []; track a) { <p class="aviso-busca txt-denso" role="status">{{ a }}</p> }
+            } @else if (temFiltro()) {
               <ui-estado titulo="Nada encontrado" descricao="Nenhum produto bate com a busca ou o filtro.">
                 <ui-botao variante="secundario" (click)="limparFiltros()">Limpar filtros</ui-botao>
               </ui-estado>
@@ -92,6 +104,12 @@ const OPCOES_PERFIL: OpcaoSelect[] = [{ valor: 'atacado', rotulo: 'Atacado' }, {
               </ui-estado>
             }
           } @else {
+            @if (descricaoBusca(); as d) {
+              <div class="info-busca txt-denso" role="status">
+                <span>{{ d.resumo }}</span>
+                @for (a of d.avisos; track a) { <span class="aviso-busca">{{ a }}</span> }
+              </div>
+            }
             <ui-tabela [colunas]="colunas()" [linhas]="linhas()">
               <ng-template uiCelula="origem" let-p>
                 <span class="selos">
@@ -324,6 +342,9 @@ const OPCOES_PERFIL: OpcaoSelect[] = [{ valor: 'atacado', rotulo: 'Atacado' }, {
     .chk { display: inline-flex; align-items: center; gap: var(--espacamento-2); color: var(--texto-secundario); white-space: nowrap; }
     .selos { display: inline-flex; flex-wrap: wrap; gap: var(--espacamento-1); }
     .acoes { display: inline-flex; flex-wrap: nowrap; white-space: nowrap; justify-content: flex-end; gap: var(--espacamento-1); }
+    .info-busca { display: grid; gap: var(--espacamento-1); margin: 0; color: var(--texto-secundario); min-width: 0; }
+    .aviso-busca { margin: 0; padding: var(--espacamento-1) var(--espacamento-2); border-radius: var(--raio-controle);
+      background: var(--atencao-suave); color: var(--texto); }
     .contexto { display: flex; align-items: center; gap: var(--espacamento-2); margin: 0; padding: var(--espacamento-2) var(--espacamento-3);
       border-radius: var(--raio-controle); background: var(--acao-suave); color: var(--texto); font-size: 13px; }
     .form { display: grid; gap: var(--espacamento-3); min-width: 0; }
@@ -378,6 +399,13 @@ export class CatalogoPagina implements OnInit {
   readonly itens = this.servico.itens
   readonly opcoesOrigem = OPCOES_ORIGEM
   readonly opcoesPerfil = OPCOES_PERFIL
+  readonly opcoesModo = OPCOES_MODO
+  /** Como a busca inteligente achou a lista (e o que degradou); `null` na lista por trecho. */
+  readonly descricaoBusca = computed(() => {
+    const r = this.servico.resumoBusca()
+    return r ? descreverBusca(r, this.itens().length) : null
+  })
+  readonly motivoTrecho = computed(() => motivoBuscaPorTrecho(this.servico.modo(), this.servico.busca(), this.servico.inativos()))
   /** Cliente de contexto (?contato=<id>) — vem da ficha. Sem ele, não há pedido a abrir. */
   readonly contatoId = signal<string | null>(null)
   readonly temFiltro = computed(() => this.servico.busca().trim() !== '' || this.servico.origem() !== '' || this.servico.inativos())
@@ -462,6 +490,10 @@ export class CatalogoPagina implements OnInit {
     if (termo === this.servico.busca()) return
     this.servico.busca.set(termo)
     void this.servico.carregar()
+  }
+  trocarModo(v: string): void {
+    if (v !== 'inteligente' && v !== 'trecho') return
+    this.servico.modo.set(v satisfies ModoBusca); void this.servico.carregar()
   }
   trocarOrigem(v: string): void { this.servico.origem.set(v as FiltroOrigem); void this.servico.carregar() }
   trocarPerfil(v: string): void { this.servico.perfil.set(v as PerfilPreco); void this.servico.carregar() }

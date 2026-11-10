@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import type { Sql } from '../../db/index.js'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { fusoSeguro } from '../plataforma/fuso.js'
+import { lerCursor, montarCursor } from '../crm/cursor-criado-em.js'
 import { fragmentoForaDaSimulacao, fragmentoNaFila } from './sla-handoff.js'
 import { condicaoConversa, conversaNoEscopo, escopoDaRequisicao } from '../plataforma/escopo.js'
 
@@ -85,21 +86,19 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
   app.get<{ Querystring: { cursor?: string } }>(
     '/v1/atendimento-kanban/aguardando', { preHandler: exigirTenant },
     async (req, reply) => {
-      let curEm: string | null = null, curId: string | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
-        curEm = em; curId = id
-      }
+      // µs preservados: o cursor carrega `coluna::text` (cursor-criado-em.ts).
+      const cur = lerCursor(req.query.cursor)
+      if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
+      const curEm = cur?.em ?? null, curId = cur?.id ?? null
       const { linhas, fuso } = await req.comTenant(async (tx) => {
         const escopo = await escopoDaRequisicao(tx, req)
         const linhas = await tx<{
-          id: string; nome: string; ultima_mensagem_em: Date | null
+          id: string; nome: string; ultima_mensagem_em: Date | null; ultima_mensagem_em_txt: string | null
           at_id: string | null; sla_inicio_em: Date | null; sla_vence_em: Date | null; reatribuicao_vence_em: Date | null
           sla_estourado_em: Date | null; reatribuicao_liberada_em: Date | null; sla_respondido_em: Date | null
           aviso_espera_em: Date | null; aviso_espera_resultado: string | null; responsavel: string | null
         }[]>`
-        SELECT cv.id, ct.nome, cv.ultima_mensagem_em,
+        SELECT cv.id, ct.nome, cv.ultima_mensagem_em, cv.ultima_mensagem_em::text AS ultima_mensagem_em_txt,
                h.id AS at_id, h.sla_inicio_em, h.sla_vence_em, h.reatribuicao_vence_em, h.sla_estourado_em,
                h.reatribuicao_liberada_em, h.sla_respondido_em, h.aviso_espera_em, h.aviso_espera_resultado, h.responsavel
           FROM conversa cv JOIN contato ct ON ct.tenant_id = cv.tenant_id AND ct.id = cv.contato_id
@@ -115,7 +114,7 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
           ) h ON true
          WHERE cv.tenant_id = tenant_atual() AND NOT cv.arquivada AND ${fragmentoNaFila(tx)}
            AND ${condicaoConversa(tx, escopo)}
-           AND ${curEm === null ? tx`true` : tx`(cv.ultima_mensagem_em, cv.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+           AND ${curEm === null ? tx`true` : tx`(cv.ultima_mensagem_em, cv.id) < (${curEm}::text::timestamptz, ${curId}::uuid)`}
          ORDER BY cv.ultima_mensagem_em DESC NULLS LAST, cv.id DESC
          LIMIT ${PAGINA + 1}`
         const [t] = await tx<{ fuso: string | null }[]>`SELECT fuso FROM tenant WHERE id = tenant_atual()`
@@ -124,8 +123,8 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
       const ultimo = pagina[pagina.length - 1]
-      const proximoCursor = temMais && ultimo?.ultima_mensagem_em
-        ? Buffer.from(`${ultimo.ultima_mensagem_em.toISOString()}§${ultimo.id}`, 'utf8').toString('base64url') : null
+      const proximoCursor = temMais && ultimo?.ultima_mensagem_em_txt
+        ? montarCursor(ultimo.ultima_mensagem_em_txt, ultimo.id) : null
       return reply.send({
         itens: pagina.map((l) => ({
           conversaId: l.id, contato: l.nome, ultimaMensagemEm: l.ultima_mensagem_em,
@@ -148,20 +147,18 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
   app.get<{ Params: { etapaId: string }; Querystring: { cursor?: string } }>(
     '/v1/atendimento-kanban/coluna/:etapaId', { preHandler: exigirTenant },
     async (req, reply) => {
-      let curEm: string | null = null, curId: string | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
-        curEm = em; curId = id
-      }
+      // µs preservados: o cursor carrega `coluna::text` (cursor-criado-em.ts).
+      const cur = lerCursor(req.query.cursor)
+      if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
+      const curEm = cur?.em ?? null, curId = cur?.id ?? null
       const linhas = await req.comTenant(async (tx) => {
         const escopo = await escopoDaRequisicao(tx, req)
         return tx<{
         id: string; conversa_id: string; nome: string; atendente: string | null
-        protocolo: string; entrou_etapa_em: Date | null; versao: string
+        protocolo: string; entrou_etapa_em: Date | null; entrou_etapa_em_txt: string | null; versao: string
       }[]>`
         SELECT a.id, a.conversa_id, ct.nome, u.nome AS atendente,
-               a.protocolo::text, a.entrou_etapa_em, a.versao::text
+               a.protocolo::text, a.entrou_etapa_em, a.entrou_etapa_em::text AS entrou_etapa_em_txt, a.versao::text
           FROM atendimento a
           JOIN atendimento_etapa e ON e.tenant_id = a.tenant_id AND e.id = a.etapa_id
           JOIN conversa cv ON cv.tenant_id = a.tenant_id AND cv.id = a.conversa_id
@@ -170,15 +167,15 @@ export async function rotasAtendimentoKanban(app: FastifyInstance): Promise<void
          WHERE a.tenant_id = tenant_atual() AND a.etapa_id = ${req.params.etapaId} AND ${fragmentoForaDaSimulacao(tx)}
            AND ${condicaoConversa(tx, escopo)}
            AND (e.tipo = 'atendimento' OR a.entrou_etapa_em >= now() - (${DIAS_ENCERRADO} || ' days')::interval)
-           AND ${curEm === null ? tx`true` : tx`(a.entrou_etapa_em, a.id) > (${curEm}::timestamptz, ${curId}::uuid)`}
+           AND ${curEm === null ? tx`true` : tx`(a.entrou_etapa_em, a.id) > (${curEm}::text::timestamptz, ${curId}::uuid)`}
          ORDER BY a.entrou_etapa_em ASC, a.id ASC
          LIMIT ${PAGINA + 1}`
       })
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
       const ultimo = pagina[pagina.length - 1]
-      const proximoCursor = temMais && ultimo?.entrou_etapa_em
-        ? Buffer.from(`${ultimo.entrou_etapa_em.toISOString()}§${ultimo.id}`, 'utf8').toString('base64url') : null
+      const proximoCursor = temMais && ultimo?.entrou_etapa_em_txt
+        ? montarCursor(ultimo.entrou_etapa_em_txt, ultimo.id) : null
       return reply.send({
         itens: pagina.map((l) => ({
           atendimentoId: l.id, conversaId: l.conversa_id, contato: l.nome, atendente: l.atendente,

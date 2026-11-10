@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { variaveisDoCorpo, validarMapeamento } from '@geracrm/shared'
 import { lerBusca, padraoContem } from '../../db/busca.js'
+import { lerCursor, montarCursor } from '../crm/cursor-criado-em.js'
 
 const PAGINA = 50
 
@@ -79,13 +80,10 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
     '/v1/templates',
     { preHandler: exigirTenant },
     async (req, reply) => {
-      let curEm: string | null = null
-      let curId: string | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
-        curEm = em; curId = id
-      }
+      // µs preservados: o cursor carrega `coluna::text` (cursor-criado-em.ts).
+      const cur = lerCursor(req.query.cursor)
+      if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
+      const curEm = cur?.em ?? null, curId = cur?.id ?? null
       const lidos = lerFiltrosTemplate(req.query)
       if (!lidos.ok) {
         return reply.code(422).send({ erro: 'template.filtro_invalido', mensagem: 'Filtro inválido.', campos: lidos.campos })
@@ -99,11 +97,11 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
           if (canal.tipo !== 'whatsapp_oficial') return { estado: 'ok' as const, linhas: [] }
         }
         const linhas = await tx<{
-          id: string; nome: string; categoria: string; idioma: string; criado_em: Date
+          id: string; nome: string; categoria: string; idioma: string; criado_em: Date; criado_em_txt: string
           versao: number; status_meta: string; motivo_rejeicao: string | null; corpo: Corpo; submetido: boolean
           mapeamento_variaveis: Record<string, string>
         }[]>`
-          SELECT t.id, t.nome, t.categoria, t.idioma, t.criado_em, t.mapeamento_variaveis,
+          SELECT t.id, t.nome, t.categoria, t.idioma, t.criado_em, t.criado_em::text AS criado_em_txt, t.mapeamento_variaveis,
                  v.versao, v.status_meta, v.motivo_rejeicao, v.corpo, v.id_externo IS NOT NULL AS submetido
             FROM template t
             JOIN LATERAL (
@@ -116,7 +114,7 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
              AND ${f.categoria === null ? tx`true` : tx`t.categoria = ${f.categoria}`}
              AND ${f.busca === null ? tx`true` : tx`t.nome ILIKE ${padraoContem(f.busca)}`}
              AND ${curEm === null ? tx`true`
-                  : tx`(t.criado_em, t.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+                  : tx`(t.criado_em, t.id) < (${curEm}::text::timestamptz, ${curId}::uuid)`}
            ORDER BY t.criado_em DESC, t.id DESC
            LIMIT ${PAGINA + 1}`
         return { estado: 'ok' as const, linhas }
@@ -130,7 +128,7 @@ export async function rotasTemplate(app: FastifyInstance): Promise<void> {
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
       const ultimo = pagina[pagina.length - 1]
       const proximoCursor = temMais && ultimo
-        ? Buffer.from(`${ultimo.criado_em.toISOString()}§${ultimo.id}`).toString('base64url') : null
+        ? montarCursor(ultimo.criado_em_txt, ultimo.id) : null
 
       return reply.send({
         itens: pagina.map((l) => ({

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { exigirTenant } from '../../plugins/tenant.js'
 import { condicaoConversa, escopoDaRequisicao } from '../plataforma/escopo.js'
+import { lerCursor, montarCursor } from '../crm/cursor-criado-em.js'
 
 const PAGINA = 30
 const STATUS_FILTRO = new Set(['pendente', 'enviada', 'entregue', 'lida', 'falhou'])
@@ -16,18 +17,16 @@ export async function rotasMensagensLog(app: FastifyInstance): Promise<void> {
     '/v1/mensagens-enviadas', { preHandler: exigirTenant },
     async (req, reply) => {
       const status = STATUS_FILTRO.has(req.query.status ?? '') ? req.query.status! : null
-      let curEm: string | null = null, curId: string | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id) return reply.code(422).send({ erro: 'cursor.invalido' })
-        curEm = em; curId = id
-      }
+      // µs preservados: o cursor carrega `coluna::text` (cursor-criado-em.ts).
+      const cur = lerCursor(req.query.cursor)
+      if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
+      const curEm = cur?.em ?? null, curId = cur?.id ?? null
       // ⚠️ Escopo (D3): só mensagens de conversas que quem pede enxerga.
       const linhas = await req.comTenant(async (tx) => tx<{
-        id: string; criado_em: Date; tipo: string; status: string | null; preview: string | null
+        id: string; criado_em: Date; criado_em_txt: string; tipo: string; status: string | null; preview: string | null
         contato_id: string | null; contato: string | null; enviada_por: string | null
       }[]>`
-        SELECT m.id, m.criado_em, m.tipo, m.status,
+        SELECT m.id, m.criado_em, m.criado_em::text AS criado_em_txt, m.tipo, m.status,
                CASE WHEN m.tipo = 'texto' THEN left(m.conteudo->>'texto', 140) ELSE NULL END AS preview,
                cv.contato_id, ct.nome AS contato, u.nome AS enviada_por
           FROM mensagem m
@@ -37,7 +36,7 @@ export async function rotasMensagensLog(app: FastifyInstance): Promise<void> {
          WHERE m.tenant_id = tenant_atual() AND m.direcao = 'saliente'
            AND ${condicaoConversa(tx, await escopoDaRequisicao(tx, req))}
            AND ${status === null ? tx`true` : tx`m.status = ${status}`}
-           AND ${curEm === null ? tx`true` : tx`(m.criado_em, m.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+           AND ${curEm === null ? tx`true` : tx`(m.criado_em, m.id) < (${curEm}::text::timestamptz, ${curId}::uuid)`}
          ORDER BY m.criado_em DESC, m.id DESC LIMIT ${PAGINA + 1}`)
 
       const temMais = linhas.length > PAGINA
@@ -50,7 +49,7 @@ export async function rotasMensagensLog(app: FastifyInstance): Promise<void> {
           contatoId: l.contato_id, contato: l.contato, enviadaPor: l.enviada_por,
         })),
         proximoCursor: temMais && ultimo
-          ? Buffer.from(`${ultimo.criado_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
+          ? montarCursor(ultimo.criado_em_txt, ultimo.id) : null,
       })
     },
   )

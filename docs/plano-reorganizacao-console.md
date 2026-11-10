@@ -234,7 +234,7 @@ o chat como gaveta, o cabeçalho da conversa, o "⋯" da ficha, as telas com aba
 
 **Pendências conhecidas:**
 - **Celular (390) e tema claro:** não capturados.
-- **Busca do Catálogo:** a tela unificada busca por trecho (`ILIKE`); a busca inteligente ficou só no pedido assistido.
+- ~~**Busca do Catálogo**~~ resolvido em 2026-11-09: `GET /v1/catalogo/busca-inteligente` expõe a busca híbrida do agente (palavras, grafia aproximada, significado; teto de 30 com `truncado`; motivo quando a semântica está desligada). A tela do Catálogo usa por padrão com texto; "Por trecho" e "Mostrar inativos" voltam ao `ILIKE` paginado. O pedido assistido (`/v1/catalogo/busca`) ainda é `ILIKE`.
 - **BI:** a quantidade vendida por produto, que só o BI mostrava, saiu.
 - **Agente vendedor:** trocar de número com alterações não salvas não pergunta antes.
 

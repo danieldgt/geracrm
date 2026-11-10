@@ -6,6 +6,7 @@ import { garantirUsuarioId } from './rotas-fila.js'
 import { fragmentoForaDaSimulacao, fragmentoNaFila } from './sla-handoff.js'
 import { midiaHabilitada, urlAssinada, ehChaveMidia } from './midia/armazenamento.js'
 import { condicaoConversa, contatoNoEscopo, conversaNoEscopo, escopoDaRequisicao, exigirNoEscopo } from '../plataforma/escopo.js'
+import { lerCursor, lerInstante, montarCursor } from '../crm/cursor-criado-em.js'
 
 /**
  * E5-14: na leitura, a CHAVE de mídia vira URL ASSINADA de expiração curta. O
@@ -38,6 +39,7 @@ async function enriquecerMidia(tipo: string, conteudo: unknown): Promise<unknown
 const LIMITE_PADRAO = 40
 const LIMITE_MAX = 100
 const MENSAGENS_PAGINA = 50
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export async function rotasConversas(app: FastifyInstance): Promise<void> {
   // Lista de conversas de um canal (ou todas), ordenada por atividade recente.
@@ -132,13 +134,11 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
       return reply.code(422).send({ erro: 'conversas.conduzido_por_invalido', validos: ['agente', 'humano', 'aguardando'] })
     }
 
-    // Cursor: "<ultima_mensagem_em iso>:<conversa_id>".
-    let cursorEm: string | null = null
-    let cursorId: string | null = null
-    if (q.cursor) {
-      const [em, id] = Buffer.from(q.cursor, 'base64url').toString('utf8').split('§')
-      if (em && id) { cursorEm = em; cursorId = id }
-    }
+    // Cursor: "<ultima_mensagem_em::text>§<conversa_id>" — µs preservados (cursor-criado-em.ts).
+    const cur = lerCursor(q.cursor)
+    if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
+    const cursorEm = cur?.em ?? null
+    const cursorId = cur?.id ?? null
 
     const sub = subDoUsuario(req) // a MESMA regra do assumir (dev: "dev-<tenant>")
     const linhas = await req.comTenant(async (tx) => {
@@ -147,13 +147,13 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
       const escopo = await escopoDaRequisicao(tx, req)
       return tx<{
       id: string; contato_id: string; nome: string; conduzida_por: string
-      ultima_mensagem_em: Date | null; ultima_entrante_em: Date | null
+      ultima_mensagem_em: Date | null; ultima_mensagem_em_txt: string | null; ultima_entrante_em: Date | null
       ultima_direcao: string | null; arquivada: boolean
       ult_tipo: string | null; ult_conteudo: unknown; ult_direcao: string | null
       nao_lida: boolean; canal_tipo: string; dono_carteira: string | null
     }[]>`
       SELECT cv.id, cv.contato_id, ct.nome, cv.conduzida_por,
-             cv.ultima_mensagem_em, cv.ultima_entrante_em, cv.ultima_direcao, cv.arquivada,
+             cv.ultima_mensagem_em, cv.ultima_mensagem_em::text AS ultima_mensagem_em_txt, cv.ultima_entrante_em, cv.ultima_direcao, cv.arquivada,
              cc.tipo AS canal_tipo,
              -- ⚠️ Quem CUIDA deste cliente. A régua de roteamento (regra 4 de
              --    roteamento-lead.ts) diz que relação existente não é triada
@@ -216,7 +216,7 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
                  : tx`true`
          }
          AND ${cursorEm === null ? tx`true` : tx`
-               (cv.ultima_mensagem_em, cv.id) < (${cursorEm}::timestamptz, ${cursorId}::uuid)`}
+               (cv.ultima_mensagem_em, cv.id) < (${cursorEm}::text::timestamptz, ${cursorId}::uuid)`}
        ORDER BY cv.ultima_mensagem_em DESC NULLS LAST, cv.id DESC
        LIMIT ${limite + 1}
     `
@@ -247,8 +247,8 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
       janela: calcularJanela(l.ultima_entrante_em, agora),
     }))
     const ultimo = pagina[pagina.length - 1]
-    const proximoCursor = temMais && ultimo?.ultima_mensagem_em
-      ? Buffer.from(`${ultimo.ultima_mensagem_em.toISOString()}§${ultimo.id}`, 'utf8').toString('base64url')
+    const proximoCursor = temMais && ultimo?.ultima_mensagem_em_txt
+      ? montarCursor(ultimo.ultima_mensagem_em_txt, ultimo.id)
       : null
 
     return reply.send({ itens, proximoCursor })
@@ -352,8 +352,12 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
     { preHandler: [exigirTenant, exigirNoEscopo('conversa')] },
     async (req, reply) => {
       const id = req.params.id
-      const { anteriorEm, anteriorId } = req.query
-      if (!anteriorEm || !anteriorId) return reply.code(422).send({ erro: 'cursor.ausente', mensagem: 'Cursor obrigatório.' })
+      const { anteriorId } = req.query
+      if (!req.query.anteriorEm || !anteriorId) return reply.code(422).send({ erro: 'cursor.ausente', mensagem: 'Cursor obrigatório.' })
+      const anteriorEm = lerInstante(req.query.anteriorEm)
+      if (anteriorEm === null || !UUID.test(anteriorId)) {
+        return reply.code(422).send({ erro: 'cursor.invalido', mensagem: 'Cursor inválido.' })
+      }
 
       const dados = await req.comTenant(async (tx) => {
         const linhas = await tx<{
@@ -361,10 +365,20 @@ export async function rotasConversas(app: FastifyInstance): Promise<void> {
           status: string | null; criado_em: Date
           apagada_em: Date | null; apagada_para_todos: boolean | null; editada_em: Date | null
         }[]>`
+          WITH ancora AS (
+            -- ⚠️ O 'anteriorEm' do cliente veio de um Date (ms); a âncora real tem µs. Achamos
+            --    a mensagem pelo id dentro desse milissegundo (poda as partições) e usamos o
+            --    instante exato — senão a do mesmo ms, mais antiga em µs, nunca aparecia.
+            SELECT criado_em, id FROM mensagem
+             WHERE conversa_id = ${id} AND id = ${anteriorId}::uuid
+               AND criado_em >= ${anteriorEm}::text::timestamptz
+               AND criado_em < ${anteriorEm}::text::timestamptz + interval '1 millisecond')
           SELECT id, direcao, tipo, conteudo, status, criado_em, apagada_em, apagada_para_todos, editada_em
             FROM mensagem
            WHERE conversa_id = ${id}
-             AND (criado_em, id) < (${anteriorEm}::timestamptz, ${anteriorId}::uuid)
+             AND criado_em < ${anteriorEm}::text::timestamptz + interval '1 millisecond'
+             AND (criado_em, id) < (coalesce((SELECT criado_em FROM ancora), ${anteriorEm}::text::timestamptz),
+                                    coalesce((SELECT id FROM ancora), ${anteriorId}::uuid))
            ORDER BY criado_em DESC, id DESC LIMIT ${MENSAGENS_PAGINA + 1}`
         const temMais = linhas.length > MENSAGENS_PAGINA
         return { mensagens: (temMais ? linhas.slice(0, MENSAGENS_PAGINA) : linhas).reverse(), temMais }

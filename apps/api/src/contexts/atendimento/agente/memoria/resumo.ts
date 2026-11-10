@@ -109,15 +109,15 @@ async function lerMaterial(tx: Sql, sessaoId: string): Promise<Leitura | null> {
 
   // A âncora é (criado_em, id) da última mensagem resumida — a chave da partição.
   const [ancora] = s.resumo_ate_mensagem_id
-    ? await tx<{ criado_em: Date }[]>`
-        SELECT criado_em FROM mensagem
+    ? await tx<{ criado_em_txt: string }[]>`
+        SELECT criado_em::text AS criado_em_txt FROM mensagem
          WHERE tenant_id = tenant_atual() AND conversa_id = ${s.conversa_id} AND id = ${s.resumo_ate_mensagem_id}`
     : []
   const mensagens = await tx<{ id: string; direcao: string; tipo: string; conteudo: Record<string, unknown> }[]>`
     SELECT id, direcao, tipo, conteudo FROM mensagem
      WHERE tenant_id = tenant_atual() AND conversa_id = ${s.conversa_id} AND tipo <> 'sistema'
        AND ${ancora && s.resumo_ate_mensagem_id
-         ? tx`(criado_em, id) > (${ancora.criado_em}::timestamptz, ${s.resumo_ate_mensagem_id}::uuid)`
+         ? tx`(criado_em, id) > (${ancora.criado_em_txt}::text::timestamptz, ${s.resumo_ate_mensagem_id}::uuid)`
          : tx`true`}
      ORDER BY criado_em, id
      LIMIT ${MAX_MENSAGENS_POR_RESUMO}`

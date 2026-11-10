@@ -63,6 +63,7 @@ import { rotasModelosIa } from './contexts/plataforma/rotas-modelos-ia.js'
 import { rotasEventos } from './contexts/atendimento/eventos/rotas-eventos.js'
 import { rotasPedido } from './contexts/pedido/rotas-pedido.js'
 import { rotasCatalogoManual } from './contexts/catalogo/rotas-catalogo-manual.js'
+import { rotasBuscaCatalogo, type OpcoesRotasBuscaCatalogo } from './contexts/catalogo/rotas-busca.js'
 import { rotasAquisicao } from './contexts/aquisicao/rotas-aquisicao.js'
 import { rotasLpPublica } from './contexts/aquisicao/rotas-lp-publica.js'
 import { rotasFormularios } from './contexts/aquisicao/rotas-formularios.js'
@@ -123,7 +124,10 @@ export function saltosExcessivos(bruto = process.env.TRUST_PROXY_HOPS): boolean 
  * Cognito; os testes passam o falso — nenhum teste chama a AWS.
  */
 export async function criarApp(
-  opcoes: { provedorIdentidade?: ProvedorIdentidade; campanha?: OpcoesRotasCampanha; provedorSenha?: ProvedorSenha } = {},
+  opcoes: {
+    provedorIdentidade?: ProvedorIdentidade; campanha?: OpcoesRotasCampanha; provedorSenha?: ProvedorSenha
+    buscaCatalogo?: OpcoesRotasBuscaCatalogo
+  } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
     trustProxy: saltosDeProxy(),
@@ -232,6 +236,7 @@ export async function criarApp(
   await app.register(rotasEventos)
   await app.register(rotasPedido)
   await app.register(rotasCatalogoManual)
+  await app.register(rotasBuscaCatalogo, opcoes.buscaCatalogo ?? {})
   await app.register(rotasAquisicao)
   // ⚠️ Superfície PÚBLICA (sem token): a landing page do anúncio. O tenant é
   //    RESOLVIDO pela chave da URL (0062), como o webhook resolve pelo

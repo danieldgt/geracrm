@@ -1,4 +1,4 @@
-import type { AtributosSku, OrigemCatalogo, PerfilPreco, ProdutoResumo, SkuResumo } from '@geracrm/shared'
+import type { AtributosSku, FonteBuscaCatalogo, OrigemCatalogo, PerfilPreco, ProdutoResumo, SkuResumo } from '@geracrm/shared'
 import type { Sql } from '../../db/index.js'
 import { jsonbDe } from '../../db/jsonb.js'
 import { fragmentoPrecoDeVenda, precosDeVenda, type PrecoDeVenda } from '../pedido/preco-de-venda.js'
@@ -25,12 +25,14 @@ import { ErroEmbedding, type PortaEmbedding } from './porta-embedding.js'
  * pelo perfil do cliente com a regra única de `preco-de-venda.ts`.
  */
 
-export type FonteBusca = 'lexical' | 'trgm' | 'semantica'
+export type FonteBusca = FonteBuscaCatalogo
 
 export interface FiltrosCatalogo {
   categoria?: string
   /** Produto precisa ter SKU ativo com TODOS estes atributos (`@>`). */
   atributos?: AtributosSku
+  /** Só o catálogo do ERP ou só o manual (a tela do Catálogo filtra por origem). */
+  origem?: OrigemCatalogo
 }
 
 export interface OpcoesBusca {
@@ -144,6 +146,7 @@ function fragmentoFiltros(tx: Sql, filtros: FiltrosCatalogo | undefined) {
   return tx`
     p.ativo
     AND ${categoria ? tx`p.categoria = ${categoria}` : tx`true`}
+    AND ${filtros?.origem ? tx`p.origem = ${filtros.origem}` : tx`true`}
     AND ${atributos
       ? tx`EXISTS (SELECT 1 FROM sku s
                     WHERE s.tenant_id = p.tenant_id AND s.produto_id = p.id AND s.ativo

@@ -1,8 +1,11 @@
 import { Injectable, inject, signal } from '@angular/core'
 import { HttpClient } from '@angular/common/http'
 import { firstValueFrom } from 'rxjs'
-import { PERFIL_PRECO_PADRAO, type OrigemCatalogo, type PerfilPreco, type ProdutoEntrada, type SkuEntrada } from '@geracrm/shared'
+import {
+  PERFIL_PRECO_PADRAO, type OrigemCatalogo, type PerfilPreco, type ProdutoEntrada, type ResumoBuscaInteligente, type SkuEntrada,
+} from '@geracrm/shared'
 import { ehStatus, mensagemDeErro, mesclarPagina, queryDeLista } from '../../compartilhado/ui/index.js'
+import { usaBuscaInteligente, type ModoBusca } from './catalogo-busca.regras.js'
 
 /** Como a API lista/detalha um produto (busca.ts → montarDetalhe). */
 export interface SkuLinha {
@@ -36,6 +39,7 @@ export type FiltroOrigem = '' | OrigemCatalogo
 export type ResultadoEscrita = { readonly ok: true } | { readonly ok: false; readonly mensagem: string; readonly campos?: readonly string[] }
 
 interface Pagina { itens: ProdutoLinha[]; proximoCursor: string | null }
+type RespostaBuscaInteligente = ResumoBuscaInteligente & { itens: ProdutoLinha[] }
 
 @Injectable({ providedIn: 'root' })
 export class CatalogoProdutosServico {
@@ -54,6 +58,16 @@ export class CatalogoProdutosServico {
   readonly inativos = signal(false)
   /** Perfil de preço da lista (varejo × atacado). O preço é resolvido na API, nunca aqui (ADR-025). */
   readonly perfil = signal<PerfilPreco>(PERFIL_PRECO_PADRAO)
+  /** Inteligente (ranqueada, a busca do agente) ou por trecho (ILIKE, por cursor). */
+  readonly modo = signal<ModoBusca>('inteligente')
+  /** Como a busca inteligente achou a lista atual; `null` = a lista é a paginada por trecho. */
+  readonly resumoBusca = signal<ResumoBuscaInteligente | null>(null)
+  /** Cada carga ganha um número: resposta de uma digitação antiga não sobrescreve a nova. */
+  private carga = 0
+
+  private urlInteligente(): string {
+    return '/v1/catalogo/busca-inteligente' + queryDeLista({ q: this.busca().trim(), origem: this.origem(), perfil: this.perfil() })
+  }
 
   private url(cursor: string | null): string {
     return '/v1/catalogo/produtos' + queryDeLista({
@@ -62,12 +76,24 @@ export class CatalogoProdutosServico {
   }
 
   async carregar(): Promise<void> {
+    const carga = ++this.carga
     this.estado.set('carregando'); this.erroLista.set(null); this.erroMais.set(null)
     try {
-      const r = await firstValueFrom(this.http.get<Pagina>(this.url(null)))
-      this.itens.set(r.itens); this.proximoCursor.set(r.proximoCursor)
+      if (usaBuscaInteligente(this.modo(), this.busca(), this.inativos())) {
+        // Ranking, não página: sem "carregar mais" — a tela pede para refinar quando cortou.
+        const r = await firstValueFrom(this.http.get<RespostaBuscaInteligente>(this.urlInteligente()))
+        if (carga !== this.carga) return
+        this.itens.set(r.itens); this.proximoCursor.set(null)
+        this.resumoBusca.set({ fontes: r.fontes, semantica: r.semantica, truncado: r.truncado })
+      } else {
+        const r = await firstValueFrom(this.http.get<Pagina>(this.url(null)))
+        if (carga !== this.carga) return
+        this.itens.set(r.itens); this.proximoCursor.set(r.proximoCursor)
+        this.resumoBusca.set(null)
+      }
       this.estado.set('pronto')
     } catch (e) {
+      if (carga !== this.carga) return
       if (ehStatus(e, 403)) { this.estado.set('sem_permissao'); return }
       this.erroLista.set(mensagemDeErro(e, 'Não foi possível carregar o catálogo.'))
       this.estado.set('erro')
@@ -77,9 +103,11 @@ export class CatalogoProdutosServico {
   async carregarMais(): Promise<void> {
     const cursor = this.proximoCursor()
     if (!cursor || this.carregandoMais()) return
+    const carga = this.carga
     this.carregandoMais.set(true); this.erroMais.set(null)
     try {
       const r = await firstValueFrom(this.http.get<Pagina>(this.url(cursor)))
+      if (carga !== this.carga) return // a busca mudou enquanto a página vinha
       this.itens.update((a) => mesclarPagina(a, r.itens, (p) => p.id))
       this.proximoCursor.set(r.proximoCursor)
     } catch (e) {

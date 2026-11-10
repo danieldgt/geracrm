@@ -8,6 +8,7 @@ import { exigirTenant } from '../../../../plugins/tenant.js'
 import { exigirPapel } from '../../../plataforma/papel.js'
 import { sql, type Sql } from '../../../../db/index.js'
 import { auditar } from '../../../plataforma/auditoria.js'
+import { lerCursor, montarCursor } from '../../../crm/cursor-criado-em.js'
 import { garantirUsuarioId } from '../../rotas-fila.js'
 import { embutirConsulta } from '../../../catalogo/busca.js'
 import { cacheConsultaPadrao } from '../../../catalogo/cache-consulta.js'
@@ -183,33 +184,31 @@ export async function rotasConhecimento(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { cursor?: string; canalId?: string; incluirDespublicados?: string; tipo?: string } }>(
     '/v1/agente/conhecimento', { preHandler: exigirTenant },
     async (req, reply) => {
-      let curEm: string | null = null, curId: string | null = null
-      if (req.query.cursor) {
-        const [em, id] = Buffer.from(req.query.cursor, 'base64url').toString('utf8').split('§')
-        if (!em || !id || !UUID.test(id)) return reply.code(422).send({ erro: 'cursor.invalido' })
-        curEm = em; curId = id
-      }
+      // µs preservados: o cursor carrega `coluna::text` (cursor-criado-em.ts).
+      const cur = lerCursor(req.query.cursor)
+      if (cur === 'invalido') return reply.code(422).send({ erro: 'cursor.invalido' })
+      const curEm = cur?.em ?? null, curId = cur?.id ?? null
       const canalId = req.query.canalId && UUID.test(req.query.canalId) ? req.query.canalId : null
       const soPublicados = req.query.incluirDespublicados !== 'true'
       // Filtro por tipo (a tela usa `tipo=prova_social` no filtro "Prova social").
       const tipo = req.query.tipo && (TIPOS_DOCUMENTO as readonly string[]).includes(req.query.tipo) ? req.query.tipo : null
       if (req.query.tipo && !tipo) return reply.code(422).send({ erro: 'conhecimento.campo_invalido', mensagem: 'tipo: inválido.', campos: ['tipo'] })
-      const linhas = await req.comTenant((tx) => tx<LinhaDocumento[]>`
-        SELECT ${tx.unsafe(COLUNAS_DOC)},
+      const linhas = await req.comTenant((tx) => tx<(LinhaDocumento & { atualizado_em_txt: string })[]>`
+        SELECT ${tx.unsafe(COLUNAS_DOC)}, d.atualizado_em::text AS atualizado_em_txt,
                (SELECT count(*)::int FROM conhecimento_trecho t WHERE t.tenant_id = d.tenant_id AND t.documento_id = d.id) AS trechos
           FROM conhecimento_documento d
          WHERE d.tenant_id = tenant_atual()
            AND ${tipo ? tx`d.tipo = ${tipo}` : tx`true`}
            AND ${canalId ? tx`(d.canal_id IS NULL OR d.canal_id = ${canalId})` : tx`true`}
            AND ${soPublicados ? tx`d.publicado` : tx`true`}
-           AND ${curEm === null ? tx`true` : tx`(d.atualizado_em, d.id) < (${curEm}::timestamptz, ${curId}::uuid)`}
+           AND ${curEm === null ? tx`true` : tx`(d.atualizado_em, d.id) < (${curEm}::text::timestamptz, ${curId}::uuid)`}
          ORDER BY d.atualizado_em DESC, d.id DESC LIMIT ${PAGINA + 1}`)
       const temMais = linhas.length > PAGINA
       const pagina = temMais ? linhas.slice(0, PAGINA) : linhas
       const ultimo = pagina[pagina.length - 1]
       return reply.send({
         itens: pagina.map(paraSaida),
-        proximoCursor: temMais && ultimo ? Buffer.from(`${ultimo.atualizado_em.toISOString()}§${ultimo.id}`).toString('base64url') : null,
+        proximoCursor: temMais && ultimo ? montarCursor(ultimo.atualizado_em_txt, ultimo.id) : null,
       })
     },
   )
