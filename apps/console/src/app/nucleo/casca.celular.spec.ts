@@ -23,9 +23,14 @@ function fixosSemCamada(dir: string, achados: string[] = []): string[] {
     // A casca e o trilho são donos das camadas abaixo dos modais.
     if (ent.name === 'shell.componente.ts' || ent.name === 'chat-rail.componente.ts') continue
     const src = readFileSync(resolve(dir, ent.name), 'utf8')
-    for (const m of src.matchAll(/([^{}]*)\{([^{}]*position:\s*fixed[^{}]*)\}/g)) {
-      const z = /z-index:\s*(\d+)/.exec(m[2] ?? '')
-      const seletor = (m[1] ?? '').trim().split('\n').pop()?.trim()
+    if (!/position:\s*fixed/.test(src)) continue
+    // ⚠️ Casa a partir de cada `{` (âncora literal). A versão `([^{}]*)\{…\}` recomeçava em
+    //    TODA posição do arquivo — custo quadrático que estourava os 5 s do teste no CI.
+    for (const m of src.matchAll(/\{([^{}]*position:\s*fixed[^{}]*)\}/g)) {
+      const z = /z-index:\s*(\d+)/.exec(m[1] ?? '')
+      const antes = src.slice(0, m.index)
+      const inicio = Math.max(antes.lastIndexOf('{'), antes.lastIndexOf('}')) + 1
+      const seletor = antes.slice(inicio).trim().split('\n').pop()?.trim()
       if (!z || Number(z[1]) < CAMADA.modal) achados.push(`${ent.name}: '${seletor}' z-index ${z?.[1] ?? 'ausente'}`)
     }
   }
