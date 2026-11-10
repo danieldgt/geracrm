@@ -93,3 +93,33 @@ export function textoParaIndice(p: {
   return [p.referencia, p.descricao, p.categoria ?? '', p.descricaoLonga ?? '', atributos]
     .map((s) => s.trim()).filter(Boolean).join('\n')
 }
+
+/**
+ * BUSCA INTELIGENTE do catálogo (ADR-026) — o contrato de `GET /v1/catalogo/busca-inteligente`.
+ *
+ * Três pernas fundidas por RRF: `lexical` (palavras, sem acento), `trgm` (grafia aproximada:
+ * "camisetta" acha "camiseta") e `semantica` (significado, só com embedding configurado).
+ * ⚠️ É um RANKING, não uma lista: devolve os N mais próximos com teto explícito e diz quando
+ * cortou (`truncado`) — a tela pede para refinar em vez de paginar (padrão X7 de top-N).
+ */
+export const FONTES_BUSCA_CATALOGO = ['lexical', 'trgm', 'semantica'] as const
+export type FonteBuscaCatalogo = (typeof FONTES_BUSCA_CATALOGO)[number]
+
+/**
+ * A perna semântica rodou (`ligada`) ou por que não — a degradação é VISÍVEL (ADR-008):
+ * `sem_chave` = nenhum provedor de embedding no ambiente; `sem_indice` = o banco não tem
+ * pgvector; `indisponivel` = o provedor falhou ou estourou o tempo nesta consulta.
+ */
+export const SITUACOES_SEMANTICA = ['ligada', 'sem_chave', 'sem_indice', 'indisponivel'] as const
+export type SituacaoSemantica = (typeof SITUACOES_SEMANTICA)[number]
+
+export const LIMITE_BUSCA_INTELIGENTE = { padrao: 20, maximo: 30 } as const
+export const MAX_CONSULTA_BUSCA_INTELIGENTE = 200
+
+export interface ResumoBuscaInteligente {
+  /** Pernas que rodaram nesta consulta. */
+  readonly fontes: readonly FonteBuscaCatalogo[]
+  readonly semantica: SituacaoSemantica
+  /** Havia mais candidatos que o limite: a tela pede para refinar a busca. */
+  readonly truncado: boolean
+}
