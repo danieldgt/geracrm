@@ -358,6 +358,26 @@ describe('BAIXA — filial desativada e dedupe fora do escopo', () => {
     // Quem enxerga recebe o existente, como antes.
     expect((await pedir('adm', 'POST', '/v1/contatos', { nome: 'Tentativa', telefone: '11912345678' })).corpo.id).toBe(C.b)
   })
+
+  it('vendedora cadastra contato novo → nasce na carteira DELA e ela abre a ficha (não some)', async () => {
+    const r = await pedir('va', 'POST', '/v1/contatos', { nome: 'Lead da VA', telefone: '11955554444' })
+    expect(r.status).toBe(201)
+    const id = r.corpo.id as string
+    expect(await donoAtual(id)).toBe(U.va)
+    expect((await pedir('va', 'GET', `/v1/contatos/${id}`)).status).toBe(200)
+    // Cadastrar de novo devolve o MESMO contato (idempotente pelo telefone), não o 409.
+    const deNovo = await pedir('va', 'POST', '/v1/contatos', { nome: 'Lead da VA', telefone: '11955554444' })
+    expect(deNovo.status).toBe(200)
+    expect(deNovo.corpo.id).toBe(id)
+    // O colega continua sem ver.
+    expect((await pedir('vb', 'GET', `/v1/contatos/${id}`)).status).toBe(404)
+  })
+
+  it('admin cadastra contato novo → segue nascendo sem dono (órfão para distribuir)', async () => {
+    const r = await pedir('adm', 'POST', '/v1/contatos', { nome: 'Lead do admin', telefone: '11955553333' })
+    expect(r.status).toBe(201)
+    expect(await donoAtual(r.corpo.id as string)).toBeNull()
+  })
 })
 
 describe('C2 — assumir exige a conversa no escopo (e a fila segue funcionando)', () => {

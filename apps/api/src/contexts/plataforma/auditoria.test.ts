@@ -247,7 +247,9 @@ describe('D6: filtros de /v1/auditoria', () => {
                        FOR VALUES FROM ('2020-01-01') TO ('2020-02-01')`)
     try {
       await inserir(T, [
-        { quando: quando(1), dados: { obs: 'urgente recente' } },
+        // ⚠️ HOJE, não dia 1: a janela "só `ate`" (ate = agora + 10 d) começa em agora − 20 d — do dia
+        //    ~21 em diante o dia 1 caía fora e o teste falhava só no fim do mês.
+        { quando: quando(new Date().getUTCDate()), dados: { obs: 'urgente recente' } },
         { quando: '2020-01-15T10:00:00.000000Z', dados: { obs: 'urgente antigo' } },
       ])
       const sem = await chamar(T, '/v1/auditoria?q=urgente')

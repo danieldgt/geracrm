@@ -36,7 +36,10 @@ import {
   template: `
     <ui-cabecalho-tela titulo="Contatos"
       subtitulo="Todos os contatos, dos que mais compraram aos que ainda não compraram. A cor mostra onde cada um está no ciclo de recompra.">
-      <button class="btn btn--secundario" type="button" (click)="abrirImport()">Importar CSV</button>
+      <!-- Importar em massa é da GESTÃO (a API devolve 403 ao vendedor): o botão nem aparece para quem não pode. -->
+      @if (servico.gestao()) {
+        <button class="btn btn--secundario" type="button" (click)="abrirImport()">Importar CSV</button>
+      }
       <a class="btn btn--primario" routerLink="/contato/novo">+ Novo contato</a>
     </ui-cabecalho-tela>
 
@@ -129,10 +132,17 @@ import {
                 <button type="button" class="btn btn--secundario" (click)="limpar()">Limpar filtros</button>
               </ui-estado>
             } @else {
-              <ui-estado titulo="Nenhum contato ainda"
-                descricao="Importe um CSV, conecte seu ERP ou comece uma conversa: os contatos aparecem nesta lista.">
-                <button type="button" class="btn btn--secundario" (click)="abrirImport()">Importar CSV</button>
-              </ui-estado>
+              @if (servico.gestao()) {
+                <ui-estado titulo="Nenhum contato ainda"
+                  descricao="Importe um CSV, conecte seu ERP ou comece uma conversa: os contatos aparecem nesta lista.">
+                  <button type="button" class="btn btn--secundario" (click)="abrirImport()">Importar CSV</button>
+                </ui-estado>
+              } @else {
+                <ui-estado titulo="Nenhum contato na sua carteira"
+                  descricao="Cadastre um contato ou atenda uma conversa: os seus contatos aparecem nesta lista.">
+                  <a class="btn btn--secundario" routerLink="/contato/novo">+ Novo contato</a>
+                </ui-estado>
+              }
             }
           </div>
         </ui-tabela>

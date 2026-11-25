@@ -1,9 +1,13 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" translate="no" class="notranslate">
   <head>
   <!-- ⚠️ Sem base href, o bundle é buscado RELATIVO à rota: /contato/x pedia /contato/main.js e a tela abria em branco no deep link. -->
   <base href="/">
     <meta charset="utf-8" />
+    <!-- ⚠️ O console é só pt-BR. O tradutor automático do Chrome trocava rótulo e opção (CEP→"BOLSO",
+         UF CE→"ESSE", "Sim"→"Tentar", "Importar"→"Matéria", Hub→"Eixo") e o usuário cadastrava errado.
+         `translate="no"` + `notranslate` no <html> e esta meta desligam a oferta e a tradução da página. -->
+    <meta name="google" content="notranslate" />
     <title>Drezz Hub</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
