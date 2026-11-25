@@ -165,13 +165,14 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
       let r: { id: string; novo: boolean } | { erro: 'origem' | 'ja_existe_fora' }
       try {
         r = await req.comTenant(async (tx) => {
+        const escopo = await escopoDaRequisicao(tx, req)
         const [existe] = await tx<{ contato_id: string }[]>`
           SELECT contato_id FROM contato_telefone
            WHERE tenant_id = tenant_atual() AND chave_bloqueio = ${tel.chaveBloqueio} AND principal
            LIMIT 1`
         // ⚠️ Escopo (D3): o existente FORA do escopo não devolve o id (seria a
         //    porta para a ficha alheia) — 409 sem id.
-        if (existe && !(await contatoNoEscopo(tx, await escopoDaRequisicao(tx, req), existe.contato_id))) {
+        if (existe && !(await contatoNoEscopo(tx, escopo, existe.contato_id))) {
           return { erro: 'ja_existe_fora' as const }
         }
         if (existe) return { id: existe.contato_id, novo: false }
@@ -188,6 +189,17 @@ export async function rotasContatos(app: FastifyInstance): Promise<void> {
           INSERT INTO contato_telefone (tenant_id, contato_id, seq, e164, chave_bloqueio, principal, whatsapp, fonte)
           VALUES (tenant_atual(), ${id}, 1, ${tel.e164}, ${tel.chaveBloqueio}, true, ${d.whatsapp ?? true}, 'manual')`
         await gravarDocumentoEEndereco(tx, id, d)
+        // ⚠️ Quem só enxerga a própria carteira (vendedor/atendente) é o DONO do
+        //    que cadastra. Sem isto o contato nascia órfão e sumia para quem o
+        //    criou: não aparecia na tarefa, e o segundo cadastro batia no 409
+        //    "peça ao gestor" (relato da Drezz, 2026-11-10). Gestão e admin já
+        //    enxergam o órfão — para eles o contato segue nascendo sem dono.
+        if (escopo.tipo === 'carteira' && escopo.usuarioId) {
+          await tx`
+            INSERT INTO carteira_atribuicao (tenant_id, id, contato_id, usuario_id, origem, atribuido_por, motivo)
+            VALUES (tenant_atual(), ${randomUUID()}, ${id}, ${escopo.usuarioId}, 'manual', ${escopo.usuarioId},
+                    'Cadastrado pelo próprio vendedor')`
+        }
         return { id, novo: true }
         })
       } catch (err) {
